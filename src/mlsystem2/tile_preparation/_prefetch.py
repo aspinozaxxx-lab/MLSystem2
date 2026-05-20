@@ -6,10 +6,12 @@ from collections.abc import Iterator
 
 from .contracts import (
     TileBatch,
+    TilePreparationError,
     TilePreparationReport,
     TileSourceBundle,
     TileSourceRequest,
 )
+from ._tiles import validate_vrt_xml
 
 
 class EmptyTileBatchSource:
@@ -27,13 +29,19 @@ class EmptyTileBatchSource:
 
 
 def build_tile_sources(request: TileSourceRequest) -> TileSourceBundle:
+    try:
+        validate_vrt_xml(request.dataset.train_vrt_xml)
+        validate_vrt_xml(request.dataset.val_vrt_xml)
+    except Exception as exc:  # noqa: BLE001
+        raise TilePreparationError("Не удалось открыть VRT XML для подготовки тайлов") from exc
+
     report = TilePreparationReport(
         train_batches_prepared=0,
         val_batches_prepared=0,
-        queue_capacity=request.config.prefetch_batches,
-        worker_count=request.config.prefetch_workers,
+        queue_capacity=request.prefetch_batches,
+        worker_count=request.prefetch_workers,
         warnings=[
-            "Источники тайлов являются пустыми итераторами-заглушками до миграции предварительной подготовки с учетом соседних снимков."
+            "Реальная нарезка батчей из VRT еще не реализована."
         ],
     )
     source = EmptyTileBatchSource(report)

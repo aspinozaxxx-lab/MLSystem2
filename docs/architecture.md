@@ -37,7 +37,7 @@ mlsystem2-infer --config configs/example.server.yaml
 
 1. Загрузить настройки.
 2. Создать или открыть запуск MLflow через `mlflow_adapter`.
-3. `dataset_preparing` проверяет наличие снимков и готовит разбиение и footprints.
+3. `dataset_preparing` проверяет наличие снимков, готовит разбиение и возвращает train/val VRT XML.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
 5. `tile_preparation` создает источники train/val тайлов.
@@ -51,5 +51,4 @@ mlsystem2-infer --config configs/example.server.yaml
 2. Загрузить модель или чекпойнт.
 3. Выполнить инференс напрямую в Python/PyTorch.
 4. Записать результаты и отчеты в MLflow.
-
 

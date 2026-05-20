@@ -12,18 +12,16 @@ storage:
   s3_bucket: mlsystems
 
 dataset:
-  default_class_dir: /data/mlsystem/MLMarkup/classes/default
+  images_dir: /data/mlsystem/images
   scenes_file: /data/mlsystem/MLMarkup/scenes.json
   annotation_file: /data/mlsystem/MLMarkup/annotations.json
   val_fraction: 0.2
-  split_strategy: object_count_balanced
 
 tile_preparation:
   tile_size: 512
   stride: 256
   prefetch_workers: 16
   prefetch_batches: 8
-  use_neighbor_footprints: true
 
 train:
   model_name: unet
@@ -44,4 +42,3 @@ mlflow:
   enabled: true
   tracking_uri: http://mlflow.example.local:5000
   experiment_name: MLSystem2
-

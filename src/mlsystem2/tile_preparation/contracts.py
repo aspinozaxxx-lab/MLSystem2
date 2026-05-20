@@ -7,21 +7,11 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlsystem2.dataset_preparing.contracts import DatasetManifest
+from mlsystem2.dataset_preparing.contracts import PreparedDataset
 
 
 class TilePreparationError(RuntimeError):
     """Ошибка подготовки тайлов."""
-
-
-class TilePreparationConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tile_size: int = Field(gt=0)
-    stride: int = Field(gt=0)
-    prefetch_workers: int = Field(default=16, gt=0)
-    prefetch_batches: int = Field(gt=0)
-    use_neighbor_footprints: bool
 
 
 class TileBatch(BaseModel):
@@ -55,9 +45,12 @@ class TileBatchSource(Protocol):
 class TileSourceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    manifest: DatasetManifest
-    config: TilePreparationConfig
-    scratch_uri: str | None = None
+    dataset: PreparedDataset
+    tile_size: int = Field(gt=0)
+    stride: int = Field(gt=0)
+    batch_size: int = Field(gt=0)
+    prefetch_workers: int = Field(gt=0)
+    prefetch_batches: int = Field(gt=0)
 
 
 class TileSourceBundle(BaseModel):
@@ -71,7 +64,6 @@ class TileSourceBundle(BaseModel):
 __all__ = [
     "TileBatch",
     "TileBatchSource",
-    "TilePreparationConfig",
     "TilePreparationError",
     "TilePreparationReport",
     "TileSourceBundle",

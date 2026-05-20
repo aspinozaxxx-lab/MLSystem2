@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,11 +31,10 @@ class StorageSettings(BaseModel):
 class DatasetSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    default_class_dir: str
+    images_dir: str
     scenes_file: str
     annotation_file: str
     val_fraction: float = Field(gt=0.0, lt=1.0)
-    split_strategy: Literal["object_count_balanced"]
 
 
 class TilePreparationSettings(BaseModel):
@@ -47,7 +44,6 @@ class TilePreparationSettings(BaseModel):
     stride: int = Field(gt=0)
     prefetch_workers: int = Field(default=16, gt=0)
     prefetch_batches: int = Field(gt=0)
-    use_neighbor_footprints: bool
 
 
 class TrainSettings(BaseModel):

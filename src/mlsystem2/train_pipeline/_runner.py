@@ -22,7 +22,6 @@ from mlsystem2.settings.api import load_settings
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import build_tile_sources
 from mlsystem2.tile_preparation.contracts import (
-    TilePreparationConfig,
     TileSourceBundle,
     TileSourceRequest,
 )
@@ -109,14 +108,14 @@ def run_train_pipeline(
 
         measure_mlflow(lambda: deps.log_dataset_preparation(run, dataset_result.report))
 
-        if dataset_result.status == "failed" or dataset_result.manifest is None:
+        if dataset_result.report.status == "error" or dataset_result.dataset is None:
             report = PipelineReport(
                 status=PipelineStatus.FAILED,
                 message="Подготовка датасета завершилась ошибкой.",
-                dataset_status=dataset_result.status,
-                errors=dataset_result.errors,
-                warnings=dataset_result.report.warnings,
-                artifacts={"footprints": dataset_result.report.footprints_artifact_uri},
+                dataset_status=dataset_result.report.status,
+                errors=dataset_result.report.errors,
+                warnings=[],
+                artifacts={},
             )
             timing_report = _timing_report(total_started, timings, mlflow_elapsed)
             measure_mlflow(lambda: deps.log_timing_report(run, timing_report))
@@ -131,7 +130,7 @@ def run_train_pipeline(
 
         tile_bundle, timing = timed_call(
             "tile_preparation",
-            lambda: deps.build_tile_sources(_tile_request(settings, dataset_result.manifest)),
+            lambda: deps.build_tile_sources(_tile_request(settings, dataset_result.dataset)),
         )
         timings.append(timing)
         tile_bundle = _expect_tile_bundle(tile_bundle)
@@ -150,9 +149,9 @@ def run_train_pipeline(
         report = PipelineReport(
             status=PipelineStatus.SUCCEEDED,
             message="Конвейер обучения завершен.",
-            dataset_status=dataset_result.status,
+            dataset_status=dataset_result.report.status,
             errors=[],
-            warnings=dataset_result.report.warnings + tile_bundle.report.warnings,
+            warnings=tile_bundle.report.warnings,
             artifacts={
                 "best_checkpoint_path": train_result.best_checkpoint_path,
                 "final_checkpoint_path": train_result.final_checkpoint_path,
@@ -200,27 +199,21 @@ def _mlflow_start_request(
 
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     return DatasetPreparationRequest(
-        images_uri=settings.storage.images_uri,
+        images_dir=settings.dataset.images_dir,
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
-        default_class_dir=settings.dataset.default_class_dir,
         val_fraction=settings.dataset.val_fraction,
-        split_strategy=settings.dataset.split_strategy,
-        output_uri=settings.runtime.scratch_root,
     )
 
 
-def _tile_request(settings: SystemSettings, manifest) -> TileSourceRequest:
+def _tile_request(settings: SystemSettings, dataset) -> TileSourceRequest:
     return TileSourceRequest(
-        manifest=manifest,
-        config=TilePreparationConfig(
-            tile_size=settings.tile_preparation.tile_size,
-            stride=settings.tile_preparation.stride,
-            prefetch_workers=settings.tile_preparation.prefetch_workers,
-            prefetch_batches=settings.tile_preparation.prefetch_batches,
-            use_neighbor_footprints=settings.tile_preparation.use_neighbor_footprints,
-        ),
-        scratch_uri=settings.runtime.scratch_root,
+        dataset=dataset,
+        tile_size=settings.tile_preparation.tile_size,
+        stride=settings.tile_preparation.stride,
+        batch_size=settings.train.batch_size,
+        prefetch_workers=settings.tile_preparation.prefetch_workers,
+        prefetch_batches=settings.tile_preparation.prefetch_batches,
     )
 
 

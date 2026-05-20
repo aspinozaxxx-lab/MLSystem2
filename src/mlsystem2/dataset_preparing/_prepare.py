@@ -2,147 +2,214 @@
 
 from __future__ import annotations
 
-from mlsystem2.storage import api as storage_api
-from mlsystem2.storage.contracts import StorageError
+from pathlib import Path
 
-from ._footprints import build_placeholder_footprints
-from ._split import object_count_balanced_split
+from ._object_counts import SceneObjectCount, count_objects_per_scene
+from ._raster_validation import validate_rasters
+from ._scene_matching import filter_existing_scenes, index_image_files, read_scene_list
+from ._split import split_train_val_by_object_counts
+from ._vrt import build_vrt_xml
 from .contracts import (
-    DatasetManifest,
-    DatasetPreparationError,
     DatasetPreparationReport,
     DatasetPreparationRequest,
     DatasetPreparationResult,
-    ObjectCountByScene,
-    SceneRecord,
+    DatasetSceneReport,
+    PreparedDataset,
 )
+
+SPLIT_SEED = 42
 
 
 def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
-    missing_inputs = [
-        uri
-        for uri in (request.scenes_file, request.annotation_file, request.default_class_dir)
-        if not storage_api.exists(uri)
-    ]
-    if missing_inputs:
-        report = _empty_failed_report(
-            [f"Обязательный вход подготовки датасета отсутствует: {uri}" for uri in missing_inputs]
+    images_dir = Path(request.images_dir)
+    scenes_file = Path(request.scenes_file)
+    annotation_file = Path(request.annotation_file)
+
+    errors: list[str] = []
+    scenes = _read_scenes_or_collect_error(scenes_file, errors)
+    if not scenes:
+        errors.append("Список сцен пуст.")
+    if not images_dir.exists():
+        errors.append(f"Директория снимков не существует: {images_dir}")
+    elif not images_dir.is_dir():
+        errors.append(f"Путь снимков не является директорией: {images_dir}")
+    if not annotation_file.exists():
+        errors.append(f"Файл разметки не существует: {annotation_file}")
+    elif not annotation_file.is_file():
+        errors.append(f"Путь разметки не является файлом: {annotation_file}")
+
+    if errors:
+        report = _build_report(
+            scenes=scenes,
+            rows=[],
+            scene_to_image={},
+            train_names=set(),
+            val_names=set(),
+            missing_files=[],
+            errors=errors,
         )
-        return DatasetPreparationResult(status="failed", manifest=None, report=report, errors=report.errors)
+        return DatasetPreparationResult(dataset=None, report=report)
 
-    try:
-        scenes_payload = storage_api.read_json(request.scenes_file)
-        annotations_payload = storage_api.read_json(request.annotation_file)
-    except StorageError as exc:
-        raise DatasetPreparationError("Не удалось прочитать входы подготовки датасета") from exc
-
-    records = _scene_records(request, scenes_payload, annotations_payload)
-    missing_images = [record.image_uri for record in records if not storage_api.exists(record.image_uri)]
-    object_counts = [
-        ObjectCountByScene(scene_id=record.scene_id, object_count=record.object_count)
-        for record in records
-    ]
-    split = object_count_balanced_split(records, request.val_fraction)
-    footprints = build_placeholder_footprints(records)
-
-    status = "failed" if missing_images else "succeeded"
-    errors = [f"Снимок отсутствует: {uri}" for uri in missing_images]
-    footprints_artifact_uri = (
-        f"{request.output_uri.rstrip('/')}/footprints.json" if request.output_uri is not None else None
-    )
-    report = DatasetPreparationReport(
-        status=status,
-        scenes_total=len(records),
-        train_scenes=split.train_scenes,
-        val_scenes=split.val_scenes,
-        object_counts=object_counts,
-        missing_files=missing_images,
-        warnings=[
-            "Границы сцен являются заглушками до миграции реального GIS-извлечения."
-        ],
-        errors=errors,
-        footprints_artifact_uri=footprints_artifact_uri,
-    )
-    manifest = None
-    if status == "succeeded":
-        manifest = DatasetManifest(
-            images_uri=request.images_uri,
-            scenes=records,
-            split=split,
-            footprints=footprints,
-            object_counts=object_counts,
-            footprints_artifact_uri=footprints_artifact_uri,
+    image_index = _index_images_or_collect_error(images_dir, errors)
+    if image_index is None:
+        report = _build_report(
+            scenes=scenes,
+            rows=[],
+            scene_to_image={},
+            train_names=set(),
+            val_names=set(),
+            missing_files=[],
+            errors=errors,
         )
+        return DatasetPreparationResult(dataset=None, report=report)
 
-    return DatasetPreparationResult(status=status, manifest=manifest, report=report, errors=errors)
+    filtered = filter_existing_scenes(scenes, image_index)
+    missing_files = list(filtered.missing_scenes)
+    scene_to_image = {
+        scene: path.resolve()
+        for scene, path in filtered.scene_to_image.items()
+    }
+    if missing_files:
+        errors.append(f"Не найдены снимки для сцен: {', '.join(missing_files)}")
+    for scene, paths in filtered.ambiguous_scenes.items():
+        joined = "; ".join(path.resolve().as_posix() for path in paths)
+        errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
 
-
-def _empty_failed_report(errors: list[str]) -> DatasetPreparationReport:
-    return DatasetPreparationReport(
-        status="failed",
-        scenes_total=0,
-        train_scenes=[],
-        val_scenes=[],
-        object_counts=[],
-        missing_files=[],
-        warnings=[],
-        errors=errors,
-        footprints_artifact_uri=None,
+    rows = _count_objects_or_collect_error(scenes, scene_to_image, annotation_file, errors)
+    found_rows = [row for row in rows if row.scene_name in scene_to_image]
+    split = split_train_val_by_object_counts(
+        found_rows,
+        target_val_fraction=request.val_fraction,
+        seed=SPLIT_SEED,
     )
+    train_scene_ids = [row.scene_name for row in split.train]
+    val_scene_ids = [row.scene_name for row in split.val]
+    train_names = set(train_scene_ids)
+    val_names = set(val_scene_ids)
 
+    if not found_rows:
+        errors.append("Не найдено ни одного снимка из списка сцен.")
+    elif not split.train or not split.val:
+        errors.append("Недостаточно найденных сцен для построения train и val VRT.")
 
-def _scene_records(
-    request: DatasetPreparationRequest,
-    scenes_payload: dict[str, object],
-    annotations_payload: dict[str, object],
-) -> list[SceneRecord]:
-    raw_scenes = scenes_payload.get("scenes", [])
-    if not isinstance(raw_scenes, list):
-        raise DatasetPreparationError("Данные сцен должны содержать список 'scenes'")
+    validation = validate_rasters(scene_to_image) if scene_to_image else None
+    if validation is not None:
+        errors.extend(validation.errors)
 
-    records: list[SceneRecord] = []
-    for index, raw_scene in enumerate(raw_scenes):
-        if isinstance(raw_scene, str):
-            scene_id = raw_scene
-            image_uri = _join_uri(request.images_uri, f"{scene_id}.tif")
-            annotation_uri = request.annotation_file
-            object_count = _annotation_count(scene_id, annotations_payload)
-        elif isinstance(raw_scene, dict):
-            scene_id_value = raw_scene.get("scene_id", raw_scene.get("id", f"scene-{index}"))
-            scene_id = str(scene_id_value)
-            image_uri = str(raw_scene.get("image_uri") or _join_uri(request.images_uri, f"{scene_id}.tif"))
-            annotation_value = raw_scene.get("annotation_uri")
-            annotation_uri = str(annotation_value) if annotation_value is not None else request.annotation_file
-            object_count_value = raw_scene.get("object_count")
-            object_count = (
-                int(object_count_value)
-                if isinstance(object_count_value, int)
-                else _annotation_count(scene_id, annotations_payload)
-            )
+    dataset: PreparedDataset | None = None
+    if not errors and validation is not None:
+        raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
+        try:
+            train_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in train_scene_ids])
+            val_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in val_scene_ids])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Не удалось построить VRT: {exc}")
         else:
-            raise DatasetPreparationError("Каждая сцена должна быть строкой или объектом")
-
-        records.append(
-            SceneRecord(
-                scene_id=scene_id,
-                image_uri=image_uri,
-                annotation_uri=annotation_uri,
-                object_count=max(0, object_count),
+            dataset = PreparedDataset(
+                train_vrt_xml=train_vrt_xml,
+                val_vrt_xml=val_vrt_xml,
+                annotation_file=annotation_file.resolve().as_posix(),
             )
+
+    report = _build_report(
+        scenes=scenes,
+        rows=rows,
+        scene_to_image=scene_to_image,
+        train_names=train_names,
+        val_names=val_names,
+        missing_files=missing_files,
+        errors=errors,
+    )
+    if errors:
+        dataset = None
+    return DatasetPreparationResult(dataset=dataset, report=report)
+
+
+def _read_scenes_or_collect_error(path: Path, errors: list[str]) -> list[str]:
+    if not path.exists():
+        errors.append(f"Файл списка сцен не существует: {path}")
+        return []
+    if not path.is_file():
+        errors.append(f"Путь списка сцен не является файлом: {path}")
+        return []
+    try:
+        return read_scene_list(path)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Не удалось прочитать список сцен: {path}: {exc}")
+        return []
+
+
+def _index_images_or_collect_error(images_dir: Path, errors: list[str]) -> dict[str, object] | None:
+    try:
+        return index_image_files(images_dir)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Не удалось проиндексировать снимки: {images_dir}: {exc}")
+        return None
+
+
+def _count_objects_or_collect_error(
+    scenes: list[str],
+    scene_to_image: dict[str, Path],
+    annotation_file: Path,
+    errors: list[str],
+) -> list[SceneObjectCount]:
+    try:
+        return count_objects_per_scene(scenes, scene_to_image, annotation_file)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Не удалось посчитать объекты по разметке: {annotation_file}: {exc}")
+        return [
+            SceneObjectCount(scene_name=scene, image_path=scene_to_image.get(scene), object_count=0)
+            for scene in scenes
+        ]
+
+
+def _build_report(
+    *,
+    scenes: list[str],
+    rows: list[SceneObjectCount],
+    scene_to_image: dict[str, Path],
+    train_names: set[str],
+    val_names: set[str],
+    missing_files: list[str],
+    errors: list[str],
+) -> DatasetPreparationReport:
+    count_by_scene = {row.scene_name: row.object_count for row in rows}
+    scene_reports = [
+        DatasetSceneReport(
+            scene_id=scene,
+            image_path=scene_to_image[scene].as_posix() if scene in scene_to_image else None,
+            object_count=max(0, int(count_by_scene.get(scene, 0))),
+            split=_scene_split(scene, scene_to_image, train_names, val_names),
         )
-    return records
+        for scene in scenes
+    ]
+    train_objects = sum(item.object_count for item in scene_reports if item.split == "train")
+    val_objects = sum(item.object_count for item in scene_reports if item.split == "val")
+    return DatasetPreparationReport(
+        status="error" if errors else "ok",
+        scenes_total=len(scenes),
+        scenes_found=len(scene_to_image),
+        objects_total=sum(item.object_count for item in scene_reports),
+        train_scenes_count=sum(1 for item in scene_reports if item.split == "train"),
+        train_objects_count=train_objects,
+        val_scenes_count=sum(1 for item in scene_reports if item.split == "val"),
+        val_objects_count=val_objects,
+        scenes=scene_reports,
+        missing_files=missing_files,
+        errors=errors,
+    )
 
 
-def _annotation_count(scene_id: str, annotations_payload: dict[str, object]) -> int:
-    raw = annotations_payload.get(scene_id)
-    if isinstance(raw, list):
-        return len(raw)
-    if isinstance(raw, dict):
-        objects = raw.get("objects")
-        if isinstance(objects, list):
-            return len(objects)
-    return 0
-
-
-def _join_uri(base: str, child: str) -> str:
-    return f"{base.rstrip('/')}/{child}"
+def _scene_split(
+    scene: str,
+    scene_to_image: dict[str, Path],
+    train_names: set[str],
+    val_names: set[str],
+) -> str:
+    if scene not in scene_to_image:
+        return "missing"
+    if scene in train_names:
+        return "train"
+    if scene in val_names:
+        return "val"
+    return "missing"
