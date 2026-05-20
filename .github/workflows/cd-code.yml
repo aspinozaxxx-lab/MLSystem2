@@ -1,0 +1,64 @@
+name: доставка-кода
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "docs/**"
+      - "configs/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "README.md"
+      - ".github/workflows/cd-code.yml"
+
+jobs:
+  copy-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установить dev-зависимости
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      - name: Запустить тесты
+        run: |
+          python -m pytest
+          python -m compileall -q src tests
+
+      - name: Настроить SSH-ключ
+        env:
+          SSH_KEY: ${{ secrets.MLSYSTEM2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/mlsystem2_key
+          chmod 600 ~/.ssh/mlsystem2_key
+
+      - name: Скопировать код репозитория
+        env:
+          SERVER_HOST: ${{ secrets.MLSYSTEM2_SERVER_HOST }}
+          SERVER_USER: ${{ secrets.MLSYSTEM2_SERVER_USER }}
+          SERVER_PORT: ${{ vars.MLSYSTEM2_SERVER_PORT || '22' }}
+          TARGET_PATH: ${{ vars.MLSYSTEM2_DEPLOY_PATH || '/opt/mlsystem2/repo' }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/mlsystem2_key -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "mkdir -p '${TARGET_PATH}'"
+          rsync -az --delete \
+            -e "${SSH_CMD}" \
+            --exclude ".git" \
+            --exclude ".venv" \
+            --exclude "__pycache__" \
+            --exclude ".pytest_cache" \
+            --exclude ".mypy_cache" \
+            --exclude "data" \
+            --exclude "runs" \
+            --exclude "artifacts" \
+            ./ "${SERVER_USER}@${SERVER_HOST}:${TARGET_PATH}/"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "printf '%s\n' '${GITHUB_SHA}' > '${TARGET_PATH}/DEPLOYED_COMMIT'"

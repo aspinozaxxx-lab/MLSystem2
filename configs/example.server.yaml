@@ -1,0 +1,47 @@
+runtime:
+  project_root: /opt/mlsystem2/repo
+  scratch_root: /opt/mlsystem2/scratch
+  logs_root: /opt/mlsystem2/logs
+  cleanup_scratch_after_mlflow_log: true
+
+storage:
+  images_uri: s3://mlsystems/images/
+  mlmarkup_repo: /data/mlsystem/MLMarkup
+  local_cache_root: /opt/mlsystem2/cache
+  s3_endpoint_url: https://s3.example.local
+  s3_bucket: mlsystems
+
+dataset:
+  default_class_dir: /data/mlsystem/MLMarkup/classes/default
+  scenes_file: /data/mlsystem/MLMarkup/scenes.json
+  annotation_file: /data/mlsystem/MLMarkup/annotations.json
+  val_fraction: 0.2
+  split_strategy: object_count_balanced
+
+tile_preparation:
+  tile_size: 512
+  stride: 256
+  prefetch_workers: 16
+  prefetch_batches: 8
+  use_neighbor_footprints: true
+
+train:
+  model_name: unet
+  input_channels: 3
+  output_channels: 1
+  epochs: 50
+  batch_size: 8
+  device: cuda
+  num_workers: 8
+
+inference:
+  checkpoint_uri: s3://mlsystems/checkpoints/latest.pt
+  threshold: 0.5
+  batch_size: 8
+  device: cuda
+
+mlflow:
+  enabled: true
+  tracking_uri: http://mlflow.example.local:5000
+  experiment_name: MLSystem2
+
