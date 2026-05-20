@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`dataset_preparing` готовит локальный raster-датасет к нарезке тайлов: читает список сцен, находит снимки в `images_dir`, считает объекты по разметке, строит train/val split и возвращает VRT XML для train и val без записи VRT на диск.
+`dataset_preparing` готовит локальный raster-датасет к нарезке тайлов: читает список сцен, находит снимки в `images_dir`, считает объекты по разметке, строит train/val split и возвращает warped VRT XML в `EPSG:3857` для train и val без записи VRT на диск.
 
 ## Публичный интерфейс
 
@@ -23,4 +23,4 @@
 
 ## Алгоритм работы и его особенности
 
-Модуль читает `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, сопоставляет сцены по имени, stem, casefold и нормализованному ключу. При отсутствующем или неоднозначном снимке возвращает `status="error"`. Затем считает объекты по `annotation_file`, детерминированно делит найденные сцены на train/val с `seed=42`, проверяет CRS, bands, dtype, resolution, nodata и grid alignment. При успехе собирает два GDAL VRT XML со ссылками на абсолютные пути снимков.
+Модуль читает `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, сопоставляет сцены по имени, stem, casefold и нормализованному ключу. Ошибками считаются только отсутствующие снимки, невозможность открыть raster, отсутствие CRS или nodata, несовместимые bands или dtype, некорректный geotransform и отсутствие `gdalwarp`. Разные source CRS, source resolution и source grid alignment допустимы. При успехе модуль через `gdalwarp -of VRT` строит train/val VRT в `EPSG:3857` с resampling `near`, `-tap`, абсолютными путями источников и минимальным target pixel size по датасету.

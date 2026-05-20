@@ -8,7 +8,7 @@ from ._object_counts import SceneObjectCount, count_objects_per_scene
 from ._raster_validation import validate_rasters
 from ._scene_matching import filter_existing_scenes, index_image_files, read_scene_list
 from ._split import split_train_val_by_object_counts
-from ._vrt import build_vrt_xml
+from ._vrt import build_vrt_xml, calculate_target_resolution
 from .contracts import (
     DatasetPreparationReport,
     DatasetPreparationRequest,
@@ -100,8 +100,15 @@ def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationRes
     if not errors and validation is not None:
         raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
         try:
-            train_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in train_scene_ids])
-            val_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in val_scene_ids])
+            target_resolution = calculate_target_resolution(validation.rasters)
+            train_vrt_xml = build_vrt_xml(
+                [raster_by_scene[scene] for scene in train_scene_ids],
+                target_resolution=target_resolution,
+            )
+            val_vrt_xml = build_vrt_xml(
+                [raster_by_scene[scene] for scene in val_scene_ids],
+                target_resolution=target_resolution,
+            )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Не удалось построить VRT: {exc}")
         else:
