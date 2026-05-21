@@ -22,12 +22,19 @@ def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
     item = report["files"][0]
     assert item["source_count"] == 3
     assert item["output_count"] == 3
+    assert item["source_nodata"] == 0
+    assert item["output_nodata"] == 0
+    assert item["has_alpha"] is False
+    assert item["has_internal_mask"] is False
+    assert item["has_sidecar_msk"] is False
     assert item["is_cog_check"] is True
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.count == 3
+        assert dataset.nodata == 0
+        assert ColorInterp.alpha not in dataset.colorinterp
 
 
-def test_prepare_images_for_vrt_writes_epsg3857_and_internal_mask(tmp_path: Path) -> None:
+def test_prepare_images_for_vrt_writes_epsg3857_nodata_without_mask(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
@@ -37,12 +44,14 @@ def test_prepare_images_for_vrt_writes_epsg3857_and_internal_mask(tmp_path: Path
 
     output_path = prepared_dir / "nested" / "scene.tif"
     assert report["status"] == "ok"
+    item = report["files"][0]
+    assert item["has_internal_mask"] is False
+    assert item["has_sidecar_msk"] is False
     assert not Path(str(output_path) + ".msk").exists()
     with rasterio.open(output_path) as dataset:
         assert dataset.crs == "EPSG:3857"
-        mask = dataset.dataset_mask()
-        assert mask.min() == 0
-        assert mask.max() == 255
+        assert dataset.nodata == 0
+        assert dataset.count == 1
 
 
 def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_path: Path) -> None:
@@ -65,11 +74,13 @@ def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_p
     assert report["status"] == "ok"
     item = report["files"][0]
     assert item["output_count"] == 4
+    assert item["output_nodata"] == 0
     assert item["source_colorinterp"] == ["gray", "undefined", "undefined", "undefined"]
     assert item["output_colorinterp"] == ["gray", "undefined", "undefined", "undefined"]
     assert item["is_cog_check"] is True
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.count == 4
+        assert dataset.nodata == 0
         assert ColorInterp.alpha not in dataset.colorinterp
         assert dataset.colorinterp == (
             ColorInterp.gray,
@@ -103,6 +114,7 @@ def test_prepare_images_for_vrt_preserves_descriptions_and_band_tags(tmp_path: P
     item = report["files"][0]
     assert item["source_descriptions"] == list(descriptions)
     assert item["output_descriptions"] == list(descriptions)
+    assert item["has_internal_mask"] is False
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.descriptions == descriptions
         assert dataset.tags(4)["name"] == "nir"
@@ -131,10 +143,27 @@ def test_prepare_images_for_vrt_replaces_source_alpha_colorinterp(tmp_path: Path
     assert item["source_colorinterp"] == ["red", "green", "blue", "alpha"]
     assert item["output_count"] == 4
     assert item["output_colorinterp"] == ["red", "green", "blue", "undefined"]
+    assert item["has_alpha"] is False
     assert item["is_cog_check"] is True
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.count == 4
         assert ColorInterp.alpha not in dataset.colorinterp
+
+
+def test_prepare_images_for_vrt_errors_without_source_nodata(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    _write_raw_raster_with_white_border(raw_dir / "scene.tif", count=4, nodata=None)
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+
+    assert report["status"] == "error"
+    assert report["output_count"] == 0
+    item = report["files"][0]
+    assert item["status"] == "error"
+    assert "nodata" in item["error"]
+    assert not (prepared_dir / "scene.tif").exists()
 
 
 def _write_raw_raster_with_white_border(
@@ -144,13 +173,15 @@ def _write_raw_raster_with_white_border(
     colorinterp: tuple[ColorInterp, ...] | None = None,
     descriptions: tuple[str, ...] | None = None,
     band_tags: dict[int, dict[str, str]] | None = None,
+    nodata: int | None = 0,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = np.full((count, 8, 8), 20, dtype=np.uint8)
-    data[:, 0, :] = 255
-    data[:, -1, :] = 255
-    data[:, :, 0] = 255
-    data[:, :, -1] = 255
+    if nodata is not None:
+        data[:, 0, :] = nodata
+        data[:, -1, :] = nodata
+        data[:, :, 0] = nodata
+        data[:, :, -1] = nodata
     with rasterio.open(
         path,
         "w",
@@ -161,6 +192,7 @@ def _write_raw_raster_with_white_border(
         dtype="uint8",
         crs="EPSG:4326",
         transform=from_origin(40.0, 50.0, 0.0001, 0.0001),
+        nodata=nodata,
     ) as dataset:
         dataset.write(data)
         if colorinterp is not None:

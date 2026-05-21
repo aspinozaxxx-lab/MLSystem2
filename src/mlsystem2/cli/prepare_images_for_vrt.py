@@ -6,13 +6,11 @@ import json
 import shutil
 import subprocess
 import tempfile
-from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import rasterio
-from rasterio.enums import ColorInterp, Resampling
+from rasterio.enums import ColorInterp, MaskFlags, Resampling
 from rasterio.warp import calculate_default_transform, reproject
 
 
@@ -43,9 +41,10 @@ def prepare_images_for_vrt(
             "input_path": input_path.resolve().as_posix(),
             "output_path": output_path.resolve().as_posix(),
             "status": "ok",
-            "mask_source": None,
             "source_count": None,
             "output_count": None,
+            "source_nodata": None,
+            "output_nodata": None,
             "source_dtypes": [],
             "output_dtypes": [],
             "source_colorinterp": [],
@@ -54,6 +53,9 @@ def prepare_images_for_vrt(
             "output_descriptions": [],
             "source_had_alpha_colorinterp": False,
             "colorinterp_source_invalid": False,
+            "has_internal_mask": False,
+            "has_alpha": False,
+            "has_sidecar_msk": False,
             "is_cog_check": False,
             "error": None,
         }
@@ -107,7 +109,7 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
         if len(set(src.dtypes)) != 1:
             raise ValueError("Скрипт не меняет dtype, а снимок содержит разные dtype по каналам")
 
-        source_mask, mask_source = _valid_mask(src)
+        source_nodata = _source_nodata(src)
         dst_transform, dst_width, dst_height = calculate_default_transform(
             src.crs,
             TARGET_CRS,
@@ -115,19 +117,6 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
             src.height,
             *src.bounds,
         )
-        dst_mask = np.zeros((dst_height, dst_width), dtype=np.uint8)
-        reproject(
-            source=source_mask,
-            destination=dst_mask,
-            src_transform=src.transform,
-            src_crs=src.crs,
-            dst_transform=dst_transform,
-            dst_crs=TARGET_CRS,
-            src_nodata=0,
-            dst_nodata=0,
-            resampling=Resampling.nearest,
-        )
-        dst_mask = np.where(dst_mask > 0, 255, 0).astype(np.uint8)
 
         source_count = src.count
         source_dtypes = tuple(src.dtypes)
@@ -147,25 +136,26 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
                 dst_width=dst_width,
                 dst_height=dst_height,
                 dst_transform=dst_transform,
-                dst_mask=dst_mask,
+                nodata=source_nodata,
                 colorinterp=colorinterp,
                 source_descriptions=source_descriptions,
                 source_tags=source_tags,
                 source_band_tags=source_band_tags,
             )
-            _translate_to_cog(temp_tif, output_path, colorinterp)
+            _translate_to_cog(temp_tif, output_path, colorinterp, source_nodata)
 
     validation = _validate_output(
         output_path=output_path,
         source_count=source_count,
         source_dtypes=source_dtypes,
+        source_nodata=source_nodata,
         expected_colorinterp=colorinterp,
         source_descriptions=source_descriptions,
         source_band_tags=source_band_tags,
     )
     return {
-        "mask_source": mask_source,
         "source_count": source_count,
+        "source_nodata": _json_scalar(source_nodata),
         "source_dtypes": list(source_dtypes),
         "source_colorinterp": [item.name for item in source_colorinterp],
         "source_descriptions": list(source_descriptions),
@@ -182,7 +172,7 @@ def _write_temp_geotiff(
     dst_width: int,
     dst_height: int,
     dst_transform: object,
-    dst_mask: np.ndarray,
+    nodata: float | int,
     colorinterp: tuple[ColorInterp, ...],
     source_descriptions: tuple[str | None, ...],
     source_tags: dict[str, str],
@@ -201,39 +191,39 @@ def _write_temp_geotiff(
         "blockysize": 512,
         "compress": "deflate",
         "BIGTIFF": "IF_SAFER",
-        "nodata": None,
+        "nodata": nodata,
     }
-    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
-        with rasterio.open(output_path, "w", **profile) as dst:
-            for band_index in range(1, src.count + 1):
-                dst_data = np.zeros((dst_height, dst_width), dtype=src.dtypes[band_index - 1])
-                reproject(
-                    source=rasterio.band(src, band_index),
-                    destination=dst_data,
-                    src_transform=src.transform,
-                    src_crs=src.crs,
-                    dst_transform=dst_transform,
-                    dst_crs=TARGET_CRS,
-                    resampling=Resampling.nearest,
-                )
-                dst_data[dst_mask == 0] = 0
-                dst.write(dst_data, band_index)
-            dst.colorinterp = colorinterp
-            if source_tags:
-                dst.update_tags(**source_tags)
-            for band_index, description in enumerate(source_descriptions, start=1):
-                if description:
-                    dst.set_band_description(band_index, description)
-            for band_index, tags in enumerate(source_band_tags, start=1):
-                if tags:
-                    dst.update_tags(band_index, **tags)
-            dst.write_mask(dst_mask)
+    with rasterio.open(output_path, "w", **profile) as dst:
+        for band_index in range(1, src.count + 1):
+            dst_data = np.full((dst_height, dst_width), nodata, dtype=src.dtypes[band_index - 1])
+            reproject(
+                source=rasterio.band(src, band_index),
+                destination=dst_data,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                src_nodata=nodata,
+                dst_transform=dst_transform,
+                dst_crs=TARGET_CRS,
+                dst_nodata=nodata,
+                resampling=Resampling.nearest,
+            )
+            dst.write(dst_data, band_index)
+        dst.colorinterp = colorinterp
+        if source_tags:
+            dst.update_tags(**source_tags)
+        for band_index, description in enumerate(source_descriptions, start=1):
+            if description:
+                dst.set_band_description(band_index, description)
+        for band_index, tags in enumerate(source_band_tags, start=1):
+            if tags:
+                dst.update_tags(band_index, **tags)
 
 
 def _translate_to_cog(
     input_path: Path,
     output_path: Path,
     colorinterp: tuple[ColorInterp, ...],
+    nodata: float | int,
 ) -> None:
     gdal_translate = _find_gdal_translate()
     if gdal_translate is None:
@@ -252,6 +242,8 @@ def _translate_to_cog(
         "RESAMPLING=NEAREST",
         "-colorinterp",
         ",".join(item.name for item in colorinterp),
+        "-a_nodata",
+        _format_nodata(nodata),
         input_path.as_posix(),
         output_path.as_posix(),
     ]
@@ -265,6 +257,7 @@ def _validate_output(
     output_path: Path,
     source_count: int,
     source_dtypes: tuple[str, ...],
+    source_nodata: float | int,
     expected_colorinterp: tuple[ColorInterp, ...],
     source_descriptions: tuple[str | None, ...],
     source_band_tags: list[dict[str, str]],
@@ -273,15 +266,19 @@ def _validate_output(
         output_colorinterp = [item.name for item in ds.colorinterp]
         output_dtypes = list(ds.dtypes)
         output_descriptions = list(ds.descriptions)
-        mask = ds.dataset_mask(out_shape=(min(ds.height, 256), min(ds.width, 256)))
+        has_internal_mask = any(MaskFlags.per_dataset in flags for flags in ds.mask_flag_enums)
+        has_alpha = ColorInterp.alpha in ds.colorinterp
+        has_sidecar_msk = Path(str(output_path) + ".msk").exists()
         if ds.count != source_count:
             raise ValueError(f"COG output count отличается: {ds.count} != {source_count}")
-        if ColorInterp.alpha in ds.colorinterp:
+        if has_alpha:
             raise ValueError("COG output содержит ColorInterp.alpha")
         if ds.crs != rasterio.crs.CRS.from_string(TARGET_CRS):
             raise ValueError(f"COG output CRS отличается от {TARGET_CRS}")
         if tuple(ds.dtypes) != source_dtypes:
             raise ValueError(f"COG output dtype отличается: {ds.dtypes} != {source_dtypes}")
+        if not _nodata_equal(ds.nodata, source_nodata):
+            raise ValueError(f"COG output nodata отличается: {ds.nodata} != {source_nodata}")
         if tuple(ds.colorinterp) != expected_colorinterp:
             raise ValueError(
                 f"COG output colorinterp отличается: {ds.colorinterp} != {expected_colorinterp}"
@@ -299,17 +296,23 @@ def _validate_output(
             }
             if missing_tags:
                 raise ValueError(f"COG output потерял band tags {band_index}: {missing_tags}")
-        if mask.max() == 0:
-            raise ValueError("COG output mask полностью пустая")
+        if has_internal_mask:
+            raise ValueError("COG output содержит internal mask")
+        if has_sidecar_msk:
+            raise ValueError("COG output содержит sidecar .msk")
 
     is_cog_check = _check_cog_layout(output_path)
     if not is_cog_check:
         raise ValueError("gdalinfo не подтвердил COG layout")
     return {
         "output_count": source_count,
+        "output_nodata": _json_scalar(source_nodata),
         "output_dtypes": output_dtypes,
         "output_colorinterp": output_colorinterp,
         "output_descriptions": output_descriptions,
+        "has_internal_mask": has_internal_mask,
+        "has_alpha": has_alpha,
+        "has_sidecar_msk": has_sidecar_msk,
         "is_cog_check": is_cog_check,
     }
 
@@ -351,75 +354,43 @@ def _filtered_dataset_tags(tags: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _valid_mask(src: rasterio.io.DatasetReader) -> tuple[np.ndarray, str]:
-    mask = src.dataset_mask()
-    if mask.max() == 0:
-        raise ValueError("dataset_mask полностью пустая")
-    if mask.min() < mask.max():
-        return mask.astype(np.uint8), "dataset_mask"
+def _source_nodata(src: rasterio.io.DatasetReader) -> float | int:
+    if src.nodata is not None:
+        nodata = src.nodata
+    else:
+        nodata_values = [value for value in src.nodatavals if value is not None]
+        if not nodata_values:
+            raise ValueError("У исходного снимка нет nodata")
+        nodata = nodata_values[0]
 
-    empty_tuple = _detect_empty_tuple(src)
-    if empty_tuple is None:
-        raise ValueError("Не удалось определить пустую область по углам снимка")
-    derived_mask = _mask_from_empty_tuple(src, empty_tuple)
-    if derived_mask.max() == 0 or derived_mask.min() == derived_mask.max():
-        raise ValueError("Маска по угловому tuple не отделяет пустые пиксели")
-    return derived_mask, "corner_tuple"
+    for value in src.nodatavals:
+        if value is not None and not _nodata_equal(value, nodata):
+            raise ValueError("На каналах исходного снимка разный nodata")
+    return nodata
 
 
-def _detect_empty_tuple(src: rasterio.io.DatasetReader) -> tuple[Any, ...] | None:
-    corner_pixels = [
-        _read_pixel_tuple(src, 0, 0),
-        _read_pixel_tuple(src, 0, src.width - 1),
-        _read_pixel_tuple(src, src.height - 1, 0),
-        _read_pixel_tuple(src, src.height - 1, src.width - 1),
-    ]
-    common_tuple, common_count = Counter(corner_pixels).most_common(1)[0]
-    if common_count < 3:
+def _nodata_equal(left: float | int | None, right: float | int | None) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    return bool(np.isclose(float(left), float(right), rtol=0.0, atol=1e-12))
+
+
+def _format_nodata(nodata: float | int) -> str:
+    value = float(nodata)
+    if value.is_integer():
+        return str(int(value))
+    return str(nodata)
+
+
+def _json_scalar(value: float | int | None) -> float | int | None:
+    if value is None:
         return None
-
-    border_width = min(max(1, min(src.width, src.height) // 20), 128)
-    border_total = 0
-    border_matches = 0
-    windows = [
-        ((0, border_width), (0, src.width)),
-        ((src.height - border_width, src.height), (0, src.width)),
-        ((0, src.height), (0, border_width)),
-        ((0, src.height), (src.width - border_width, src.width)),
-    ]
-    for window in windows:
-        data = src.read(window=window)
-        matches = _tuple_matches(data, common_tuple)
-        border_matches += int(matches.sum())
-        border_total += matches.size
-    if border_total == 0 or border_matches / border_total < 0.10:
-        return None
-    return common_tuple
-
-
-def _read_pixel_tuple(src: rasterio.io.DatasetReader, row: int, col: int) -> tuple[Any, ...]:
-    data = src.read(window=((row, row + 1), (col, col + 1)))
-    return tuple(item.item() for item in data[:, 0, 0])
-
-
-def _mask_from_empty_tuple(src: rasterio.io.DatasetReader, empty_tuple: tuple[Any, ...]) -> np.ndarray:
-    mask = np.zeros((src.height, src.width), dtype=np.uint8)
-    for _, window in src.block_windows(1):
-        data = src.read(window=window)
-        empty_pixels = _tuple_matches(data, empty_tuple)
-        row_start = int(window.row_off)
-        row_stop = row_start + int(window.height)
-        col_start = int(window.col_off)
-        col_stop = col_start + int(window.width)
-        mask[row_start:row_stop, col_start:col_stop] = np.where(empty_pixels, 0, 255)
-    return mask
-
-
-def _tuple_matches(data: np.ndarray, expected: tuple[Any, ...]) -> np.ndarray:
-    matches = np.ones(data.shape[1:], dtype=bool)
-    for band_index, expected_value in enumerate(expected):
-        matches &= data[band_index] == expected_value
-    return matches
+    if isinstance(value, np.generic):
+        return value.item()
+    value_float = float(value)
+    if value_float.is_integer():
+        return int(value_float)
+    return value_float
 
 
 def _find_gdal_translate() -> str | None:
