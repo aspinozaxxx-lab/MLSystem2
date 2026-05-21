@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`dataset_preparing` готовит локальный raster-датасет к нарезке тайлов: читает список сцен, находит снимки в `images_dir`, считает объекты по разметке, строит train/val split и возвращает warped VRT XML в `EPSG:3857` для train и val без записи VRT на диск.
+`dataset_preparing` готовит локальный raster-датасет к нарезке тайлов: читает список сцен, находит подготовленные снимки в `images_dir`, считает объекты по разметке, строит train/val split и возвращает VRT XML для train и val без записи VRT на диск.
 
 ## Публичный интерфейс
 
@@ -23,4 +23,4 @@
 
 ## Алгоритм работы и его особенности
 
-Модуль читает `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, сопоставляет сцены по имени, stem, casefold и нормализованному ключу. Ошибками считаются только отсутствующие снимки, невозможность открыть raster, отсутствие CRS или nodata, несовместимые bands или dtype, некорректный geotransform и отсутствие `gdalwarp`. Разные source CRS, source resolution и source grid alignment допустимы. При успехе модуль через `gdalwarp -of VRT` строит train/val VRT в `EPSG:3857` с resampling `near`, `-tap`, абсолютными путями источников и минимальным target pixel size по датасету.
+Модуль читает `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, сопоставляет сцены по имени, stem, casefold и нормализованному ключу. Тяжелую нормализацию исходных снимков модуль не выполняет: одноразовая подготовка GeoTIFF в `EPSG:3857` с internal mask делается CLI-скриптом `mlsystem2.cli.prepare_images_for_vrt`. Ошибками считаются отсутствующие снимки, невозможность открыть raster, CRS не `EPSG:3857`, отсутствие usable mask или nodata, несовместимые bands или dtype, некорректный geotransform и ошибка `gdalbuildvrt`. При успехе модуль через `gdalbuildvrt` строит VRT из подготовленных снимков, возвращает XML string и дает GDAL учитывать source masks/nodata.

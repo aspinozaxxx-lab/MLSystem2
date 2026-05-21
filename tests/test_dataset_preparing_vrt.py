@@ -37,14 +37,14 @@ def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
     assert result.dataset.train_vrt_xml.startswith("<VRTDataset")
     assert "<VRTDataset" in result.dataset.val_vrt_xml
     assert max(
-        result.dataset.train_vrt_xml.count("<SourceDataset"),
-        result.dataset.val_vrt_xml.count("<SourceDataset"),
+        result.dataset.train_vrt_xml.count("<SourceFilename"),
+        result.dataset.val_vrt_xml.count("<SourceFilename"),
     ) >= 2
     _assert_vrt_reads(result.dataset.train_vrt_xml)
     _assert_vrt_reads(result.dataset.val_vrt_xml)
 
 
-def test_prepare_dataset_builds_vrt_for_different_source_crs_and_resolution(
+def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(
     tmp_path: Path,
 ) -> None:
     images = tmp_path / "images"
@@ -53,10 +53,10 @@ def test_prepare_dataset_builds_vrt_for_different_source_crs_and_resolution(
     _write_raster(
         images / "scene_b.tif",
         2,
-        0,
-        crs="EPSG:4326",
-        pixel_size=0.00001,
-        top=0.00004,
+        2.25,
+        crs="EPSG:3857",
+        pixel_size=0.5,
+        top=4.25,
     )
     scenes_file = tmp_path / "scenes.txt"
     scenes_file.write_text("scene_a\nscene_b\n", encoding="utf-8")
@@ -76,6 +76,37 @@ def test_prepare_dataset_builds_vrt_for_different_source_crs_and_resolution(
     assert result.dataset is not None
     assert "<VRTDataset" in result.dataset.train_vrt_xml
     assert "<VRTDataset" in result.dataset.val_vrt_xml
+
+
+def test_prepare_dataset_vrt_uses_source_masks_for_overlap(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    _write_raster(images / "lower.tif", 10, 0)
+    _write_masked_raster_with_invalid_white_edge(images / "upper.tif")
+    _write_raster(images / "val_scene.tif", 20, 8)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("lower\nupper\nval_scene\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(
+        annotation_file,
+        ["lower.tif"] + ["upper.tif"] * 100 + ["val_scene.tif"] * 25,
+    )
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    with MemoryFile(result.dataset.train_vrt_xml.encode("utf-8")) as memory_file:
+        with memory_file.open() as dataset:
+            data = dataset.read(1, window=((0, 1), (0, 1)), masked=False)
+    assert int(data[0, 0]) == 10
 
 
 def test_prepare_dataset_reports_error_when_scene_is_missing(tmp_path: Path) -> None:
@@ -174,6 +205,28 @@ def _write_raster(
         nodata=nodata,
     ) as dataset:
         dataset.write(data)
+
+
+def _write_masked_raster_with_invalid_white_edge(path: Path) -> None:
+    data = np.full((1, 4, 4), 50, dtype=np.uint8)
+    data[:, 0, :] = 255
+    mask = np.full((4, 4), 255, dtype=np.uint8)
+    mask[0, :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=4,
+            height=4,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:3857",
+            transform=from_origin(0, 4, 1, 1),
+            tiled=True,
+        ) as dataset:
+            dataset.write(data)
+            dataset.write_mask(mask)
 
 
 def _write_annotation(path: Path, scene_names: list[str]) -> None:

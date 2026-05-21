@@ -9,7 +9,7 @@ from mlsystem2.dataset_preparing.api import prepare_dataset
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest
 
 
-IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestation")
+IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
 DATASET_DIR = Path(r"D:\Projects\MLMarkup\Вырубки")
 OUT_DIR = Path(r"D:\Projects\test")
 

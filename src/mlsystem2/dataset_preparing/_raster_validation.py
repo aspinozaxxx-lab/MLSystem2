@@ -10,6 +10,9 @@ import rasterio
 from affine import Affine
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
+from rasterio.enums import MaskFlags
+
+from ._constants import TARGET_CRS
 
 TOLERANCE = 1e-12
 
@@ -25,7 +28,6 @@ class RasterInfo:
     crs: CRS
     transform: Affine
     bounds: BoundingBox
-    nodata: float | int
 
 
 @dataclass(frozen=True)
@@ -49,11 +51,14 @@ def validate_rasters(scene_to_image: dict[str, Path]) -> RasterValidationResult:
                 if crs is None:
                     errors.append(f"У снимка нет CRS: {path}")
                     continue
+                if crs != CRS.from_string(TARGET_CRS):
+                    errors.append(f"CRS снимка должен быть {TARGET_CRS}: {path}")
+                    continue
                 if not _is_valid_geotransform(transform):
                     errors.append(f"У снимка некорректный geotransform: {path}")
                     continue
-                if any(value is None for value in nodata_values):
-                    errors.append(f"У снимка не задан nodata: {path}")
+                if all(value is None for value in nodata_values) and not _has_usable_mask(dataset):
+                    errors.append(f"У снимка нет usable mask или nodata: {path}")
                     continue
 
                 info = RasterInfo(
@@ -66,7 +71,6 @@ def validate_rasters(scene_to_image: dict[str, Path]) -> RasterValidationResult:
                     crs=crs,
                     transform=transform,
                     bounds=dataset.bounds,
-                    nodata=nodata_values[0],
                 )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Снимок не открывается через rasterio: {path}: {exc}")
@@ -91,3 +95,16 @@ def _is_valid_geotransform(transform: Affine) -> bool:
         return False
     determinant = transform.a * transform.e - transform.b * transform.d
     return not math.isclose(determinant, 0.0, abs_tol=TOLERANCE)
+
+
+def _has_usable_mask(dataset: rasterio.io.DatasetReader) -> bool:
+    flag_sets = [set(flags) for flags in dataset.mask_flag_enums]
+    if flag_sets and all(MaskFlags.all_valid not in flags for flags in flag_sets):
+        return True
+
+    sample_height = min(dataset.height, 256)
+    sample_width = min(dataset.width, 256)
+    if sample_height == 0 or sample_width == 0:
+        return False
+    mask = dataset.dataset_mask(out_shape=(sample_height, sample_width))
+    return bool(mask.min() < mask.max())
