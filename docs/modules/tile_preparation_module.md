@@ -2,25 +2,26 @@
 
 ## Назначение
 
-`tile_preparation` принимает `PreparedDataset` от `dataset_preparing` и готовит источники train/val батчей из `train_vrt_xml` и `val_vrt_xml`.
+`tile_preparation` создает один `torch.utils.data.DataLoader` по одному VRT XML и одному GeoJSON-файлу разметки.
 
 ## Публичный интерфейс
 
-- `build_tile_sources(request: TileSourceRequest) -> TileSourceBundle` — создает источники батчей по VRT XML и параметрам `tile_size`, `stride`, `batch_size`, `prefetch_workers`, `prefetch_batches`.
+- `create_tile_dataloader(request: TileDataloaderRequest) -> torch.utils.data.DataLoader` — загружает настройки, строит датасет тайлов для одного режима и возвращает DataLoader. Батч DataLoader содержит `images: torch.Tensor float32 [B, C, tile_size, tile_size]` и `masks: torch.Tensor float32 [B, 1, tile_size, tile_size]`, маска бинарная `0/1`.
 
 ## Публичные контракты
 
-- `TilePreparationError` — ошибка подготовки тайлов.
-- `TileBatch` — поля `inputs`, `targets`, `scene_ids`, `metadata`.
-- `TilePreparationReport` — поля `train_batches_prepared`, `val_batches_prepared`, `queue_capacity`, `worker_count`, `warnings`.
-- `TileBatchSource` — протокол итератора батчей с `close` и `profile_snapshot`.
-- `TileSourceRequest` — поля `dataset`, `tile_size`, `stride`, `batch_size`, `prefetch_workers`, `prefetch_batches`.
-- `TileSourceBundle` — поля `train`, `val`, `report`.
+- `TilePreparationError` — ошибка подготовки tile DataLoader.
+- `TileDataloaderRequest` — DTO запроса создания DataLoader:
+  - `config_path: str | Path` — путь к YAML-конфигу; модуль сам загружает `settings` и использует только секцию `tile_preparation`;
+  - `vrt_xml: str` — VRT XML одного набора данных;
+  - `annotation_file: str | Path` — GeoJSON-разметка;
+  - `batch_size: int` — размер батча для torch DataLoader; значение передает `train_pipeline` из `train.batch_size`;
+  - `mode: Literal["train", "val"]` — режим одного loader; это не split. `train` включает shuffle и аугментации из настроек, `val` выключает shuffle и аугментации.
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `dataset_preparing.contracts` — публичный контракт `PreparedDataset`.
+- `settings.api` — загрузить YAML-конфиг и взять секцию `tile_preparation`.
 
 ## Алгоритм работы и его особенности
 
-Получает готовые VRT XML, открывает их in-memory через rasterio `MemoryFile` и возвращает источники батчей. Текущая нарезка батчей остается заглушкой: источники пустые, а реальное чтение окон из VRT будет следующим шагом.
+Загрузить настройки, открыть VRT через rasterio `MemoryFile`, загрузить GeoJSON, построить окна `tile_size`/`stride`, rasterize mask в `window_transform`, clip по valid/nodata mask, применить аугментации только в `train` mode при `augmentation_level > 0`, собрать torch DataLoader с `num_workers`, `prefetch_factor` и `seed`.

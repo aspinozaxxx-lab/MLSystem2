@@ -42,7 +42,7 @@ mlsystem2-infer --config configs/example.server.yaml
 3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
-5. `tile_preparation` создает источники train/val тайлов.
+5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для `train_vrt_xml` и `val_vrt_xml`. `tile_preparation` не выполняет split, а создает один torch DataLoader по одному VRT XML и GeoJSON.
 6. `train` обучает модель.
 7. `mlflow_adapter` записывает метрики, артефакты, модель или чекпойнт, отчет времени и итоговый
    отчет.
