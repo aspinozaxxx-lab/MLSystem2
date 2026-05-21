@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -18,9 +19,7 @@ RAW_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestation")
 PREPARED_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
 REPORT_PATH = Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
 TARGET_CRS = "EPSG:3857"
-DEBUG_ONE_IMAGE = Path(
-    r"D:\Projects\ImagesDeforestation\irkutsk\KV5_24818_25736-01_KANOPUS_20230618_035304_20.L2.PMS.SCN03.tif"
-)
+WORKERS = 8
 
 
 def main() -> int:
@@ -32,48 +31,28 @@ def prepare_images_for_vrt(
     raw_images_dir: Path,
     prepared_images_dir: Path,
     report_path: Path,
+    workers: int = WORKERS,
 ) -> dict[str, object]:
     files = _select_input_files(raw_images_dir)
-    report_files: list[dict[str, object]] = []
-    for input_path in files:
-        output_path = prepared_images_dir / input_path.relative_to(raw_images_dir)
-        record = {
-            "input_path": input_path.resolve().as_posix(),
-            "output_path": output_path.resolve().as_posix(),
-            "status": "ok",
-            "source_count": None,
-            "output_count": None,
-            "source_nodata": None,
-            "output_nodata": None,
-            "source_dtypes": [],
-            "output_dtypes": [],
-            "source_colorinterp": [],
-            "output_colorinterp": [],
-            "source_descriptions": [],
-            "output_descriptions": [],
-            "source_had_alpha_colorinterp": False,
-            "colorinterp_source_invalid": False,
-            "has_internal_mask": False,
-            "has_alpha": False,
-            "has_sidecar_msk": False,
-            "is_cog_check": False,
-            "error": None,
+    report_files: list[dict[str, object] | None] = [None] * len(files)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_prepare_record, raw_images_dir, prepared_images_dir, input_path): index
+            for index, input_path in enumerate(files)
         }
-        try:
-            record.update(_prepare_one(input_path, output_path))
-        except Exception as exc:  # noqa: BLE001
-            record["status"] = "error"
-            record["error"] = str(exc)
-        report_files.append(record)
+        for future in as_completed(futures):
+            report_files[futures[future]] = future.result()
 
-    error_count = sum(1 for item in report_files if item["status"] == "error")
-    output_count = sum(1 for item in report_files if item["status"] == "ok")
+    files_report = [item for item in report_files if item is not None]
+    error_count = sum(1 for item in files_report if item["status"] == "error")
+    output_count = sum(1 for item in files_report if item["status"] == "ok")
     report = {
         "status": "error" if error_count else "ok",
         "input_count": len(files),
         "output_count": output_count,
         "error_count": error_count,
-        "files": report_files,
+        "workers": workers,
+        "files": files_report,
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -81,9 +60,7 @@ def prepare_images_for_vrt(
 
 
 def _select_input_files(raw_images_dir: Path) -> list[Path]:
-    if DEBUG_ONE_IMAGE.is_file() and _is_relative_to(DEBUG_ONE_IMAGE, raw_images_dir):
-        return [DEBUG_ONE_IMAGE]
-    files = sorted(
+    return sorted(
         [
             path
             for path in raw_images_dir.rglob("*")
@@ -91,15 +68,38 @@ def _select_input_files(raw_images_dir: Path) -> list[Path]:
         ],
         key=lambda item: str(item).casefold(),
     )
-    return files[:1]
 
 
-def _is_relative_to(path: Path, root: Path) -> bool:
+def _prepare_record(raw_images_dir: Path, prepared_images_dir: Path, input_path: Path) -> dict[str, object]:
+    output_path = prepared_images_dir / input_path.relative_to(raw_images_dir)
+    record: dict[str, object] = {
+        "input_path": input_path.resolve().as_posix(),
+        "output_path": output_path.resolve().as_posix(),
+        "status": "ok",
+        "source_count": None,
+        "output_count": None,
+        "source_nodata": None,
+        "output_nodata": None,
+        "source_dtypes": [],
+        "output_dtypes": [],
+        "source_colorinterp": [],
+        "output_colorinterp": [],
+        "source_descriptions": [],
+        "output_descriptions": [],
+        "source_had_alpha_colorinterp": False,
+        "colorinterp_source_invalid": False,
+        "has_internal_mask": False,
+        "has_alpha": False,
+        "has_sidecar_msk": False,
+        "is_cog_check": False,
+        "error": None,
+    }
     try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+        record.update(_prepare_one(input_path, output_path))
+    except Exception as exc:  # noqa: BLE001
+        record["status"] = "error"
+        record["error"] = str(exc)
+    return record
 
 
 def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:

@@ -34,6 +34,27 @@ def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
         assert ColorInterp.alpha not in dataset.colorinterp
 
 
+def test_prepare_images_for_vrt_processes_multiple_files_with_workers(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    _write_raw_raster_with_white_border(raw_dir / "scene_a.tif", count=3)
+    _write_raw_raster_with_white_border(raw_dir / "nested" / "scene_b.tiff", count=3)
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
+
+    assert report["status"] == "ok"
+    assert report["input_count"] == 2
+    assert report["output_count"] == 2
+    assert report["error_count"] == 0
+    assert report["workers"] == 2
+    assert (prepared_dir / "scene_a.tif").is_file()
+    assert (prepared_dir / "nested" / "scene_b.tiff").is_file()
+    assert all(item["is_cog_check"] is True for item in report["files"])
+    assert all(item["has_alpha"] is False for item in report["files"])
+    assert all(item["has_sidecar_msk"] is False for item in report["files"])
+
+
 def test_prepare_images_for_vrt_writes_epsg3857_nodata_without_mask(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
