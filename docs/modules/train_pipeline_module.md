@@ -7,7 +7,7 @@
 
 ## Публичный интерфейс
 
-- `run_train_pipeline(request: TrainPipelineRequest) -> TrainPipelineResult` — запускает полный конвейер обучения по YAML-конфигу.
+- `run_train_pipeline(request: TrainPipelineRequest) -> TrainPipelineResult` — запускает полный конвейер обучения.
 
 ## Публичные контракты
 
