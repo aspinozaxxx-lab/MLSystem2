@@ -9,6 +9,7 @@ def train_model(
     request: TrainRequest,
     progress_sink: TrainProgressSink | None = None,
 ) -> TrainResult:
+    del request, progress_sink
     raise NotImplementedError(
-        "Реальный цикл обучения на PyTorch намеренно оставлен для шага миграции из старого проекта."
+        "Реальный цикл обучения на готовых train_loader и val_loader еще не реализован."
     )

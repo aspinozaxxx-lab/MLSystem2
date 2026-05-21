@@ -18,3 +18,7 @@ def test_run_train_pipeline_signature_uses_request_contract() -> None:
 
 def test_train_pipeline_result_fields() -> None:
     assert {"status", "mlflow_run", "timings", "report"} <= set(TrainPipelineResult.model_fields)
+
+
+def test_train_pipeline_request_has_only_run_name() -> None:
+    assert set(TrainPipelineRequest.model_fields) == {"run_name"}

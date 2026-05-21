@@ -6,7 +6,7 @@ from mlsystem2.inference.api import run_inference
 from mlsystem2.inference.contracts import InferenceConfig, InferenceRequest, InferenceResult
 from mlsystem2.mlflow_adapter.api import end_run, log_pipeline_report, log_timing_report, start_run
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
-from mlsystem2.settings.api import load_settings
+from mlsystem2.settings.api import get_settings
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.train_pipeline.contracts import (
     ModuleTiming,
@@ -32,7 +32,7 @@ def run_inference_pipeline(request: InferencePipelineRequest) -> InferencePipeli
         mlflow_elapsed += elapsed_since(started)
 
     try:
-        settings, timing = timed_call("settings", lambda: load_settings(request.config_path))
+        settings, timing = timed_call("settings", lambda: get_settings())
         timings.append(timing)
         settings = _expect_settings(settings)
 
@@ -113,7 +113,7 @@ def _timing_report(
 
 def _expect_settings(value: object) -> SystemSettings:
     if not isinstance(value, SystemSettings):
-        raise InferencePipelineError("settings.load_settings вернул неожиданное значение")
+        raise InferencePipelineError("settings.get_settings вернул неожиданное значение")
     return value
 
 

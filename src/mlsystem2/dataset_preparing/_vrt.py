@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from ._constants import TARGET_CRS
 from ._raster_validation import RasterInfo
 
 

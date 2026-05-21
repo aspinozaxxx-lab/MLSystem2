@@ -18,13 +18,10 @@ from mlsystem2.mlflow_adapter.api import (
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
 from mlsystem2.models.api import create_model
 from mlsystem2.models.contracts import ModelSpec
-from mlsystem2.settings.api import load_settings
+from mlsystem2.settings.api import get_settings
 from mlsystem2.settings.contracts import SystemSettings
-from mlsystem2.tile_preparation.api import build_tile_sources
-from mlsystem2.tile_preparation.contracts import (
-    TileSourceBundle,
-    TileSourceRequest,
-)
+from mlsystem2.tile_preparation.api import create_tile_dataloader
+from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import TrainConfig, TrainRequest, TrainResult
 
@@ -42,10 +39,10 @@ from .contracts import (
 
 @dataclass(frozen=True)
 class _PipelineDependencies:
-    load_settings: object
+    get_settings: object
     start_run: object
     prepare_dataset: object
-    build_tile_sources: object
+    create_tile_dataloader: object
     create_model: object
     train_model: object
     log_dataset_preparation: object
@@ -58,10 +55,10 @@ class _PipelineDependencies:
 
 def _default_dependencies() -> _PipelineDependencies:
     return _PipelineDependencies(
-        load_settings=load_settings,
+        get_settings=get_settings,
         start_run=start_run,
         prepare_dataset=prepare_dataset,
-        build_tile_sources=build_tile_sources,
+        create_tile_dataloader=create_tile_dataloader,
         create_model=create_model,
         train_model=train_model,
         log_dataset_preparation=log_dataset_preparation,
@@ -92,7 +89,7 @@ def run_train_pipeline(
     try:
         settings, timing = timed_call(
             "settings",
-            lambda: deps.load_settings(request.config_path),
+            lambda: deps.get_settings(),
         )
         timings.append(timing)
         settings = _expect_settings(settings)
@@ -128,17 +125,34 @@ def run_train_pipeline(
                 report=report,
             )
 
-        tile_bundle, timing = timed_call(
+        loaders, timing = timed_call(
             "tile_preparation",
-            lambda: deps.build_tile_sources(_tile_request(settings, dataset_result.dataset)),
+            lambda: (
+                deps.create_tile_dataloader(
+                    _tile_request(
+                        dataset_result.dataset.train_vrt_xml,
+                        dataset_result.dataset.annotation_file,
+                        settings.train.batch_size,
+                        "train",
+                    )
+                ),
+                deps.create_tile_dataloader(
+                    _tile_request(
+                        dataset_result.dataset.val_vrt_xml,
+                        dataset_result.dataset.annotation_file,
+                        settings.train.batch_size,
+                        "val",
+                    )
+                ),
+            ),
         )
         timings.append(timing)
-        tile_bundle = _expect_tile_bundle(tile_bundle)
+        train_loader, val_loader = loaders
 
         model = deps.create_model(_model_spec(settings))
         train_result, timing = timed_call(
             "train",
-            lambda: deps.train_model(_train_request(settings, model, tile_bundle)),
+            lambda: deps.train_model(_train_request(settings, model, train_loader, val_loader)),
         )
         timings.append(timing)
         train_result = _expect_train_result(train_result)
@@ -151,7 +165,7 @@ def run_train_pipeline(
             message="Конвейер обучения завершен.",
             dataset_status=dataset_result.report.status,
             errors=[],
-            warnings=tile_bundle.report.warnings,
+            warnings=[],
             artifacts={
                 "best_checkpoint_path": train_result.best_checkpoint_path,
                 "final_checkpoint_path": train_result.final_checkpoint_path,
@@ -206,14 +220,17 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     )
 
 
-def _tile_request(settings: SystemSettings, dataset) -> TileSourceRequest:
-    return TileSourceRequest(
-        dataset=dataset,
-        tile_size=settings.tile_preparation.tile_size,
-        stride=settings.tile_preparation.stride,
-        batch_size=settings.train.batch_size,
-        prefetch_workers=settings.tile_preparation.prefetch_workers,
-        prefetch_batches=settings.tile_preparation.prefetch_batches,
+def _tile_request(
+    vrt_xml: str,
+    annotation_file: str,
+    batch_size: int,
+    mode: str,
+) -> TileDataloaderRequest:
+    return TileDataloaderRequest(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        batch_size=batch_size,
+        mode=mode,
     )
 
 
@@ -225,16 +242,20 @@ def _model_spec(settings: SystemSettings) -> ModelSpec:
     )
 
 
-def _train_request(settings: SystemSettings, model, tile_bundle: TileSourceBundle) -> TrainRequest:
+def _train_request(
+    settings: SystemSettings,
+    model,
+    train_loader: object,
+    val_loader: object,
+) -> TrainRequest:
     return TrainRequest(
         model=model,
-        train_source=tile_bundle.train,
-        val_source=tile_bundle.val,
+        train_loader=train_loader,
+        val_loader=val_loader,
         config=TrainConfig(
             epochs=settings.train.epochs,
             batch_size=settings.train.batch_size,
             device=settings.train.device,
-            num_workers=settings.train.num_workers,
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
     )
@@ -254,19 +275,13 @@ def _timing_report(
 
 def _expect_settings(value: object) -> SystemSettings:
     if not isinstance(value, SystemSettings):
-        raise TrainPipelineError("settings.load_settings вернул неожиданное значение")
+        raise TrainPipelineError("settings.get_settings вернул неожиданное значение")
     return value
 
 
 def _expect_dataset_result(value: object) -> DatasetPreparationResult:
     if not isinstance(value, DatasetPreparationResult):
         raise TrainPipelineError("dataset_preparing.prepare_dataset вернул неожиданное значение")
-    return value
-
-
-def _expect_tile_bundle(value: object) -> TileSourceBundle:
-    if not isinstance(value, TileSourceBundle):
-        raise TrainPipelineError("tile_preparation.build_tile_sources вернул неожиданное значение")
     return value
 
 

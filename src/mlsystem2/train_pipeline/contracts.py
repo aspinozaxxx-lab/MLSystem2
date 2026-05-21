@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,7 +47,6 @@ class PipelineReport(BaseModel):
 class TrainPipelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config_path: str | Path
     run_name: str | None = None
 
 

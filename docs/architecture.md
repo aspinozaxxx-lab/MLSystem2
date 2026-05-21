@@ -37,7 +37,7 @@ mlsystem2-infer --config configs/example.server.yaml
 
 ## Конвейер Обучения
 
-1. Загрузить настройки.
+1. CLI получает путь `--config`, вызывает `settings.api.load_settings` и инициализирует текущие настройки процесса.
 2. Создать или открыть запуск MLflow через `mlflow_adapter`.
 3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
@@ -49,7 +49,7 @@ mlsystem2-infer --config configs/example.server.yaml
 
 ## Конвейер Инференса
 
-1. Загрузить настройки.
+1. CLI получает путь `--config`, вызывает `settings.api.load_settings` и инициализирует текущие настройки процесса.
 2. Загрузить модель или чекпойнт.
 3. Выполнить инференс напрямую в Python/PyTorch по локальной папке `dataset.images_dir`.
 4. Записать результаты и отчеты в MLflow.

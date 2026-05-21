@@ -7,7 +7,6 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from mlsystem2.models.contracts import ModelHandle
-from mlsystem2.tile_preparation.contracts import TileBatchSource
 
 
 class TrainError(RuntimeError):
@@ -20,7 +19,6 @@ class TrainConfig(BaseModel):
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str
-    num_workers: int = Field(ge=0)
 
 
 class EpochMetrics(BaseModel):
@@ -55,8 +53,8 @@ class TrainRequest(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     model: ModelHandle
-    train_source: TileBatchSource
-    val_source: TileBatchSource
+    train_loader: object
+    val_loader: object
     config: TrainConfig
     checkpoint_dir: str
 

@@ -1,4 +1,4 @@
-"""Открытие VRT-источников для нарезки тайлов."""
+"""Открытие VRT XML из памяти."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ def open_vrt_xml(vrt_xml: str) -> Iterator[DatasetReader]:
             yield dataset
 
 
-def validate_vrt_xml(vrt_xml: str) -> None:
-    with open_vrt_xml(vrt_xml) as dataset:
-        dataset.read(1, window=((0, min(dataset.height, 1)), (0, min(dataset.width, 1))))
+def open_vrt_reader(vrt_xml: str) -> tuple[MemoryFile, DatasetReader]:
+    memory_file = MemoryFile(vrt_xml.encode("utf-8"))
+    try:
+        dataset = memory_file.open()
+    except Exception:
+        memory_file.close()
+        raise
+    return memory_file, dataset

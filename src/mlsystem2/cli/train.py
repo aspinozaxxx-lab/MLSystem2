@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from mlsystem2.settings.api import load_settings
 from mlsystem2.train_pipeline.api import run_train_pipeline
 from mlsystem2.train_pipeline.contracts import PipelineStatus, TrainPipelineRequest
 
@@ -14,9 +15,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-name", default=None, help="Необязательное имя запуска.")
     args = parser.parse_args(argv)
 
-    result = run_train_pipeline(
-        TrainPipelineRequest(config_path=args.config, run_name=args.run_name)
-    )
+    load_settings(args.config)
+    result = run_train_pipeline(TrainPipelineRequest(run_name=args.run_name))
     print(f"status={result.status.value}")
     if result.mlflow_run is not None:
         print(f"mlflow_run={result.mlflow_run.run_id}")

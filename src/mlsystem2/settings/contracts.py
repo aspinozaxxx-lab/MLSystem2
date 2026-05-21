@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SettingsError(RuntimeError):
@@ -32,8 +34,16 @@ class TilePreparationSettings(BaseModel):
 
     tile_size: int = Field(gt=0)
     stride: int = Field(gt=0)
-    prefetch_workers: int = Field(default=16, gt=0)
-    prefetch_batches: int = Field(gt=0)
+    num_workers: int = Field(default=16, ge=0)
+    prefetch_factor: int = Field(default=2, gt=0)
+    seed: int = 42
+    augmentation_level: int = Field(default=0, ge=0, le=3)
+
+    @model_validator(mode="after")
+    def validate_stride(self) -> Self:
+        if self.stride > self.tile_size:
+            raise ValueError("stride должен быть меньше или равен tile_size")
+        return self
 
 
 class TrainSettings(BaseModel):
@@ -45,7 +55,6 @@ class TrainSettings(BaseModel):
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str
-    num_workers: int = Field(ge=0)
 
 
 class InferenceSettings(BaseModel):

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, ConfigDict
 
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
@@ -17,7 +15,6 @@ class InferencePipelineError(RuntimeError):
 class InferencePipelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config_path: str | Path
     run_name: str | None = None
 
 

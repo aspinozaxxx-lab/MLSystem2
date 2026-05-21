@@ -16,12 +16,12 @@
 - `ModuleTiming` — поля `module`, `elapsed_sec`, `details`.
 - `TimingReport` — поля `total_pipeline_time_sec`, `modules`.
 - `PipelineReport` — поля `status`, `message`, `dataset_status`, `errors`, `warnings`, `artifacts`.
-- `TrainPipelineRequest` — поля `config_path`, `run_name`.
+- `TrainPipelineRequest` — поле `run_name`.
 - `TrainPipelineResult` — поля `status`, `mlflow_run`, `timings`, `report`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `settings.api` — загрузить настройки.
+- `settings.api` — получить текущие настройки через `get_settings`.
 - `mlflow_adapter.api` — управлять запуском MLflow и записывать результаты.
 - `dataset_preparing.api` — подготовить split и получить `train_vrt_xml`, `val_vrt_xml`, `annotation_file`.
 - `tile_preparation.api` — создать `train_loader` и `val_loader`.
@@ -30,4 +30,4 @@
 
 ## Алгоритм работы и его особенности
 
-Загружает settings, открывает запуск MLflow, вызывает `dataset_preparing`. После успешной подготовки вызывает `create_tile_dataloader` два раза: для `train_vrt_xml` с `mode="train"` и для `val_vrt_xml` с `mode="val"`. В оба запроса передает `config_path`, `annotation_file` и `train.batch_size`. Затем создает модель и вызывает `train`, передавая готовые `train_loader` и `val_loader`. Ошибки и итоговые отчеты фиксируются через `mlflow_adapter`.
+Получает settings через `get_settings`, открывает запуск MLflow, вызывает `dataset_preparing` по `settings.dataset`. После успешной подготовки вызывает `create_tile_dataloader` два раза: для `train_vrt_xml` с `mode="train"` и для `val_vrt_xml` с `mode="val"`. В оба запроса передает `annotation_file` и `train.batch_size`. Затем создает модель и вызывает `train`, передавая готовые `train_loader` и `val_loader`. Ошибки и итоговые отчеты фиксируются через `mlflow_adapter`.

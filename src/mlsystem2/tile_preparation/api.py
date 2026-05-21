@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from ._prefetch import build_tile_sources as _build_tile_sources
-from .contracts import TileSourceBundle, TileSourceRequest
+from typing import TYPE_CHECKING
+
+from ._dataloader import create_tile_dataloader as _create_tile_dataloader
+from .contracts import TileDataloaderRequest
+
+if TYPE_CHECKING:
+    import torch
 
 
-def build_tile_sources(request: TileSourceRequest) -> TileSourceBundle:
-    return _build_tile_sources(request)
+def create_tile_dataloader(
+    request: TileDataloaderRequest,
+) -> "torch.utils.data.DataLoader":
+    return _create_tile_dataloader(request)
 
 
-__all__ = ["build_tile_sources"]
+__all__ = ["create_tile_dataloader"]

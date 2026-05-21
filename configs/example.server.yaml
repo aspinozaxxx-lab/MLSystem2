@@ -13,8 +13,10 @@ dataset:
 tile_preparation:
   tile_size: 512
   stride: 256
-  prefetch_workers: 16
-  prefetch_batches: 8
+  num_workers: 16
+  prefetch_factor: 2
+  seed: 42
+  augmentation_level: 0
 
 train:
   model_name: unet
@@ -23,7 +25,6 @@ train:
   epochs: 50
   batch_size: 8
   device: cuda
-  num_workers: 8
 
 inference:
   checkpoint_uri: /data/mlsystem2/models/latest.pt
