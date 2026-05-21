@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
+import boto3
 import numpy as np
 import rasterio
 from rasterio.enums import ColorInterp, MaskFlags, Resampling
@@ -20,11 +24,73 @@ PREPARED_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
 REPORT_PATH = Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
 TARGET_CRS = "EPSG:3857"
 WORKERS = 8
+SERVER_SOURCE_URI = "s3://mlsystems/images/kanopus/"
+SERVER_PREPARED_IMAGES_DIR = Path("/data/mlsystem2/prepared_images/kanopus")
+SERVER_REPORT_PATH = Path("/data/mlsystem2/prepared_images/report/prepare_images_for_vrt_report.json")
+SERVER_WORKERS = 32
 
 
-def main() -> int:
-    report = prepare_images_for_vrt(RAW_IMAGES_DIR, PREPARED_IMAGES_DIR, REPORT_PATH)
+@dataclass(frozen=True)
+class RunConfig:
+    mode: str
+    source_uri: str
+    raw_images_dir: Path | None
+    prepared_images_dir: Path
+    report_path: Path
+    workers: int
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    config = _config_for_mode(args.mode)
+    if config.mode == "server":
+        report = prepare_images_for_vrt_from_s3(
+            config.source_uri,
+            config.prepared_images_dir,
+            config.report_path,
+            workers=config.workers,
+            mode=config.mode,
+        )
+    else:
+        if config.raw_images_dir is None:
+            raise ValueError("Для local режима нужен локальный путь к исходным снимкам")
+        report = prepare_images_for_vrt(
+            config.raw_images_dir,
+            config.prepared_images_dir,
+            config.report_path,
+            workers=config.workers,
+            mode=config.mode,
+            source_uri=config.source_uri,
+        )
     return 0 if report["status"] == "ok" else 1
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("local", "server"), default="local")
+    return parser.parse_args(argv)
+
+
+def _config_for_mode(mode: str) -> RunConfig:
+    if mode == "local":
+        return RunConfig(
+            mode="local",
+            source_uri=str(RAW_IMAGES_DIR),
+            raw_images_dir=RAW_IMAGES_DIR,
+            prepared_images_dir=PREPARED_IMAGES_DIR,
+            report_path=REPORT_PATH,
+            workers=WORKERS,
+        )
+    if mode == "server":
+        return RunConfig(
+            mode="server",
+            source_uri=SERVER_SOURCE_URI,
+            raw_images_dir=None,
+            prepared_images_dir=SERVER_PREPARED_IMAGES_DIR,
+            report_path=SERVER_REPORT_PATH,
+            workers=SERVER_WORKERS,
+        )
+    raise ValueError(f"Неизвестный режим подготовки снимков: {mode}")
 
 
 def prepare_images_for_vrt(
@@ -32,6 +98,8 @@ def prepare_images_for_vrt(
     prepared_images_dir: Path,
     report_path: Path,
     workers: int = WORKERS,
+    mode: str = "local",
+    source_uri: str | None = None,
 ) -> dict[str, object]:
     files = _select_input_files(raw_images_dir)
     report_files: list[dict[str, object] | None] = [None] * len(files)
@@ -48,7 +116,44 @@ def prepare_images_for_vrt(
     output_count = sum(1 for item in files_report if item["status"] == "ok")
     report = {
         "status": "error" if error_count else "ok",
+        "mode": mode,
+        "source_uri": source_uri or raw_images_dir.resolve().as_posix(),
         "input_count": len(files),
+        "output_count": output_count,
+        "error_count": error_count,
+        "workers": workers,
+        "files": files_report,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
+def prepare_images_for_vrt_from_s3(
+    source_uri: str,
+    prepared_images_dir: Path,
+    report_path: Path,
+    workers: int = SERVER_WORKERS,
+    mode: str = "server",
+) -> dict[str, object]:
+    rasters = _list_s3_rasters(source_uri)
+    report_files: list[dict[str, object] | None] = [None] * len(rasters)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_prepare_s3_record, source_uri, prepared_images_dir, raster): index
+            for index, raster in enumerate(rasters)
+        }
+        for future in as_completed(futures):
+            report_files[futures[future]] = future.result()
+
+    files_report = [item for item in report_files if item is not None]
+    error_count = sum(1 for item in files_report if item["status"] == "error")
+    output_count = sum(1 for item in files_report if item["status"] == "ok")
+    report = {
+        "status": "error" if error_count else "ok",
+        "mode": mode,
+        "source_uri": source_uri,
+        "input_count": len(rasters),
         "output_count": output_count,
         "error_count": error_count,
         "workers": workers,
@@ -70,10 +175,51 @@ def _select_input_files(raw_images_dir: Path) -> list[Path]:
     )
 
 
+@dataclass(frozen=True)
+class S3Uri:
+    bucket: str
+    key: str
+
+
+@dataclass(frozen=True)
+class S3RasterObject:
+    bucket: str
+    key: str
+    source_uri: str
+    relative_path: PurePosixPath
+
+
 def _prepare_record(raw_images_dir: Path, prepared_images_dir: Path, input_path: Path) -> dict[str, object]:
     output_path = prepared_images_dir / input_path.relative_to(raw_images_dir)
-    record: dict[str, object] = {
-        "input_path": input_path.resolve().as_posix(),
+    record = _empty_file_record(input_path.resolve().as_posix(), output_path)
+    try:
+        record.update(_prepare_one(input_path, output_path))
+    except Exception as exc:  # noqa: BLE001
+        record["status"] = "error"
+        record["error"] = str(exc)
+    return record
+
+
+def _prepare_s3_record(
+    source_uri: str,
+    prepared_images_dir: Path,
+    raster: S3RasterObject,
+) -> dict[str, object]:
+    output_path = _output_path_for_s3_key(prepared_images_dir, source_uri, raster.key)
+    record = _empty_file_record(raster.source_uri, output_path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="mlsystem2_s3_image_") as temp_dir:
+            temp_input = _download_s3_object_to_temp(raster, Path(temp_dir))
+            record.update(_prepare_one(temp_input, output_path))
+    except Exception as exc:  # noqa: BLE001
+        record["status"] = "error"
+        record["error"] = str(exc)
+    return record
+
+
+def _empty_file_record(input_path: str, output_path: Path) -> dict[str, object]:
+    return {
+        "input_path": input_path,
         "output_path": output_path.resolve().as_posix(),
         "status": "ok",
         "source_count": None,
@@ -94,12 +240,81 @@ def _prepare_record(raw_images_dir: Path, prepared_images_dir: Path, input_path:
         "is_cog_check": False,
         "error": None,
     }
-    try:
-        record.update(_prepare_one(input_path, output_path))
-    except Exception as exc:  # noqa: BLE001
-        record["status"] = "error"
-        record["error"] = str(exc)
-    return record
+
+
+def _parse_s3_uri(uri: str) -> S3Uri:
+    if not uri.startswith("s3://"):
+        raise ValueError(f"Ожидался S3 URI: {uri}")
+    without_scheme = uri.removeprefix("s3://")
+    bucket, separator, key = without_scheme.partition("/")
+    if not bucket or not separator:
+        raise ValueError(f"Некорректный S3 URI: {uri}")
+    return S3Uri(bucket=bucket, key=key)
+
+
+def _list_s3_rasters(source_uri: str) -> list[S3RasterObject]:
+    parsed = _parse_s3_uri(source_uri)
+    prefix = _normalized_s3_prefix(parsed.key)
+    client = _s3_client()
+    rasters: list[S3RasterObject] = []
+    continuation_token: str | None = None
+    while True:
+        request: dict[str, object] = {"Bucket": parsed.bucket, "Prefix": prefix}
+        if continuation_token is not None:
+            request["ContinuationToken"] = continuation_token
+        response = client.list_objects_v2(**request)
+        for item in response.get("Contents", []):
+            key = str(item["Key"])
+            if key.endswith("/") or PurePosixPath(key).suffix.lower() not in {".tif", ".tiff"}:
+                continue
+            relative_key = _relative_s3_key(prefix, key)
+            rasters.append(
+                S3RasterObject(
+                    bucket=parsed.bucket,
+                    key=key,
+                    source_uri=f"s3://{parsed.bucket}/{key}",
+                    relative_path=PurePosixPath(relative_key),
+                )
+            )
+        if not response.get("IsTruncated"):
+            break
+        continuation_token = str(response["NextContinuationToken"])
+    return sorted(rasters, key=lambda item: item.key.casefold())
+
+
+def _download_s3_object_to_temp(raster: S3RasterObject, temp_dir: Path) -> Path:
+    input_path = temp_dir / "input" / Path(*raster.relative_path.parts)
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    _s3_client().download_file(raster.bucket, raster.key, str(input_path))
+    return input_path
+
+
+def _output_path_for_s3_key(prepared_images_dir: Path, source_uri: str, key: str) -> Path:
+    parsed = _parse_s3_uri(source_uri)
+    prefix = _normalized_s3_prefix(parsed.key)
+    return prepared_images_dir.joinpath(*PurePosixPath(_relative_s3_key(prefix, key)).parts)
+
+
+def _relative_s3_key(prefix: str, key: str) -> str:
+    if not key.startswith(prefix):
+        raise ValueError(f"S3 object не принадлежит prefix {prefix}: {key}")
+    relative_key = key[len(prefix) :]
+    if not relative_key:
+        raise ValueError(f"S3 object не содержит относительный путь: {key}")
+    return relative_key
+
+
+def _normalized_s3_prefix(key: str) -> str:
+    if not key:
+        return ""
+    return key if key.endswith("/") else f"{key}/"
+
+
+def _s3_client() -> object:
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("MLFLOW_S3_ENDPOINT_URL")
+    if endpoint_url:
+        return boto3.client("s3", endpoint_url=endpoint_url)
+    return boto3.client("s3")
 
 
 def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:

@@ -3,11 +3,69 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 
-from mlsystem2.cli.prepare_images_for_vrt import prepare_images_for_vrt
+from mlsystem2.cli.prepare_images_for_vrt import (
+    _config_for_mode,
+    _output_path_for_s3_key,
+    _parse_args,
+    _parse_s3_uri,
+    prepare_images_for_vrt,
+)
+
+
+def test_prepare_images_for_vrt_default_mode_is_local() -> None:
+    args = _parse_args([])
+
+    assert args.mode == "local"
+
+
+def test_prepare_images_for_vrt_local_config() -> None:
+    config = _config_for_mode("local")
+
+    assert config.mode == "local"
+    assert config.raw_images_dir == Path(r"D:\Projects\ImagesDeforestation")
+    assert config.prepared_images_dir == Path(r"D:\Projects\ImagesDeforestationPrepared3857")
+    assert config.report_path == Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
+    assert config.workers == 8
+
+
+def test_prepare_images_for_vrt_server_config() -> None:
+    config = _config_for_mode("server")
+
+    assert config.mode == "server"
+    assert config.source_uri == "s3://mlsystems/images/kanopus/"
+    assert config.raw_images_dir is None
+    assert config.prepared_images_dir == Path("/data/mlsystem2/prepared_images/kanopus")
+    assert config.report_path == Path(
+        "/data/mlsystem2/prepared_images/report/prepare_images_for_vrt_report.json"
+    )
+    assert config.workers == 32
+
+
+def test_prepare_images_for_vrt_unknown_mode_exits() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(["--mode", "unknown"])
+
+
+def test_prepare_images_for_vrt_parse_s3_uri() -> None:
+    parsed = _parse_s3_uri("s3://mlsystems/images/kanopus/abc.tif")
+
+    assert parsed.bucket == "mlsystems"
+    assert parsed.key == "images/kanopus/abc.tif"
+
+
+def test_prepare_images_for_vrt_s3_output_path_preserves_relative_key() -> None:
+    output_path = _output_path_for_s3_key(
+        Path("/data/mlsystem2/prepared_images/kanopus"),
+        "s3://mlsystems/images/kanopus/",
+        "images/kanopus/a/b.tif",
+    )
+
+    assert output_path == Path("/data/mlsystem2/prepared_images/kanopus/a/b.tif")
 
 
 def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
@@ -47,6 +105,8 @@ def test_prepare_images_for_vrt_processes_multiple_files_with_workers(tmp_path: 
     assert report["input_count"] == 2
     assert report["output_count"] == 2
     assert report["error_count"] == 0
+    assert report["mode"] == "local"
+    assert report["source_uri"] == raw_dir.resolve().as_posix()
     assert report["workers"] == 2
     assert (prepared_dir / "scene_a.tif").is_file()
     assert (prepared_dir / "nested" / "scene_b.tiff").is_file()
