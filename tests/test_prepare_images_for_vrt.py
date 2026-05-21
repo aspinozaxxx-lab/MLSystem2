@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pytest
 import rasterio
 from rasterio.enums import ColorInterp
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.transform import from_origin
 
 from mlsystem2.cli.prepare_images_for_vrt import (
@@ -247,6 +249,30 @@ def test_prepare_images_for_vrt_errors_without_source_nodata(tmp_path: Path) -> 
     assert not (prepared_dir / "scene.tif").exists()
 
 
+def test_prepare_images_for_vrt_logs_file_error_and_skips_bad_geotransform(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    _write_raw_raster_with_white_border(raw_dir / "good.tif", count=3)
+    _write_raw_raster_without_transform(raw_dir / "bad.tif")
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
+
+    captured = capsys.readouterr()
+    assert report["status"] == "error"
+    assert report["input_count"] == 2
+    assert report["output_count"] == 1
+    assert report["error_count"] == 1
+    assert (prepared_dir / "good.tif").is_file()
+    assert not (prepared_dir / "bad.tif").exists()
+    assert "ERROR input_path=" in captured.out
+    assert "bad.tif" in captured.out
+    assert "geotransform" in captured.out
+
+
 def _write_raw_raster_with_white_border(
     path: Path,
     *,
@@ -284,3 +310,22 @@ def _write_raw_raster_with_white_border(
         if band_tags is not None:
             for band_index, tags in band_tags.items():
                 dataset.update_tags(band_index, **tags)
+
+
+def _write_raw_raster_without_transform(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = np.full((3, 8, 8), 20, dtype=np.uint8)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=8,
+            height=8,
+            count=3,
+            dtype="uint8",
+            crs="EPSG:4326",
+            nodata=0,
+        ) as dataset:
+            dataset.write(data)

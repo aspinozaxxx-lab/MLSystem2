@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -16,6 +17,7 @@ import boto3
 import numpy as np
 import rasterio
 from rasterio.enums import ColorInterp, MaskFlags, Resampling
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.warp import calculate_default_transform, reproject
 
 
@@ -102,6 +104,7 @@ def prepare_images_for_vrt(
     source_uri: str | None = None,
 ) -> dict[str, object]:
     files = _select_input_files(raw_images_dir)
+    _log_run_start(mode, source_uri or raw_images_dir.resolve().as_posix(), len(files), workers)
     report_files: list[dict[str, object] | None] = [None] * len(files)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
@@ -109,7 +112,9 @@ def prepare_images_for_vrt(
             for index, input_path in enumerate(files)
         }
         for future in as_completed(futures):
-            report_files[futures[future]] = future.result()
+            record = future.result()
+            report_files[futures[future]] = record
+            _log_file_result(record)
 
     files_report = [item for item in report_files if item is not None]
     error_count = sum(1 for item in files_report if item["status"] == "error")
@@ -137,6 +142,7 @@ def prepare_images_for_vrt_from_s3(
     mode: str = "server",
 ) -> dict[str, object]:
     rasters = _list_s3_rasters(source_uri)
+    _log_run_start(mode, source_uri, len(rasters), workers)
     report_files: list[dict[str, object] | None] = [None] * len(rasters)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
@@ -144,7 +150,9 @@ def prepare_images_for_vrt_from_s3(
             for index, raster in enumerate(rasters)
         }
         for future in as_completed(futures):
-            report_files[futures[future]] = future.result()
+            record = future.result()
+            report_files[futures[future]] = record
+            _log_file_result(record)
 
     files_report = [item for item in report_files if item is not None]
     error_count = sum(1 for item in files_report if item["status"] == "error")
@@ -215,6 +223,25 @@ def _prepare_s3_record(
         record["status"] = "error"
         record["error"] = str(exc)
     return record
+
+
+def _log_run_start(mode: str, source_uri: str, input_count: int, workers: int) -> None:
+    print(
+        f"START mode={mode} source_uri={source_uri} input_count={input_count} workers={workers}",
+        flush=True,
+    )
+
+
+def _log_file_result(record: dict[str, object]) -> None:
+    input_path = record.get("input_path")
+    output_path = record.get("output_path")
+    if record.get("status") == "error":
+        print(
+            f"ERROR input_path={input_path} output_path={output_path} error={record.get('error')}",
+            flush=True,
+        )
+        return
+    print(f"OK input_path={input_path} output_path={output_path}", flush=True)
 
 
 def _empty_file_record(input_path: str, output_path: Path) -> dict[str, object]:
@@ -318,46 +345,54 @@ def _s3_client() -> object:
 
 
 def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
-    with rasterio.open(input_path) as src:
-        if src.crs is None:
-            raise ValueError("У исходного снимка нет CRS")
-        if len(set(src.dtypes)) != 1:
-            raise ValueError("Скрипт не меняет dtype, а снимок содержит разные dtype по каналам")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+        with rasterio.open(input_path) as src:
+            return _prepare_open_dataset(src, output_path)
 
-        source_nodata = _source_nodata(src)
-        dst_transform, dst_width, dst_height = calculate_default_transform(
-            src.crs,
-            TARGET_CRS,
-            src.width,
-            src.height,
-            *src.bounds,
+
+def _prepare_open_dataset(src: rasterio.io.DatasetReader, output_path: Path) -> dict[str, object]:
+    if src.crs is None:
+        raise ValueError("У исходного снимка нет CRS")
+    if _has_invalid_geotransform(src):
+        raise ValueError("У исходного снимка некорректный geotransform")
+    if len(set(src.dtypes)) != 1:
+        raise ValueError("Скрипт не меняет dtype, а снимок содержит разные dtype по каналам")
+
+    source_nodata = _source_nodata(src)
+    dst_transform, dst_width, dst_height = calculate_default_transform(
+        src.crs,
+        TARGET_CRS,
+        src.width,
+        src.height,
+        *src.bounds,
+    )
+
+    source_count = src.count
+    source_dtypes = tuple(src.dtypes)
+    source_colorinterp = tuple(src.colorinterp)
+    source_descriptions = tuple(src.descriptions)
+    source_tags = _filtered_dataset_tags(src.tags())
+    source_band_tags = [src.tags(band_index) for band_index in range(1, src.count + 1)]
+    colorinterp_source_invalid = len(source_colorinterp) != src.count
+    source_had_alpha_colorinterp = ColorInterp.alpha in source_colorinterp
+    colorinterp = _sanitized_source_colorinterp(source_colorinterp, src.count)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="mlsystem2_prepare_image_") as temp_dir:
+        temp_tif = Path(temp_dir) / "prepared_tmp.tif"
+        _write_temp_geotiff(
+            src=src,
+            output_path=temp_tif,
+            dst_width=dst_width,
+            dst_height=dst_height,
+            dst_transform=dst_transform,
+            nodata=source_nodata,
+            colorinterp=colorinterp,
+            source_descriptions=source_descriptions,
+            source_tags=source_tags,
+            source_band_tags=source_band_tags,
         )
-
-        source_count = src.count
-        source_dtypes = tuple(src.dtypes)
-        source_colorinterp = tuple(src.colorinterp)
-        source_descriptions = tuple(src.descriptions)
-        source_tags = _filtered_dataset_tags(src.tags())
-        source_band_tags = [src.tags(band_index) for band_index in range(1, src.count + 1)]
-        colorinterp_source_invalid = len(source_colorinterp) != src.count
-        source_had_alpha_colorinterp = ColorInterp.alpha in source_colorinterp
-        colorinterp = _sanitized_source_colorinterp(source_colorinterp, src.count)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="mlsystem2_prepare_image_") as temp_dir:
-            temp_tif = Path(temp_dir) / "prepared_tmp.tif"
-            _write_temp_geotiff(
-                src=src,
-                output_path=temp_tif,
-                dst_width=dst_width,
-                dst_height=dst_height,
-                dst_transform=dst_transform,
-                nodata=source_nodata,
-                colorinterp=colorinterp,
-                source_descriptions=source_descriptions,
-                source_tags=source_tags,
-                source_band_tags=source_band_tags,
-            )
-            _translate_to_cog(temp_tif, output_path, colorinterp, source_nodata)
+        _translate_to_cog(temp_tif, output_path, colorinterp, source_nodata)
 
     validation = _validate_output(
         output_path=output_path,
@@ -378,6 +413,10 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
         "colorinterp_source_invalid": colorinterp_source_invalid,
         **validation,
     }
+
+
+def _has_invalid_geotransform(src: rasterio.io.DatasetReader) -> bool:
+    return bool(src.transform.is_identity or src.transform.a == 0 or src.transform.e == 0)
 
 
 def _write_temp_geotiff(
