@@ -23,6 +23,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Установить GDAL CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin
+
       - name: Установить dev-зависимости
         run: |
           python -m pip install --upgrade pip
