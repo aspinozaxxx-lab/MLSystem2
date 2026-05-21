@@ -45,31 +45,106 @@ def test_prepare_images_for_vrt_writes_epsg3857_and_internal_mask(tmp_path: Path
         assert mask.max() == 255
 
 
-def test_prepare_images_for_vrt_keeps_fourth_band_non_alpha(tmp_path: Path) -> None:
+def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
-    _write_raw_raster_with_white_border(raw_dir / "scene.tif", count=4)
+    _write_raw_raster_with_white_border(
+        raw_dir / "scene.tif",
+        count=4,
+        colorinterp=(
+            ColorInterp.gray,
+            ColorInterp.undefined,
+            ColorInterp.undefined,
+            ColorInterp.undefined,
+        ),
+    )
 
     report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
     item = report["files"][0]
     assert item["output_count"] == 4
-    assert item["output_colorinterp"] == ["red", "green", "blue", "undefined"]
+    assert item["source_colorinterp"] == ["gray", "undefined", "undefined", "undefined"]
+    assert item["output_colorinterp"] == ["gray", "undefined", "undefined", "undefined"]
     assert item["is_cog_check"] is True
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.count == 4
         assert ColorInterp.alpha not in dataset.colorinterp
         assert dataset.colorinterp == (
-            ColorInterp.red,
-            ColorInterp.green,
-            ColorInterp.blue,
+            ColorInterp.gray,
+            ColorInterp.undefined,
+            ColorInterp.undefined,
             ColorInterp.undefined,
         )
 
 
-def _write_raw_raster_with_white_border(path: Path, *, count: int) -> None:
+def test_prepare_images_for_vrt_preserves_descriptions_and_band_tags(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    descriptions = ("red band", "green band", "blue band", "nir band")
+    _write_raw_raster_with_white_border(
+        raw_dir / "scene.tif",
+        count=4,
+        colorinterp=(
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.undefined,
+        ),
+        descriptions=descriptions,
+        band_tags={4: {"name": "nir"}},
+    )
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+
+    assert report["status"] == "ok"
+    item = report["files"][0]
+    assert item["source_descriptions"] == list(descriptions)
+    assert item["output_descriptions"] == list(descriptions)
+    with rasterio.open(prepared_dir / "scene.tif") as dataset:
+        assert dataset.descriptions == descriptions
+        assert dataset.tags(4)["name"] == "nir"
+
+
+def test_prepare_images_for_vrt_replaces_source_alpha_colorinterp(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    _write_raw_raster_with_white_border(
+        raw_dir / "scene.tif",
+        count=4,
+        colorinterp=(
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.alpha,
+        ),
+    )
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+
+    assert report["status"] == "ok"
+    item = report["files"][0]
+    assert item["source_had_alpha_colorinterp"] is True
+    assert item["source_colorinterp"] == ["red", "green", "blue", "alpha"]
+    assert item["output_count"] == 4
+    assert item["output_colorinterp"] == ["red", "green", "blue", "undefined"]
+    assert item["is_cog_check"] is True
+    with rasterio.open(prepared_dir / "scene.tif") as dataset:
+        assert dataset.count == 4
+        assert ColorInterp.alpha not in dataset.colorinterp
+
+
+def _write_raw_raster_with_white_border(
+    path: Path,
+    *,
+    count: int,
+    colorinterp: tuple[ColorInterp, ...] | None = None,
+    descriptions: tuple[str, ...] | None = None,
+    band_tags: dict[int, dict[str, str]] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = np.full((count, 8, 8), 20, dtype=np.uint8)
     data[:, 0, :] = 255
@@ -88,3 +163,11 @@ def _write_raw_raster_with_white_border(path: Path, *, count: int) -> None:
         transform=from_origin(40.0, 50.0, 0.0001, 0.0001),
     ) as dataset:
         dataset.write(data)
+        if colorinterp is not None:
+            dataset.colorinterp = colorinterp
+        if descriptions is not None:
+            for band_index, description in enumerate(descriptions, start=1):
+                dataset.set_band_description(band_index, description)
+        if band_tags is not None:
+            for band_index, tags in band_tags.items():
+                dataset.update_tags(band_index, **tags)

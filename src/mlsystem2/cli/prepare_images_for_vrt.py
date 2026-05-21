@@ -48,7 +48,12 @@ def prepare_images_for_vrt(
             "output_count": None,
             "source_dtypes": [],
             "output_dtypes": [],
+            "source_colorinterp": [],
             "output_colorinterp": [],
+            "source_descriptions": [],
+            "output_descriptions": [],
+            "source_had_alpha_colorinterp": False,
+            "colorinterp_source_invalid": False,
             "is_cog_check": False,
             "error": None,
         }
@@ -126,7 +131,13 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
 
         source_count = src.count
         source_dtypes = tuple(src.dtypes)
-        colorinterp = _output_colorinterp(src.count)
+        source_colorinterp = tuple(src.colorinterp)
+        source_descriptions = tuple(src.descriptions)
+        source_tags = _filtered_dataset_tags(src.tags())
+        source_band_tags = [src.tags(band_index) for band_index in range(1, src.count + 1)]
+        colorinterp_source_invalid = len(source_colorinterp) != src.count
+        source_had_alpha_colorinterp = ColorInterp.alpha in source_colorinterp
+        colorinterp = _sanitized_source_colorinterp(source_colorinterp, src.count)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="mlsystem2_prepare_image_") as temp_dir:
             temp_tif = Path(temp_dir) / "prepared_tmp.tif"
@@ -138,18 +149,28 @@ def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
                 dst_transform=dst_transform,
                 dst_mask=dst_mask,
                 colorinterp=colorinterp,
+                source_descriptions=source_descriptions,
+                source_tags=source_tags,
+                source_band_tags=source_band_tags,
             )
-            _translate_to_cog(temp_tif, output_path)
+            _translate_to_cog(temp_tif, output_path, colorinterp)
 
     validation = _validate_output(
         output_path=output_path,
         source_count=source_count,
         source_dtypes=source_dtypes,
+        expected_colorinterp=colorinterp,
+        source_descriptions=source_descriptions,
+        source_band_tags=source_band_tags,
     )
     return {
         "mask_source": mask_source,
         "source_count": source_count,
         "source_dtypes": list(source_dtypes),
+        "source_colorinterp": [item.name for item in source_colorinterp],
+        "source_descriptions": list(source_descriptions),
+        "source_had_alpha_colorinterp": source_had_alpha_colorinterp,
+        "colorinterp_source_invalid": colorinterp_source_invalid,
         **validation,
     }
 
@@ -163,6 +184,9 @@ def _write_temp_geotiff(
     dst_transform: object,
     dst_mask: np.ndarray,
     colorinterp: tuple[ColorInterp, ...],
+    source_descriptions: tuple[str | None, ...],
+    source_tags: dict[str, str],
+    source_band_tags: list[dict[str, str]],
 ) -> None:
     profile = {
         "driver": "GTiff",
@@ -195,10 +219,22 @@ def _write_temp_geotiff(
                 dst_data[dst_mask == 0] = 0
                 dst.write(dst_data, band_index)
             dst.colorinterp = colorinterp
+            if source_tags:
+                dst.update_tags(**source_tags)
+            for band_index, description in enumerate(source_descriptions, start=1):
+                if description:
+                    dst.set_band_description(band_index, description)
+            for band_index, tags in enumerate(source_band_tags, start=1):
+                if tags:
+                    dst.update_tags(band_index, **tags)
             dst.write_mask(dst_mask)
 
 
-def _translate_to_cog(input_path: Path, output_path: Path) -> None:
+def _translate_to_cog(
+    input_path: Path,
+    output_path: Path,
+    colorinterp: tuple[ColorInterp, ...],
+) -> None:
     gdal_translate = _find_gdal_translate()
     if gdal_translate is None:
         raise RuntimeError("gdal_translate не найден, COG driver недоступен")
@@ -214,6 +250,8 @@ def _translate_to_cog(input_path: Path, output_path: Path) -> None:
         "BIGTIFF=IF_SAFER",
         "-co",
         "RESAMPLING=NEAREST",
+        "-colorinterp",
+        ",".join(item.name for item in colorinterp),
         input_path.as_posix(),
         output_path.as_posix(),
     ]
@@ -222,16 +260,19 @@ def _translate_to_cog(input_path: Path, output_path: Path) -> None:
         message = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"gdal_translate COG завершился с ошибкой: {message}")
 
-
 def _validate_output(
     *,
     output_path: Path,
     source_count: int,
     source_dtypes: tuple[str, ...],
+    expected_colorinterp: tuple[ColorInterp, ...],
+    source_descriptions: tuple[str | None, ...],
+    source_band_tags: list[dict[str, str]],
 ) -> dict[str, object]:
     with rasterio.open(output_path) as ds:
         output_colorinterp = [item.name for item in ds.colorinterp]
         output_dtypes = list(ds.dtypes)
+        output_descriptions = list(ds.descriptions)
         mask = ds.dataset_mask(out_shape=(min(ds.height, 256), min(ds.width, 256)))
         if ds.count != source_count:
             raise ValueError(f"COG output count отличается: {ds.count} != {source_count}")
@@ -241,6 +282,23 @@ def _validate_output(
             raise ValueError(f"COG output CRS отличается от {TARGET_CRS}")
         if tuple(ds.dtypes) != source_dtypes:
             raise ValueError(f"COG output dtype отличается: {ds.dtypes} != {source_dtypes}")
+        if tuple(ds.colorinterp) != expected_colorinterp:
+            raise ValueError(
+                f"COG output colorinterp отличается: {ds.colorinterp} != {expected_colorinterp}"
+            )
+        if tuple(ds.descriptions) != source_descriptions:
+            raise ValueError(
+                f"COG output descriptions отличаются: {ds.descriptions} != {source_descriptions}"
+            )
+        for band_index, expected_tags in enumerate(source_band_tags, start=1):
+            output_tags = ds.tags(band_index)
+            missing_tags = {
+                key: value
+                for key, value in expected_tags.items()
+                if output_tags.get(key) != value
+            }
+            if missing_tags:
+                raise ValueError(f"COG output потерял band tags {band_index}: {missing_tags}")
         if mask.max() == 0:
             raise ValueError("COG output mask полностью пустая")
 
@@ -251,6 +309,7 @@ def _validate_output(
         "output_count": source_count,
         "output_dtypes": output_dtypes,
         "output_colorinterp": output_colorinterp,
+        "output_descriptions": output_descriptions,
         "is_cog_check": is_cog_check,
     }
 
@@ -271,17 +330,25 @@ def _check_cog_layout(output_path: Path) -> bool:
     return "LAYOUT=COG" in result.stdout
 
 
-def _output_colorinterp(count: int) -> tuple[ColorInterp, ...]:
-    if count == 1:
-        return (ColorInterp.gray,)
-    if count < 3:
+def _sanitized_source_colorinterp(
+    src_colorinterp: tuple[ColorInterp, ...],
+    count: int,
+) -> tuple[ColorInterp, ...]:
+    if len(src_colorinterp) != count:
         return tuple(ColorInterp.undefined for _ in range(count))
-    return (
-        ColorInterp.red,
-        ColorInterp.green,
-        ColorInterp.blue,
-        *[ColorInterp.undefined for _ in range(count - 3)],
+    return tuple(
+        ColorInterp.undefined if item == ColorInterp.alpha else item
+        for item in src_colorinterp
     )
+
+
+def _filtered_dataset_tags(tags: dict[str, str]) -> dict[str, str]:
+    blocked_fragments = ("alpha", "mask")
+    return {
+        key: value
+        for key, value in tags.items()
+        if not any(fragment in key.casefold() for fragment in blocked_fragments)
+    }
 
 
 def _valid_mask(src: rasterio.io.DatasetReader) -> tuple[np.ndarray, str]:
