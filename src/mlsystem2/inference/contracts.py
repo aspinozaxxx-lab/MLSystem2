@@ -34,7 +34,7 @@ class InferenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: InferenceConfig
-    images_uri: str
+    images_dir: str
     output_uri: str
     model_spec: ModelSpec | None = None
 

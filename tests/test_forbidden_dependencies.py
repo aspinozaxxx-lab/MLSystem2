@@ -49,6 +49,13 @@ def test_mlflow_imports_are_adapter_only() -> None:
                     assert "mlflow_adapter" in path.relative_to(SRC).parts, f"{path}: импорт MLflow"
 
 
+def test_removed_storage_settings_class_is_absent() -> None:
+    removed_class_name = "Storage" + "Settings"
+    for path in SRC.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert removed_class_name not in text, f"{path}: найден удаленный класс настроек хранилища"
+
+
 def _assert_no_cross_module_internal_import(path: Path, module: str) -> None:
     parts = module.split(".")
     if len(parts) < 3 or parts[0] != "mlsystem2":

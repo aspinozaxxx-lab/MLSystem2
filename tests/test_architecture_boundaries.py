@@ -8,7 +8,6 @@ PACKAGE_ROOT = ROOT / "src" / "mlsystem2"
 MODULES = {
     "cli",
     "settings",
-    "storage",
     "dataset_preparing",
     "tile_preparation",
     "models",
@@ -24,11 +23,14 @@ MODULES = {
 def test_forbidden_directories_absent() -> None:
     for name in ("ansible", "deploy", "frontend", "monitoring"):
         assert not (ROOT / name).exists()
+    assert not (PACKAGE_ROOT / "storage").exists()
 
 
 def test_forbidden_files_absent() -> None:
     for name in ("Dockerfile", "docker-compose.yml"):
         assert not (ROOT / name).exists()
+    removed_module = "stor" + "age"
+    assert not (ROOT / "docs" / "modules" / f"{removed_module}_module.md").exists()
 
 
 def test_no_unapproved_top_level_package_modules() -> None:
@@ -57,4 +59,3 @@ def test_each_module_has_api() -> None:
 def test_each_non_cli_module_has_contracts() -> None:
     for module in MODULES - {"cli"}:
         assert (PACKAGE_ROOT / module / "contracts.py").is_file()
-

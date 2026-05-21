@@ -4,15 +4,8 @@ runtime:
   logs_root: ./.runtime/logs
   cleanup_scratch_after_mlflow_log: false
 
-storage:
-  images_uri: ./data/images
-  mlmarkup_repo: ./data/MLMarkup
-  local_cache_root: ./.runtime/cache
-  s3_endpoint_url: null
-  s3_bucket: null
-
 dataset:
-  images_dir: ./data/images
+  images_dir: ./data/prepared_images/kanopus
   scenes_file: ./data/MLMarkup/scenes.json
   annotation_file: ./data/MLMarkup/annotations.json
   val_fraction: 0.2

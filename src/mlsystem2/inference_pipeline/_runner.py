@@ -94,7 +94,7 @@ def _inference_request(settings: SystemSettings) -> InferenceRequest:
             batch_size=settings.inference.batch_size,
             device=settings.inference.device,
         ),
-        images_uri=settings.storage.images_uri,
+        images_dir=settings.dataset.images_dir,
         output_uri=settings.runtime.scratch_root,
         model_spec=None,
     )

@@ -5,7 +5,6 @@ import importlib
 
 EXPECTED_API = {
     "settings.api": ["load_settings"],
-    "storage.api": ["resolve_uri", "exists", "list_files", "read_json", "write_json"],
     "dataset_preparing.api": ["prepare_dataset"],
     "tile_preparation.api": ["build_tile_sources"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],
@@ -30,4 +29,3 @@ def test_public_api_all_is_exact() -> None:
     for module_name, expected in EXPECTED_API.items():
         module = importlib.import_module(f"mlsystem2.{module_name}")
         assert list(module.__all__) == expected
-

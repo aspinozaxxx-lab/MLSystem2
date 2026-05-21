@@ -18,16 +18,6 @@ class RuntimeSettings(BaseModel):
     cleanup_scratch_after_mlflow_log: bool
 
 
-class StorageSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    images_uri: str
-    mlmarkup_repo: str
-    local_cache_root: str
-    s3_endpoint_url: str | None = None
-    s3_bucket: str | None = None
-
-
 class DatasetSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -79,7 +69,6 @@ class SystemSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runtime: RuntimeSettings
-    storage: StorageSettings
     dataset: DatasetSettings
     tile_preparation: TilePreparationSettings
     train: TrainSettings
@@ -93,7 +82,6 @@ __all__ = [
     "MLflowSettings",
     "RuntimeSettings",
     "SettingsError",
-    "StorageSettings",
     "SystemSettings",
     "TilePreparationSettings",
     "TrainSettings",

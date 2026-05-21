@@ -4,17 +4,10 @@ runtime:
   logs_root: /opt/mlsystem2/logs
   cleanup_scratch_after_mlflow_log: true
 
-storage:
-  images_uri: s3://mlsystems/images/
-  mlmarkup_repo: /data/mlsystem/MLMarkup
-  local_cache_root: /opt/mlsystem2/cache
-  s3_endpoint_url: https://s3.example.local
-  s3_bucket: mlsystems
-
 dataset:
-  images_dir: /data/mlsystem/images
-  scenes_file: /data/mlsystem/MLMarkup/scenes.json
-  annotation_file: /data/mlsystem/MLMarkup/annotations.json
+  images_dir: /data/mlsystem2/prepared_images/kanopus
+  scenes_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.txt
+  annotation_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
 
 tile_preparation:
@@ -33,7 +26,7 @@ train:
   num_workers: 8
 
 inference:
-  checkpoint_uri: s3://mlsystems/checkpoints/latest.pt
+  checkpoint_uri: /data/mlsystem2/models/latest.pt
   threshold: 0.5
   batch_size: 8
   device: cuda
