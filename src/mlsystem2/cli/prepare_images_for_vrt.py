@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import rasterio
-from rasterio.enums import Resampling
+from rasterio.enums import ColorInterp, Resampling
 from rasterio.warp import calculate_default_transform, reproject
 
 
@@ -17,6 +20,9 @@ RAW_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestation")
 PREPARED_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
 REPORT_PATH = Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
 TARGET_CRS = "EPSG:3857"
+DEBUG_ONE_IMAGE = Path(
+    r"D:\Projects\ImagesDeforestation\irkutsk\KV5_24818_25736-01_KANOPUS_20230618_035304_20.L2.PMS.SCN03.tif"
+)
 
 
 def main() -> int:
@@ -29,14 +35,7 @@ def prepare_images_for_vrt(
     prepared_images_dir: Path,
     report_path: Path,
 ) -> dict[str, object]:
-    files = sorted(
-        [
-            path
-            for path in raw_images_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
-        ],
-        key=lambda item: str(item).casefold(),
-    )
+    files = _select_input_files(raw_images_dir)
     report_files: list[dict[str, object]] = []
     for input_path in files:
         output_path = prepared_images_dir / input_path.relative_to(raw_images_dir)
@@ -45,10 +44,16 @@ def prepare_images_for_vrt(
             "output_path": output_path.resolve().as_posix(),
             "status": "ok",
             "mask_source": None,
+            "source_count": None,
+            "output_count": None,
+            "source_dtypes": [],
+            "output_dtypes": [],
+            "output_colorinterp": [],
+            "is_cog_check": False,
             "error": None,
         }
         try:
-            record["mask_source"] = _prepare_one(input_path, output_path)
+            record.update(_prepare_one(input_path, output_path))
         except Exception as exc:  # noqa: BLE001
             record["status"] = "error"
             record["error"] = str(exc)
@@ -68,7 +73,29 @@ def prepare_images_for_vrt(
     return report
 
 
-def _prepare_one(input_path: Path, output_path: Path) -> str:
+def _select_input_files(raw_images_dir: Path) -> list[Path]:
+    if DEBUG_ONE_IMAGE.is_file() and _is_relative_to(DEBUG_ONE_IMAGE, raw_images_dir):
+        return [DEBUG_ONE_IMAGE]
+    files = sorted(
+        [
+            path
+            for path in raw_images_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
+        ],
+        key=lambda item: str(item).casefold(),
+    )
+    return files[:1]
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _prepare_one(input_path: Path, output_path: Path) -> dict[str, object]:
     with rasterio.open(input_path) as src:
         if src.crs is None:
             raise ValueError("У исходного снимка нет CRS")
@@ -97,40 +124,164 @@ def _prepare_one(input_path: Path, output_path: Path) -> str:
         )
         dst_mask = np.where(dst_mask > 0, 255, 0).astype(np.uint8)
 
-        profile = src.profile.copy()
-        profile.update(
-            driver="GTiff",
-            width=dst_width,
-            height=dst_height,
-            count=src.count,
-            dtype=src.dtypes[0],
-            crs=TARGET_CRS,
-            transform=dst_transform,
-            nodata=None,
-            tiled=True,
-            blockxsize=512,
-            blockysize=512,
-            compress="deflate",
-            BIGTIFF="IF_SAFER",
-        )
+        source_count = src.count
+        source_dtypes = tuple(src.dtypes)
+        colorinterp = _output_colorinterp(src.count)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
-            with rasterio.open(output_path, "w", **profile) as dst:
-                for band_index in range(1, src.count + 1):
-                    dst_data = np.zeros((dst_height, dst_width), dtype=src.dtypes[band_index - 1])
-                    reproject(
-                        source=rasterio.band(src, band_index),
-                        destination=dst_data,
-                        src_transform=src.transform,
-                        src_crs=src.crs,
-                        dst_transform=dst_transform,
-                        dst_crs=TARGET_CRS,
-                        resampling=Resampling.nearest,
-                    )
-                    dst_data[dst_mask == 0] = 0
-                    dst.write(dst_data, band_index)
-                dst.write_mask(dst_mask)
-    return mask_source
+        with tempfile.TemporaryDirectory(prefix="mlsystem2_prepare_image_") as temp_dir:
+            temp_tif = Path(temp_dir) / "prepared_tmp.tif"
+            _write_temp_geotiff(
+                src=src,
+                output_path=temp_tif,
+                dst_width=dst_width,
+                dst_height=dst_height,
+                dst_transform=dst_transform,
+                dst_mask=dst_mask,
+                colorinterp=colorinterp,
+            )
+            _translate_to_cog(temp_tif, output_path)
+
+    validation = _validate_output(
+        output_path=output_path,
+        source_count=source_count,
+        source_dtypes=source_dtypes,
+    )
+    return {
+        "mask_source": mask_source,
+        "source_count": source_count,
+        "source_dtypes": list(source_dtypes),
+        **validation,
+    }
+
+
+def _write_temp_geotiff(
+    *,
+    src: rasterio.io.DatasetReader,
+    output_path: Path,
+    dst_width: int,
+    dst_height: int,
+    dst_transform: object,
+    dst_mask: np.ndarray,
+    colorinterp: tuple[ColorInterp, ...],
+) -> None:
+    profile = {
+        "driver": "GTiff",
+        "width": dst_width,
+        "height": dst_height,
+        "count": src.count,
+        "dtype": src.dtypes[0],
+        "crs": TARGET_CRS,
+        "transform": dst_transform,
+        "tiled": True,
+        "blockxsize": 512,
+        "blockysize": 512,
+        "compress": "deflate",
+        "BIGTIFF": "IF_SAFER",
+        "nodata": None,
+    }
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
+        with rasterio.open(output_path, "w", **profile) as dst:
+            for band_index in range(1, src.count + 1):
+                dst_data = np.zeros((dst_height, dst_width), dtype=src.dtypes[band_index - 1])
+                reproject(
+                    source=rasterio.band(src, band_index),
+                    destination=dst_data,
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=dst_transform,
+                    dst_crs=TARGET_CRS,
+                    resampling=Resampling.nearest,
+                )
+                dst_data[dst_mask == 0] = 0
+                dst.write(dst_data, band_index)
+            dst.colorinterp = colorinterp
+            dst.write_mask(dst_mask)
+
+
+def _translate_to_cog(input_path: Path, output_path: Path) -> None:
+    gdal_translate = _find_gdal_translate()
+    if gdal_translate is None:
+        raise RuntimeError("gdal_translate не найден, COG driver недоступен")
+    if output_path.exists():
+        output_path.unlink()
+    command = [
+        gdal_translate,
+        "-of",
+        "COG",
+        "-co",
+        "COMPRESS=DEFLATE",
+        "-co",
+        "BIGTIFF=IF_SAFER",
+        "-co",
+        "RESAMPLING=NEAREST",
+        input_path.as_posix(),
+        output_path.as_posix(),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"gdal_translate COG завершился с ошибкой: {message}")
+
+
+def _validate_output(
+    *,
+    output_path: Path,
+    source_count: int,
+    source_dtypes: tuple[str, ...],
+) -> dict[str, object]:
+    with rasterio.open(output_path) as ds:
+        output_colorinterp = [item.name for item in ds.colorinterp]
+        output_dtypes = list(ds.dtypes)
+        mask = ds.dataset_mask(out_shape=(min(ds.height, 256), min(ds.width, 256)))
+        if ds.count != source_count:
+            raise ValueError(f"COG output count отличается: {ds.count} != {source_count}")
+        if ColorInterp.alpha in ds.colorinterp:
+            raise ValueError("COG output содержит ColorInterp.alpha")
+        if ds.crs != rasterio.crs.CRS.from_string(TARGET_CRS):
+            raise ValueError(f"COG output CRS отличается от {TARGET_CRS}")
+        if tuple(ds.dtypes) != source_dtypes:
+            raise ValueError(f"COG output dtype отличается: {ds.dtypes} != {source_dtypes}")
+        if mask.max() == 0:
+            raise ValueError("COG output mask полностью пустая")
+
+    is_cog_check = _check_cog_layout(output_path)
+    if not is_cog_check:
+        raise ValueError("gdalinfo не подтвердил COG layout")
+    return {
+        "output_count": source_count,
+        "output_dtypes": output_dtypes,
+        "output_colorinterp": output_colorinterp,
+        "is_cog_check": is_cog_check,
+    }
+
+
+def _check_cog_layout(output_path: Path) -> bool:
+    gdalinfo = _find_gdalinfo()
+    if gdalinfo is None:
+        raise RuntimeError("gdalinfo не найден, COG layout не проверен")
+    result = subprocess.run(
+        [gdalinfo, output_path.as_posix()],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"gdalinfo завершился с ошибкой: {message}")
+    return "LAYOUT=COG" in result.stdout
+
+
+def _output_colorinterp(count: int) -> tuple[ColorInterp, ...]:
+    if count == 1:
+        return (ColorInterp.gray,)
+    if count < 3:
+        return tuple(ColorInterp.undefined for _ in range(count))
+    return (
+        ColorInterp.red,
+        ColorInterp.green,
+        ColorInterp.blue,
+        *[ColorInterp.undefined for _ in range(count - 3)],
+    )
 
 
 def _valid_mask(src: rasterio.io.DatasetReader) -> tuple[np.ndarray, str]:
@@ -202,6 +353,28 @@ def _tuple_matches(data: np.ndarray, expected: tuple[Any, ...]) -> np.ndarray:
     for band_index, expected_value in enumerate(expected):
         matches &= data[band_index] == expected_value
     return matches
+
+
+def _find_gdal_translate() -> str | None:
+    return _find_gdal_executable("gdal_translate")
+
+
+def _find_gdalinfo() -> str | None:
+    return _find_gdal_executable("gdalinfo")
+
+
+def _find_gdal_executable(name: str) -> str | None:
+    executable = shutil.which(name)
+    if executable is not None:
+        return executable
+    for candidate in (
+        Path(rf"C:\Program Files\QGIS 3.44.10\bin\{name}.exe"),
+        Path(rf"C:\Program Files\QGIS 3.42.0\bin\{name}.exe"),
+        Path(rf"C:\Program Files\QGIS 3.40.0\bin\{name}.exe"),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 if __name__ == "__main__":

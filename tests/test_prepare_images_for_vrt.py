@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 
 from mlsystem2.cli.prepare_images_for_vrt import prepare_images_for_vrt
@@ -18,6 +19,10 @@ def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
     report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
+    item = report["files"][0]
+    assert item["source_count"] == 3
+    assert item["output_count"] == 3
+    assert item["is_cog_check"] is True
     with rasterio.open(prepared_dir / "scene.tif") as dataset:
         assert dataset.count == 3
 
@@ -38,6 +43,30 @@ def test_prepare_images_for_vrt_writes_epsg3857_and_internal_mask(tmp_path: Path
         mask = dataset.dataset_mask()
         assert mask.min() == 0
         assert mask.max() == 255
+
+
+def test_prepare_images_for_vrt_keeps_fourth_band_non_alpha(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    prepared_dir = tmp_path / "prepared"
+    raw_dir.mkdir()
+    _write_raw_raster_with_white_border(raw_dir / "scene.tif", count=4)
+
+    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+
+    assert report["status"] == "ok"
+    item = report["files"][0]
+    assert item["output_count"] == 4
+    assert item["output_colorinterp"] == ["red", "green", "blue", "undefined"]
+    assert item["is_cog_check"] is True
+    with rasterio.open(prepared_dir / "scene.tif") as dataset:
+        assert dataset.count == 4
+        assert ColorInterp.alpha not in dataset.colorinterp
+        assert dataset.colorinterp == (
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.undefined,
+        )
 
 
 def _write_raw_raster_with_white_border(path: Path, *, count: int) -> None:
