@@ -6,7 +6,6 @@
 
 ## Публичный интерфейс
 
-- `python -m mlsystem2.cli.preparation_test` — тестовый запуск подготовки датасета с записью VRT, отчета и таймингов во внешнюю директорию.
 - `python -m mlsystem2.cli.prepare_images_for_vrt` — одноразовая подготовка исходных GeoTIFF к построению VRT-мозаик.
 - `mlsystem2-train` — запуск обучающего конвейера.
 - `mlsystem2-infer` — запуск инференса.
@@ -17,12 +16,12 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `dataset_preparing.api` — вызов подготовки датасета из `preparation_test`.
+- `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — локальная диагностика модулей из `modules_test`.
 - `settings.api`, `train_pipeline.api`, `inference_pipeline.api` — существующие точки входа train и infer.
 
 ## Алгоритм работы и его особенности
 
-CLI разбирает аргументы, вызывает публичный API нужного модуля и завершает процесс с кодом, соответствующим результату. `preparation_test` пишет `preparation_report.json` и `preparation_timing.json` всегда, а `train.vrt` и `val.vrt` только при успешной подготовке датасета.
+CLI разбирает аргументы, вызывает публичный API нужного модуля и завершает процесс с кодом, соответствующим результату. `modules_test` — служебный локальный диагностический скрипт, не публичный API и не основной CLI приложения; он пишет `preparation_report.json`, `modules_test_timing_report.json`, `train.vrt`, `val.vrt` и до 100 batch в `tile_batches` при успешной подготовке датасета и DataLoader.
 
 Подготовка снимков для VRT
 

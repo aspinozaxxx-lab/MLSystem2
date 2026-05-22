@@ -12,7 +12,7 @@ from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import rasterize_window_mask
 from ._vrt import open_vrt_reader, open_vrt_xml
-from ._windows import build_tile_windows
+from ._windows import build_vrt_source_windows
 
 
 class TileDataset:
@@ -41,7 +41,13 @@ class TileDataset:
             self._count = dataset.count
             self._dtypes = tuple(dataset.dtypes)
             self._vrt_crs = dataset.crs.to_string() if dataset.crs is not None else None
-            self._windows = build_tile_windows(dataset.width, dataset.height, tile_size, stride)
+            self._windows = build_vrt_source_windows(
+                vrt_xml,
+                dataset.width,
+                dataset.height,
+                tile_size,
+                stride,
+            )
 
     def __len__(self) -> int:
         return len(self._windows)
