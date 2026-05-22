@@ -47,18 +47,29 @@ def _geometric(
 
 
 def _photometric(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    image = image.astype(np.float32, copy=False)
+    value_scale = _image_value_scale(image)
     contrast = float(rng.uniform(0.85, 1.15))
-    brightness = float(rng.uniform(-0.08, 0.08))
+    brightness = float(rng.uniform(-0.08, 0.08)) * value_scale
     image = image * contrast + brightness
 
-    gamma = float(rng.uniform(0.85, 1.15))
-    image = np.power(np.clip(image, 0.0, 1.0), gamma).astype(np.float32, copy=False)
-
     if rng.random() < 0.5:
-        image = image + rng.normal(0.0, 0.02, size=image.shape).astype(np.float32)
+        noise = rng.normal(0.0, 0.02 * value_scale, size=image.shape).astype(np.float32)
+        image = image + noise
     if rng.random() < 0.3:
         image = _mean_blur(image)
-    return np.clip(image, 0.0, 1.0).astype(np.float32, copy=False)
+    return image.astype(np.float32, copy=False)
+
+
+def _image_value_scale(image: np.ndarray) -> float:
+    finite = image[np.isfinite(image)]
+    if finite.size == 0:
+        return 1.0
+
+    value_scale = float(finite.max() - finite.min())
+    if value_scale > 0.0:
+        return value_scale
+    return max(float(np.max(np.abs(finite))), 1.0)
 
 
 def _mean_blur(image: np.ndarray) -> np.ndarray:

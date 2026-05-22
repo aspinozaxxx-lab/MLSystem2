@@ -23,4 +23,4 @@
 
 ## Алгоритм работы и его особенности
 
-Получить настройки, открыть VRT через rasterio `MemoryFile`, загрузить GeoJSON, построить окна `tile_size`/`stride`, rasterize mask в `window_transform`, clip по valid/nodata mask, применить аугментации только в `train` mode при `augmentation_level > 0`, собрать torch DataLoader с `num_workers`, `prefetch_factor` и `seed`.
+Получить настройки, открыть VRT через rasterio `MemoryFile`, загрузить GeoJSON, построить регулярные окна `tile_size`/`stride` без сдвига edge-тайлов, читать image `boundless=True` с nodata-fill и приводить только к `float32` `C,H,W`, отфильтровать полностью nodata-тайлы, rasterize mask в `window_transform`, занулить mask по пикселям, где все image-каналы равны nodata, применить аугментации только в `train` mode при `augmentation_level > 0`, собрать torch DataLoader.

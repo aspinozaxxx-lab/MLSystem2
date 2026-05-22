@@ -12,7 +12,7 @@ from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import rasterize_window_mask
 from ._vrt import open_vrt_reader, open_vrt_xml
-from ._windows import build_vrt_source_windows
+from ._windows import TileWindow, build_vrt_source_windows
 
 
 class TileDataset:
@@ -39,15 +39,16 @@ class TileDataset:
 
         with open_vrt_xml(vrt_xml) as dataset:
             self._count = dataset.count
-            self._dtypes = tuple(dataset.dtypes)
+            self._nodata = _resolve_nodata(dataset)
             self._vrt_crs = dataset.crs.to_string() if dataset.crs is not None else None
-            self._windows = build_vrt_source_windows(
+            candidate_windows = build_vrt_source_windows(
                 vrt_xml,
                 dataset.width,
                 dataset.height,
                 tile_size,
                 stride,
             )
+            self._windows = self._filter_non_nodata_windows(dataset, candidate_windows)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -57,11 +58,11 @@ class TileDataset:
         dataset = self._open_dataset()
         window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
 
-        image = self._read_image(dataset, window)
-        valid_mask = self._read_valid_mask(dataset, window)
-        image[:, ~valid_mask] = 0.0
+        image_raw = self._read_image_raw(dataset, window)
+        nodata_pixels = _nodata_pixels(image_raw, self._nodata)
+        image = image_raw.astype(np.float32, copy=False)
 
-        mask = self._read_annotation_mask(dataset, window, valid_mask)
+        mask = self._read_annotation_mask(dataset, window, nodata_pixels)
         if self._mode == "train" and self._augmentation_level > 0:
             image, mask = apply_augmentations(
                 image,
@@ -104,31 +105,33 @@ class TileDataset:
             self._annotation_index = load_annotation_index(self._annotation_file, self._vrt_crs)
         return self._annotation_index
 
-    def _read_image(self, dataset: DatasetReader, window: Window) -> np.ndarray:
-        image = dataset.read(
+    def _filter_non_nodata_windows(
+        self,
+        dataset: DatasetReader,
+        windows: list[TileWindow],
+    ) -> list[TileWindow]:
+        filtered: list[TileWindow] = []
+        for tile_window in windows:
+            window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
+            sample = self._read_image_raw(dataset, window)
+            if not _is_fully_nodata(sample, self._nodata):
+                filtered.append(tile_window)
+        return filtered
+
+    def _read_image_raw(self, dataset: DatasetReader, window: Window) -> np.ndarray:
+        return dataset.read(
             window=window,
             boundless=True,
-            fill_value=0,
+            fill_value=self._nodata,
             out_shape=(self._count, self._tile_size, self._tile_size),
             masked=False,
         )
-        return _to_float32(image, self._dtypes)
-
-    def _read_valid_mask(self, dataset: DatasetReader, window: Window) -> np.ndarray:
-        masks = dataset.read_masks(
-            window=window,
-            boundless=True,
-            out_shape=(self._count, self._tile_size, self._tile_size),
-        )
-        if masks.ndim == 2:
-            return masks > 0
-        return np.all(masks > 0, axis=0)
 
     def _read_annotation_mask(
         self,
         dataset: DatasetReader,
         window: Window,
-        valid_mask: np.ndarray,
+        nodata_pixels: np.ndarray,
     ) -> np.ndarray:
         geometries = self._annotation_index_or_load().query_bounds(dataset.window_bounds(window))
         mask = rasterize_window_mask(
@@ -136,16 +139,33 @@ class TileDataset:
             out_shape=(self._tile_size, self._tile_size),
             transform=dataset.window_transform(window),
         )
-        mask[~valid_mask] = 0
+        mask[nodata_pixels] = 0
         return mask.astype(np.float32, copy=False)[None, :, :]
 
 
-def _to_float32(image: np.ndarray, dtypes: tuple[str, ...]) -> np.ndarray:
-    result = image.astype(np.float32, copy=False)
-    for channel, dtype_name in enumerate(dtypes):
-        dtype = np.dtype(dtype_name)
-        if dtype == np.dtype("uint8"):
-            result[channel] /= 255.0
-        elif np.issubdtype(dtype, np.integer):
-            result[channel] /= float(np.iinfo(dtype).max)
-    return result
+def _resolve_nodata(dataset: DatasetReader) -> object:
+    if dataset.nodata is not None:
+        return dataset.nodata
+    for nodata in dataset.nodatavals:
+        if nodata is not None:
+            return nodata
+    return 0
+
+
+def _is_fully_nodata(image: np.ndarray, nodata: object) -> bool:
+    if _is_nan(nodata):
+        return bool(np.all(np.isnan(image)))
+    return bool(np.all(image == nodata))
+
+
+def _nodata_pixels(image: np.ndarray, nodata: object) -> np.ndarray:
+    if _is_nan(nodata):
+        return np.all(np.isnan(image), axis=0)
+    return np.all(image == nodata, axis=0)
+
+
+def _is_nan(value: object) -> bool:
+    try:
+        return bool(np.isnan(value))
+    except TypeError:
+        return False

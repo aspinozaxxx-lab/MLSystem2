@@ -15,22 +15,17 @@ class TileWindow:
     height: int
 
 
-def axis_origins(length: int, tile_size: int, stride: int) -> list[int]:
-    if length <= tile_size:
-        return [0]
-
-    origins = list(range(0, length - tile_size + 1, stride))
-    last = length - tile_size
-    if origins[-1] != last:
-        origins.append(last)
-    return origins
+def regular_axis_origins(start: int, length: int, stride: int) -> list[int]:
+    if length <= 0:
+        return []
+    return list(range(start, start + length, stride))
 
 
 def build_tile_windows(width: int, height: int, tile_size: int, stride: int) -> list[TileWindow]:
     return [
         TileWindow(x=x, y=y, width=tile_size, height=tile_size)
-        for y in axis_origins(height, tile_size, stride)
-        for x in axis_origins(width, tile_size, stride)
+        for y in regular_axis_origins(0, height, stride)
+        for x in regular_axis_origins(0, width, stride)
     ]
 
 
@@ -48,8 +43,8 @@ def build_vrt_source_windows(
     windows: list[TileWindow] = []
     seen: set[tuple[int, int]] = set()
     for rect in source_rects:
-        for y in _rect_origins(rect.y, rect.height, height, tile_size, stride):
-            for x in _rect_origins(rect.x, rect.width, width, tile_size, stride):
+        for y in _regular_rect_origins(rect.y, rect.height, stride):
+            for x in _regular_rect_origins(rect.x, rect.width, stride):
                 key = (x, y)
                 if key in seen:
                     continue
@@ -87,13 +82,5 @@ def _parse_source_rects(vrt_xml: str) -> list[_SourceRect]:
     return rects
 
 
-def _rect_origins(
-    start: int,
-    length: int,
-    dataset_length: int,
-    tile_size: int,
-    stride: int,
-) -> list[int]:
-    origins = [start + origin for origin in axis_origins(length, tile_size, stride)]
-    max_origin = max(0, dataset_length - tile_size)
-    return [min(max(origin, 0), max_origin) for origin in origins]
+def _regular_rect_origins(start: int, length: int, stride: int) -> list[int]:
+    return [max(origin, 0) for origin in regular_axis_origins(start, length, stride)]

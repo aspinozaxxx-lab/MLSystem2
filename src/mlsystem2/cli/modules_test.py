@@ -359,6 +359,17 @@ def _batch_meta(
     fetch_sec: float,
     save_sec: float,
 ) -> dict[str, Any]:
+    image_min = float(images.min().item())
+    image_max = float(images.max().item())
+    per_channel_min = [
+        float(value) for value in images.amin(dim=(0, 2, 3)).detach().cpu().tolist()
+    ]
+    per_channel_max = [
+        float(value) for value in images.amax(dim=(0, 2, 3)).detach().cpu().tolist()
+    ]
+    per_channel_mean = [
+        float(value) for value in images.mean(dim=(0, 2, 3)).detach().cpu().tolist()
+    ]
     mask_min = float(masks.min().item())
     mask_max = float(masks.max().item())
     positive_mask_pixels = int((masks > 0).sum().item())
@@ -368,6 +379,11 @@ def _batch_meta(
         "masks_shape": list(masks.shape),
         "images_dtype": str(images.dtype),
         "masks_dtype": str(masks.dtype),
+        "image_min": image_min,
+        "image_max": image_max,
+        "per_channel_min": per_channel_min,
+        "per_channel_max": per_channel_max,
+        "per_channel_mean": per_channel_mean,
         "mask_min": mask_min,
         "mask_max": mask_max,
         "positive_mask_pixels": positive_mask_pixels,
@@ -387,6 +403,12 @@ def _batch_report_item(batch_meta: dict[str, Any]) -> dict[str, Any]:
         "batch_total_sec": batch_meta["batch_total_sec"],
         "images_shape": batch_meta["images_shape"],
         "masks_shape": batch_meta["masks_shape"],
+        "images_dtype": batch_meta["images_dtype"],
+        "image_min": batch_meta["image_min"],
+        "image_max": batch_meta["image_max"],
+        "per_channel_min": batch_meta["per_channel_min"],
+        "per_channel_max": batch_meta["per_channel_max"],
+        "per_channel_mean": batch_meta["per_channel_mean"],
         "positive_mask_pixels": batch_meta["positive_mask_pixels"],
         "tile_count": batch_meta["tile_count"],
     }
