@@ -1,0 +1,12 @@
+.sort-indicator {
+  width: 16px;
+  opacity: 0.5;
+
+  &:hover {
+    opacity: 1;
+  }
+
+  &.sort-indicator--selected {
+    opacity: 1;
+  }
+}

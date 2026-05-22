@@ -1,0 +1,3 @@
+ALTER TABLE workflow_def ADD COLUMN price_per_sq_km NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE processing ADD COLUMN source_type VARCHAR(64);
+ALTER TABLE processing ADD COLUMN source VARCHAR(64);

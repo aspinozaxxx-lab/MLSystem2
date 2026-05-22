@@ -1,0 +1,10 @@
+config:
+    foo: bar
+    bars:
+    -   foo1: bar1
+        foo2: bar2
+        baz:
+            foo3: bar3
+            foo6:
+                foo7: bar7
+               

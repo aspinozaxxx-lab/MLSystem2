@@ -1,0 +1,10 @@
+name: Build COG
+version: 0
+
+stages:
+  build-cog:
+    description: Preparing imagery
+    action: build-cog
+    config:
+      params:
+        crop_to_mask: false

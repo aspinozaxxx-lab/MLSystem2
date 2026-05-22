@@ -1,0 +1,186 @@
+shared:
+    semantic_model_name: &semantic_model_name rt-usa-rgb-000015-01
+    semantic_model_host: &semantic_model_host 'localhost'
+
+    lines_model1_name: &lines_model1_name roof-ridges-rgb-00015-02
+    lines_model1_host: &lines_model1_host 'localhost'
+
+    lines_model2_name: &lines_model2_name roof-ridges-rgb-00015-03
+    lines_model2_host: &lines_model2_host 'localhost'
+
+    lines_model3_name: &lines_model3_name roof-ridges-rgb-00015-04
+    lines_model3_host: &lines_model3_host 'localhost'
+
+    lines_model4_name: &lines_model4_name roof-markers-ridges-rgb-00015-05
+    lines_model4_host: &lines_model4_host 'localhost'
+
+    port: &port 8000
+
+config:
+    _class: Compose
+    bricks:
+#    -   _class: SplitRaster
+#        input: input
+#        input_ext: tif
+#        output:
+#        - RED
+#        - GRN
+#        - BLU
+#    -   _class: Segmentation
+#        bounds: 128
+#        sample_size:
+#        - 768
+#        - 768
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - semantic
+#        adapter:
+#            _class: TritonAdapter
+#            name: *semantic_model_name
+#            host: *semantic_model_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+#
+#    -   _class: Segmentation
+#        bounds: 128
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - lines1
+#        sample_size:
+#        - 768
+#        - 768
+#        adapter:
+#            _class: TritonAdapter
+#            name: *lines_model1_name
+#            host: *lines_model1_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+#
+#    -   _class: Segmentation
+#        bounds: 128
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - lines2
+#        sample_size:
+#        - 768
+#        - 768
+#        adapter:
+#            _class: TritonAdapter
+#            name: *lines_model2_name
+#            host: *lines_model2_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+
+    - _class: Segmentation
+      bounds: 128
+      input_rasters:
+          - RED
+          - GRN
+          - BLU
+      output_labels:
+          - lines3
+      sample_size:
+          - 768
+          - 768
+      adapter:
+          _class: TritonAdapter
+          name: *lines_model3_name
+          host: *lines_model3_host
+          port: *port
+          input_ndim: 4
+          output_ndim: 3
+
+#    - _class: Segmentation
+#      bounds: 128
+#      input_rasters:
+#          - RED
+#          - GRN
+#          - BLU
+#      output_labels:
+#          - markers4
+#      sample_size:
+#          - 768
+#          - 768
+#      adapter:
+#          _class: TritonAdapter
+#          name: *lines_model4_name
+#          host: *lines_model4_host
+#          port: *port
+#          input_ndim: 4
+#          output_ndim: 3
+#      postprocessors:
+#          - _class: LabelsToOnehot
+#            class_map: 1, 2
+#
+#    - _class: SplitByLinesWatershed
+#      semantic_band: semantic
+#      lines_band: lines1
+#      output_band: res1
+#      threshold: 1
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+#
+#    - _class: SplitByLinesWatershed
+#      semantic_band: semantic
+#      lines_band: lines2
+#      output_band: res2
+#      threshold: 1
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+
+    - _class: SplitByLinesWatershed
+      semantic_band: semantic
+      lines_band: lines3
+      output_band: res3
+      threshold: 1
+      semantic_erosion: 3
+      lines_dilation: 3
+      min_size: 32
+
+#    - _class: SplitByLinesWatershed
+#      semantic_band: markers4
+#      lines_band: lines4
+#      output_band: res4
+#      threshold: 0
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+#      mode: markers_and_lines
+#
+#    - _class: VectorizeMasks
+#      input_rasters:
+#          - res1
+#          - res2
+#          - res3
+#          - res4
+#
+#    - _class: Merge
+#      input_vectors:
+#          - res1
+#          - res2
+#          - res3
+#          - res4
+#      class_tag: model
+#      class_labels:
+#          - *lines_model1_name
+#          - *lines_model2_name
+#          - *lines_model3_name
+#          - *lines_model4_name
+#      output_vector: output
+        
+date: '2024-01-01'
+version: 0.1.0

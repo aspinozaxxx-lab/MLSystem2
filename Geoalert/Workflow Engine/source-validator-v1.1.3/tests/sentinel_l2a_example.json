@@ -1,0 +1,21 @@
+{
+  "task_id": "345",
+  "runcheck_url": "http://localhost:3000",
+  "input": {
+    "requirements": "dmVyc2lvbjogMS4wCnNvdXJjZXM6IAogIHNlbnRpbmVsX2wyYToge30=",
+    "request": {
+      "source_type": "sentinel_l2a",
+      "zoom": 18,
+      "url": "/48/S/WH/2022/9/3/0/"
+    },
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [[
+        [106.21127634229785, 37.9672651745489],
+        [106.2551358187204, 37.96680533253752],
+        [106.25594740577971, 38.01441636357656],
+        [106.2120595864771, 38.01487698897252],
+        [106.21127634229785, 37.9672651745489]]]
+    }
+  }
+}

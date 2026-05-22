@@ -1,0 +1,24 @@
+@import "~normalize.css";
+
+// Should be first
+@import "./nspd/theme";
+
+@import "~@blueprintjs/core/src/blueprint.scss";
+@import "~@blueprintjs/core/lib/scss/variables";
+
+@import "@blueprintjs/datetime2/lib/css/blueprint-datetime2.css";
+@import "@blueprintjs/datetime/lib/css/blueprint-datetime.css";
+@import "@blueprintjs/popover2/lib/css/blueprint-popover2.css";
+
+@import "~@blueprintjs/table/lib/css/table.css";
+
+@import "~@blueprintjs/icons/lib/css/blueprint-icons.css";
+
+$height-without-header: calc(100vh - #{$pt-navbar-height});
+
+// Breakpoints
+$breakpoint-desktop: 1024px;
+$breakpoint-tablet: 768px;
+$breakpoint-mobile: 512px;
+
+@import "./mixins";

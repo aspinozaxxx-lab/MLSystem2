@@ -1,0 +1,56 @@
+version: "3.5"
+
+x-common-minio-variables: &common-minio-variables
+  MINIO_HOST: minio
+  MINIO_PORT: 9000
+  MINIO_ACCESS_KEY: 
+  MINIO_SECRET_KEY: 
+
+services:
+  source-validator:
+    image: "source_validator/test"
+    environment:
+      <<: *common-minio-variables
+
+      WORKER_NAME: "validate-source"
+      INPUT_QUEUE: ".tasks.queue"
+      OUTPUT_QUEUE: ".result.queue"
+
+      RABBITMQ_MAX_PRIORITY: "10"
+      RABBITMQ_HOST: "queue"
+      RABBITMQ_NODE_PORT: "5672"
+      RABBITMQ_DEFAULT_USER: "user"
+      RABBITMQ_DEFAULT_PASS: "password"
+    depends_on:
+      - queue
+      - minio
+
+  minio:
+    image: minio/minio:RELEASE.2022-07-17T15-43-14Z
+    command: server --address :9000 /data
+    environment:
+      <<: *common-minio-variables
+    volumes:
+      - minio-data:/data
+      - minio-export:/export
+    ports:
+      - 9000:9000
+      - 9001:9001
+
+  queue:
+    image: rabbitmq:3.10.7-management # docker.io/bitnami/rabbitmq:3.10.7-debian-11-r4 #
+    environment:
+      RABBITMQ_HOST: "queue"
+      RABBITMQ_NODE_PORT: "5672"
+      RABBITMQ_DEFAULT_USER: "user"
+      RABBITMQ_DEFAULT_PASS: "password"
+    ports:
+      - 15672:15672
+      - 5672:5672
+
+  #queuadmin:
+  #  image: rabbitmq:3.10.7-management
+
+volumes:
+  minio-data: ~
+  minio-export: ~

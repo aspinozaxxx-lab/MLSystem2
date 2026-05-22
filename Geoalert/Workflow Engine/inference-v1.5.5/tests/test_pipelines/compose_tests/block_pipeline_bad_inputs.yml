@@ -1,0 +1,18 @@
+config:
+    _class: Compose
+    inputs: [input.tif]
+    outputs: [output.geojson]
+    blocks:
+        - name: SampleBlock
+          optional: false
+          inputs: [ input.tif ]
+          outputs: [ output.geojson ]
+          bricks: []
+        - name: SampleBlock2
+          optional: false
+          inputs: [ output.tif ]
+          outputs: [ output.geojson ]
+          bricks: []
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

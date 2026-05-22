@@ -1,0 +1,21 @@
+.manage-workflow-users {
+  &__header {
+    @include flex-centred(flex-start);
+    h2 {
+      margin-right: 2rem;
+    }
+  }
+
+  &__search {
+    @include flex-centred;
+    margin: 1.5rem 0 1rem;
+  }
+
+  &__search-input {
+    flex-grow: 1;
+  }
+
+  &__search-result {
+    margin: 0 0 1.5rem;
+  }
+}

@@ -1,0 +1,86 @@
+shared:
+    segm_model_name:  &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host 'localhost'
+    cls_name:  &class_model_name roof-type-classification-rgb-000030-03
+    cls_host: &class_model_host 'localhost'
+    port: &port '8000'
+
+config:
+    _class: Compose
+    bricks:
+    -   _class: SplitRaster
+        input: input
+        input_ext: tif
+        output:
+        - RED
+        - GRN
+        - BLU
+#    -   _class: Segmentation
+#        bounds: 128
+#        sample_size:
+#        - 768
+#        - 768
+#        vectorize: false
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - ''
+#        - ''
+#        - rt
+#        adapter:
+#            _class: TritonAdapter
+#            name: *segm_model_name
+#            host: *segm_model_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+#        postprocessors:
+#        -   _class: LabelsToOnehot
+#            class_map: 1, 2, 3, 4
+#        -   _class: SeparateInstances
+#            channel: 2
+#            aux_channel: 3
+#            mode: markers_and_borders
+#    -   _class: VectorizeMasks
+#        input_rasters:
+#        - rt
+#        output_fcs:
+#        - rt
+#    -   _class: UnifiedVectorProcessing
+#        input: rt
+#        output: rt
+#        crs: utm
+#        bricks:
+#        -   _class: FilterBigObjects
+#            max_area_sq_m: 100000
+#        -   _class: FilterSmallObjects
+#            min_area: 30.0
+#        -   _class: RemoveSmallHoles
+#            min_hole_area: 50.0
+#        -   _class: Simplify
+    -   _class: InstanceRegression
+        adapter:
+            _class: TritonAdapter
+            host: *class_model_host
+            port: *port
+            name: *class_model_name
+            input_ndim: 4
+            output_ndim: 1
+            output_dtype: float32
+        input_rasters:
+        - RED
+        - GRN
+        - BLU
+        input_vector: rt
+        output_vector: output
+        sample_size:
+        - 384
+        - 384
+        tag: gable_prob
+        undefined_result: 0.5
+        prediction: simple
+        buffer: 0.8
+date: '2023-06-27'
+version: 0.1.0

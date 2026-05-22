@@ -1,0 +1,95 @@
+.aoi-list {
+  display: flex;
+  flex-flow: column nowrap;
+  width: 100%;
+  height: 100%;
+  margin: 5px 0 20px;
+  border-radius: $pt-border-radius;
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  @include use-background-color($light-gray4, $dark-gray5);
+
+  .aoi-list__header {
+    @include use-background-color($light-gray1, $dark-gray2);
+    @include flex-centred(space-between);
+    font-weight: 600;
+
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .aoi-list-loader {
+    flex: 1;
+  }
+}
+
+.aoi-list-item {
+  height: 40px;
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 30px 90px 70px 1fr 30px 15px;
+  grid-template-rows: 1fr;
+  align-items: center;
+  // column-gap: 25px;
+
+  &::before,
+  &::after {
+    content: "";
+  }
+}
+
+.aoi-item-coll {
+  &.percent-completed {
+    justify-self: flex-end;
+  }
+
+  &.actions {
+    button {
+      border-radius: 50%;
+    }
+  }
+
+  &.status {
+    margin-left: 50px;
+    display: flex;
+  }
+}
+
+.aoi-messages-container {
+  display: inline-block;
+}
+
+.aoi-messages {
+  overflow-x: scroll;
+  font-size: 0.75rem;
+  word-wrap: break-word;
+
+  &-icon {
+    cursor: pointer;
+    outline: none;
+    margin-left: 5px;
+
+    color: $red2;
+  }
+}
+
+.aoi-list-actions {
+  display: grid;
+}
+
+.aoi-list-item-skeleton {
+  $skeleton-size: 40px;
+
+  position: relative;
+  min-height: $skeleton-size;
+  height: $skeleton-size;
+
+  & div {
+    position: absolute;
+    height: $skeleton-size;
+    width: 100%;
+    @include flex-centred;
+  }
+}

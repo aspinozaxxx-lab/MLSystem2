@@ -1,0 +1,274 @@
+# stage cannot be removed if we have "!" before stage name
+# pipeline-input: [input.tif]
+
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host 'localhost'
+
+    class_model: &class_model_name roofs-clssegm-russia-rgb-000060-03
+    class_model_host: &class_model_host 'localhost'
+
+    port: &port 8000
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+# SEGMENTATION ---------------------------------------------------------------------------------------------------------
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        -   input.tif
+        outputs:
+        -   100.geojson
+        -   RED.tif
+        -   GRN.tif
+        -   BLU.tif
+        -   100.tif
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED_
+            - GRN_
+            - BLU_
+        -   _class: BrightnessNormalization
+            input:
+            - RED_
+            - GRN_
+            - BLU_
+            output:
+            - RED
+            - GRN
+            - BLU
+            std_width: 3
+        -   _class: Segmentation
+            bounds: 128
+            res:
+              - 0.6
+              - 0.6
+            crs: epsg:3857
+            sample_size:
+              - 768
+              - 768
+            input_rasters:
+              - RED
+              - GRN
+              - BLU
+            output_labels:
+              - rt
+            adapter:
+              _class: TritonAdapter
+              name: *segm_model_name
+              host: *segm_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+            postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 3, 4
+              - _class: SeparateInstances
+                mode: markers_and_borders
+        -   _class: VectorizeMasks
+            input_rasters:
+              - rt
+            output_fcs:
+              - '100'
+    -   name: Postprocessing1
+        optional: false
+        inputs:
+            - 100.geojson
+        outputs:
+            - 100.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: '100'
+            crs: utm
+            bricks:
+            -   _class: FilterBigObjects
+                max_area_sq_m: 100000
+            -   _class: FilterSmallObjects
+                input: '100'
+                min_area: 30.0
+                output: '100'
+            -   _class: RemoveSmallHoles
+                input: '100'
+                min_hole_area: 50.0
+                output: '100'
+
+    -   name: OSM
+        optional: true
+        inputs:
+        -   100.geojson
+        outputs:
+        -   100.geojson
+        bricks:
+        -   _class: LoadOSMBuildingsLike
+            input: '100'
+            output: 100-osm
+        -   _class: MergeByReplace
+            input: '100'
+            min_iou: 0.7
+            output: '100'
+            prior: 100-osm
+            tag: shape_type
+            value_if_input: UNK
+            value_if_prior: OSM
+
+# SIMPLIFICATION -------------------------------------------------------------------------------------------------------
+    -   name: Simplification
+        optional: true
+        inputs:
+        -   100.geojson
+        outputs:
+        -   100.geojson
+        bricks:
+        -   _class: SimplifyAsShapes
+            input: '100'
+            output: '100'
+            iou_confidence_tag: "simplification_confidence_score"
+            verbose: true
+            simplification_params:
+                - shape_type: CIRCLE
+                  max_hausdorff: 2.0
+                  min_area: 0.0
+                  min_iou: 0.9
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: L-SHAPE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 200.0
+                  min_iou: 0.8
+                - shape_type: GRID_SNAP
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+
+        # next two steps are not simplification but do nothing if simplification is not applied
+        -   _class: LoadOSMRoadsLike
+            input: '100'
+            output: 301-osm
+        -   _class: AlignBuildings
+            cluster_distance: 5.0
+            input: '100'
+            max_building_area: 600.0
+            output: '100'
+            roads: 301-osm
+            shape_types:
+            - RECTANGLE
+            - L-SHAPE
+            - GRID_SNAP
+
+
+# CLASSIFICATION -------------------------------------------------------------------------------------------------------
+    -   name: Classification
+        optional: true
+        inputs:
+        -   100.geojson
+        -   RED.tif
+        -   GRN.tif
+        -   BLU.tif
+        outputs:
+        -   100.geojson
+        bricks:
+        -   _class: RasterizeLike
+            band: RED
+            input: '100'
+            output: '100rasterized'
+        - _class: Segmentation
+          bounds: 128
+          res:
+              - 0.6
+              - 0.6
+          crs: epsg:3857
+          sample_size:
+              - 768
+              - 768
+          input_rasters:
+              - RED
+              - GRN
+              - BLU
+              - '100rasterized'
+          output_labels:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+          adapter:
+              _class: TritonAdapter
+              name: *class_model_name
+              host: *class_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+          postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 1, 2, 3, 4, 5
+        - _class: VectorizeMasks
+          input_rasters:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+          output_fcs:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+        - _class: ClassifyByIntersection
+          semantic_mask: '100'
+          class_mask:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+
+# POSTPROCESSING -------------------------------------------------------------------------------------------------------
+    -   name: Postprocessing2
+        optional: false
+        inputs:
+        -  100.geojson
+        outputs:
+        -  output.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: 'output'
+            crs: utm
+            bricks:
+            -   _class: CorrectTopology
+                distance_step: 1.0
+                correct_by_subtraction: 1
+                buffer: 0.0
+            -   _class: FilterSmallObjects
+                min_area: 5.0
+                area_tag: 'area'
+            -   _class: RemoveTags
+                tags:
+                - "sat_azimuth"
+                - "sat_elevation"
+                - "sun_azimuth"
+                - "sun_elevation"
+                remove_underscore_tags: true
+            -   _class: AddAttributes
+                add_timestamp: true
+
+    namespace: null
+date: '2020-04-30'
+version: 0.1.4

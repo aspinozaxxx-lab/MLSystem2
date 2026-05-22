@@ -1,0 +1,80 @@
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host 'localhost'
+
+    port: &port 8000
+
+
+
+config:
+    _class: Compose
+    bricks:
+        - _class: Segmentation
+          bounds: 128
+          sample_size:
+            - 768
+            - 768
+          vectorize: False
+          input_rasters:
+            - RED
+            - GRN
+            - BLU
+          output_labels:
+            - sh
+            - wl
+            - rt
+          adapter:
+            _class: TritonAdapter
+            name: *segm_model_name
+            host: *segm_model_host
+            port: *port
+            input_ndim: 4
+            output_ndim: 3
+          postprocessors:
+            - _class: LabelsToOnehot
+              class_map: 1, 2, 3, 4
+            - _class: SeparateInstances
+              channel: 2
+              aux_channel: 3
+              mode: markers_and_borders
+
+        - _class: VectorizeMasks
+          input_rasters:
+            - rt
+            - wl
+            - sh
+
+          output_fcs:
+            - '100'
+            - '902'
+            - '901'
+
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: '100'
+            crs: utm
+            bricks:
+            -   _class: FilterBigObjects
+                max_area_sq_m: 100000
+            -   _class: FilterSmallObjects
+                input: '100'
+                min_area: 30.0
+                output: '100'
+            -   _class: RemoveSmallHoles
+                input: '100'
+                min_hole_area: 50.0
+                output: '100'
+
+        - _class: ComputeMetaAngles
+          meta: meta
+          output: meta
+          shadows: shadows_labels
+          walls: walls_labels
+
+        - _class: MeasureHeight
+          meta: meta
+          output: '100'
+          roofs: '100'
+          shadows: '901'
+          walls: '902'
+          sw_height_tag: _sw_height

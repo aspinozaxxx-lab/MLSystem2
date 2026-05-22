@@ -1,0 +1,75 @@
+version: '3'
+
+services:
+  database:
+    container_name: markup_storage_database
+    build: database/.
+    #volumes:
+    #  - markupstorage_db:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=markup_storage_db
+    ports:
+      - 5432:5432
+
+  minio:
+    image: minio/minio:RELEASE.2022-06-20T23-13-45Z
+    container_name: minio_container
+    command: server --console-address :9001 /data
+    environment:
+      MINIO_HOST: minio
+      MINIO_PORT: 4566
+      MINIO_ACCESS_KEY: 
+      MINIO_SECRET_KEY: 
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  queue:
+    image: rabbitmq:3.10.7-management # docker.io/bitnami/rabbitmq:3.10.7-debian-11-r4 #
+    environment:
+      RABBITMQ_HOST: "queue"
+      RABBITMQ_NODE_PORT: "5672"
+      RABBITMQ_DEFAULT_USER: "user"
+      RABBITMQ_DEFAULT_PASS: "password"
+    ports:
+      - 15672:15672
+      - 5672:5672
+
+
+  backend:
+    build: backend/.
+    environment:
+      - THREAD_COUNT=4
+      - DATABASE_URI=database
+      - POSTGRES_PASSWORD=
+      - POSTGRES_USER=postgres
+      - DATABASE_NAME=markup_storage_db
+      - DATABASE_SCHEMA=vector
+      - SQL_LOG_LEVEL=DEBUG
+      - SHOW_SQL=true
+      - minio.host=minio
+      - minio.port=9000
+      - minio.access.key=test
+      - minio.secret.key=
+      - rabbitmq.host=queue
+      - rabbitmq.node.port=5672
+      - rabbitmq.default.user=user
+      - rabbitmq.default.pass=password
+      - worker.name=vector-processor
+      - input.queue=.result.queue
+      - output.queue=.tasks.queue
+    ports:
+      - 8080:8080
+    depends_on:
+      - database
+      - minio
+      - queue
+    links:
+      - database
+      - minio
+      - queue
+
+volumes:
+  markupstorage_db: {}

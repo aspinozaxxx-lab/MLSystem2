@@ -1,0 +1,1414 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2020-02-17 20:18+0300\n"
+"Mime-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: en\n"
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Plural-Forms: \n"
+
+#: components/create-processing-dialog/index.js:169
+#~ msgid "(I hope you know what you are doing)"
+#~ msgstr "(I hope you know what you are doing)"
+
+#: components/create-processing-dialog/index.js:184
+#: components/create-project-dialog/index.js:74
+msgid "(optional)"
+msgstr "(optional)"
+
+#: src/containers/sign-up-form/index.js:43
+#~ msgid "A user with the specified email already exists"
+#~ msgstr "A user with the specified email already exists"
+
+#: containers/aoi-list/actions-menu.js:139
+msgid "AOI actions"
+msgstr "AOI actions"
+
+#: providers/CurrentUserProvider.js:26
+msgid "Access denied"
+msgstr "Access denied"
+
+#: components/processing-list/index.js:156
+#: components/project-workflow-list/index.js:97
+#: pages/link-workflow/index.js:154
+#: pages/manage-workflow-users/index.js:138
+#: pages/workflow-list/index.js:132
+msgid "Actions"
+msgstr "Actions"
+
+#: pages/project-dashboard/index.js:121
+msgid "Aoi area"
+msgstr "Aoi area"
+
+#: pages/project-dashboard/index.js:118
+msgid "Aoi count"
+msgstr "Aoi count"
+
+#: components/processing-list/index.js:108
+#: containers/aoi-list-header/index.js:64
+msgid "Area"
+msgstr "Area"
+
+#: providers/CurrentUserProvider.js:14
+msgid "Authenticating..."
+msgstr "Authenticating..."
+
+#: src/containers/upload-aoi-dialog/index.js:240
+#~ msgid "Bad extention, accepts only *.geojson/*.json files"
+#~ msgstr "Bad extention, accepts only *.geojson/*.json files"
+
+#: src/graphql/link.js:41
+#~ msgid "Bad token"
+#~ msgstr "Bad token"
+
+#: components/basemap-switcher/index.js:57
+msgid "Base overlay"
+msgstr "Base overlay"
+
+#: src/containers/aoi-list-filter-dialog/index.js:51
+#~ msgid "By status"
+#~ msgstr "By status"
+
+#: components/create-processing-dialog/index.js:236
+#: components/create-project-dialog/index.js:104
+#: components/processing-list/actions.js:60
+#: components/project-card/index.js:75
+#: components/project-workflow-list/actions.js:75
+#: pages/create-edit-workflow/index.js:393
+#: pages/link-workflow/index.js:163
+#: pages/manage-workflow-users/index.js:149
+#: pages/manage-workflow-users/index.js:220
+#: pages/project-workflows/create-and-link-workflow.js:371
+#: pages/workflow-list/delete-workflow-dialog.js:68
+
+#~ msgid "Cancel"
+#~ msgstr "Cancel"
+
+#: components/create-processing-dialog/index.js:196
+#~ msgid "Choose an provider..."
+#~ msgstr "Choose an provider..."
+
+#: pages/create-edit-workflow/index.js:353
+#: pages/project-workflows/create-and-link-workflow.js:332
+msgid "Choose file..."
+msgstr "Choose file..."
+
+#: pages/project-dashboard/index.js:125
+msgid "Completed"
+msgstr "Completed"
+
+#: components/processing-list/actions.js:63
+msgid "Confirm delete processing"
+msgstr "Confirm delete processing"
+
+#: components/project-card/index.js:78
+msgid "Confirm delete project"
+msgstr "Confirm delete project"
+
+#: pages/workflow-list/actions.js:61
+#~ msgid "Confirm delete workflow"
+#~ msgstr "Confirm delete workflow"
+
+#: pages/link-workflow/index.js:132
+#: pages/manage-workflow-users/index.js:209
+#~ msgid "Confirm link workflow"
+#~ msgstr "Confirm link workflow"
+
+#: pages/link-workflow/index.js:166
+msgid "Confirm link workflow to project"
+msgstr "Confirm link workflow to project"
+
+#: src/containers/sign-up-form/index.js:117
+#~ msgid "Confirm password"
+#~ msgstr "Confirm password"
+
+#: components/project-workflow-list/actions.js:78
+msgid "Confirm unlink workflow"
+msgstr "Confirm unlink workflow"
+
+#: components/project-workflow-list/index.js:128
+#: pages/workflow-list/workflows-list-content.js:23
+msgid "Could not fetch workflows"
+msgstr "Could not fetch workflows"
+
+#: pages/project-workflows/create-and-link-workflow.js:225
+#: pages/project-workflows/create-and-link-workflow.js:238
+msgid "Create Workflow"
+msgstr "Create Workflow"
+
+#: pages/create-edit-workflow/index.js:268
+msgid "Create a Workflow"
+msgstr "Create a Workflow"
+
+#: components/create-workflow-button/index.js:19
+#~ msgid "Create a workflow"
+#~ msgstr "Create a workflow"
+
+#: components/create-processing-dialog/index.js:156
+#: components/project-workflow-list/actions.js:118
+msgid "Create processing"
+msgstr "Create processing"
+
+#: pages/projects/index.js:117
+#: pages/projects/projects-header.js:25
+msgid "Create project"
+msgstr "Create project"
+
+#: pages/workflow-list/workflows-header.js:28
+msgid "Create workflow"
+msgstr "Create workflow"
+
+#: components/processing-list/index.js:114
+#: components/project-card/index.js:143
+#: components/project-workflow-list/index.js:88
+#: pages/processings-stats/table.js:56
+#: pages/project-dashboard/index.js:113
+#: pages/workflow-list/index.js:102
+msgid "Created"
+msgstr "Created"
+
+#: src/components/project-card/index.js:119
+#~ msgid "Created <0/>"
+#~ msgstr "Created <0/>"
+
+#: src/components/basemap-switcher/index.js:20
+#~ msgid "Dark"
+#~ msgstr "Dark"
+
+#: pages/project-dashboard/index.js:91
+msgid "Dashboard loading"
+msgstr "Dashboard loading"
+
+#: components/create-processing-dialog/index.js:198
+#: components/processing-list/index.js:132
+msgid "Data Provider"
+msgstr "Data Provider"
+
+#: pages/create-edit-workflow/index.js:314
+#: pages/project-workflows/create-and-link-workflow.js:290
+msgid "Default"
+msgstr "Default"
+
+#: components/processing-list/actions.js:59
+#: components/project-card/index.js:74
+#: containers/aoi-list/actions-menu.js:166
+#: pages/workflow-list/delete-workflow-dialog.js:67
+#: pages/workflow-list/delete-workflow-dialog.js:92
+msgid "Delete"
+msgstr "Delete"
+
+#: containers/aoi-list-actions/actions-menu.js:203
+msgid "Delete all"
+msgstr "Delete all"
+
+#: src/containers/aoi-list/actions-menu.js:59
+#: src/containers/aoi-list-actions/actions-menu.js:40
+#~ msgid "Deleted {0} AOIs"
+#~ msgstr "Deleted {0} AOIs"
+
+#: components/create-processing-dialog/index.js:182
+#: components/create-project-dialog/index.js:72
+#: components/project-workflow-list/index.js:83
+#: pages/create-edit-workflow/index.js:296
+#: pages/project-workflows/create-and-link-workflow.js:272
+#: pages/create-edit-workflow/index.js:285
+#: pages/project-workflows/create-and-link-workflow.js:258
+#: pages/workflow-list/index.js:122
+msgid "Description"
+msgstr "Description"
+
+#: src/pages/auth/index.js:25
+#~ msgid "Don't have an account?"
+#~ msgstr "Don't have an account?"
+
+#: containers/aoi-list-actions/actions-menu.js:174
+msgid "Download AOIs geometries"
+msgstr "Download all AOIs geometries"
+
+#: containers/aoi-list-actions/actions-menu.js:166
+msgid "Download raster"
+msgstr "Download raster"
+
+#: pages/workflow-list/actions.js:28
+msgid "Edit"
+msgstr "Edit"
+
+#: pages/create-edit-workflow/index.js:266
+msgid "Edit Workflow"
+msgstr "Edit Workflow"
+
+#: pages/link-workflow/index.js:240
+msgid "Either available workflows are already linked or none available"
+msgstr "Either available workflows are already linked or none available"
+
+#: pages/manage-workflow-users/index.js:133
+msgid "Email"
+msgstr "Email"
+
+#: components/processing-list/index.js:166
+#: components/project-workflow-list/index.js:127
+#: pages/processings-stats/index.js:74
+#: pages/project-workflows/index.js:40
+#: pages/projects/index.js:75
+#: pages/workflow-list/workflows-list-content.js:22
+msgid "Error"
+msgstr "Error"
+
+#: src/components/create-processing-dialog/index.js:94
+#~ msgid "Error creating processing"
+#~ msgstr "Error creating processing"
+
+#: src/pages/projects/with-create-dialog.js:27
+#~ msgid "Error creating project"
+#~ msgstr "Error creating project"
+
+#: src/containers/aoi-list/actions-menu.js:60
+#: src/containers/aoi-list-actions/actions-menu.js:41
+#~ msgid "Error delete AOIs"
+#~ msgstr "Error delete AOIs"
+
+#: src/components/processing-list/actions.js:43
+#~ msgid "Error delete processing"
+#~ msgstr "Error delete processing"
+
+#: src/components/project-card/index.js:44
+#~ msgid "Error delete project"
+#~ msgstr "Error delete project"
+
+#: src/components/workflow-list/actions.js:56
+#~ msgid "Error delete workflow"
+#~ msgstr "Error delete workflow"
+
+#: src/containers/aoi-list/actions-menu.js:107
+#~ msgid "Error export AOI geometry"
+#~ msgstr "Error export AOI geometry"
+
+#: src/containers/aoi-list/actions-menu.js:97
+#: src/containers/aoi-list-actions/actions-menu.js:66
+#~ msgid "Error export processing result"
+#~ msgstr "Error export processing result"
+
+#: pages/processings-stats/index.js:75
+msgid "Error fetch processings"
+msgstr "Error fetch processings"
+
+#: pages/projects/index.js:76
+msgid "Error fetch projects"
+msgstr "Error fetch projects"
+
+#: pages/project-workflows/index.js:41
+msgid "Error fetch projects workflows"
+msgstr "Error fetch projects workflows"
+
+#: src/containers/workflow-list/index.js:77
+#~ msgid "Error fetching workflows"
+#~ msgstr "Error fetching workflows"
+
+#: src/containers/aoi-list/actions-menu.js:125
+#~ msgid "Error locate AOI"
+#~ msgstr "Error locate AOI"
+
+#: src/containers/sign-up-form/index.js:48
+#~ msgid "Error occured"
+#~ msgstr "Error occured"
+
+#: src/containers/aoi-list/actions-menu.js:86
+#: src/containers/aoi-list-actions/actions-menu.js:55
+#~ msgid "Error restart AOIs"
+#~ msgstr "Error restart AOIs"
+
+#: src/containers/aoi-list/actions-menu.js:71
+#: src/containers/aoi-list-actions/index.js:53
+#~ msgid "Error run processing"
+#~ msgstr "Error run processing"
+
+#: src/components/draw-rectangle-button/index.js:162
+#~ msgid "Error while created aoi's"
+#~ msgstr "Error while created aoi's"
+
+#: src/containers/upload-aoi-dialog/index.js:250
+#~ msgid "Error while uploading aoi's"
+#~ msgstr "Error while uploading aoi's"
+
+#: src/pages/create-edit-workflow/index.js:98
+#~ msgid "Error while workflow definition creating"
+#~ msgstr "Error while workflow definition creating"
+
+#: containers/main-navbar/index.js:185
+msgid "Expand navbar"
+msgstr "Expand navbar"
+
+#: containers/aoi-list/actions-menu.js:181
+msgid "Export AOI geometry"
+msgstr "Export AOI geometry"
+
+#: containers/aoi-list/actions-menu.js:159
+#: containers/aoi-list-actions/actions-menu.js:187
+msgid "Export results"
+msgstr "Export results"
+
+#: components/workflow-editor/index.js:335
+msgid "Extract base64"
+msgstr "Extract base64"
+
+#: pages/project-dashboard/index.js:168
+msgid "FAILED"
+msgstr "FAILED"
+
+#: containers/aoi-list/index.js:71
+msgid "Fetching AOI's"
+msgstr "Fetching AOI's"
+
+#: components/processing-list/index.js:172
+#: pages/processings-stats/index.js:84
+msgid "Fetching Processings"
+msgstr "Fetching Processings"
+
+#: pages/projects/index.js:84
+msgid "Fetching Projects"
+msgstr "Fetching Projects"
+
+#: pages/link-workflow/index.js:234
+msgid "Fetching available workflows"
+msgstr "Fetching available workflows"
+
+#: src/components/map-loader/index.js:13
+#: src/pages/processing/map-loader.js:13
+#~ msgid "Fetching the processing"
+#~ msgstr "Fetching the processing"
+
+#: pages/manage-workflow-users/index.js:258
+msgid "Fetching users linked to workflow"
+msgstr "Fetching users linked to workflow"
+
+#: components/project-workflow-list/index.js:120
+#: pages/workflow-list/workflows-list-content.js:14
+msgid "Fetching workflows"
+msgstr "Fetching workflows"
+
+#: src/containers/aoi-list-filter-dialog/index.js:37
+#~ msgid "Filters"
+#~ msgstr "Filters"
+
+#: containers/aoi-list/actions-menu.js:174
+msgid "Fit AOI bounds"
+msgstr "Fit AOI bounds"
+
+#: pages/manage-workflow-users/user-search-callout.js:32
+msgid "Found user with this email"
+msgstr "Found user with this email"
+
+#: pages/not-found/index.js:22
+#~ msgid "Go to Projects"
+#~ msgstr "Go to Projects"
+
+#: src/pages/auth/index.js:18
+#~ msgid "Have an account?"
+#~ msgstr "Have an account?"
+
+#: pages/project-dashboard/index.js:162
+msgid "IN_PROGRESS"
+msgstr "IN_PROGRESS"
+
+#: components/create-project-dialog/index.js:92
+msgid "Include default workflow definitions"
+msgstr "Include default workflow definitions"
+
+#: src/components/map-loader/index.js:12
+#: src/pages/processing/map-loader.js:12
+#~ msgid "Initialize the map"
+#~ msgstr "Initialize the map"
+
+#: src/containers/sign-in-form/index.js:68
+#: src/containers/sign-up-form/index.js:67
+#~ msgid "Invalid email"
+#~ msgstr "Invalid email"
+
+#: src/components/basemap-switcher/index.js:21
+#~ msgid "Light"
+#~ msgstr "Light"
+
+#: pages/link-workflow/index.js:162
+#: pages/link-workflow/index.js:183
+#: pages/manage-workflow-users/index.js:219
+#: pages/manage-workflow-users/index.js:238
+msgid "Link"
+msgstr "Link"
+
+#: pages/link-workflow/index.js:210
+msgid "Link Workflows"
+msgstr "Link Workflows"
+
+#: components/link-workflow-button/index.js:19
+#~ msgid "Link workflow"
+#~ msgstr "Link workflow"
+
+#: pages/link-workflow/index.js:248
+msgid "Link workflow to user first"
+msgstr "Link workflow to user first"
+
+#: components/link-workflow-button/index.js:18
+msgid "Link workflows"
+msgstr "Link workflows"
+
+#: pages/workflow-list/delete-workflow-dialog.js:24
+msgid "Linked users: "
+msgstr "Linked users: "
+
+#: components/map-loader/index.js:29
+#: containers/aoi-list/index.js:70
+#: containers/aoi-list/loading-item.js:9
+#: pages/processing/map-loader.js:29
+msgid "Loading"
+msgstr "Loading"
+
+#: pages/manage-workflow-users/index.js:185
+msgid "Manage Workflow Users"
+msgstr "Manage Workflow Users"
+
+#: pages/workflow-list/actions.js:40
+msgid "Manage users"
+msgstr "Manage users"
+
+#: containers/aoi-list/actions-menu.js:170
+msgid "Map actions"
+msgstr "Map actions"
+
+#: containers/aoi-list/aoi-messages-dialog.js:32
+msgid "Messages"
+msgstr "Messages"
+
+#: containers/main-navbar/index.js:193
+msgid "Minify navbar"
+msgstr "Minify navbar"
+
+#: components/create-processing-dialog/index.js:166
+#: components/create-project-dialog/index.js:56
+#: components/processing-list/index.js:103
+#: components/project-workflow-list/index.js:65
+#: pages/create-edit-workflow/index.js:278
+#: pages/link-workflow/index.js:136
+#: pages/project-workflows/create-and-link-workflow.js:254
+#: pages/create-edit-workflow/index.js:267
+#: pages/link-workflow/index.js:136
+#: pages/processings-stats/table.js:33
+#: pages/project-workflows/create-and-link-workflow.js:240
+#: pages/workflow-list/index.js:84
+msgid "Name"
+msgstr "Name"
+
+#: pages/link-workflow/index.js:238
+msgid "No available workflows to link"
+msgstr "No available workflows to link"
+
+#: pages/workflow-list/delete-workflow-dialog.js:41
+msgid "No linked users"
+msgstr "No linked users"
+
+#: pages/workflow-list/workflows-list-content.js:29
+msgid "No workflow created yet"
+msgstr "No workflow created yet"
+
+#: pages/not-found/index.js:16
+#~ msgid "Not Found"
+#~ msgstr "Not Found"
+
+#: pages/project-dashboard/index.js:150
+msgid "OK"
+msgstr "OK"
+
+#: providers/CurrentUserProvider.js:28
+msgid "Only administrators allowed to use this service"
+msgstr "Only administrators allowed to use this service"
+
+#: components/create-processing-dialog/index.js:227
+msgid "Options"
+msgstr "Options"
+
+#: src/components/basemap-switcher/index.js:24
+#~ msgid "Outdoors"
+#~ msgstr "Outdoors"
+
+#: components/create-processing-dialog/index.js:168
+#~ msgid "Partition size"
+#~ msgstr "Partition size"
+
+#: src/containers/sign-in-form/index.js:99
+#: src/containers/sign-up-form/index.js:101
+#~ msgid "Password"
+#~ msgstr "Password"
+
+#: src/containers/sign-in-form/index.js:73
+#: src/containers/sign-up-form/index.js:72
+#~ msgid "Password must be 8 characters or longer"
+#~ msgstr "Password must be 8 characters or longer"
+
+#: src/containers/sign-up-form/index.js:76
+#~ msgid "Passwords didn't matches"
+#~ msgstr "Passwords didn't matches"
+
+#: pages/create-edit-workflow/index.js:326
+#: pages/project-workflows/create-and-link-workflow.js:302
+msgid "Price per sq. km."
+msgstr "Price per sq. km."
+
+#: src/components/processing-list/actions.js:38
+#~ msgid "Processing \"{name}\" deleted"
+#~ msgstr "Processing \"{name}\" deleted"
+
+#: containers/aoi-list/actions-menu.js:144
+#~ msgid "Processing actions"
+#~ msgstr "Processing actions"
+
+#: src/components/create-processing-dialog/index.js:90
+#~ msgid "Processing {name} successfully created"
+#~ msgstr "Processing {name} successfully created"
+
+#: containers/main-navbar/index.js:143
+#: pages/processings/index.js:14
+#: pages/processings-stats/header.js:16
+msgid "Processings"
+msgstr "Processings"
+
+#: components/processing-list/index.js:167
+msgid "Processings was not fetched"
+msgstr "Processings was not fetched"
+
+#: components/processing-list/index.js:151
+#: containers/aoi-list-header/index.js:71
+#: pages/processings-stats/table.js:78
+msgid "Progress"
+msgstr "Progress"
+
+#: src/pages/projects/with-create-dialog.js:23
+#~ msgid "Project \"{0}\" successfully created"
+#~ msgstr "Project \"{0}\" successfully created"
+
+#: src/components/project-card/index.js:39
+#~ msgid "Project \"{name}\" deleted"
+#~ msgstr "Project \"{name}\" deleted"
+
+#: pages/project-workflows/index.js:23
+msgid "Project Workflows"
+msgstr "Project Workflows"
+
+#: components/create-project-dialog/index.js:49
+msgid "Project creation"
+msgstr "Project creation"
+
+#: containers/main-navbar/index.js:109
+#: pages/projects/projects-header.js:16
+msgid "Projects"
+msgstr "Projects"
+
+#: pages/projects/index.js:130
+msgid "Projects not found"
+msgstr "Projects not found"
+
+#: pages/not-found/index.js:17
+#~ msgid "Requested resource is not found"
+#~ msgstr "Requested resource is not found"
+
+#: src/containers/aoi-list-filter-dialog/index.js:43
+#~ msgid "Reset"
+#~ msgstr "Reset"
+
+#: containers/aoi-list/actions-menu.js:151
+msgid "Restart AOI"
+msgstr "Restart AOI"
+
+#: containers/aoi-list-actions/actions-menu.js:189
+#~ msgid "Restart all failed"
+#~ msgstr "Restart all failed"
+
+#: containers/aoi-list-actions/actions-menu.js:195
+msgid "Restart processing"
+msgstr "Restart processing"
+
+#~ msgid "Restarted processing"
+#~ msgstr "Restarted processing"
+
+#~ msgid "Restarted AOI"
+#~ msgstr "Restarted AOI"
+
+#: src/containers/aoi-list/actions-menu.js:85
+#: src/containers/aoi-list-actions/actions-menu.js:54
+#~ msgid "Restarted {0} AOIs"
+#~ msgstr "Restarted {0} AOIs"
+
+#: src/containers/workflow-list/index.js:104
+#~ msgid "Retry"
+#~ msgstr "Retry"
+
+#: containers/aoi-list-actions/index.js:64
+#~ msgid "Run all unprocessed"
+#~ msgstr "Run all unprocessed"
+
+#: containers/aoi-list-actions/index.js:69
+msgid "Run processing"
+msgstr "Run processing"
+
+#: src/components/basemap-switcher/index.js:22
+#~ msgid "Satellite"
+#~ msgstr "Satellite"
+
+#: components/create-processing-dialog/index.js:244
+#: components/create-project-dialog/index.js:113
+#: pages/create-edit-workflow/index.js:402
+#: pages/project-workflows/create-and-link-workflow.js:379
+msgid "Save"
+msgstr "Save"
+
+#: pages/manage-workflow-users/user-search-callout.js:15
+msgid "Search in progress..."
+msgstr "Search in progress..."
+
+#: src/containers/sign-in-form/index.js:126
+#~ msgid "Sign In"
+#~ msgstr "Sign In"
+
+#: containers/sign-out-button/index.js:25
+msgid "Sign Out"
+msgstr "Sign Out"
+
+#: src/containers/sign-up-form/index.js:141
+#~ msgid "Sign Up"
+#~ msgstr "Sign Up"
+
+#: src/pages/auth/index.js:19
+#~ msgid "SignIn"
+#~ msgstr "SignIn"
+
+#: src/containers/sign-in-form/index.js:80
+#~ msgid "SignIn form"
+#~ msgstr "SignIn form"
+
+#: src/pages/auth/index.js:26
+#~ msgid "SignUp"
+#~ msgstr "SignUp"
+
+#: src/containers/sign-up-form/index.js:82
+#~ msgid "SignUp form"
+#~ msgstr "SignUp form"
+
+#: containers/aoi-list/actions-menu.js:143
+msgid "Start AOI"
+msgstr "Start AOI"
+
+#: containers/main-navbar/index.js:173
+msgid "Stats of Processings"
+msgstr "Stats of Processings"
+
+#: components/processing-list/index.js:138
+#: containers/aoi-list-header/index.js:78
+#: pages/processings-stats/table.js:43
+msgid "Status"
+msgstr "Status"
+
+#: src/components/basemap-switcher/index.js:23
+#~ msgid "Streets"
+#~ msgstr "Streets"
+
+#: src/containers/sign-up-form/index.js:140
+#~ msgid "Submit"
+#~ msgstr "Submit"
+
+#: src/components/draw-rectangle-button/index.js:157
+#~ msgid "Successfully created {count} features"
+#~ msgstr "Successfully created {count} features"
+
+#: src/containers/upload-aoi-dialog/index.js:245
+#~ msgid "Successfully loaded {count} features"
+#~ msgstr "Successfully loaded {count} features"
+
+#: src/containers/aoi-list/actions-menu.js:96
+#: src/containers/aoi-list-actions/actions-menu.js:65
+#~ msgid "Successfully prepared export data"
+#~ msgstr "Successfully prepared export data"
+
+#: src/containers/aoi-list/actions-menu.js:70
+#: src/containers/aoi-list-actions/index.js:52
+#~ msgid "Successfully started {0} AOIs"
+#~ msgstr "Successfully started {0} AOIs"
+
+#: src/components/create-processing-dialog/index.js:83
+#: src/components/create-project-dialog/index.js:37
+#: src/pages/create-edit-workflow/index.js:53
+#~ msgid "The description field may not be greater than {0} characters"
+#~ msgstr "The description field may not be greater than {0} characters"
+
+#: src/components/create-processing-dialog/index.js:80
+#: src/components/create-project-dialog/index.js:34
+#: src/pages/create-edit-workflow/index.js:50
+#~ msgid "The name field may not be greater than {0} characters"
+#~ msgstr "The name field may not be greater than {0} characters"
+
+#: src/containers/aoi-list/actions-menu.js:99
+#: src/containers/aoi-list-actions/actions-menu.js:68
+#~ msgid "The selected AOIs contain no data"
+#~ msgstr "The selected AOIs contain no data"
+
+#: src/components/create-processing-dialog/index.js:79
+#: src/components/create-project-dialog/index.js:33
+#: src/containers/sign-in-form/index.js:70
+#: src/containers/sign-in-form/index.js:74
+#: src/containers/sign-up-form/index.js:69
+#: src/containers/sign-up-form/index.js:73
+#: src/containers/sign-up-form/index.js:77
+#: src/pages/create-edit-workflow/index.js:49
+#: src/pages/create-edit-workflow/index.js:56
+#~ msgid "This field is required"
+#~ msgstr "This field is required"
+
+#: pages/projects/index.js:109
+msgid "To create a new project, click the button bellow."
+msgstr "To create a new project, click the button bellow."
+
+#: pages/manage-workflow-users/index.js:265
+msgid "To link users, enter emails above and click \"Link\" button."
+msgstr "To link users, enter emails above and click \"Link\" button."
+
+#: pages/processings/index.js:21
+msgid "To to create a processing please go to workflows and select one"
+msgstr "To to create a processing please go to workflows and select one"
+
+#: src/graphql/link.js:44
+#~ msgid "Token expired"
+#~ msgstr "Token expired"
+
+#: pages/project-dashboard/index.js:156
+msgid "UNPROCESSED"
+msgstr "UNPROCESSED"
+
+#: containers/aoi-list/index.js:77
+msgid "Unable to load AOIs"
+msgstr "Unable to load AOIs"
+
+#: components/project-workflow-list/actions.js:74
+#: components/project-workflow-list/actions.js:95
+#: pages/manage-workflow-users/index.js:148
+#: pages/manage-workflow-users/index.js:166
+msgid "Unlink"
+msgstr "Unlink"
+
+#: components/processing-list/index.js:123
+#: components/project-card/index.js:149
+#: pages/project-dashboard/index.js:107
+#: pages/workflow-list/index.js:112
+msgid "Updated"
+msgstr "Updated"
+
+#: src/components/project-card/index.js:126
+#~ msgid "Updated <0/>"
+#~ msgstr "Updated <0/>"
+
+#: containers/aoi-list/index.js:89
+#: containers/aoi-list-actions/actions-menu.js:181
+msgid "Upload Areas of interest"
+msgstr "Upload Areas of interest"
+
+#: containers/upload-aoi-dialog/index.js:154
+msgid "Upload files"
+msgstr "Upload files"
+
+#: pages/manage-workflow-users/user-search-callout.js:28
+msgid "User with this email doesn't exist"
+msgstr "User with this email doesn't exist"
+
+#: pages/manage-workflow-users/index.js:245
+#~ msgid "User with this email was found"
+#~ msgstr "User with this email was found"
+
+#: pages/manage-workflow-users/index.js:238
+#~ msgid "User with this email was not found"
+#~ msgstr "User with this email was not found"
+
+#: components/processing-list/index.js:88
+#: pages/processings-stats/table.js:19
+msgid "Workflow"
+msgstr "Workflow"
+
+#: pages/create-edit-workflow/index.js:172
+#~ msgid "Workflow \"{0}\" successfully created"
+#~ msgstr "Workflow \"{0}\" successfully created"
+
+#~ msgid "Workflow \"{0}\" updated"
+#~ msgstr "Workflow \"{0}\" updated"
+
+#: src/components/workflow-list/actions.js:42
+#~ msgid "Workflow \"{name}\" deleted"
+#~ msgstr "Workflow \"{name}\" deleted"
+#~ msgid "Workflow \"{workflowName}\" deleted"
+#~ msgstr "Workflow \"{workflowName}\" deleted"
+
+#: src/components/workflow-list/actions.js:52
+#~ msgid "Workflow cannot be deleted while it is in use"
+#~ msgstr "Workflow cannot be deleted while it is in use"
+
+#: pages/create-edit-workflow/index.js:343
+#: pages/project-workflows/create-and-link-workflow.js:322
+msgid "Workflow definition"
+msgstr "Workflow definition"
+
+#: pages/workflows/index.js:19
+#~ msgid "Workflow definitions"
+#~ msgstr "Workflow definitions"
+
+#: containers/main-navbar/index.js:125
+#: containers/main-navbar/index.js:160
+#: pages/workflow-list/workflows-header.js:17
+msgid "Workflows"
+msgstr "Workflows"
+
+#: components/workflow-list/index.js:99
+#~ msgid "Workflows was not fetched"
+#~ msgstr "Workflows was not fetched"
+
+#: src/containers/sign-in-form/index.js:34
+#: src/containers/sign-in-form/index.js:36
+#~ msgid "Wrong login/password"
+#~ msgstr "Wrong login/password"
+
+#: src/containers/theme-button/index.js:15
+#~ msgid "You activated a dark theme"
+#~ msgstr "You activated a dark theme"
+
+#: src/containers/theme-button/index.js:14
+#~ msgid "You activated a light theme"
+#~ msgstr "You activated a light theme"
+
+#: components/project-workflow-list/index.js:137
+msgid "You haven't linked any workflows yet"
+msgstr "You haven't linked any workflows yet"
+
+#: containers/aoi-list/index.js:84
+msgid "You haven’t created any AOI yet"
+msgstr "You haven’t created any AOI yet"
+
+#: components/processing-list/index.js:177
+msgid "You haven’t created any processing yet"
+msgstr "You haven’t created any processing yet"
+
+#: pages/projects/index.js:107
+msgid "You haven’t created any project yet"
+msgstr "You haven’t created any project yet"
+
+#: components/workflow-list/index.js:108
+#~ msgid "You haven’t created any workflow yet"
+#~ msgstr "You haven’t created any workflow yet"
+
+#: containers/breadcrumbs/index.js:141
+msgid "breadcrumbs.fallback"
+msgstr "-"
+
+#: pages/processings-stats/table.js:65
+msgid "completionDate"
+msgstr "completionDate"
+
+#: src/containers/workflow-list/actions.js:13
+#~ msgid "create processing"
+#~ msgstr "create processing"
+
+#: pages/processings/index.js:19
+msgid "create-processing-tip"
+msgstr "Tip"
+
+#: src/constants/common.js:15
+#~ msgid "dark"
+#~ msgstr "dark"
+
+#: components/project-workflow-list/index.js:75
+#: pages/link-workflow/index.js:146
+#: pages/workflow-list/index.js:94
+msgid "default"
+msgstr "default"
+
+#: containers/upload-aoi-dialog/index.js:143
+msgid "dnd-file-message"
+msgstr "Drag 'n' drop files here, or click to select files"
+
+#: src/containers/sign-up-form/index.js:68
+#~ msgid "email taken"
+#~ msgstr "email taken"
+
+#: components/create-processing-dialog/index.js:196
+#~ msgid "empty-provider"
+#~ msgstr "empty-provider"
+
+#: src/constants/common.js:23
+#~ msgid "english"
+#~ msgstr "english"
+
+#: src/constants/common.js:43
+#~ msgid "failed"
+#~ msgstr "failed"
+
+#: src/constants/common.js:44
+#~ msgid "in progress"
+#~ msgstr "in progress"
+
+#: src/constants/common.js:14
+#~ msgid "light"
+#~ msgstr "light"
+
+#: src/constants/common.js:24
+#~ msgid "russian"
+#~ msgstr "russian"
+
+#~ msgid "success"
+#~ msgstr "success"
+
+#: src/constants/common.js:45
+#~ msgid "unprocessed"
+#~ msgstr "unprocessed"
+
+#: src/pages/create-edit-data-provider/index.js
+
+#~ msgid "Display Name"
+#~ msgstr "Display Name"
+
+#~ msgid "URL Template"
+#~ msgstr "URL Template"
+
+#~ msgid "Preview URL"
+#~ msgstr "Preview URL"
+
+#~ msgid "Default"
+#~ msgstr "Default"
+
+#~ msgid "Price per Mp"
+#~ msgstr "Price per Mp"
+
+#~ msgid "Credentials Username"
+#~ msgstr "Credentials Username"
+
+#~ msgid "Credentials Password"
+#~ msgstr "Credentials Password"
+
+#~ msgid "Credentials Token"
+#~ msgstr "Credentials Token"
+
+#~ msgid "Data Providers"
+#~ msgstr "Data Providers"
+
+#~ msgid "Create Data Provider"
+#~ msgstr "Create Data Provider"
+
+#~ msgid "Create data provider"
+#~ msgstr "Create data provider"
+
+#~ msgid "Edit Data Provider"
+#~ msgstr "Edit Data Provider"
+#: components/workflow-editor/errors.js:20
+#~ msgid "workflow-editor_errors.empty"
+#~ msgstr "Cannot save, file {tabName} is empty"
+
+#: components/workflow-editor/errors.js:10
+#~ msgid "workflow-editor_errors.markers"
+#~ msgstr "Cannot save, workflow syntax error in {files}"
+
+#: components/workflow-editor/errors.js:15
+#~ msgid "workflow-editor_errors.parse"
+#~ msgstr "Cannot parse yaml, while has syntax error"
+
+#~ msgid "Enter to search for projects by name, description or author"
+#~ msgstr "Enter to search for projects by name, description or author"
+
+#: pages/workflow-list/delete-workflow-dialog.js:72
+#~ msgid "Confirm delete workflow \"{workflowName}\""
+#~ msgstr "Confirm delete workflow \"{workflowName}\""
+#~ msgid "Confirm delete workflow \"{name}\""
+#~ msgstr "Confirm delete workflow \"{name}\""
+
+#~ msgid "Confirm delete data provider\"{name}\""
+#~ msgstr "Confirm delete data provider\"{name}\""
+
+#~ msgid "Data provider \"{name}\" deleted"
+#~ msgstr "Data provider \"{name}\" deleted"
+
+#~ msgid "Fetching data providers"
+#~ msgstr "Fetching data providers"
+
+#~ msgid "Fetching data provider"
+#~ msgstr "Fetching data provider"
+
+#: pages/create-edit-workflow/index.js:171
+#~ msgid "Error updating workflow"
+#~ msgstr "Error updating workflow"
+
+#~ msgid "Error creating workflow"
+#~ msgstr "Error creating workflow"
+
+#~ msgid "Cannot save, file wd is empty"
+#~ msgstr "Cannot save, file wd is empty"
+
+#~ msgid "Project name"
+#~ msgstr "Project name"
+
+#~ msgid "Start date"
+#~ msgstr "Start date"
+
+#~ msgid "End date"
+#~ msgstr "End date"
+
+#~ msgid "The display name field may not be greater than {0} characters"
+#~ msgstr "The display name field may not be greater than {0} characters"
+
+#~ msgid "Data provider \"{0}\" updated"
+#~ msgstr "Data provider \"{0}\" updated"
+
+#~ msgid "Error updating data provider"
+#~ msgstr "Error updating data provider"
+
+#~ msgid "Data provider \"{0}\" successfully created"
+#~ msgstr "Data provider \"{0}\" successfully created"
+
+#~ msgid "Error creating data provider"
+#~ msgstr "Error creating data provider"
+
+#~ msgid "Price"
+#~ msgstr "Price"
+
+#~ msgid "Could not fetch data providers"
+#~ msgstr "Could not fetch data providers"
+
+#~ msgid "Could not fetch data provider"
+#~ msgstr "Could not fetch data provider"
+
+#~ msgid "No data provider created yet"
+#~ msgstr "No data provider created yet"
+
+#~ msgid "Search for data providers by name (case sensitive)"
+#~ msgstr "Search for data providers by name (case sensitive)"
+
+#~ msgid "Enter to search for projects by name, description or author"
+#~ msgstr "Enter to search for projects by name, description or author"
+
+#~ msgid "Search for workflows by name (case sensitive)"
+#~ msgstr "Search for workflows by name (case sensitive)"
+
+#~ msgid "Enter to search for processings by email, wd name or processing name"
+#~ msgstr "Enter to search for processings by email, wd name or processing name"
+
+#~ msgid "Search and link users by email"
+#~ msgstr "Search and link users by email"
+
+#~ msgid "Confirm link data provider to user \"{0}\""
+#~ msgstr "Confirm link data provider to user \"{0}\""
+
+#~ msgid "Confirm unlink data provider from user \"{0}\""
+#~ msgstr "Confirm unlink data provider from user \"{0}\""
+
+#~ msgid "Data provider linked to user"
+#~ msgstr "Data provider linked to user"
+
+#~ msgid "Data provider unlinked from user"
+#~ msgstr "Data provider unlinked from user"
+
+#~ msgid "Fetching users linked to data provider"
+#~ msgstr "Fetching users linked to data provider"
+
+#~ msgid "Error linking Data provider to user"
+#~ msgstr "Error linking Data provider to user"
+
+#~ msgid "Error unlink Data provider"
+#~ msgstr "Error unlink Data provider"
+
+#~ msgid "Failed to get users linked to data provider"
+#~ msgstr "Failed to get users linked to data provider"
+
+#~ msgid "You haven't linked any users yet"
+#~ msgstr "You haven't linked any users yet"
+
+#~ msgid "Search for workflows by name"
+#~ msgstr "Search for workflows by name"
+
+#~ msgid "THIS ACTION WILL LINK THE NEW WORKFLOW TO THE OWNER OF THIS PROJECT"
+#~ msgstr "THIS ACTION WILL LINK THE NEW WORKFLOW TO THE OWNER OF THIS PROJECT"
+
+#~ msgid "Click to copy"
+#~ msgstr "Click to copy"
+
+#~ msgid "Copied!"
+#~ msgstr "Copied!"
+//
+#~ msgid "Found user with this email"
+#~ msgstr "Found user with this email"
+
+#~ msgid "Confirm link workflow to user"
+#~ msgstr "Confirm link workflow to user"
+
+#~ msgid "Failed to get users linked to workflow"
+#~ msgstr "Failed to get users linked to workflow"
+
+#~ msgid "Workflow linked to user"
+#~ msgstr "Workflow linked to user"
+
+#~ msgid "Error linking Workflow to user"
+#~ msgstr "Error linking Workflow to user"
+
+#~ msgid "Confirm unlink workflow from user \"{email}\""
+#~ msgstr "Confirm unlink workflow from user \"{email}\""
+
+#~ msgid "Confirm link workflow to user \"{0}\""
+#~ msgstr "Confirm link workflow to user \"{0}\""
+
+#~ msgid "Workflow unlinked from user"
+#~ msgstr "Workflow unlinked from user"
+
+#~ msgid "Error unlink workflow"
+#~ msgstr "Error unlink workflow"
+
+#~ msgid "Manage Data Provider Users"
+#~ msgstr "Manage Data Provider Users"
+
+#~ msgid "Completion estimated time:"
+#~ msgstr "Completion estimated time:"
+
+#~ msgid "Successful processings:"
+#~ msgstr "Successful processings:"
+
+#~ msgid "Count"
+#~ msgstr "Count"
+
+#~ msgid "Project Details"
+#~ msgstr "Project Details"
+
+#~ msgid "Click to open project processings details"
+#~ msgstr "Click to open project processings details"
+
+msgid "Max bbox area: {0} km. sq."
+msgstr "Max bbox area: {0} km. sq."
+
+msgid "Min area: {0} km. sq."
+msgstr "Min area: {0} km. sq."
+
+msgid "Max length of either bbox side: {0} km. sq."
+msgstr "Max length of either bbox side: {0} km. sq."
+
+msgid "Polygon should not has self-intersections (kinks)"
+msgstr "Polygon should not has self-intersections (kinks)"
+
+msgid "Too large file size, max. size: {0} mb"
+msgstr "Too large file size, max. size: {0} mb"
+
+msgid "Missing georeference"
+msgstr "Missing georeference"
+
+msgid "Unsupported projection. Use web mercator, UTM or lat-lon coordinate systems"
+msgstr "Unsupported projection. Use web mercator, UTM or lat-lon coordinate systems"
+
+msgid "Uploaded image width and height must be less than {0} pixels, your image has size {1}. Please cut it into parts before the upload."
+msgstr "Uploaded image width and height must be less than {0} pixels, your image has size {1}. Please cut it into parts before the upload."
+
+msgid "The file doesn't match the required input parameters"
+msgstr "The file doesn't match the required input parameters"
+
+#~ msgid "Project name updated"
+#~ msgstr "Project name updated"
+
+#~ msgid "Processing name updated"
+#~ msgstr "Processing name updated"
+
+#~ msgid "Project description updated"
+#~ msgstr "Project description updated"
+
+msgid "Upload Geotiff"
+msgstr "Upload Geotiff"
+
+msgid "Browse"
+msgstr "Browse"
+
+msgid "No search results"
+msgstr "No search results"
+
+msgid "Your search didn't match any processings. Try searching for something else or clear selected filters"
+msgstr "Your search didn't match any processings. Try searching for something else or clear selected filters"
+
+msgid "Clear filters"
+msgstr "Clear filters"
+
+msgid "Please enter workflow definition in YAML"
+msgstr "Please enter workflow definition in YAML"
+#~ msgid "Please enter workflow definition in YAML"
+#~ msgstr "Please enter workflow definition in YAML"
+
+msgid "Workflow unlinked"
+msgstr "Workflow unlinked"
+
+msgid "Workflow linked to this project and Default project"
+msgstr "Workflow linked to this project and Default project"
+
+msgid "Deleted AOI"
+msgstr "Deleted AOI"
+
+msgid "Successfully started processing"
+msgstr "Successfully started processing"
+
+#~ msgid "Successfully started AOI"
+#~ msgstr "Successfully started AOI"
+
+
+#~ msgid "File upload failed. Please try again later or contact us."
+#~ msgstr "File upload failed. Please try again later or contact us."
+
+#~ msgid "Cannot save, file {tabName} is empty"
+#~ msgstr "Cannot save, file {tabName} is empty"
+
+#~ msgid "Cannot save, workflow syntax error in {files}"
+#~ msgstr "Cannot save, workflow syntax error in {files}"
+
+#~ msgid "Authentication..."
+#~ msgstr "Authentication..."
+
+#~ msgid "ETA"
+#~ msgstr "ETA"
+
+#~ msgid "No data"
+#~ msgstr "No data"
+
+msgid "Cancel processing"
+msgstr "Cancel processing"
+
+msgid "cancelled"
+msgstr "cancelled"
+
+msgid "Canceled processing"
+msgstr "Canceled processing"
+
+msgid "No processings started yet"
+msgstr "No processings started yet"
+
+
+
+#: components/basemap-switcher/index.js:20
+#: components/basemap-switcher/index.js:21
+#: components/basemap-switcher/index.js:22
+#: components/basemap-switcher/index.js:23
+#: components/basemap-switcher/index.js:24
+#: components/create-processing-dialog/index.js:97
+#: components/create-processing-dialog/index.js:98
+#: components/create-processing-dialog/index.js:102
+#: components/create-processing-dialog/index.js:118
+#: components/create-processing-dialog/index.js:122
+#: components/create-project-dialog/index.js:33
+#: components/create-project-dialog/index.js:34
+#: components/create-project-dialog/index.js:37
+#: components/draw-rectangle-button/index.js:152
+#: components/draw-rectangle-button/index.js:157
+#: components/map-loader/index.js:12
+#: components/map-loader/index.js:13
+#: components/processing-list/actions.js:37
+#: components/processing-list/actions.js:42
+#: components/project-card/index.js:43
+#: components/project-card/index.js:48
+#: components/project-workflow-list/actions.js:48
+#: components/project-workflow-list/actions.js:58
+#: components/project-workflow-list/actions.js:62
+#: components/project-workflow-list/queries.js:21
+#: components/status-tag/index.js:11
+#: components/workflow-editor/index.js:254
+#: components/workflow-editor/index.js:264
+#: components/workflow-editor/index.js:290
+#: constants/common.js:14
+#: constants/common.js:15
+#: constants/common.js:23
+#: constants/common.js:24
+#: constants/common.js:44
+#: constants/common.js:45
+#: constants/common.js:46
+#: constants/common.js:47
+#: constants/common.js:48
+#: containers/aoi-list/actions-menu.js:58
+#: containers/aoi-list/actions-menu.js:59
+#: containers/aoi-list/actions-menu.js:69
+#: containers/aoi-list/actions-menu.js:70
+#: containers/aoi-list/actions-menu.js:80
+#: containers/aoi-list/actions-menu.js:81
+#: containers/aoi-list/actions-menu.js:90
+#: containers/aoi-list/actions-menu.js:91
+#: containers/aoi-list/actions-menu.js:93
+#: containers/aoi-list/actions-menu.js:101
+#: containers/aoi-list/actions-menu.js:119
+#: containers/aoi-list-actions/actions-menu.js:95
+#: containers/aoi-list-actions/actions-menu.js:96
+#: containers/aoi-list-actions/actions-menu.js:108
+#: containers/aoi-list-actions/actions-menu.js:109
+#: containers/aoi-list-actions/actions-menu.js:119
+#: containers/aoi-list-actions/actions-menu.js:120
+#: containers/aoi-list-actions/actions-menu.js:122
+#: containers/aoi-list-actions/actions-menu.js:130
+#: containers/aoi-list-actions/index.js:40
+#: containers/aoi-list-actions/index.js:41
+#: containers/breadcrumbs/index.js:104
+#: containers/breadcrumbs/index.js:104
+#: containers/breadcrumbs/index.js:105
+#: containers/breadcrumbs/index.js:106
+#: containers/breadcrumbs/index.js:107
+#: containers/breadcrumbs/index.js:108
+#: containers/breadcrumbs/index.js:109
+#: containers/breadcrumbs/index.js:110
+#: containers/breadcrumbs/index.js:110
+#: containers/theme-button/index.js:14
+#: containers/theme-button/index.js:15
+#: containers/upload-aoi-dialog/index.js:194
+#: containers/upload-aoi-dialog/index.js:199
+#: containers/upload-aoi-dialog/index.js:204
+#: graphql/link.js:48
+#: graphql/link.js:51
+#: graphql/link.js:54
+#: pages/create-edit-workflow/index.js:125
+#: pages/create-edit-workflow/index.js:126
+#: pages/create-edit-workflow/index.js:129
+#: pages/create-edit-workflow/index.js:132
+#: pages/create-edit-workflow/index.js:135
+#: pages/create-edit-workflow/index.js:163
+#: pages/create-edit-workflow/index.js:170
+#: pages/create-edit-workflow/index.js:189
+#: pages/create-edit-workflow/index.js:195
+#: pages/link-workflow/index.js:90
+#: pages/link-workflow/index.js:126
+#: pages/link-workflow/index.js:129
+#: pages/manage-workflow-users/index.js:71
+#: pages/manage-workflow-users/index.js:99
+#: pages/manage-workflow-users/index.js:103
+#: pages/manage-workflow-users/index.js:120
+#: pages/manage-workflow-users/index.js:126
+#: pages/project-workflows/create-and-link-workflow.js:75
+#: pages/processings-stats/header.js:21
+#: pages/project-workflows/create-and-link-workflow.js:69
+#: pages/project-workflows/create-and-link-workflow.js:70
+#: pages/project-workflows/create-and-link-workflow.js:73
+#: pages/project-workflows/create-and-link-workflow.js:76
+#: pages/project-workflows/create-and-link-workflow.js:79
+#: pages/project-workflows/create-and-link-workflow.js:82
+#: pages/project-workflows/create-and-link-workflow.js:85
+#: pages/project-workflows/create-and-link-workflow.js:105
+#: pages/project-workflows/create-and-link-workflow.js:114
+#: pages/project-workflows/create-and-link-workflow.js:129
+#: pages/project-workflows/create-and-link-workflow.js:137
+#: pages/project-workflows/create-and-link-workflow.js:155
+#: pages/project-workflows/create-and-link-workflow.js:164
+#: pages/project-workflows/create-and-link-workflow.js:243
+#: pages/projects/with-create-dialog.js:24
+#: pages/projects/with-create-dialog.js:28
+#: pages/workflow-list/queries.js:24
+#: pages/workflow-list/queries.js:49
+#: pages/workflow-list/queries.js:59
+#: pages/workflow-list/queries.js:63
+msgid "{0}"
+msgstr "{0}"
+
+#: src/components/format-area/index.js:8
+#~ msgid "{a} km<0>2</0>"
+#~ msgstr "{a} km<0>2</0>"
+
+#: src/components/format-area/index.js:7
+#~ msgid "{a} m<0>2</0>"
+#~ msgstr "{a} m<0>2</0>"

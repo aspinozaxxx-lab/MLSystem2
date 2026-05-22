@@ -1,0 +1,112 @@
+// node_modules/@blueprintjs/core/src/common/_color-aliases.scss
+
+$pt-intent-primary: $blue3; //*
+$pt-intent-success: $green3;
+$pt-intent-warning: $orange3;
+$pt-intent-danger: $red3;
+
+$pt-toast-box-shadow: 0px 10px 15px 0px $gray6;
+$navbar-background-color: $blue6; // old value $white
+
+
+$pt-app-background-color: $white; //*
+$pt-dark-app-background-color: rgba($dark-gray1, 1); // color from nspd pallet with alpha cannot use, couse we use that in modal, or need workaround
+
+$pt-outline-color: rgba($blue3, 0.6);
+
+$pt-text-color: $dark-gray1;
+$pt-text-color-muted: $gray1;
+$pt-text-color-disabled: rgba($pt-text-color-muted, 0.6);
+$pt-heading-color: $pt-text-color;
+$pt-dark-text-color: $white;
+$pt-dark-text-color-muted: $white;
+$pt-dark-text-color-disabled: rgba($pt-dark-text-color-muted, 0.6);
+$pt-dark-heading-color: $pt-dark-text-color;
+$pt-link-color: $blue3;
+$pt-link-color-hover: $blue3;
+$pt-dark-link-color: $blue3;
+// text selection color using #7dbcff
+$pt-text-selection-color: rgba(125, 188, 255, 60%);
+
+$pt-icon-color: $pt-text-color;
+$pt-icon-color-hover: $gray2;
+$pt-icon-color-disabled: $pt-text-color-disabled;
+$pt-icon-color-selected: $pt-intent-primary;
+$pt-dark-icon-color: $pt-dark-text-color;
+$pt-dark-icon-color-hover: $pt-dark-text-color;
+$pt-dark-icon-color-disabled: $pt-dark-text-color-disabled;
+$pt-dark-icon-color-selected: $pt-intent-primary;
+
+$pt-divider-black: rgba($black, 0.15);
+$pt-dark-divider-black: rgba($black, 0.4);
+$pt-dark-divider-white: rgba($white, 0.2);
+
+$pt-code-text-color: $pt-text-color-muted;
+$pt-dark-code-text-color: $pt-dark-text-color-muted;
+$pt-code-background-color: rgba($white, 0.7);
+$pt-dark-code-background-color: rgba($black, 0.3);
+
+$pt-border-radius: 4px;
+
+$toast-intent-colors: (
+  "primary": ($pt-intent-primary, $white, $blue2, $blue1),
+  "success": ($green6, $white, $green2, $green1),
+  "warning": ($orange6, $dark-gray1, $orange4, $orange3),
+  "danger": ($red6, $white, $red2, $red1),
+);
+
+
+$pt-intent-text-colors: (
+  "primary": $blue3,
+  "success": $green2,
+  "warning": $orange2,
+  "danger" : $red7,
+);
+
+$pt-intent-colors: (
+  "primary": $blue9,
+  "success": $green2,
+  "warning": $orange2,
+  "danger" : $red7,
+);
+
+$pt-intent-active-text-colors: (
+  "primary": $blue3,
+  "success": $green1,
+  "warning": $orange1,
+  "danger":  $red7,
+);
+
+// Not changed the colors for dark theme because of we cant change the hover color of the dark mode
+// $pt-dark-intent-text-colors: (
+//   "primary": $blue3,
+//   "success": $green5,
+//   "warning": $orange5,
+//   "danger" : $red7,
+// );
+// $pt-dark-intent-active-text-colors: (
+//   "primary": $blue3,
+//   "success": $green1,
+//   "warning": $orange1,
+//   "danger": purple,
+// );
+
+// the change is not give any result
+// $dark-minimal-hover-text-colors: (
+//   "primary": $blue5,
+//   "success": $green5,
+//   "warning": $orange5,
+//   "danger": $red5,
+// );
+
+$headings: (
+  "h1": (48px, normal),
+  "h2": (32px, normal),
+  "h3": (20px, 28px),
+  "h4": (18px, 21px),
+  "h5": (16px, 19px),
+  "h6": (14px, 16px)
+);
+
+
+$pt-font-family: 'Inter';

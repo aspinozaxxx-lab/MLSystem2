@@ -1,0 +1,10 @@
+aiohttp==3.8.1
+boto3==1.24.96
+gdal==3.3.2
+geojson==2.5.0
+kombu==5.2.4
+loguru==0.6.0
+pydantic==2.3.0
+rasterio==1.3.3
+shapely==1.8.5
+tqdm==4.64.1

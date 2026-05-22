@@ -1,0 +1,104 @@
+# stage cannot be removed if we have "!" before stage name
+# pipeline-input: [input.tif]
+
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host 'localhost'
+    port: &port 8000
+
+config:
+    _class: Compose
+    bricks:
+#        -   _class: SplitRaster
+#            input: input
+#            input_ext: tif
+#            output:
+#            - RED
+#            - GRN
+#            - BLU
+#
+#        -   _class: Segmentation
+#            bounds: 128
+#            sample_size:
+#              - 768
+#              - 768
+#            input_rasters:
+#              - RED
+#              - GRN
+#              - BLU
+#            output_labels:
+#              - rt
+#            adapter:
+#              _class: TritonAdapter
+#              name: *segm_model_name
+#              host: *segm_model_host
+#              port: *port
+#              input_ndim: 4
+#              output_ndim: 3
+#            postprocessors:
+#              - _class: LabelsToOnehot
+#                class_map: 3, 4
+#              - _class: SeparateInstances
+#                mode: markers_and_borders
+
+#        -   _class: VectorizeMasks
+#            input_rasters:
+#              - rt
+#            output_fcs:
+#              - rt_raw
+#
+#        -   _class: UnifiedVectorProcessing
+#            input: rt_raw
+#            output: rt_filtered
+#            crs: utm
+#            bricks:
+#            -   _class: FilterBigObjects
+#                max_area_sq_m: 100000
+#            -   _class: FilterSmallObjects
+#                min_area: 30.0
+#            -   _class: RemoveSmallHoles
+#                min_hole_area: 50.0
+#
+#        -   _class: SimplifyAsShapes
+#            input: rt_filtered
+#            output: rt_default
+#            iou_confidence_tag: "simplification_confidence_score"
+#            simplification_params:
+#                - shape_type: CIRCLE
+#                  max_hausdorff: 2.0
+#                  min_area: 0.0
+#                  min_iou: 0.9
+#                - shape_type: RECTANGLE
+#                  max_hausdorff: 7.0
+#                  min_area: 0.0
+#                  min_iou: 0.8
+#                - shape_type: L-SHAPE
+#                  max_hausdorff: 7.0
+#                  min_area: 0.0
+#                  min_iou: 0.8
+#                - shape_type: RECTANGLE
+#                  max_hausdorff: 7.0
+#                  min_area: 200.0
+#                  min_iou: 0.8
+#                - shape_type: GRID_SNAP
+#                  max_hausdorff: 7.0
+#                  min_area: 0.0
+#                  min_iou: 0.8
+
+        - _class: SimplifyAsShapes
+          input: rt_filtered
+          output: rt_new
+          iou_confidence_tag: "simplification_confidence_score"
+          simplification_params:
+              - shape_type: CIRCLE
+                max_hausdorff: 2.0
+                min_area: 0.0
+                min_iou: 0.9
+              - shape_type: DYNAMIC_GRID
+                max_hausdorff: 999.0
+                min_area: 0.
+                min_iou: 0.1
+
+    namespace: null
+date: '2020-04-30'
+version: 0.1.4

@@ -1,0 +1,8 @@
+# files
+*.pyc
+*.pyx
+*.DS_Store
+# dirs
+.idea/
+.vscode/
+__pycache__/

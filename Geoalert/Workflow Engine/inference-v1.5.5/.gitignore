@@ -1,0 +1,20 @@
+*~
+*.swp
+*.swo
+
+# files
+*.pyc
+*.pyx
+
+# dirs
+.idea/
+.vscode/
+__pycache__/
+modules/urban/build/
+modules/urban/urban.egg-info/
+.DS_Store
+
+*.tif
+*.tiff
+
+.token

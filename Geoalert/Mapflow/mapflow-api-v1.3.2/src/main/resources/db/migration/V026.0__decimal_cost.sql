@@ -1,0 +1,1 @@
+ALTER TABLE processing ALTER COLUMN cost TYPE BIGINT;

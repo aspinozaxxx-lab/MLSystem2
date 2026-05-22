@@ -1,0 +1,87 @@
+.projects {
+  @include content-container($desktop-padding: 6, $phone-padding: 2);
+  @include flex-centred(flex-start, stretch, column);
+  height: auto;
+  overflow: auto;
+
+  .pagination {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .projects-header {
+    margin-bottom: 16px;
+    width: 100%;
+    @include flex-centred(center, stretch, column);
+
+    &__search-input {
+      flex-grow: 1;
+    }
+
+    &__title {
+      display: flex;
+      align-items: center;
+
+      h1 {
+        margin-right: 25px;
+      }
+      margin-bottom: 8px;
+    }
+  }
+
+  .project-list {
+    display: grid;
+    grid-gap: 1.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  }
+
+  .project-card {
+    width: 100%;
+  }
+}
+
+.projects-loader {
+  flex: 1;
+}
+
+.projects-tip-message {
+  position: relative;
+  width: 100%;
+  padding: 50px 60px;
+
+  @include for-size(tablet) {
+    font-size: 24px;
+  }
+  @include for-size(phone) {
+    font-size: 14px;
+    font-weight: bold;
+    padding: 30px 20px;
+    padding-right: 60px;
+  }
+  font-size: 28px;
+  @include use-background-color($light-gray2, $dark-gray2);
+
+  .close-tip {
+    position: absolute;
+    top: $pt-grid-size;
+    right: $pt-grid-size;
+  }
+}
+
+.section {
+  width: 100%;
+  padding: 0 40px;
+
+  .section-header {
+    height: 5rem;
+
+    &.section-name {
+      font-size: 1.3rem;
+    }
+  }
+
+  @include for-size(desktop) {
+    padding: 0 20px;
+  }
+}

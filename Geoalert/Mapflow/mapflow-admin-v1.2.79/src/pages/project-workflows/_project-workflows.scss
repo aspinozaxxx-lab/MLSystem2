@@ -1,0 +1,49 @@
+.workflows {
+  @include flex-centred(flex-start, stretch, column);
+  height: auto;
+  width: 100%;
+  overflow: auto;
+
+  &__container {
+    @include content-container($desktop-padding: 6, $phone-padding: 2);
+    height: auto;
+    overflow: auto;
+  }
+
+  &__name {
+    margin-top: 1rem;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    margin-bottom: $pt-grid-size;
+  }
+
+  &__header-title {
+    margin-bottom: 0;
+  }
+
+  &__header-action {
+    margin-left: 25px;
+    display: flex;
+    align-items: center;
+  }
+}
+
+.create-and-link {
+  margin-left: 1rem;
+
+  &__dialog {
+    width: 80%;
+  }
+
+  &__container {
+    @include content-container($desktop-padding: 6, $phone-padding: 2);
+    overflow: auto;
+
+    .bp4-callout {
+      margin: 1rem auto;
+    }
+  }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE app_user ADD COLUMN IF NOT EXISTS max_aois_per_processing BIGINT DEFAULT 10;

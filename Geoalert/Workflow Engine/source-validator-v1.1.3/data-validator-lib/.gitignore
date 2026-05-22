@@ -1,0 +1,6 @@
+.idea
+*__pycache__*
+build/*
+dist/*
+data_validator_lib.egg-info/*
+*.pytest_cache*

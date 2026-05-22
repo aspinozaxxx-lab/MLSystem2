@@ -1,0 +1,75 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Workflows matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class="breadcrumbs-container "
+    >
+      <ul
+        class="bp3-overflow-list bp3-breadcrumbs breadcrumbs"
+      >
+        <div
+          class="bp3-overflow-list-spacer"
+        />
+      </ul>
+    </div>
+    <div
+      class="workflows"
+    >
+      <div
+        class="workflows-header"
+      >
+        <h2
+          class="bp3-heading workflows-header__title"
+        >
+          Workflow definitions
+        </h2>
+      </div>
+      <div
+        class="bp3-non-ideal-state"
+      >
+        <div
+          class="bp3-non-ideal-state-visual"
+        >
+          <div
+            class="bp3-spinner"
+          >
+            <div
+              class="bp3-spinner-animation"
+            >
+              <svg
+                height="50"
+                stroke-width="8.00"
+                viewBox="1.00 1.00 98.00 98.00"
+                width="50"
+              >
+                <path
+                  class="bp3-spinner-track"
+                  d="M 50,50 m 0,-45 a 45,45 0 1 1 0,90 a 45,45 0 1 1 0,-90"
+                />
+                <path
+                  class="bp3-spinner-head"
+                  d="M 50,50 m 0,-45 a 45,45 0 1 1 0,90 a 45,45 0 1 1 0,-90"
+                  pathLength="280"
+                  stroke-dasharray="280 280"
+                  stroke-dashoffset="210"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
+        <h4
+          class="bp3-heading"
+        >
+          Fetching workflows
+        </h4>
+        <div />
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;

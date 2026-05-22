@@ -1,0 +1,10 @@
+{
+   "rootDir": "./src",
+   "catalogs": [{
+      "path": "<rootDir>/locales/{locale}/messages",
+      "include": ["<rootDir>"],
+      "exclude": ["<rootDir>/locales"]
+   }],
+   "sourceLocale": "en",
+   "locales": ["en", "ru"]
+}

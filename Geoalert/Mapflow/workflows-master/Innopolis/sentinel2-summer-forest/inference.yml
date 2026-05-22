@@ -1,0 +1,70 @@
+shared:
+    model_name: &segm_model_name sentinel2-summer-forest
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    bricks:
+    -   _class: SplitRaster
+        input: input
+        input_ext: tif
+        output:
+            - B02
+            - B03
+            - B04
+            - B08
+            - B8A
+            - B11
+            - B12
+    -   _class: Segmentation
+        bounds: 0
+        adapter:
+            _class: TritonAdapter
+            host: *segm_model_host
+            port: *port
+            name: *segm_model_name
+            use_batch_dim: false
+            timeout: 60
+            input_dtype: int16
+        input_rasters:
+        - B04
+        - B03
+        - B02
+        - B08
+        nodata: 0
+        output_dtype: uint8
+        output_labels:
+        - 'output'
+        n_workers: 1
+        sample_size:
+        - 512
+        - 512
+        verbose: true
+        bound_mode: drop
+        padding: none
+        nodata_mask_mode: false
+    -   _class: VectorizeMasks
+        input_rasters:
+        - 'output'
+    -   _class: UnifiedVectorProcessing
+        input: output
+        output: output
+        crs: "utm"
+        bricks:
+          - _class: Simplify
+            crs: "utm"
+            rate: 50
+          - _class: FilterSmallObjects
+            min_area: 0
+            area_tag: "area"
+          - _class: AddAttributes
+            add_processing_id: true
+            add_timestamp: true
+            attributes:
+                  neural_network_type: 'sentinel-forest'
+                  neural_network_version: '1'
+                  object_class: 'FOREST'
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

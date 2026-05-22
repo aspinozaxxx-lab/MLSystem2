@@ -1,0 +1,1 @@
+ALTER TABLE project ADD COLUMN default_wds BOOLEAN NOT NULL DEFAULT false;

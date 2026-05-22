@@ -1,0 +1,71 @@
+image: registry.hub.nspd.rosreestr.gov.ru/nspd/geoalert/docker/dind-sbt:1.6.2
+
+variables:
+  GIT_DEPTH: 10
+  SBT_OPTS: "-Dsbt.global.base=sbt-cache/sbtboot -Dsbt.boot.directory=sbt-cache/boot -Dsbt.ivy.home=sbt-cache/ivy"
+  CACHE_FALLBACK_KEY: master
+  PROJ_NAME: ${CI_PROJECT_NAME}
+
+stages:
+  - test
+  - publish
+  - deploy
+
+.tags: &tags
+  - debug
+  - docker
+#  - 10.1.6.26
+#  - docker
+
+cache:
+  key: $CI_COMMIT_REF_SLUG
+  untracked: true
+  paths:
+    - "sbt-cache/ivy/cache"
+    - "sbt-cache/boot"
+    - "sbt-cache/sbtboot"
+    - "sbt-cache/target"
+    - "sbt-cache/coursier"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_SLUG
+
+test-backend:
+  stage: test
+  tags: *tags
+  variables:
+    # test database env vars
+    POSTGRES_PASSWORD: 
+    POSTGRES_USER: postgres
+    POSTGRES_DB: mapflow
+    # it-test backend env vars
+    DB_HOST: mdillon-postgis
+    DB_NAME: mapflow
+  services:
+    - mdillon/postgis:11-alpine
+  before_script:
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  script:
+    - TEST_ENV=true sbt test it:test
+
+publish-backend-image:
+  stage: publish
+  tags: *tags
+  before_script:
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  script:
+    - VERSION=${IMAGE_TAG} sbt -Dsbt.ivy.home=./.ivy docker:publish
+
+include:
+  # Deploy Stage
+  - project: nspd/backend/templates/ci-cd
+    ref: ${TEMPLATES_REPO_REF}
+    file: /deploy/deploy.yml

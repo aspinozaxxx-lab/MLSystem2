@@ -1,0 +1,220 @@
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        -   input.tif
+        outputs:
+        -   100.geojson
+        -   RED.tif
+        -   GRN.tif
+        -   BLU.tif
+        -   100.tif
+        -   wl.geojson
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED_
+            - GRN_
+            - BLU_
+        -   _class: BrightnessNormalization
+            input:
+            - RED_
+            - GRN_
+            - BLU_
+            output:
+            - RED
+            - GRN
+            - BLU
+            std_width: 3
+        -   _class: Segmentation
+            bounds: 128
+            sample_size:
+              - 768
+              - 768
+            vectorize: False
+            input_rasters:
+              - RED
+              - GRN
+              - BLU
+            output_labels:
+              - sh
+              - wl
+              - markers
+              - bound
+            adapter:
+              _class: TritonAdapter
+              name: *segm_model_name
+              host: *segm_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+            postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 1, 2, 3, 4
+        -   _class: ApplyMask
+            child_masks:
+              - 'bound'
+            parent_mask: 'markers'
+            out_masks:
+            - 'rt'
+            mask_operation: or
+            reverse_parent: false
+            sample_size:
+              - 2000
+              - 2000
+        -   _class: VectorizeMasks
+            input_rasters:
+              - rt
+              - wl
+            output_fcs:
+              - '100'
+              - 'wl'
+    - name: Postprocessing1
+      optional: false
+      inputs:
+        - 100.geojson
+      outputs:
+        - 100.geojson
+      bricks:
+        - _class: UnifiedVectorProcessing
+          input: '100'
+          output: '100'
+          crs: utm
+          bricks:
+            - _class: FilterBigObjects
+              max_area_sq_m: 100000
+            - _class: FilterSmallObjects
+              input: '100'
+              min_area: 30.0
+              output: '100'
+            - _class: RemoveSmallHoles
+              input: '100'
+              min_hole_area: 50.0
+              output: '100'
+
+    - name: FpShiftMeasureCorrect
+      optional: false
+      inputs:
+        - 100.geojson
+        - wl.geojson
+      outputs:
+        - 100.geojson
+      bricks:
+        - _class: MeasureShift
+          roofs: '100'
+          walls: 'wl'
+          output: 'rt_shift'
+          max_shift: 50
+          max_iterations: 50
+        - _class: GenerateFootprints
+          roofs: rt_shift
+          output: output_fp
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          confidence_shift_thr: 0.2
+        - _class: CorrectShift
+          footprints: 'output_fp'
+          walls: 'wl'
+          output: 'output_fp_corrected'
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          corr_x_shift_tag: _x_shift_corr
+          corr_y_shift_tag: _y_shift_corr
+          corr_confidence_shift_tag: _confidence_shift_corr
+          corr_threshold: 0.05
+        - _class: GenerateFootprints
+          roofs: output_fp_corrected
+          output: '100'
+          x_shift_tag: _x_shift_corr
+          y_shift_tag: _y_shift_corr
+          confidence_shift_tag: _confidence_shift_corr
+          confidence_shift_thr: 0.05
+    - name: Simplification
+      optional: true
+      inputs:
+        - 100.geojson
+      outputs:
+        - 100.geojson
+      bricks:
+        - _class: SimplifyAsShapes
+          input: '100'
+          output: '100'
+          iou_confidence_tag: "simplification_confidence_score"
+          verbose: true
+          simplification_params:
+            - shape_type: CIRCLE
+              max_hausdorff: 2.0
+              min_area: 0.0
+              min_iou: 0.9
+            - shape_type: RECTANGLE
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+            - shape_type: L-SHAPE
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+            - shape_type: RECTANGLE
+              max_hausdorff: 7.0
+              min_area: 200.0
+              min_iou: 0.8
+            - shape_type: GRID_SNAP
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+        - _class: AddAttributes
+          input: '100'
+          output: '100'
+          add_processing_id: false
+          add_timestamp: false
+          attributes:
+            simplification: 'true'
+    -   name: Postprocessing2
+        optional: false
+        inputs:
+        -  100.geojson
+        outputs:
+        -  output.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: 'output'
+            crs: utm
+            bricks:
+            -   _class: CorrectTopology
+                distance_step: 1.0
+                correct_by_subtraction: 1
+                buffer: 0.0
+            -   _class: FilterSmallObjects
+                min_area: 5.0
+                area_tag: 'area'
+            -   _class: RemoveTags
+                remove_underscore_tags: true
+            -   _class: AddAttributes
+                add_processing_id: true
+                add_timestamp: true
+                attributes:
+                    neural_network_type: 'aerial-buildings-instance'
+                    neural_network_version: '2'
+                    object_class: 'OKS'
+                    shift: 'true'
+
+    namespace: null
+date: '2020-04-30'
+version: 0.1.4

@@ -1,0 +1,9 @@
+version: 1.0
+sources: 
+  local:
+    recommended:
+      min_res: 0.5
+      max_res: 2.0
+    required:
+      max_res: 4.0
+      nchannels: 4

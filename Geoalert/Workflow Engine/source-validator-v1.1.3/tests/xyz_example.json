@@ -1,0 +1,12 @@
+{
+  "task_id": "123",
+  "runcheck_url": "http://localhost:3000",
+  "input": {
+    "requirements": "dmVyc2lvbjogMS4wCnNvdXJjZXM6IAogIHh5ejogCiAgICByZWNvbW1lbmRlZDogCiAgICAgIG1pbl96b29tOiAxNyAKICAgICAgbWF4X3pvb206IDE4IAogICAgcmVxdWlyZWQ6IAogICAgICBtaW5fem9vbTogMTYKICAgICAgbWF4X3pvb206IDE4Cg==",
+    "request": {
+      "source_type": "xyz",
+      "zoom": 18,
+      "url": "https://tile.sometileserver.org/方框_1/{z}/{x}/{y}.png"
+    }
+  }
+}

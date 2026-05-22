@@ -1,0 +1,94 @@
+variables:
+  PROJ_NAME: $CI_PROJECT_NAME
+  NGINX_DOCKER_IMAGE: ${CI_REGISTRY}/nspd/docker/nginx:v1.24.0.3
+  DEFAULT_NODE_DOCKER_IMAGE: $NODE_DOCKER_IMAGE
+  DOCKER_BUILDKIT: 1
+
+default:
+  tags: [ $FRONTEND_RUNNER_TAGS ]
+  image: $DEFAULT_NODE_DOCKER_IMAGE
+  cache:
+    key: mapflow-admin_node-modules
+    paths:
+      - node_modules/
+    policy: pull-push
+
+.matrix:
+  environment:
+    name: $TIER
+  variables:
+    REACT_APP_LIST_POLL_INTERVAL: $REACT_APP_LIST_POLL_INTERVAL
+    REACT_APP_AVANPOST_CLIENT_ID: $REACT_APP_AVANPOST_CLIENT_ID
+    REACT_APP_MIN_AREA: $REACT_APP_MIN_AREA
+    REACT_APP_MAX_AREA: $REACT_APP_MAX_AREA
+    REACT_APP_MAX_SIZE: $REACT_APP_MAX_SIZE
+    REACT_APP_MAX_IMAGE_SIZE_PIXELS: $REACT_APP_MAX_IMAGE_SIZE_PIXELS
+    REACT_APP_MAX_FILE_SIZE_MB: $REACT_APP_MAX_FILE_SIZE_MB
+    # Use only if need override, default uses window.location.origin
+    # REACT_APP_BACKEND_URL: $backend_url
+    REACT_APP_TILE_URL_PREFIX: $prefix_url
+    REACT_APP_SSO_AVANPOST_URL: $avanpost_url
+    REACT_APP_BASE_MAP_URL: $base_map_url
+    GENERATE_SOURCEMAP: $generate_sourcemap
+    REGISTRY_IMAGE: ${CI_REGISTRY_IMAGE}/${TIER}
+    REACT_APP_IMAGE_TAG: $IMAGE_TAG
+    IMAGE_NAME: ${REGISTRY_IMAGE}:${IMAGE_TAG}
+  parallel:
+    matrix:
+      - TIER: dev
+        prefix_url: $DEV_PREXIX_URL
+        avanpost_url: $DEV_SSO_AVANPOST_URL
+        base_map_url: $DEV_BASE_MAP_URL
+        generate_sourcemap: $DEV_GENERATE_SOURCEMAP
+        backend_url: $DEV_BACKEND_URL
+      - TIER: test
+        prefix_url: $TEST_PREXIX_URL
+        avanpost_url: $TEST_SSO_AVANPOST_URL
+        base_map_url: $TEST_BASE_MAP_URL
+        generate_sourcemap: $TEST_GENERATE_SOURCEMAP
+        backend_url: $TEST_BACKEND_URL
+      - TIER: demo
+        prefix_url: $DEMO_PREXIX_URL
+        avanpost_url: $DEMO_SSO_AVANPOST_URL
+        base_map_url: $DEMO_BASE_MAP_URL
+        generate_sourcemap: $DEMO_GENERATE_SOURCEMAP
+        backend_url: $DEMO_BACKEND_URL
+      - TIER: prod
+        prefix_url: $PROD_PREXIX_URL
+        avanpost_url: $PROD_SSO_AVANPOST_URL
+        base_map_url: $PROD_BASE_MAP_URL
+        generate_sourcemap: $PROD_GENERATE_SOURCEMAP
+        backend_url: $PROD_BACKEND_URL
+      - TIER: stage
+        prefix_url: $STAGE_PREXIX_URL
+        avanpost_url: $STAGE_SSO_AVANPOST_URL
+        base_map_url: $STAGE_BASE_MAP_URL
+        generate_sourcemap: $STAGE_GENERATE_SOURCEMAP
+        backend_url: $STAGE_BACKEND_URL
+
+stages:
+  - build
+  - dockerize
+  - deploy
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+      when: never
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_PROTECTED == 'true'
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+
+include:
+  - project: nspd/frontend/templates/ci-cd
+    ref: $FRONTEND_TEMPLATES_REPO_REF
+    file: /parts/nspd/mapflow/build.yml
+  - project: nspd/frontend/templates/ci-cd
+    ref: $FRONTEND_TEMPLATES_REPO_REF
+    file: /parts/nspd/mapflow/dockerize.yml
+  - project: nspd/frontend/templates/ci-cd
+    ref: $FRONTEND_TEMPLATES_REPO_REF
+    file: /parts/nspd/mapflow/deploy.yml

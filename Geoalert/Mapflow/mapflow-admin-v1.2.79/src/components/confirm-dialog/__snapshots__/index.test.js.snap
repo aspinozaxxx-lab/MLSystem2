@@ -1,0 +1,16 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ConfirmDialog should open by child button click 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div>
+      <button>
+        Open
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;

@@ -1,0 +1,69 @@
+shared:
+    model_name: &segm_model_name aerial-summer-littering
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    bricks:
+    - _class: SplitRaster
+      input: input
+      input_ext: tif
+      output:
+          - RED
+          - GRN
+          - BLU
+    -   _class: Segmentation
+        bounds: 32
+        adapter:
+            _class: TritonAdapter
+            host: *segm_model_host
+            port: *port
+            name: *segm_model_name
+            use_batch_dim: false
+            timeout: 60
+        input_rasters:
+        - RED
+        - GRN
+        - BLU
+        nodata: 0
+        crs: "utm"
+        res:
+            - 0.15
+            - 0.15
+        output_labels:
+        - 'output'
+        n_workers: 1
+        sample_size:
+        - 448
+        - 448
+        verbose: true
+        bound_mode: drop
+        padding: none
+        nodata_mask_mode: false
+        vectorize: false
+    -   _class: VectorizeMasks
+        input_rasters:
+        - 'output'
+    -   _class: FilterSmallObjects
+        input: output
+        output: output
+        area_tag: "area"
+        min_area: 0
+    -   _class: AddAttributes
+        input: output
+        output: output
+        add_processing_id: true
+        add_timestamp: true
+        attributes:
+            neural_network_type: 'aerial-littering'
+            neural_network_version: '1'
+            object_class: 'DUMP'
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

@@ -1,0 +1,73 @@
+shared:
+    model_name: &segm_model_name sentinel2-summer-deforestation
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+
+config:
+    _class: Compose
+    bricks:
+    -   _class: SplitRaster
+        input: input
+        input_ext: tif
+        output:
+            - base_B02
+            - base_B03
+            - base_B04
+            - base_B11
+            - new_B02
+            - new_B03
+            - new_B04
+            - new_B11
+    -   _class: Segmentation
+        bounds: 32
+        adapter:
+            _class: TritonAdapter
+            host: *segm_model_host
+            port: *port
+            name: *segm_model_name
+            use_batch_dim: false
+            timeout: 60
+            input_dtype: int16
+        input_rasters:
+        - base_B04
+        - base_B03
+        - base_B02
+        - base_B11
+        - new_B04
+        - new_B03
+        - new_B02
+        - new_B11
+        nodata: 0
+        output_labels:
+        - 'output'
+        n_workers: 1
+        sample_size:
+        - 448
+        - 448
+        verbose: true
+        bound_mode: drop
+        padding: none
+        nodata_mask_mode: false
+        vectorize: false
+    -   _class: VectorizeMasks
+        input_rasters:
+            - 'output'
+    -   _class: UnifiedVectorProcessing
+        input: output
+        output: output
+        crs: "utm"
+        bricks:
+          - _class: FilterSmallObjects
+            min_area: 0
+            area_tag: "area"
+          - _class: AddAttributes
+            add_processing_id: true
+            add_timestamp: true
+            attributes:
+                  neural_network_type: 'sentinel-deforestation'
+                  neural_network_version: '1'
+                  object_class: 'DEFORESTATION'
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

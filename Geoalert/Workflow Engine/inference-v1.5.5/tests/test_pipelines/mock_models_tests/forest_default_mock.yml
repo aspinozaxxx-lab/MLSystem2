@@ -1,0 +1,212 @@
+shared:
+    segm_model_name: &segm_model_name forest_segm
+    segm_model_path: &segm_model_path 'tests/mock_models/forest_segm_model.py'
+
+    height_model_name: &height_model_name forest_regr
+    height_model_path: &height_model_path 'tests/mock_models/forest_regr_model.py'
+
+    class_1: &class_1 "00m-04m"  # 0-4 meters
+    class_2: &class_2 "04m-10m"  # 4-10 meters
+    class_3: &class_3 "10m-99m"  # everything greater than 10 meters (actually without upper bound)
+
+    raster_ops_sample_size: &raster_ops_sample_size [1024, 1024]
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        - input.tif
+        outputs:
+        - 614.geojson
+        - 614.tif
+        - RED.tif
+        - GRN.tif
+        - BLU.tif
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED
+            - GRN
+            - BLU
+#        -   _class: BrightnessNormalization
+#            input:
+#            - RED_
+#            - GRN_
+#            - BLU_
+#            output:
+#            - RED
+#            - GRN
+#            - BLU
+#            std_width: 3
+        -   _class: Segmentation
+            bounds: 300
+            adapter:
+                _class: MockAdapter
+                name: *segm_model_name
+                path: *segm_model_path
+                input_ndim: 3
+            input_rasters: &id001
+                - RED
+                - GRN
+                - BLU
+            output_labels:
+                - '614'
+            crs: epsg:3857
+            res:
+                - 0.6
+                - 0.6
+            res_tolerance: 0.1
+            nodata: 0
+            sample_size:
+                - 904
+                - 904
+            verbose: false
+        - _class: VectorizeMasks
+          input_rasters:
+              - '614'
+
+    -   name: Heights
+        optional: true
+        inputs:
+        - 614.geojson
+        - 614.tif
+        - RED.tif
+        - GRN.tif
+        - BLU.tif
+        outputs:
+        - 614.geojson
+        bricks:
+        -   _class: Segmentation
+            adapter:
+                _class: MockAdapter
+                path: *height_model_path
+                use_batch_dim: false
+                name: *height_model_name
+                output_dtype: float32
+            crs: epsg:3857
+            input_rasters: *id001
+            output_labels:
+                - regr
+            res:
+                - 0.6
+                - 0.6
+            res_tolerance: 0.1
+            nodata: 0
+            sample_size:
+                - 736
+                - 736
+            bounds: 150
+            verbose: false
+            bound_mode: 'weight'
+            nodata_mask_mode: true
+
+        - _class: RoundRaster
+          input_masks:
+              - regr
+          out_masks:
+              - rounded_regr
+
+        -   _class: MultiThresholding
+            input_raster: rounded_regr
+            n_workers: 1
+            out_masks:
+            - 00m_raw
+            - 00m-04m_raw
+            - 04m-10m_raw
+            - 10m-99m_raw
+            sample_size: *raster_ops_sample_size
+            strict_more: false
+            thresholds:
+            - 0.05
+            - 4.0
+            - 10.0
+            verbose: false
+
+        -   _class: ApplyMask
+            child_masks:
+            - 00m-04m_raw
+            - 04m-10m_raw
+            - 10m-99m_raw
+            mask_operation: and
+            n_workers: 1
+            out_masks:
+            - 00m-04m_cut
+            - 04m-10m_cut
+            - 10m-99m_cut
+            parent_mask: '614'
+            reverse_parent: false
+            sample_size: *raster_ops_sample_size
+            verbose: false
+
+        -   _class: MaskMorphology
+            input_masks:
+            - 00m-04m_cut
+            - 04m-10m_cut
+            - 10m-99m_cut
+            mask_operation: binary_opening
+            n_workers: 1
+            out_masks:
+            - *class_1
+            - *class_2
+            - *class_3
+            sample_size: *raster_ops_sample_size
+            selem: null
+            verbose: false
+
+        -   _class: VectorizeMasks
+            input_rasters:
+            - *class_1
+            - *class_2
+            - *class_3
+
+#        -   _class: Merge
+#            class_labels:
+#            - *class_1
+#            - *class_2
+#            - *class_3
+#            class_tag: class_id
+#            input_vectors:
+#            - *class_1
+#            - *class_2
+#            - *class_3
+#            output_vector: "614"
+#
+#        -   _class: Smooth
+#            input: '614'
+#            output: '614'
+#            iterations: 2
+#            offset: 0.25
+
+    -   name: Postprocessing
+        optional: false
+        inputs:
+          - 614.geojson
+        outputs:
+          - output.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '614'
+            output: 'output'
+            crs: utm
+            bricks:
+#            -   _class: RemoveSmallHoles
+#                min_hole_area: 5
+#            -   _class: FilterSmallObjects
+#                min_area: 1
+#                area_tag: 'area'
+            -   _class: RemoveTags
+                remove_underscore_tags: true
+            -   _class: AddAttributes
+                add_timestamp: true
+    namespace: null
+
+date: '2023-05-14'
+version: 0.1.4

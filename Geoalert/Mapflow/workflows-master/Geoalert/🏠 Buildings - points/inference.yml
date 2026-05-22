@@ -1,0 +1,131 @@
+# stage cannot be removed if we have "!" before stage name
+# pipeline-input: [input.tif]
+
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        -   input.tif
+        outputs:
+        -   100.geojson
+        -   RED.tif
+        -   GRN.tif
+        -   BLU.tif
+        -   100.tif
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED_
+            - GRN_
+            - BLU_
+        -   _class: BrightnessNormalization
+            input:
+            - RED_
+            - GRN_
+            - BLU_
+            output:
+            - RED
+            - GRN
+            - BLU
+            std_width: 3
+        -   _class: Segmentation
+            bounds: 128
+            sample_size:
+              - 768
+              - 768
+            vectorize: False
+            input_rasters:
+              - RED
+              - GRN
+              - BLU
+            output_labels:
+              - rt
+            adapter:
+              _class: TritonAdapter
+              name: *segm_model_name
+              host: *segm_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+            postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 3, 4
+              - _class: SeparateInstances
+                mode: markers_and_borders
+        -   _class: VectorizeMasks
+            input_rasters:
+              - rt
+            output_fcs:
+              - '100'
+    -   name: Postprocessing1
+        optional: false
+        inputs:
+            - 100.geojson
+        outputs:
+            - 100.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: '100'
+            crs: utm
+            bricks:
+            -   _class: FilterBigObjects
+                max_area_sq_m: 100000
+            -   _class: FilterSmallObjects
+                input: '100'
+                min_area: 30.0
+                output: '100'
+            -   _class: RemoveSmallHoles
+                input: '100'
+                min_hole_area: 50.0
+                output: '100'
+    -   name: Generalization
+        optional: false
+        inputs:
+        -   100.geojson
+        outputs:
+        -   100.geojson
+        bricks:
+        -   _class: Polygons2Points
+            method: optimal
+            input: '100'
+            output: '100'
+    -   name: Postprocessing2
+        optional: false
+        inputs:
+        -  100.geojson
+        outputs:
+        -  output.geojson
+        bricks:
+        -   _class: RemoveTags
+            input: '100'
+            output: '100'
+            remove_underscore_tags: true
+        -   _class: AddAttributes
+            add_processing_id: true
+            input: '100'
+            output: 'output'
+            add_timestamp: true
+            attributes:
+                  neural_network_type: 'aerial-buildings-instance'
+                  neural_network_version: '2'
+                  generalization: 'true'
+                  object_class: 'OKS'
+                  shift: 'false'
+    namespace: null
+date: '2020-04-30'
+version: 0.1.4

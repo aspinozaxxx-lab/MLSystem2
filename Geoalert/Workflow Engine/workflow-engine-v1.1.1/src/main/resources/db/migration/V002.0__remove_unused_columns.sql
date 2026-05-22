@@ -1,0 +1,1 @@
+ALTER TABLE task_status DROP COLUMN IF EXISTS code;

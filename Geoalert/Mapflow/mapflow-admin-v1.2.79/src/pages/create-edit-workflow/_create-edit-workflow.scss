@@ -1,0 +1,47 @@
+.create-edit-workflow {
+  height: $height-without-header;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: auto;
+
+  &__container {
+    @include content-container($desktop-padding: 6, $phone-padding: 2);
+    overflow: auto;
+  }
+}
+
+.create-workflow-form {
+  padding: 10px;
+  max-width: 100%;
+  overflow: auto;
+
+  .create-workflow-form__error {
+    margin-bottom: 10px;
+  }
+
+  &__default {
+    width: min-content;
+  }
+  &__pricePerSqKm {
+    width: fit-content;
+  }
+  &__yaml-editor {
+    min-height: 100px !important;
+    font-size: 12;
+    background-color: "#edeff2";
+    overflow: "auto";
+    color: "#333";
+    padding: 15px;
+  }
+}
+
+.create-workflow-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 20px 10px 10px;
+  .#{$ns}-button {
+    margin-left: 10px;
+  }
+}

@@ -1,0 +1,35 @@
+variables:
+  PROJ_NAME: ${CI_PROJECT_NAME}
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: 1.0.0
+
+stages:
+  - publish
+
+
+publish:
+  stage: publish
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - > 
+      docker build 
+      --build-arg PIP_SOURCE=${PIP_SOURCE}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      -t $CI_REGISTRY_IMAGE:$IMAGE_TAG -f ./Dockerfile .
+    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker rmi $CI_REGISTRY_IMAGE:$IMAGE_TAG
+  after_script:
+    - docker logout $CI_REGISTRY
+  tags:
+    - docker
+    - hub
+

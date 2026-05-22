@@ -1,0 +1,131 @@
+shared:
+    segm_model_name: &segm_model_name rt-israel-rgb-000015-02
+    segm_model_host: &segm_model_host 'localhost'
+    port: &port 8000
+
+config:
+  _class: Compose
+  inputs:
+      - input.tif
+  outputs:
+      - output.geojson
+  blocks:
+      - name: RoofsSegmentation
+        optional: false
+        inputs:
+            - input.tif
+        outputs:
+            - output.geojson
+            - RED.tif
+            - GRN.tif
+            - BLU.tif
+            - rt.tif
+        bricks:
+            - _class: SplitRaster
+              input: input
+              input_ext: tif
+              output:
+                  - RED
+                  - GRN
+                  - BLU
+
+            - _class: Segmentation
+              bounds: 128
+              sample_size:
+                  - 768
+                  - 768
+              input_rasters:
+                  - RED
+                  - GRN
+                  - BLU
+              output_labels:
+                  - rt
+              adapter:
+                  _class: TritonAdapter
+                  name: *segm_model_name
+                  host: *segm_model_host
+                  port: *port
+                  input_ndim: 4
+                  output_ndim: 3
+
+            - _class: VectorizeMasks
+              input_rasters:
+                  - rt
+              output_fcs:
+                  - output
+
+
+      - name: OldSimplification
+        optional: true
+        inputs:
+            - output.geojson
+        outputs:
+            - output.geojson
+        bricks:
+            - _class: UnifiedVectorProcessing
+              input: output
+              output: output
+              crs: utm
+              bricks:
+                  - _class: FilterSmallObjects
+                    min_area: 5.0
+                  - _class: RemoveSmallHoles
+                    min_hole_area: 10.0
+
+                  - _class: SimplifyAsShapes
+                    iou_confidence_tag: "simplification_confidence_score"
+                    simplification_params:
+                      - shape_type: CIRCLE
+                        max_hausdorff: 2.0
+                        min_area: 0.0
+                        min_iou: 0.9
+                      - shape_type: RECTANGLE
+                        max_hausdorff: 7.0
+                        min_area: 0.0
+                        min_iou: 0.8
+                        rect_neg_buffer: -0.1
+                      - shape_type: L-SHAPE
+                        max_hausdorff: 7.0
+                        min_area: 0.0
+                        min_iou: 0.8
+                      - shape_type: RECTANGLE
+                        max_hausdorff: 7.0
+                        min_area: 20.0
+                        min_iou: 0.8
+                        rect_neg_buffer: -0.1
+                      - shape_type: GRID_SNAP
+                        max_hausdorff: 7.0
+                        min_area: 0.0
+                        min_iou: 0.8
+
+      - name: NewSimplification
+        optional: true
+        inputs:
+          - output.geojson
+        outputs:
+          - output.geojson
+        bricks:
+          - _class: UnifiedVectorProcessing
+            input: output
+            output: output
+            crs: utm
+            bricks:
+              - _class: FilterSmallObjects
+                min_area: 5.0
+              - _class: RemoveSmallHoles
+                min_hole_area: 10.0
+
+              - _class: SimplifyAsShapes
+                iou_confidence_tag: "simplification_confidence_score"
+                simplification_params:
+                  - shape_type: CIRCLE
+                    max_hausdorff: 2.0
+                    min_area: 0.0
+                    min_iou: 0.9
+                  - shape_type: DYNAMIC_GRID
+                    max_hausdorff: 999.0
+                    min_area: 0.
+                    min_iou: 0.1
+
+date: '2023-06-27'
+version: 0.1.0

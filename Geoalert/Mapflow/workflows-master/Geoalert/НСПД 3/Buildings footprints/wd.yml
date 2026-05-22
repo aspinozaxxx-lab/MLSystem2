@@ -1,0 +1,95 @@
+name: "Buildings footprints"
+description: ""
+version: 0
+price_per_sq_km: 0
+partition_size: 0.01
+
+blocks:
+  - name: Segmentation
+    optional: false
+    default_enabled: true
+    price: 5
+    display_name: Segmentation
+  - name: Postprocessing1
+    optional: false
+    default_enabled: true
+    display_name: ""
+    price: 0
+  - name: Simplification
+    optional: true
+    default_enabled: true
+    display_name: Полигонизация
+    price: 3
+  - name: FpShiftMeasureCorrect
+    optional: false
+    default_enabled: true
+    display_name: "Footprint"
+    price: 2
+    description: ""
+  - name: Postprocessing2
+    optional: false
+    default_enabled: true
+    display_name: ""
+    price: 0
+
+stages:
+  select-source:
+    description: Source selection
+    action: select-source
+    config:
+      params:
+        auto_confirm: true
+        source_type: xyz
+        zoom: 18
+        projection: epsg:3857
+  validate-source:
+    description: Source validation
+    action: validate-source
+    dependsOn:
+    - select-source
+    config:
+      params:
+        requirements: requirements.yml
+  load-data:
+    description: Downloading data
+    action: dataloader
+    dependsOn:
+    - validate-source
+    config:
+      retries: 1
+      retry_interval: 60
+      params:
+        bucket: ml-workflow-data
+        workers: 0
+        buffer: 200m
+        use_cache: true
+  build-cog:
+    description: Preparing imagery
+    action: build-cog
+    dependsOn:
+    - load-data
+    config:
+      params:
+        bucket: ml-rasters
+        buffer: 10m
+  inference:
+    description: Detecting buildings
+    action: inference
+    dependsOn:
+    - load-data
+    config:
+      retries: 1
+      retry_interval: 30
+      params:
+        buffer: 200m
+        pipeline: inference.yml
+        bucket: ml-workflow-data
+  import-vector:
+    description: Saving results
+    action: import-vector
+    dependsOn:
+    - inference
+    config:
+      params:
+        crop_to_mask: false
+        merge_strategy: INSTANCE_SEGMENTATION

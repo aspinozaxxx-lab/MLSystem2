@@ -1,0 +1,68 @@
+shared:
+    model_name: &segm_model_name aerial-summer-pieceofland-with-scores
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    bricks:
+    - _class: SplitRaster
+      input: input
+      input_ext: tif
+      output:
+          - RED
+          - GRN
+          - BLU
+    - _class: NSPDParcels
+      bounds: 628
+      input_rasters:
+        - RED
+        - GRN
+        - BLU
+      output_fc: output
+      sample_size:
+        - 628
+        - 628
+      crs: "utm"
+      res:
+        - 0.15
+        - 0.15
+      adapter:
+        _class: TritonAdapter
+        name: *segm_model_name
+        host: *segm_model_host
+        port: *port
+        input_ndim: 3
+        output_ndim: null
+        output_dtype: null
+        output_transpose: null
+    - _class: UnifiedVectorProcessing
+      input: output
+      output: output
+      crs: "utm"
+      bricks:
+      -   _class: NMSVector
+          algorithm: original
+          corr_coef: 0.75
+          iou_threshold: 0.75
+      -   _class: FilterSmallObjects
+          min_area: 0
+          area_tag: "area"
+      -   _class: Polygons2Points
+          method: optimal
+      -   _class: AddAttributes
+          add_processing_id: true
+          add_timestamp: true
+          attributes:
+              neural_network_type: 'aerial-pieceofland-instance'
+              neural_network_version: '1'
+              object_class: 'ZU'
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

@@ -1,0 +1,73 @@
+shared:
+    model_name: &segm_model_name 'nspd'
+    model_host: &segm_model_path 'tests/mock_models/parcels_model.py'
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    bricks:
+
+    - _class: SplitRaster
+      input: input
+      input_ext: tif
+      output:
+          - RED
+          - GRN
+          - BLU
+
+    - _class: NSPDParcels
+      bounds: 628
+      input_rasters:
+        - RED
+        - GRN
+        - BLU
+      output_fc: output_non_nms
+      sample_size:
+        - 628
+        - 628
+      adapter:
+        _class: MockAdapter
+        name: *segm_model_name
+        path: *segm_model_path
+        input_ndim: 3
+        output_ndim: null
+        output_dtype: null
+        output_transpose: null
+
+    - _class: UnifiedVectorProcessing
+      input: output_non_nms
+      output: output
+      crs: "utm"
+      bricks:
+      -   _class: NMSVector
+          algorithm: original
+          corr_coef: 0.75
+          iou_threshold: 0.75
+      -   _class: Simplify
+          crs: null
+          input: 'output'
+          output: 'output'
+          rate: 0.000006
+      -   _class: CorrectTopology
+          correct_by_subtraction: -1
+          distance_step: 0.0
+      -   _class: FilterOutput
+          flatten_multipolygons: true
+          min_hole_area: 10
+      -   _class: FilterSmallObjects
+          min_area: 50
+          area_tag: "area"
+      -   _class: AddAttributes
+          add_processing_id: true
+          add_timestamp: true
+          attributes:
+              neural_network_type: aerial-pieceofland-instance
+              neural_network_version: '1'
+              object_class: 'ZU'
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

@@ -1,0 +1,166 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`CreateWorkflowFromFile matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div>
+      <div
+        class="breadcrumbs-container "
+      >
+        <ul
+          class="bp3-overflow-list bp3-breadcrumbs breadcrumbs"
+        >
+          <div
+            class="bp3-overflow-list-spacer"
+          />
+        </ul>
+      </div>
+      <div
+        class="bp3-divider"
+      />
+    </div>
+    <div
+      class="create-edit-workflow"
+    >
+      <h2
+        class="bp3-heading"
+      >
+        Create a Workflow
+      </h2>
+      <form
+        autocomplete="off"
+        class="create-workflow-form"
+      >
+        <div
+          class="create-workflow-form__body"
+        >
+          <div
+            class="bp3-form-group"
+          >
+            <label
+              class="bp3-label"
+              for="name"
+            >
+              Name 
+              <span
+                class="bp3-text-muted"
+              />
+            </label>
+            <div
+              class="bp3-form-content"
+            >
+              <div
+                class="bp3-input-group bp3-large"
+              >
+                <input
+                  class="bp3-input"
+                  id="name"
+                  name="name"
+                  type="text"
+                />
+              </div>
+              <div
+                class="bp3-form-helper-text"
+              />
+            </div>
+          </div>
+          <div
+            class="bp3-form-group"
+          >
+            <label
+              class="bp3-label"
+              for="desc"
+            >
+              Description 
+              <span
+                class="bp3-text-muted"
+              />
+            </label>
+            <div
+              class="bp3-form-content"
+            >
+              <div
+                class="bp3-input-group bp3-large"
+              >
+                <input
+                  class="bp3-input"
+                  id="desc"
+                  name="desc"
+                  type="text"
+                />
+              </div>
+              <div
+                class="bp3-form-helper-text"
+              />
+            </div>
+          </div>
+          <div
+            class="bp3-form-group"
+          >
+            <label
+              class="bp3-label"
+              for="file"
+            >
+              Workflow definition 
+              <span
+                class="bp3-text-muted"
+              />
+            </label>
+            <div
+              class="bp3-form-content"
+            >
+              <label
+                class="bp3-file-input bp3-fill bp3-large"
+              >
+                <input
+                  id="file"
+                  intent="none"
+                  name="file"
+                  type="file"
+                />
+                <span
+                  class="bp3-file-upload-input"
+                >
+                  Choose file...
+                </span>
+              </label>
+              <div
+                class="bp3-form-helper-text"
+              />
+            </div>
+          </div>
+        </div>
+        <div
+          class="create-workflow-form__actions"
+        >
+          <button
+            class="bp3-button bp3-large"
+            data-testid="cancel-create-workflow"
+            type="button"
+          >
+            <span
+              class="bp3-button-text"
+            >
+              Cancel
+            </span>
+          </button>
+          <button
+            class="bp3-button bp3-large bp3-intent-primary"
+            data-testid="submit-create-workflow"
+            type="submit"
+          >
+            <span
+              class="bp3-button-text"
+            >
+              Save
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</DocumentFragment>
+`;

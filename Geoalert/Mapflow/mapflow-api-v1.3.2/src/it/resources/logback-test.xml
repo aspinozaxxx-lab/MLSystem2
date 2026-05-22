@@ -1,0 +1,19 @@
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{"yyyy-MM-dd'T'HH:mm:ss,SSS"} [%thread] %-5level - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="org.flywaydb" level="ERROR" additivity="false"/>
+  <logger name="o.f.c.i.c.DbMigrate" level="ERROR" additivity="false"/>
+  <logger name="o.f.c.i.s.DefaultSqlScriptExecutor" level="ERROR" additivity="false"/>
+  <logger name="io.geoalert" level="${LOG_LEVEL:-INFO}"/>
+  <logger name="io.geoalert.mapflow.service.ProgressCache" level="INFO" />
+
+  <logger name="io.geoalert.mapflow.rest.controller.MaxarController" level="DEBUG"/>
+
+  <root level="INFO">
+    <appender-ref ref="STDOUT" />
+  </root>
+</configuration>

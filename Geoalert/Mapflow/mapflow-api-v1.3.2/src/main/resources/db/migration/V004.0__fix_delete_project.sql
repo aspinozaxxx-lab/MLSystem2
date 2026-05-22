@@ -1,0 +1,2 @@
+ALTER TABLE workflow DROP CONSTRAINT workflow_fk_workflow_def;
+ALTER TABLE workflow ADD CONSTRAINT workflow_fk_workflow_def FOREIGN KEY (workflow_def_id) REFERENCES workflow_def (id) ON DELETE CASCADE;

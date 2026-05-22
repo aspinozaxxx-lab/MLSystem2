@@ -1,0 +1,1 @@
+ALTER TABLE area_of_interest ADD COLUMN params hstore;

@@ -1,0 +1,137 @@
+shared:
+    model_name: &segm_model_name aerial-summer-linear-road
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    blocks:
+        -   name: Segmentation
+            optional: false
+            inputs:
+              - input.tif
+            outputs:
+              - 307.geojson
+            bricks:
+            -   _class: SplitRaster
+                input: input
+                input_ext: tif
+                output:
+                  - RED
+                  - GRN
+                  - BLU
+            -   _class: Segmentation
+                bounds: 128
+                adapter:
+                    _class: TritonAdapter
+                    host: *segm_model_host
+                    port: *port
+                    name: *segm_model_name
+                    use_batch_dim: false
+                    timeout: 60
+                input_rasters:
+                - RED
+                - GRN
+                - BLU
+                nodata: 0
+                crs: "utm"
+                res:
+                    - 0.15
+                    - 0.15
+                output_labels:
+                - '307'
+                n_workers: 1
+                sample_size:
+                - 1408
+                - 1408
+                verbose: true
+                bound_mode: drop
+                padding: none
+                nodata_mask_mode: false
+                vectorize: false
+            -   _class: VectorizeMasks
+                input_rasters:
+                - '307'
+        -   name: Generalization
+            optional: true
+            inputs:
+              - 307.geojson
+            outputs:
+              - 307.geojson
+            bricks:
+                - _class: MaskMorphology
+                  bound: 20
+                  input_masks:
+                      - '307'
+                  mask_operation: binary_closing
+                  n_workers: 1
+                  out_masks:
+                      - '307_closing'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  selem: 'disk'
+                  selem_size: 5
+                  verbose: true
+                - _class: MaskMorphology
+                  bound: 10
+                  input_masks:
+                      - '307_closing'
+                  mask_operation: skeletonize
+                  n_workers: 1
+                  out_masks:
+                      - '307_skelet'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  verbose: true
+                - _class: MaskMorphology
+                  bound: 10
+                  connectivity: 2
+                  input_masks:
+                      - '307_skelet'
+                  mask_operation: remove_small_objects
+                  min_size: 40
+                  n_workers: 1
+                  out_masks:
+                      - '307_clean'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  verbose: true
+                - _class: VectorizeAsLines
+                  approx: 2
+                  mask_raster: '307'
+                  skeleton_raster: '307_clean'
+                  polygonize: false
+                  min_width: 7
+                  max_width: 25
+                  merge: true
+                  min_terminal_length: 10
+                  out_vector: '307'
+
+        -   name: Postprocessing
+            optional: false
+            inputs:
+                - 307.geojson
+            outputs:
+                - output.geojson
+            bricks:
+                - _class: AddAttributes
+                  input: '307'
+                  output: output
+                  add_processing_id: true
+                  add_timestamp: true
+                  attributes:
+                        neural_network_type: 'aerial-roads-linear'
+                        neural_network_version: '1'
+                        object_class: 'ROAD'
+
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

@@ -1,0 +1,237 @@
+# stage cannot be removed if we have "!" before stage name
+# pipeline-input: [input.tif]
+
+shared:
+    buildings_model: &buildings_model sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    forest_model: &forest_model triton-forest-segm-russia-rgb-000060-08
+    segm_model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        -   input.tif
+        outputs:
+        -   100.geojson
+        -   RED.tif
+        -   GRN.tif
+        -   BLU.tif
+        -   100.tif
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED_
+            - GRN_
+            - BLU_
+        -   _class: BrightnessNormalization
+            input:
+            - RED_
+            - GRN_
+            - BLU_
+            output:
+            - RED
+            - GRN
+            - BLU
+            std_width: 3
+        -   _class: Segmentation
+            bounds: 128
+            sample_size:
+              - 768
+              - 768
+            vectorize: False
+            input_rasters:
+              - RED
+              - GRN
+              - BLU
+            output_labels:
+              - rt
+            adapter:
+              _class: TritonAdapter
+              name: *buildings_model
+              host: *segm_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+            postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 3, 4
+              - _class: SeparateInstances
+                mode: markers_and_borders
+        -   _class: VectorizeMasks
+            input_rasters:
+              - rt
+            output_fcs:
+              - '100'
+    -   name: Postprocessing1
+        optional: false
+        inputs:
+            - 100.geojson
+        outputs:
+            - 100.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: '100'
+            crs: utm
+            bricks:
+            -   _class: FilterBigObjects
+                max_area_sq_m: 100000
+            -   _class: FilterSmallObjects
+                input: '100'
+                min_area: 30.0
+                output: '100'
+            -   _class: RemoveSmallHoles
+                input: '100'
+                min_hole_area: 50.0
+                output: '100'
+    -   name: Simplification
+        optional: true
+        inputs:
+        -   100.geojson
+        outputs:
+        -   100.geojson
+        bricks:
+        -   _class: SimplifyAsShapes
+            input: '100'
+            output: '100'
+            iou_confidence_tag: "simplification_confidence_score"
+            verbose: true
+            simplification_params:
+                - shape_type: CIRCLE
+                  max_hausdorff: 2.0
+                  min_area: 0.0
+                  min_iou: 0.9
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: L-SHAPE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 200.0
+                  min_iou: 0.8
+                - shape_type: GRID_SNAP
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+        # next two steps are not simplification but do nothing if simplification is not applied
+        -   _class: AddAttributes
+            input: '100'
+            output: '100'
+            add_processing_id: false
+            add_timestamp: false
+            attributes:
+              simplification: 'true'
+
+
+    -   name: Postprocessing2
+        optional: false
+        inputs:
+        -  100.geojson
+        outputs:
+        -  output.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '100'
+            output: '100'
+            crs: utm
+            bricks:
+            -   _class: CorrectTopology
+                distance_step: 1.0
+                correct_by_subtraction: 1
+                buffer: 0.0
+            -   _class: FilterSmallObjects
+                min_area: 5.0
+                area_tag: 'area'
+            -   _class: AddAttributes
+                add_processing_id: true
+                add_timestamp: true
+                attributes:
+                  neural_network_type: 'aerial-buildings-instance'
+                  neural_network_version: '2'
+
+    -   name: Forest
+        optional: false
+        inputs:
+          - 100.geojson
+          - GRN.tif
+          - GRN.tif
+          - BLU.tif
+        outputs:
+          - output.geojson
+        bricks:
+          -   _class: Segmentation
+              bounds: 300
+              model:
+                _class: MultiLabelSegmentationModel
+                adapter:
+                  _class: TritonAdapter
+                  host: *segm_model_host
+                  lazy: false
+                  use_batch_dim: false
+                  n_retries: 2
+                  name: *forest_model
+                  port: *port
+                  retry_sleep: 20.0
+                  timeout: 60
+                crs: epsg:3857
+                input_dtype: uint8
+                input_rasters:
+                  - RED
+                  - GRN
+                  - BLU
+                nodata: 0
+                output_dtype: uint8
+                output_labels:
+                  - '614'
+                res:
+                  - 0.6
+                  - 0.6
+              n_workers: 1
+              res_tolerance: 0.1
+              sample_size:
+                - 904
+                - 904
+              vectorize: true
+              verbose: false
+          -   _class: AddAttributes
+              input: '614'
+              output: '614'
+              add_processing_id: true
+              add_timestamp: true
+              attributes:
+                  neural_network_type: 'aerial-forest-nspd2'
+                  neural_network_version: '1'
+          -   _class: Merge
+              input_vectors:
+                - '614'
+                - '100'
+              output_vector: 'output'
+              class_tag: 'object_class'
+              class_labels:
+                - 'FOREST'
+                - 'OKS'
+              subtract:
+                '614':
+                  - '100'
+          -   _class: RemoveTags
+              input: 'output'
+              output: 'output'
+              remove_underscore_tags: true
+
+    namespace: null
+date: '2024-02-22'
+version: 0.1.4

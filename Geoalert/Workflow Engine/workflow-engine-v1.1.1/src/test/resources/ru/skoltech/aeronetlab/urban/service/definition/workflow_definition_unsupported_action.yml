@@ -1,0 +1,10 @@
+description: Default WD
+name: 3fe8df14-71cc-446c-9073-adc6c2be0f23
+stages:
+  select-source:
+    action: bad-action
+    config:
+      params: {auto_confirm: true, projection: 'epsg:3857', source_type: xyz, url: 'https://api.tiles.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}.jpg?access_token=,
+               zoom: 18}
+    description: Source selection
+version: 0

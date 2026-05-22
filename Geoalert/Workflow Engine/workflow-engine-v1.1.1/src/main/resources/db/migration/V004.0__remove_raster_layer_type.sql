@@ -1,0 +1,1 @@
+ALTER TABLE raster_layer DROP COLUMN IF EXISTS layer_type;

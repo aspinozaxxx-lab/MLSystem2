@@ -1,0 +1,13 @@
+FROM registry.gitlab.com/geoalert-projects/geoalert-docker/dataloader-base:079ed525
+
+RUN pip install pytest
+
+# copy external modules
+COPY ./modules /modules
+
+# install external modules
+WORKDIR /modules/xyz_loader
+RUN pip install --no-dependencies .
+
+# set project workdir
+WORKDIR /

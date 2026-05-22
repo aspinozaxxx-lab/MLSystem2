@@ -1,0 +1,4 @@
+.map-loader-spinner {
+  @include use-background-color($light: $light-gray4, $dark: $dark-gray5);
+  opacity: 0.8;
+}

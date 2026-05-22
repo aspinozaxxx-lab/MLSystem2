@@ -1,0 +1,31 @@
+.processing-map {
+  @include use-background-color($gray1, $gray5);
+
+  position: relative;
+  height: 100%;
+
+  .map-loader-spinner {
+    position: absolute;
+    z-index: 10;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    left: 0;
+  }
+}
+
+/* Mapbox map styles */
+#mapbox-map {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+
+  .#{$ns}-dark & a {
+    color: initial;
+  }
+}

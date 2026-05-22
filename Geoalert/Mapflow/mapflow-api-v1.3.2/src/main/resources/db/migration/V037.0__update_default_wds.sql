@@ -1,0 +1,1 @@
+UPDATE project SET default_wds = true;

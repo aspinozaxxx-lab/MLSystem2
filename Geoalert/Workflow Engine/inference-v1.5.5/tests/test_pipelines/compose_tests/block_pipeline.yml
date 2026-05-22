@@ -1,0 +1,67 @@
+config:
+    _class: Compose
+    inputs: [ input.tif ]
+    outputs: [ output.geojson ]
+    blocks:
+        - name: SplitRasterBlock
+          optional: false
+          inputs: [ input.tif ]
+          outputs: [ RED.tif, GRN.tif, BLU.tif ]
+          bricks:
+              - _class: SplitRaster
+                input: input
+                input_ext: tif
+                output:
+                    - RED
+                    - GRN
+                    - BLU
+        - name: Segmentation
+          optional: false
+          inputs: [ RED.tif, GRN.tif, BLU.tif ]
+          outputs: [ output.geojson ]
+          bricks:
+              - _class: Segmentation
+                bounds: 128
+                adapter:
+                    _class: TritonAdapter
+                    host: host
+                    lazy: true
+                    n_retries: 10
+                    name: name
+                    port: 80
+                    retry_sleep: 20.0
+                    timeout: 60
+                    input_dtype: uint8
+                    output_dtype: uint8
+                crs: epsg:3857
+                input_rasters:
+                    - RED
+                    - GRN
+                    - BLU
+                nodata: null
+
+                output_labels:
+                    - '100'
+                res:
+                    - 0.5
+                    - 0.5
+                sample_size:
+                  - 1024
+                  - 1024
+                verbose: true
+        - name: SimplifyAsShapeBlock
+          optional: true
+          inputs: [ output.geojson ]
+          outputs: [ output.geojson ]
+          bricks:
+            - _class: SimplifyAsShape
+              input: 'output'
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+              output: 'output'
+              shape_type: L-SHAPE
+              verbose: true
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

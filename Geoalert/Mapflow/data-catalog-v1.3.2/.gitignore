@@ -1,0 +1,5 @@
+*__pycache__
+.idea
+venv
+tests/test_files/*
+!tests/test_files/.gitkeep

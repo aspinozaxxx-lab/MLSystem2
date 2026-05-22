@@ -1,0 +1,1 @@
+ALTER TABLE workflow_def ADD COLUMN IF NOT EXISTS "archived" boolean default false;

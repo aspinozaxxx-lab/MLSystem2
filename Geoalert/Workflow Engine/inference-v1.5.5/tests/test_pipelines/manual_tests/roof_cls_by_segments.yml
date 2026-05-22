@@ -1,0 +1,106 @@
+shared:
+    semantic_model_name: &semantic_model_name rt-usa-rgb-000015-01
+    semantic_model_host: &semantic_model_host 'localhost'
+
+    lines_model_name: &lines_model1_name roof-ridges-rgb-00015-04
+    lines_model_host: &lines_model1_host 'localhost'
+
+    port: &port 8000
+
+config:
+    _class: Compose
+    bricks:
+#    -   _class: SplitRaster
+#        input: input
+#        input_ext: tif
+#        output:
+#        - RED
+#        - GRN
+#        - BLU
+#    -   _class: Segmentation
+#        bounds: 128
+#        sample_size:
+#        - 768
+#        - 768
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - semantic
+#        adapter:
+#            _class: TritonAdapter
+#            name: *semantic_model_name
+#            host: *semantic_model_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+#
+#    -   _class: Segmentation
+#        bounds: 128
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - lines1
+#        sample_size:
+#        - 768
+#        - 768
+#        adapter:
+#            _class: TritonAdapter
+#            name: *lines_model_name
+#            host: *lines_model_host
+#            port: *port
+#            input_ndim: 4
+#            output_ndim: 3
+
+#    - _class: SplitByLinesWatershed
+#      semantic_band: semantic
+#      lines_band: lines1
+#      output_band: res1
+#      threshold: 1
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+#
+#    - _class: SplitByLinesWatershed
+#      semantic_band: semantic
+#      lines_band: lines2
+#      output_band: res2
+#      threshold: 1
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+
+#    - _class: SplitByLinesWatershed
+#      semantic_band: semantic
+#      lines_band: lines
+#      output_band: segments
+#      threshold: 1
+#      semantic_erosion: 3
+#      lines_dilation: 3
+#      min_size: 32
+
+    #- _class: VectorizeMasks
+#      input_rasters:
+#          - semantic
+#          - segments
+
+    - _class: UnifiedVectorProcessing
+      input: segments
+      output: segments_filtered
+      crs: utm
+      bricks:
+          - _class: FilterSmallObjects
+            min_area: 5.0
+          - _class: RemoveSmallHoles
+            min_hole_area: 50.0
+
+    - _class: ClassifyBySegments
+      semantic_fc: semantic
+      segments_fc: segments_filtered
+
+        
+date: '2024-01-01'
+version: 0.1.0

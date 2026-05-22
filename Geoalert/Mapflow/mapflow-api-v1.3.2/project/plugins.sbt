@@ -1,0 +1,5 @@
+addSbtPlugin("io.github.davidgregory084" % "sbt-tpolecat" % "0.3.1")
+addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.9.4")
+//addSbtPlugin("ch.epfl.scala" % "sbt-bloop" % "1.4.6")
+addSbtPlugin("io.spray" % "sbt-revolver" % "0.9.1")
+addSbtPlugin("net.virtual-void" % "sbt-dependency-graph" % "0.9.2")

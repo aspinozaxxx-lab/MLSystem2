@@ -1,0 +1,67 @@
+variables:
+  PROJ_NAME: ${CI_PROJECT_NAME}
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_SLUG
+
+stages:
+  - test
+  - publish
+  - deploy
+
+test:
+  stage: test
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - > 
+      docker build --target testing 
+      --no-cache
+      --build-arg GITLAB_REGISTRY_TOKEN=} 
+      --build-arg PIP_SOURCE=${PIP_SOURCE}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --build-arg CI_SERVER_HOST=${CI_SERVER_HOST}
+      -t inference/test 
+      -f Dockerfile .
+    - docker run --rm inference/test python3 -m pytest ./tests/unit
+    #- docker compose up -d minio
+    #- docker compose run --rm app python3 -m pytest ./tests/unit  # ./tests/it
+    #- docker compose down
+  after_script:
+    - docker rmi inference/test
+  tags:
+    - docker
+
+
+publish:
+  stage: publish
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - >
+      docker build --target release 
+      --no-cache
+      --build-arg GITLAB_REGISTRY_TOKEN=} 
+      --build-arg PIP_SOURCE=${PIP_SOURCE}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --build-arg CI_SERVER_HOST=${CI_SERVER_HOST}
+      -t $CI_REGISTRY_IMAGE:$IMAGE_TAG 
+      -f ./Dockerfile .
+    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker rmi $CI_REGISTRY_IMAGE:$IMAGE_TAG
+  tags:
+    - docker
+
+include:
+  # Deploy Stage
+  - project: nspd/backend/templates/ci-cd
+    ref: ${TEMPLATES_REPO_REF}
+    file: /deploy/deploy.yml

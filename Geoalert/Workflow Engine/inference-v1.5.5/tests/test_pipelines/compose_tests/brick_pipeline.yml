@@ -1,0 +1,17 @@
+config:
+    _class: Compose
+    bricks:
+        - _class: SplitRaster
+          input: input
+          input_ext: tif
+          output:
+              - RED
+              - GRN
+              - BLU
+        - _class: FilterSmallObjects
+          input: 'output'
+          min_area: 100.0
+          output: 'output'
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

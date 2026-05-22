@@ -1,0 +1,63 @@
+{
+  "properties": {
+    "model_version": {
+      "type": "string",
+      "description": "Версия модели машинного обучения",
+      "examples": [
+        "1",
+        "2.1"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "description": "Имя модели машинного обучения",
+      "examples": [
+        "nspd2-aerial-oks"
+      ]
+    },
+    "processing_id": {
+      "type": "string",
+      "description": "Идентификатор обработки в подсистеме машинного обучения",
+      "examples": [
+        "8beea7f7-9a3e-482e-851c-06d46744b219"
+      ]
+    },
+    "processing_date": {
+      "type": "string",
+      "description": "Дата создания объекта в процессе обработки, формат YYYY-MM-DD",
+      "examples": [
+        "2024-02-16"
+      ]
+    },
+    "id": {
+      "type": "int",
+      "description": "Идентификатор объекта в подсистеме машинного обучения",
+      "examples": [
+        "473627"
+      ]
+    },
+    "type": {
+      "type": "string",
+      "description": "Название типа объекта ",
+      "examples": [
+        "FOREST",
+        "QUARRY"
+      ]
+    },
+    "object_id": {
+      "type": "str",
+      "description": "Глобальный идентификатор объекта",
+      "examples": [
+        "ca829af6-4aa9-40f7-bb55-fb481c387ce7"
+      ]
+    },
+    "generalization": {
+      "type": "bool",
+      "description": "Была ли применена генерализация (замена полигонов на точки) ",
+      "examples": [
+        true
+      ]
+    }
+
+  }
+}

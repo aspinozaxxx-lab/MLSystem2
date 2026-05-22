@@ -1,0 +1,12 @@
+.breadcrumbs-container {
+  @include use-background-color($light-gray3, $dark-gray4);
+
+  padding: 2px 15px;
+
+  .breadcrumbs {
+    .breadcrumb {
+      white-space: nowrap;
+      user-select: none;
+    }
+  }
+}

@@ -1,0 +1,28 @@
+version: 1.0
+sources: 
+  xyz: 
+    recommended: 
+      min_zoom: 20
+      max_zoom: 21
+    required:
+      min_zoom: 19
+  tms:
+    recommended:
+      min_zoom: 20
+      max_zoom: 21
+    required:
+      min_zoom: 19
+  quadkey:
+    recommended:
+      min_zoom: 20
+      max_zoom: 21
+    required:
+      min_zoom: 19
+  local:
+    recommended:
+      min_res: 0.05
+      max_res: 0.2
+      nchannels: 3
+    required:
+      max_res: 0.8
+      nchannels: [3, 4]

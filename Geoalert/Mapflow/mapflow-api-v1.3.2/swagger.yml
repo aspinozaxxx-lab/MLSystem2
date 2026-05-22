@@ -1,0 +1,612 @@
+openapi: 3.0.0
+info:
+  description: |
+    WhiteMaps client API
+    [http://swagger.io](http://swagger.io)
+  version: 1.18.0
+  title: WhiteMaps
+  termsOfService: 'http://swagger.io/terms/'
+  contact:
+    email: dev@geoalert.io
+  license:
+    name: Apache 2.0
+    url: 'http://www.apache.org/licenses/LICENSE-2.0.html'
+servers:
+  # Added by API Auto Mocking Plugin
+  - description: SwaggerHub API Auto Mocking
+    url: https://virtserver.swaggerhub.com/geoalert.io/WhiteMaps/1.18.0
+  - url: 'https://whitemaps.swagger.io/api/v0'
+tags:
+  - name: user
+  - name: processings
+  - name: projects
+paths:
+  /user/status:
+    get:
+      tags:
+        - "user"
+      summary: "Returns current user status"
+      description: "Returns current user status as specified by the auth token"
+      operationId: "getUserStatus"
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserStatusJson'
+      security:
+        - bearerAuth: [ ]
+  /processings:
+    get:
+      tags:
+        - "processings"
+      summary: "Returns all processings"
+      description: "Returns all processings as specified by the auth token"
+      operationId: "getAllProcessings"
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProcessingJson'
+      security:
+        - bearerAuth: [ ]
+
+  /projects/{projectId}/processings:
+    get:
+      tags:
+        - "processings"
+      summary: "Returns processings of project"
+      description: "Returns processings of project as specified by the auth token"
+      operationId: "getProjectProcessings"
+      parameters:
+        - name: projectId
+          in: path
+          description: 'The id of project'
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProcessingJson'
+      security:
+        - bearerAuth: [ ]
+  /processings/{processingId}:
+    delete:
+      tags:
+        - "processings"
+      summary: "Delete processing by id"
+      description: "Delete processing by id"
+      operationId: "deleteProcessing"
+      parameters:
+        - name: processingId
+          in: path
+          description: 'The id of processing'
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                type: string
+                example: "OK"
+      security:
+        - bearerAuth: [ ]
+    put:
+      tags:
+        - "processings"
+      summary: "Create processing"
+      description: "Create processing and run"
+      operationId: "createProcessing"
+      parameters:
+        - name: processingId
+          in: path
+          description: 'The id of processing'
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProcessingInputJson"
+        description: Update processing
+        required: true
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessingJson"
+      security:
+        - bearerAuth: [ ]
+  /processings/{processingId}/result:
+    get:
+      tags:
+        - "processings"
+      summary: "Download processing results"
+      description: "Downloading processing results by processing id"
+      operationId: "downloadProcessing"
+      parameters:
+        - name: processingId
+          in: path
+          description: 'The id of processing'
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+      security:
+        - bearerAuth: [ ]
+  /projects:
+    get:
+      tags:
+        - "projects"
+      summary: "Returns projects list"
+      description: "Returns projects list as specified by the auth token"
+      operationId: "listProjects"
+      responses:
+        '200':
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectJson'
+      security:
+        - bearerAuth: [ ]
+components:
+  securitySchemes:
+    bearerAuth: # arbitrary name for the security scheme
+      type: http
+      scheme: bearer
+      bearerFormat: JWT    #
+  schemas:
+    UpdateProcessingInputJson:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+    UserStatusJson:
+      type: object
+      required:
+        - email
+        - processedArea
+        - remainingArea
+        - remainingCredits
+        - areaLimit
+        - maxAoisPerProcessing
+        - memoryLimit
+        - billingType
+        - models
+        - teams
+        - dataProviders
+        - reviewWorkflowEnabled
+      properties:
+        email:
+          type: string
+          format: email
+          example: admin@admin.com
+        processedArea:
+          type: integer
+        remainingArea:
+          type: integer
+        remainingCredits:
+          type: integer
+        areaLimit:
+          type: integer
+        maxAoisPerProcessing:
+          type: integer
+        memoryLimit:
+          type: integer
+        billingType:
+          type: integer
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowDefJson'
+        teams:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMembership'
+        dataProviders:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataProviderJson'
+        reviewWorkflowEnabled:
+          type: boolean
+    WorkflowDefJson:
+      type: object
+      required:
+        - id
+        - name
+        - created
+        - updated
+        - blocks
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        created:
+          type: string
+          format: date-time
+        updated:
+          type: string
+          format: date-time
+        pricePerSqKm:
+          type: number
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockConfigJson'
+    BlockConfigJson:
+      type: object
+      required:
+        - name
+        - description
+        - optional
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        optional:
+          type: number
+    TeamMembership:
+      type: object
+      required:
+        - teamId
+        - name
+        - role
+      properties:
+        teamId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          enum:
+            - OWNER
+            - MEMBER
+        activeUntil:
+          type: string
+          format: date-time
+        creditsLimit:
+          type: number
+    DataProviderJson:
+      type: object
+      required:
+        - id
+        - name
+        - displayName
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        displayName:
+          type: string
+        previewUrl:
+          type: string
+    DataProviderPriceJson:
+      type: object
+      required:
+        - zoom
+        - priceSqKm
+      properties:
+        zoom:
+          type: integer
+        priceSqKm:
+          type: number
+    ProcessingJson:
+      type: object
+      required:
+        - id
+        - name
+        - projectId
+        - vectorLayer
+        - rasterLayer
+        - workflowDef
+        - aoiCount
+        - aoiArea
+        - area
+        - status
+        - percentCompleted
+        - params
+        - blocks
+        - meta
+        - messages
+        - created
+        - updated
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        vectorLayer:
+          $ref: '#/components/schemas/VectorLayerJson'
+        rasterLayer:
+          $ref: '#/components/schemas/RasterLayerJson'
+        workflowDef:
+          $ref: '#/components/schemas/WorkflowDefJson'
+        aoiCount:
+          type: integer
+        aoiArea:
+          type: integer
+          format: int64
+        area:
+          type: integer
+          format: int64
+        cost:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum:
+            - UNPROCESSED
+            - IN_PROGRESS
+            - OK
+            - FAILED
+            - CANCELLED
+        reviewStatus:
+          $ref: '#/components/schemas/ProcessingReviewJson'
+        rating:
+          $ref: '#/components/schemas/Rating'
+        percentCompleted:
+          type: integer
+        params:
+          $ref: '#/components/schemas/MapString'
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockParametersJson'
+        meta:
+          $ref: '#/components/schemas/MapString'
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageJson'
+        created:
+          type: string
+          format: date-time
+        updated:
+          type: string
+          format: date-time
+    MessageJson:
+      type: object
+      required:
+        - code
+        - parameters
+      properties:
+        code:
+          type: string
+        parameters:
+          type: object
+          properties:
+            key:
+              type: string
+            value:
+              type: string
+    BlockParametersJson:
+      type: object
+      required:
+        - name
+        - enabled
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+    MapString:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+    Rating:
+      type: object
+      required:
+        - rating
+      properties:
+        rating:
+          type: string
+        feedback:
+          type: string
+    ProcessingReviewJson:
+      type: object
+      required:
+        - reviewStatus
+      properties:
+        reviewStatus:
+          type: string
+          enum:
+            - ACCEPTED
+            - NOT_ACCEPTED
+            - REFUNDED
+            - IN_REVIEW
+        feedback:
+          type: string
+          format: date-time
+    RasterLayerJson:
+      type: object
+      required:
+        - id
+        - tileJsonUrl
+        - tileUrl
+      properties:
+        id:
+          type: string
+          format: uuid
+        tileJsonUrl:
+          type: string
+        tileUrl:
+          type: string
+    VectorLayerJson:
+      type: object
+      required:
+        - id
+        - name
+        - tileJsonUrl
+        - tileUrl
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        tileJsonUrl:
+          type: string
+        tileUrl:
+          type: string
+    UserJson:
+      type: object
+      required:
+        - id
+        - name
+        - tileJsonUrl
+        - tileUrl
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        tileJsonUrl:
+          type: string
+        tileUrl:
+          type: string
+    Progress:
+      type: object
+      required:
+        - status
+        - percentCompleted
+        - details
+      properties:
+        status:
+          type: string
+          enum:
+            - UNPROCESSED
+            - IN_PROGRESS
+            - OK
+            - FAILED
+            - CANCELLED
+        percentCompleted:
+          type: integer
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressDetail'
+        completionDate:
+          type: string
+          format: date-time
+    ProgressDetail:
+      type: object
+      required:
+        - status
+        - count
+        - area
+      properties:
+        status:
+          type: string
+          enum:
+            - UNPROCESSED
+            - IN_PROGRESS
+            - OK
+            - FAILED
+            - CANCELLED
+        count:
+          type: integer
+        area:
+          type: integer
+        statusUpdateDate:
+          type: string
+          format: date-time
+    ProjectJson:
+      type: object
+      required:
+        - id
+        - name
+        - progress
+        - aoiCount
+        - aoiArea
+        - area
+        - user
+        - isDefault
+        - created
+        - updated
+        - workflowDefs
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        progress:
+          $ref: '#/components/schemas/Progress'
+        aoiCount:
+          type: integer
+        aoiArea:
+          type: integer
+          format: int64
+        area:
+          type: integer
+          format: int64
+        user:
+          $ref: '#/components/schemas/UserJson'
+        isDefault:
+          type: boolean
+        created:
+          type: string
+          format: date-time
+        updated:
+          type: string
+          format: date-time
+        workflowDefs:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowDefJson'

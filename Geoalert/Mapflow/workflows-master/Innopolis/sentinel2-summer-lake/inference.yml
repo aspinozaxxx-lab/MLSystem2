@@ -1,0 +1,72 @@
+shared:
+    model_name: &segm_model_name sentinel2-summer-water-multiclass
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    bricks:
+    -   _class: SplitRaster
+        input: input
+        input_ext: tif
+        output:
+            - B02
+            - B03
+            - B04
+            - B08
+            - B8A
+            - B11
+            - B12
+    -   _class: Segmentation
+        bounds: 0
+        adapter:
+            _class: TritonAdapter
+            host: *segm_model_host
+            port: *port
+            name: *segm_model_name
+            use_batch_dim: false
+            timeout: 60
+            input_dtype: int16
+        input_rasters:
+        - B02
+        - B03
+        - B04
+        - B08
+        - B11
+        nodata: 0
+        output_labels:
+        - 'background'
+        - 'river'
+        - 'lake'
+        n_workers: 1
+        sample_size:
+        - 512
+        - 512
+        verbose: true
+        bound_mode: drop
+        padding: none
+        nodata_mask_mode: false
+        postprocessors:
+        - _class: LabelsToOnehot
+          n_classes: 3
+    -   _class: VectorizeMasks
+        input_rasters:
+        - 'lake'
+    -   _class: UnifiedVectorProcessing
+        input: lake
+        output: output
+        crs: "utm"
+        bricks:
+          - _class: FilterSmallObjects
+            min_area: 0
+            area_tag: "area"
+          - _class: AddAttributes
+            add_processing_id: true
+            add_timestamp: true
+            attributes:
+                  neural_network_type: 'sentinel-water'
+                  neural_network_version: '1'
+                  object_class: 'LAKE'
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

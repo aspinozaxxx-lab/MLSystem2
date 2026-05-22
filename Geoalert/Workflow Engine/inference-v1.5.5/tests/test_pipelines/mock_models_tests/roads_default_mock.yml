@@ -1,0 +1,116 @@
+shared:
+    segm_model_name: &segm_model_name 'roads'
+    segm_model_path: &segm_model_path 'tests/mock_models/roads_model.py'
+
+config:
+    _class: Compose
+    bricks:
+
+    -   _class: SplitRaster
+        input: input
+        input_ext: tif
+        output:
+        - RED
+        - GRN
+        - BLU
+
+    -   _class: Segmentation
+        adapter:
+            _class: MockAdapter
+            name: *segm_model_name
+            path: *segm_model_path
+            input_ndim: 3
+        input_rasters:
+            - RED
+            - GRN
+            - BLU
+        output_labels:
+            - '307'
+        #crs: utm
+        #res:
+        #    - 0.33
+        #    - 0.33
+        #nodata: 0
+        sample_size: &id001
+            - 1024
+            - 1024
+        bounds: 128
+        verbose: true
+
+    -   _class: MaskMorphology
+        bound: 20
+        input_masks:
+        - '307'
+        mask_operation: binary_closing
+        n_workers: 1
+        out_masks:
+        - '307_closing'
+        sample_size: *id001
+        selem: 'disk'
+        selem_size: 5
+        verbose: true
+    -   _class: MaskMorphology
+        bound: 10
+        input_masks:
+        - '307_closing'
+        mask_operation: skeletonize
+        n_workers: 1
+        out_masks:
+        - '307_skelet'
+        sample_size: *id001
+        verbose: true
+    -   _class: MaskMorphology
+        bound: 10
+        connectivity: 2
+        input_masks:
+        - '307_skelet'
+        mask_operation: remove_small_objects
+        min_size: 40
+        n_workers: 1
+        out_masks:
+        - '307_clean'
+        sample_size: *id001
+        verbose: true
+    -   _class: VectorizeAsLines
+        approx: 2
+        mask_raster: '307'
+        skeleton_raster: '307_clean'
+        polygonize: false
+        min_width: 7
+        max_width: 25
+        merge: true
+        min_terminal_length: 10
+        out_vector: 'lines_raw'
+    -   _class: RefineCrossroads
+        input: 'lines_raw'
+        output: 'lines_cr'
+        snap_dist: 5
+        merge_dist: 10
+    -   _class: SnapLines
+        input: 'lines_cr'
+        output: 'lines_snapped'
+        angle: 35
+    -   _class: FilterShortLines
+        input: 'lines_snapped'
+        output: 'lines_filt'
+        min_length: 20
+        min_connections: 2
+    -   _class: TopoSimplify
+        input: 'lines_filt'
+        output: 'lines_simp'
+        tolerance: 4
+    -   _class: LineStings2Polygons
+        ls_vector: 'lines_simp'
+        mask_raster: '307_closing'
+        output: 'output'
+        min_width: 3
+        max_width: 3
+    -   _class: RemoveTags
+        input: 'output'
+        output: 'output'
+        remove_underscore_tags: true
+    -   _class: AddAttributes
+        input: 'output'
+        output: 'output'
+        add_timestamp: true
+    namespace: null

@@ -1,0 +1,67 @@
+name: "Участки леса - НСПД-1 "
+price_per_sq_km: 0
+partition_size: 1.0
+
+stages:
+  build-cog:
+    action: build-cog
+    config:
+      params:
+        channels: "3,2,1"
+        crop_to_mask: False
+        bucket: ml-rasters
+    dependsOn:
+    - load-data
+    description: Preparing imagery
+  import-vector:
+    action: import-vector
+    config:
+      params:
+        crop_to_mask: true
+        key_properties: object_class
+        merge_strategy: NONE
+    dependsOn:
+    - inference
+    description: Saving results
+  inference:
+    action: inference
+    config:
+      params:
+        bucket: ml-workflow-data
+        pipeline: inference.yml
+      retries: 2
+      retry_interval: 30
+    dependsOn:
+    - load-data
+    description: fields instance segmentation sentinel2
+  load-data:
+    action: dataloader
+    config:
+      params:
+        bucket: ml-workflow-data
+        buffer: 0m
+        workers: 1
+      retries: 1
+      retry_interval: 60
+    dependsOn:
+    - validate-source
+    description: Downloading data
+  validate-source:
+    description: Source validation
+    action: validate-source
+    dependsOn:
+      - select-source
+    config:
+      params:
+        requirements: requirements.yml
+  select-source:
+    action: select-source
+    config:
+      params:
+        auto_confirm: true
+        projection: epsg:3857
+        source_type: sentinel_l2a
+        url: http://L1C_T37UEA_A026187_20200627T082607
+        zoom: 14
+    description: Source selection
+version: 0

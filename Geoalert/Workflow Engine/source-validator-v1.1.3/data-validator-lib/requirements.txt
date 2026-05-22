@@ -1,0 +1,7 @@
+flask>=2.0
+gunicorn>=20.0
+pyyaml>=6.0
+loguru>=0.5
+rasterio>=1.2.8
+tifffile>=2021.6.6
+boto3>=1.21

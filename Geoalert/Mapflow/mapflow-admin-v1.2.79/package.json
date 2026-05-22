@@ -1,0 +1,130 @@
+{
+  "name": "rwhite-maps",
+  "version": "1.2.79",
+  "private": true,
+  "repository": {
+    "url": "https://gitlab.com/geoalert-projects/white-maps-platform/white-maps-client.git"
+  },
+  "engines": {
+    "npm": ">=8.0.0 <9.0.0",
+    "node": ">=16.0.0 <=18.x"
+  },
+  "eslintConfig": {
+    "extends": "react-app"
+  },
+  "scripts": {
+    "analyze": "source-map-explorer 'build/static/js/*.js'",
+    "start": "craco start",
+    "build": "craco build",
+    "test": "TZ=UTC craco test",
+    "eject": "react-scripts eject",
+    "add-locale": "lingui add-locale",
+    "extract": "cross-env NODE_ENV=development lingui extract",
+    "compile": "lingui compile",
+    "pretty": "prettier --write 'src/**/*.js'",
+    "g": "node ./tools/generate.js",
+    "lint-last-commits": "commitlint --from HEAD~2 --to HEAD --verbose"
+  },
+  "dependencies": {
+    "@apollo/client": "3.7.1",
+    "@blueprintjs/core": "4.16.2",
+    "@blueprintjs/datetime2": "0.9.37",
+    "@blueprintjs/icons": "4.13.2",
+    "@blueprintjs/popover2": "^1.13.2",
+    "@blueprintjs/select": "4.9.3",
+    "@blueprintjs/table": "^4.9.3",
+    "@lingui/react": "3.15.0",
+    "@mapbox/geo-viewport": "0.4.0",
+    "@mapbox/mapbox-gl-draw": "^1.2.0",
+    "@tanstack/react-query": "^4.16.1",
+    "@tanstack/react-query-devtools": "^4.16.1",
+    "@turf/area": "6.0.1",
+    "@turf/bbox": "6.0.1",
+    "@turf/bbox-polygon": "^6.5.0",
+    "@turf/clean-coords": "^6.5.0",
+    "@turf/distance": "^6.5.0",
+    "@turf/kinks": "^6.5.0",
+    "apollo-upload-client": "17.0.0",
+    "base-64": "^1.0.0",
+    "classnames": "2.2.6",
+    "date-fns": "^2.30.0",
+    "fast-memoize": "2.5.2",
+    "geojson-validation": "^1.0.2",
+    "geotiff": "^2.1.1",
+    "graphql": "16.6.0",
+    "history": "4.10.1",
+    "js-cookie": "^3.0.1",
+    "js-yaml": "^4.1.0",
+    "jwt-decode": "2.2.0",
+    "ky": "^1.1.3",
+    "mapbox-gl-draw-rectangle-restrict-area": "^3.1.4",
+    "monaco-editor": "^0.44.0",
+    "monaco-yaml": "^5.1.0",
+    "normalize.css": "8.0.1",
+    "path-to-regexp": "6.1.0",
+    "proj4": "^2.9.2",
+    "ramda": "0.27.0",
+    "react": "^17.0.0",
+    "react-dom": "^17.0.0",
+    "react-dropzone": "10.2.1",
+    "react-hook-form": "7.39.5",
+    "react-router-dom": "5.1.2",
+    "react-scripts": "^5.0.1",
+    "react-table": "7.8.0",
+    "react-use-clipboard": "^1.0.7",
+    "react-virtualized-auto-sizer": "^1.0.7",
+    "react-window": "1.8.8",
+    "react-window-infinite-loader": "1.0.8",
+    "rxjs": "6.5.5",
+    "stable": "^0.1.8",
+    "use-deep-compare-effect": "1.3.0",
+    "validator": "13.7.0"
+  },
+  "devDependencies": {
+    "@babel/core": "7.20.2",
+    "@craco/craco": "^7.1.0",
+    "@hookform/devtools": "^4.3.1",
+    "@lingui/cli": "3.15.0",
+    "@lingui/loader": "3.15.0",
+    "@lingui/macro": "3.15.0",
+    "@testing-library/jest-dom": "4.2.4",
+    "@testing-library/react": "12.1.5",
+    "@testing-library/user-event": "^7.1.2",
+    "@types/react-router-dom": "^5.3.3",
+    "@vgrid/sass-inline-svg": "^1.0.1",
+    "craco-esbuild": "^0.5.2",
+    "cross-env": "^7.0.3",
+    "generate-template-files": "2.2.0",
+    "husky": "^7.0.0",
+    "jest-extended": "0.11.5",
+    "mutationobserver-shim": "0.3.3",
+    "prettier": "2.0.2",
+    "react-test-renderer": "^17.0.0",
+    "sass": "1.56.1",
+    "source-map-explorer": "2.4.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "jest": {
+    "collectCoverageFrom": [
+      "<rootDir>/src/**/*.{js,jsx,ts,tsx}",
+      "!<rootDir>/src/serviceWorker.js",
+      "!<rootDir>/src/constants/**",
+      "!<rootDir>/node_modules/",
+      "!<rootDir>/src/locales/**"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!react-virtualized)/"
+    ]
+  }
+}

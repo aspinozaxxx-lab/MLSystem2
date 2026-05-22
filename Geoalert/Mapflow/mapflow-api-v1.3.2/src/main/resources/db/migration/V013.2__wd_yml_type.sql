@@ -1,0 +1,1 @@
+ALTER TABLE workflow_def ALTER COLUMN yml TYPE text USING encode(yml, 'escape');

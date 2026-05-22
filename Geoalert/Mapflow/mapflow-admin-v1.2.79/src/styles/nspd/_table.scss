@@ -1,0 +1,21 @@
+
+$table-border-color: $blue10;
+$pt-elevation-shadow-0: 0 0 0 1px $blue10;
+$pt-elevation-shadow-1: 0 0 0 1px rgba(17, 20, 24, 0.1),
+  0 1px 1px rgba(17, 20, 24, 0.2);
+$pt-elevation-shadow-2: 0 0 0 1px rgba(17, 20, 24, 0.1),
+  0 1px 1px rgba(17, 20, 24, 0.2), 0 2px 6px rgba(17, 20, 24, 0.2);
+$pt-elevation-shadow-3: 0 0 0 1px rgba(17, 20, 24, 0.1),
+  0 2px 4px rgba(17, 20, 24, 0.2), 0 8px 24px rgba(17, 20, 24, 0.2);
+$pt-elevation-shadow-4: 0 0 0 1px rgba(17, 20, 24, 0.1),
+  0 4px 8px rgba(17, 20, 24, 0.2), 0 18px 46px 6px rgba(17, 20, 24, 0.2);
+
+$pt-dark-elevation-shadow-0: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+$pt-dark-elevation-shadow-1: inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+  0 1px 1px 0 rgba(17, 20, 24, 0.4);
+$pt-dark-elevation-shadow-2: inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+  0 1px 1px rgba(17, 20, 24, 0.4), 0 2px 6px rgba(17, 20, 24, 0.4);
+$pt-dark-elevation-shadow-3: inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+  0 2px 4px rgba(17, 20, 24, 0.4), 0 8px 24px rgba(17, 20, 24, 0.4);
+$pt-dark-elevation-shadow-4: inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+  0 4px 8px rgba(17, 20, 24, 0.4), 0 18px 46px 6px rgba(17, 20, 24, 0.4);

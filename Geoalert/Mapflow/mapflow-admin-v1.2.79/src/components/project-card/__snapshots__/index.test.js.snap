@@ -1,0 +1,94 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ProjectCard matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class="bp3-card bp3-elevation-1 project-card"
+    >
+      <div
+        class="project-card__remove-btn"
+      >
+        <button
+          class="bp3-button bp3-minimal bp3-intent-danger"
+          data-testid="delete-project"
+          type="button"
+        >
+          <span
+            class="bp3-icon bp3-icon-trash"
+            icon="trash"
+          >
+            <svg
+              data-icon="trash"
+              height="16"
+              viewBox="0 0 16 16"
+              width="16"
+            >
+              <desc>
+                trash
+              </desc>
+              <path
+                d="M14.49 3.99h-13c-.28 0-.5.22-.5.5s.22.5.5.5h.5v10c0 .55.45 1 1 1h10c.55 0 1-.45 1-1v-10h.5c.28 0 .5-.22.5-.5s-.22-.5-.5-.5zm-8.5 9c0 .55-.45 1-1 1s-1-.45-1-1v-6c0-.55.45-1 1-1s1 .45 1 1v6zm3 0c0 .55-.45 1-1 1s-1-.45-1-1v-6c0-.55.45-1 1-1s1 .45 1 1v6zm3 0c0 .55-.45 1-1 1s-1-.45-1-1v-6c0-.55.45-1 1-1s1 .45 1 1v6zm2-12h-4c0-.55-.45-1-1-1h-2c-.55 0-1 .45-1 1h-4c-.55 0-1 .45-1 1v1h14v-1c0-.55-.45-1-1-1z"
+                fill-rule="evenodd"
+              />
+            </svg>
+          </span>
+        </button>
+      </div>
+      <div>
+        <h4
+          class="bp3-heading project-card__name"
+        >
+          <div
+            class="bp3-text-overflow-ellipsis project-card__name"
+          >
+            Project A
+          </div>
+        </h4>
+        <div
+          class="project-card__description bp3-text-muted"
+        >
+          A nice one 
+        </div>
+      </div>
+      <div>
+        <span
+          class="bp3-popover-wrapper"
+        >
+          <span
+            class="bp3-popover-target"
+          >
+            <div
+              class=""
+              tabindex="0"
+            >
+              user1@mail.com
+            </div>
+          </span>
+        </span>
+      </div>
+      <div
+        class="project-card__date bp3-text-muted"
+      >
+        <span
+          class="bp3-popover-wrapper"
+        >
+          <span
+            class="bp3-popover-target"
+          >
+            <span
+              class="date-time"
+              tabindex="0"
+            >
+              Updated 12/16/2019, 11:10:29 AM
+            </span>
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;

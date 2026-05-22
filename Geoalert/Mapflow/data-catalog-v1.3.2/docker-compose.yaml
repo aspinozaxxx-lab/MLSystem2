@@ -1,0 +1,60 @@
+version: '3.8'
+
+x-common-minio-variables: &common-minio-variables
+  MINIO_HOST: minio
+  MINIO_PORT: 9000
+  MINIO_ACCESS_KEY: 
+  MINIO_SECRET_KEY: #
+
+x-common-postgres-variables: &common-postgres-variables
+  DB_USER: postgres
+  DB_PASSWORD: 
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: 
+  DB_HOST: pg_container
+  DB_PORT: 5432
+  DB_NAME: datacatalogdb
+  POSTGRES_DB: datacatalogdb
+
+services:
+  app:
+    build: .
+    container_name: data-catalog_app
+    ports:
+      - "8080:8080"
+    environment:
+      <<: [*common-minio-variables, *common-postgres-variables]
+      MINIO_BUCKET: data-catalog-bucket
+      AUTH_HOST: http://auth_server:8050/auth/
+      MAX_IMAGE_SIZE_PIXELS: ${MAX_IMAGE_SIZE_PIXELS:-30000000}
+      DB_SCHEMA: "data_catalog"
+    depends_on:
+        - minio
+        - auth_server
+        - db
+
+  auth_server:
+    build: tests/mock/auth-server
+    container_name: mock_auth_server
+    ports:
+      - "8050:8050"
+
+  minio:
+    image: minio/minio:RELEASE.2022-06-20T23-13-45Z
+    container_name: minio_container
+    command: server --console-address :9001 /data
+    environment: *common-minio-variables
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  db:
+    image: postgis/postgis:14-3.2
+    container_name: pg_container
+    restart: always
+    environment: *common-postgres-variables
+    ports:
+      - "8001:5432"
+    volumes:
+      - './z_init.sql:/docker-entrypoint-initdb.d/z_init.sql'
+

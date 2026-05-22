@@ -1,0 +1,40 @@
+*~
+*.swp
+*.swo
+
+/project/project/
+/project/target/
+
+.gradle
+/build/
+/data/
+!gradle/wrapper/gradle-wrapper.jar
+/datasets/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+out/
+
+### NetBeans ###
+nbproject/private/
+build/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+bin/
+.metals
+.vscode
+.bsp
+target

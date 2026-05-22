@@ -1,0 +1,2 @@
+INPUT_QUEUE=.tasks.queue
+OUTPUT_QUEUE=.result.queue

@@ -1,0 +1,135 @@
+shared:
+
+    roofs_model: &roofs_model triton-roofs-segm-morocco-rgb-000030-03
+    roofs_model_host: &roofs_model_host localhost
+
+    markers_model: &markers_model triton-roofmarkers-segm-morocco-rgb-000030-02
+    markers_model_host: &markers_model_host localhost
+
+config:
+    _class: Compose
+    bricks:
+#    -   _class: SplitRaster
+#        input: input
+#        input_ext: tif
+#        output:
+#        - RED
+#        - GRN
+#        - BLU
+#
+#    -   _class: Segmentation
+#        bounds: 96
+#        res_tolerance: 0.1
+#        adapter:
+#            _class: TritonAdapter
+#            host: *roofs_model_host
+#            input_ndim: 3
+#            name: *roofs_model
+#            port: 8000
+#            input_dtype: uint8
+#            output_dtype: uint8
+#
+#        input_rasters:
+#            - RED
+#            - GRN
+#            - BLU
+#        output_labels:
+#            - roofs
+##        nodata: 0
+##        crs: utm
+##        res:
+##            - 0.29
+##            - 0.29
+#        sample_size:
+#        - 576
+#        - 576
+#        verbose: true
+#
+#    -   _class: VectorizeMasks
+#        input_rasters:
+#         - roofs
+#
+#    -   _class: Segmentation
+#        bounds: 96
+#        res_tolerance: 0.1
+#        adapter:
+#            _class: TritonAdapter
+#            host: *markers_model_host
+#            input_ndim: 3
+#            name: *markers_model
+#            port: 8000
+#            input_dtype: uint8
+#            output_dtype: uint8
+#
+#        input_rasters:
+#        - RED
+#        - GRN
+#        - BLU
+#        output_labels:
+#        - markers
+##        nodata: 0
+##        crs: utm
+##        res:
+##        - 0.29
+##        - 0.29
+#        sample_size:
+#        - 576
+#        - 576
+#        verbose: true
+#
+#    -   _class: VectorizeMasks
+#        input_rasters:
+#        - markers
+
+    - _class: UnifiedVectorProcessing
+      input: roofs
+      output: roofs
+      crs: utm
+      bricks:
+          - _class: FilterSmallObjects
+            min_area: 30.0
+          - _class: RemoveSmallHoles
+            min_hole_area: 50.0
+          # end: segmentation
+          # begin: simplification [roofs.geojson] [roofs.geojson]
+          - _class: SimplifyAsShape
+            max_hausdorff: 7.0
+            min_area: 0.0
+            min_iou: 0.8
+            n_workers: -1
+            shape_type: RECTANGLE
+            verbose: true
+          - _class: SimplifyAsShape
+            max_hausdorff: 7.0
+            min_area: 0.0
+            min_iou: 0.8
+            n_workers: -1
+            shape_type: L-SHAPE
+            verbose: true
+          - _class: SimplifyAsShape
+            max_hausdorff: 7.0
+            min_area: 200.0
+            min_iou: 0.8
+            n_workers: -1
+            shape_type: RECTANGLE
+            verbose: true
+          - _class: SimplifyAsShape
+            max_hausdorff: 7.0
+            min_area: 0.0
+            min_iou: 0.8
+            n_workers: -1
+            shape_type: GRID_SNAP
+            verbose: true
+          - _class: Simplify
+            rate: 2.0
+          - _class: CorrectTopology
+            distance_step: 1.0
+
+    -   _class: InstanceSeparation
+        input: roofs
+        markers: markers
+        output: roofs
+        ids_tag: _block_id
+
+date: '2020-07-30'
+version: 0.1.4

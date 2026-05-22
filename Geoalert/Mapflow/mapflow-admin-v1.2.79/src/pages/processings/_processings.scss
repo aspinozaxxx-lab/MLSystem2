@@ -1,0 +1,26 @@
+.processings {
+  @include flex-centred(flex-start, stretch, column);
+  height: auto;
+  width: 100%;
+  overflow: auto;
+
+  &__container {
+    @include content-container($desktop-padding: 6, $phone-padding: 2);
+    overflow: auto;
+
+    .callout {
+      display: flex;
+      gap: 20px;
+
+      .create-processing-tip {
+        margin: $pt-grid-size 0;
+      }
+
+      .create-processing-progress {
+        margin: $pt-grid-size 0;
+        max-width: 200px;
+        width: 100%;
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  app:
+    image: dataloader:test
+    container_name: dataloader
+    network_mode: host
+    volumes:
+      - ./manual:/manual
+    command: pytest -v tests/it
+
+  #python3 manual/xyz_loader/test_load_tiles_local.py
+
+  mock_tile_server:
+    image: mock_tile_server
+    container_name: mock_tile_server
+    ports:
+      - "8000:8000"
+    depends_on:
+      - app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000

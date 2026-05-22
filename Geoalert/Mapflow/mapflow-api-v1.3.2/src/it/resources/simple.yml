@@ -1,0 +1,15 @@
+---
+name: Detect cows
+version: 0
+price_per_sq_km: 5
+stages:
+  select-source:
+    description: Source selection
+    action: select-source
+    config:
+      params:
+        auto_confirm: true
+        source_type: xyz
+        url: http://10.1.6.1:8800/api/tiles?proxy=true&url=http://mt0.google.com/vt/lyrs=s%26hl=en%26x={x}%26y={y}%26z={z}%26s=Ga
+        zoom: 18
+        projection: epsg:3857

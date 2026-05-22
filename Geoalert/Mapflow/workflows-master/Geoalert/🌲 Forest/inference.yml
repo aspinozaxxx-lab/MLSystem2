@@ -1,0 +1,106 @@
+shared:
+
+    segm_model_name: &segm_model_name triton-forest-segm-russia-rgb-000060-08
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+
+    blocks:
+    -   name: Segmentation
+        optional: false
+        inputs:
+        - input.tif
+        outputs:
+        - 614.geojson
+        - 614.tif
+        - RED.tif
+        - GRN.tif
+        - BLU.tif
+        bricks:
+        -   _class: SplitRaster
+            input: input
+            input_ext: tif
+            output:
+            - RED_
+            - GRN_
+            - BLU_
+        -   _class: BrightnessNormalization
+            input:
+            - RED_
+            - GRN_
+            - BLU_
+            output:
+            - RED
+            - GRN
+            - BLU
+            std_width: 3
+        -   _class: Segmentation
+            bounds: 300
+            adapter:
+                _class: TritonAdapter
+                host: *segm_model_host
+                lazy: false
+                use_batch_dim: false
+                n_retries: 2
+                name: *segm_model_name
+                port: *port
+                retry_sleep: 20.0
+                timeout: 60
+            crs: epsg:3857
+            input_dtype: uint8
+            input_rasters: &id001
+                - RED
+                - GRN
+                - BLU
+            nodata: 0
+            output_dtype: uint8
+            output_labels:
+                - '614'
+            res:
+                - 0.6
+                - 0.6
+            n_workers: 1
+            res_tolerance: 0.1
+            sample_size:
+                - 904
+                - 904
+            vectorize: false
+            verbose: false
+        - _class: VectorizeMasks
+          input_rasters:
+              - '614'
+    -   name: Postprocessing
+        optional: false
+        inputs:
+          - 614.geojson
+        outputs:
+          - output.geojson
+        bricks:
+        -   _class: UnifiedVectorProcessing
+            input: '614'
+            output: 'output'
+            crs: utm
+            bricks:
+            -   _class: FilterSmallObjects
+                min_area: 0
+                area_tag: 'area'
+            -   _class: RemoveTags
+                remove_underscore_tags: true
+            -   _class: AddAttributes
+                add_processing_id: true
+                add_timestamp: true
+                attributes:
+                    neural_network_type: 'aerial-forest-nspd2'
+                    neural_network_version: '1'
+                    object_class: 'FOREST'
+
+    namespace: null
+
+date: '2023-05-14'
+version: 0.1.4

@@ -1,0 +1,138 @@
+.editor {
+  width: 100%;
+  height: 350px;
+  position: relative;
+}
+
+#problems {
+  border-top: 1px solid var(--shadow-color);
+  flex: 0 0 20vh;
+  color: var(--foreground-color);
+  overflow-y: scroll;
+}
+
+.problem {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  padding: 0.25rem;
+}
+
+.problem:hover {
+  background-color: var(--shadow-color);
+}
+
+.problem-text {
+  margin-left: 0.5rem;
+}
+
+.problem .codicon-warning {
+  color: var(--warning-color);
+}
+
+.problem .codicon-error {
+  color: var(--error-color);
+}
+
+.monaco-placeholder {
+  position: absolute;
+  top: 0px;
+  left: 65px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.7;
+}
+
+.file-tab {
+  border: 1px solid #bbbbbb6f;
+  font-size: 16px;
+  padding: 0.3rem 2.5rem 0.3rem 0.25rem;
+  cursor: pointer;
+  position: relative;
+
+  button {
+    cursor: pointer;
+    background: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+  }
+
+  background-color: $light-gray3;
+  @include on-dark-theme {
+    background-color: $dark-gray4;
+    border: 1px solid #bbbbbb22;
+  }
+
+  &:hover {
+    background-color: #e7e7e7;
+
+    @include on-dark-theme {
+      background-color: $dark-gray3;
+    }
+
+    .close-button {
+      opacity: 1;
+    }
+  }
+
+  &.active {
+    border-top-color: $dark-gray1;
+    background-color: $light-gray2;
+    @include on-dark-theme {
+      border-top-color: $light-gray1;
+      background-color: $dark-gray5;
+    }
+  }
+
+  &.error {
+    border-top-color: $red4;
+    color: $red3;
+  }
+
+  .close-button {
+    opacity: 0;
+    position: absolute;
+    user-select: none;
+    right: 0.25rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: #bbbbbb22;
+    min-height: 20px;
+    min-width: 20px;
+
+    svg {
+      width: 12px;
+      height: 12px;
+    }
+  }
+}
+
+.top-toobar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  .file-tabs-container {
+    display: flex;
+    max-width: 80%;
+    overflow: scroll;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* Internet Explorer 10+ */
+    &::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+  }
+
+  button {
+    &:focus {
+      outline: none;
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+}

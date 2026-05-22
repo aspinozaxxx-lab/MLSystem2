@@ -1,0 +1,117 @@
+{
+  "type": "FeatureCollection",
+  "totalFeatures": 1,
+  "features": [
+    {
+      "type": "Feature",
+      "id": "5d6daea220f430e11f44d2f6c6bac651",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.03254979,
+              40.85772229
+            ],
+            [
+              -73.94867122,
+              40.86113456
+            ],
+            [
+              -73.86479265,
+              40.86454683
+            ],
+            [
+              -73.86515504,
+              40.70451869
+            ],
+            [
+              -73.86551743,
+              40.54449055
+            ],
+            [
+              -73.94864229,
+              40.54115593
+            ],
+            [
+              -74.03176715,
+              40.53782132
+            ],
+            [
+              -74.03215847,
+              40.6977718
+            ],
+            [
+              -74.03254979,
+              40.85772229
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "featureId": "5d6daea220f430e11f44d2f6c6bac651",
+        "acquisitionDate": "2020-11-04 15:50:43",
+        "acquisitionTime": 1550,
+        "sensorType": "",
+        "source": "WV03_VNIR",
+        "sourceUnit": "Strip",
+        "productType": "Pan Sharpened Natural Color",
+        "CE90Accuracy": "8.4 meters",
+        "RMSEAccuracy": "3.91 meters",
+        "cloudCover": 0,
+        "offNadirAngle": 18.458475,
+        "sunElevation": 32.718952,
+        "sunAzimuth": 166.05518,
+        "groundSampleDistance": 0.34,
+        "groundSampleDistanceUnit": "Meter",
+        "dataLayer": "daily_take",
+        "legacyDescription": "AOI4_L3_WV3",
+        "outputMosaic": false,
+        "colorBandOrder": "RGB",
+        "assetName": "FINISHED",
+        "assetType": "PRODUCT_GEOMETRY",
+        "legacyId": "10400100615E6100",
+        "factoryOrderNumber": "013306495-10",
+        "perPixelX": 3.0453127237706212E-6,
+        "perPixelY": -3.0453127237706212E-6,
+        "crsFromPixels": "EPSG:4326",
+        "url": "",
+        "ageDays": 768,
+        "formattedDate": "2020-11-04",
+        "ingestDate": "2020-11-04 17:53:04",
+        "spatialAccuracy": "1:12,000",
+        "earliestAcquisitionDate": "2020-11-04 15:50:43",
+        "latestAcquisitionDate": "2020-11-04 15:50:43",
+        "pixelsIngested": true,
+        "preciseGeometry": true,
+        "vendorName": "",
+        "vendorReference": "",
+        "companyName": "DigitalGlobe",
+        "acquisitionType": "",
+        "orbitDirection": "",
+        "licenseType": "",
+        "isBrowse": false,
+        "isMirrored": false,
+        "isMultipleWKB": false,
+        "copyright": "Image Copyright 2020 DigitalGlobe Inc",
+        "beamMode": "",
+        "polarisationMode": "",
+        "polarisationChannel": "",
+        "antennaLookDirection": "",
+        "minimumIncidenceAngle": null,
+        "maximumIncidenceAngle": null,
+        "incidenceAngleVariation": null,
+        "niirs": 5.6,
+        "verticalAccuracy": null,
+        "tagsAsString": ""
+      }
+    }
+  ],
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::4326"
+    }
+  }
+}

@@ -1,0 +1,56 @@
+$button-color-disabled: $pt-text-color-disabled !default;
+$button-background-color: $light-gray5 !default;
+$button-background-color-hover: $light-gray4 !default;
+$button-background-color-active: $light-gray2 !default;
+$button-background-color-disabled: rgba($light-gray1, 0.5) !default;
+$button-background-color-active-disabled: rgba($light-gray1, 0.7) !default;
+$button-intent-color-disabled: rgba($white, 0.6);
+$dark-button-color-disabled: $pt-dark-text-color-disabled !default;
+$dark-button-background-color: $dark-gray4 !default;
+$dark-button-background-color-hover: $dark-gray3 !default;
+$dark-button-background-color-active: $dark-gray1 !default;
+$dark-button-background-color-disabled: rgba($dark-gray5, 0.5) !default;
+$dark-button-background-color-active-disabled: rgba($dark-gray5, 0.7) !default;
+$dark-button-intent-color-disabled: rgba($white, 0.3);
+
+$minimal-button-divider-width: 1px !default;
+$minimal-button-background-color: none !default;
+$minimal-button-background-color-hover: rgba($gray3, 0.15) !default;
+$minimal-button-background-color-active: rgba($gray3, 0.3) !default;
+$dark-minimal-button-background-color: none !default;
+$dark-minimal-button-background-color-hover: rgba($gray3, 0.15) !default;
+$dark-minimal-button-background-color-active: rgba($gray3, 0.3) !default;
+
+$button-outlined-width: 1px !default;
+$button-outlined-border-intent-opacity: 0.6 !default;
+$button-outlined-border-disabled-intent-opacity: 0.2 !default;
+
+// "intent": (default, hover, active colors)
+$button-intents: (
+  "primary": (
+    $blue3,
+    $blue7,
+    $blue8,
+  ),
+  "success": (
+    $green3,
+    $green2,
+    $green1,
+  ),
+  "warning": (
+    $orange3,
+    $orange2,
+    $orange1,
+  ),
+  "danger": (
+    $red7,
+    $red2,
+    $red1,
+  ),
+) !default;
+
+
+// Buttons
+$pt-button-height: 40px;
+$pt-button-height-small: 32px;
+$pt-button-height-large: 56px;

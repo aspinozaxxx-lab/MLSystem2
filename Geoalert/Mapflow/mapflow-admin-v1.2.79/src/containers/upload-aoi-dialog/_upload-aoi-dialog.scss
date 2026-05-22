@@ -1,0 +1,80 @@
+.upload-aoi-dialog__body {
+  height: 300px;
+  display: grid;
+  grid-row-gap: $pt-grid-size;
+  grid-template-rows: minmax(auto, auto) minmax(0, max-content);
+}
+
+.dropzone {
+  outline: none;
+  display: flex;
+  flex: 1 1;
+  align-items: center;
+  justify-content: space-around;
+  opacity: 0.4;
+  border: 2px solid rgba($gray3, 0.8);
+  border-radius: $pt-border-radius * 2;
+  background: rgba($gray3, 0.2);
+  padding: $pt-grid-size * 2;
+  transition: all $pt-transition-duration $pt-transition-ease;
+  text-align: center;
+  &:hover {
+    opacity: 0.6;
+    cursor: pointer;
+  }
+
+  &:focus {
+    opacity: 1;
+    border: 2px solid rgba($blue3, 0.6);
+    background: rgba($blue3, 0.1);
+    cursor: default;
+    color: $pt-intent-primary;
+
+    .#{$ns}-dark & {
+      border: 2px solid rgba($blue4, 0.6);
+      background: rgba($blue4, 0.1);
+      color: $pt-intent-primary;
+    }
+  }
+}
+
+.dropzone--active {
+  border-color: $pt-intent-primary;
+  background: rgba($blue3, 0.2);
+}
+
+.dropzone--accept {
+  border-color: $pt-intent-success;
+  background: rgba($green3, 0.2);
+}
+
+.dropzone--reject {
+  border-color: $pt-intent-danger;
+  background: rgba($red3, 0.2);
+}
+
+.dropzone--disabled {
+  &:hover {
+    cursor: not-allowed;
+    opacity: 0.2;
+  }
+  opacity: 0.2;
+}
+
+.upload-aoi-dialog {
+  z-index: 6;
+  .upload-controls {
+    display: grid;
+    grid-template-columns: auto min-content;
+    grid-template-rows: auto;
+    grid-column-gap: $pt-grid-size;
+
+    .select > * {
+      width: 100%;
+    }
+  }
+
+  .upload-aoi-dialog-error-message {
+    overflow: auto;
+  }
+}

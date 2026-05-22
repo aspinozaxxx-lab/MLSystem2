@@ -1,0 +1,18 @@
+config:
+    _class: Compose
+    inputs: [input.tif]
+    outputs: [input.tif]
+    blocks:
+        - name: SampleBlock
+          optional: true
+          inputs: [ input.tif ]
+          outputs: [ input.tif ]
+          bricks: []
+        - name: SampleBlock2
+          optional: true
+          inputs: [ input.tif ]
+          outputs: [ input.tif ]
+          bricks: []
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

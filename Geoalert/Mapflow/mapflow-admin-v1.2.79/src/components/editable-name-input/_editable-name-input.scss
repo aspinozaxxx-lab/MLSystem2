@@ -1,0 +1,13 @@
+.editable {
+  display: flex;
+  height: 32px;
+  max-width: 340px;
+  gap: 20px;
+}
+
+.editable .bp4-editable-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}

@@ -1,0 +1,15 @@
+.infinite-list {
+  width: 100%;
+  height: 100%;
+
+  .infinite-list-item {
+    @include use-background-color($light: $light-gray4, $dark: $dark-gray5);
+  }
+
+  .infinite-list-item.odd {
+    @include use-background-color(
+      $light: $light-gray2,
+      $dark: $dark-gray4 //lighten($dark-gray3, 2)
+    );
+  }
+}

@@ -1,0 +1,28 @@
+shared:
+
+    regr_name: &regr_model_name triton-height-regression-rgb-000060-02
+    regr_host: &regr_model_host 'localhost'
+    port: &port 8000
+
+config:
+  _class: Compose
+  bricks:
+        - _class: InstanceRegression
+          adapter:
+              _class: TritonAdapter
+              host: *regr_model_host
+              port: *port
+              name: *regr_model_name
+              input_ndim: 4
+              output_dtype: float32
+              output_ndim: 1
+              n_retries: 0
+          input_rasters:
+              - RED
+              - GRN
+              - BLU
+          sample_size: [ 512, 512 ]
+          input_vector: rt_pseudo
+
+date: '2023-06-27'
+version: 0.1.0

@@ -31,6 +31,3 @@ Thumbs.db
 *.log
 tmp/
 temp/
-
-# Local external snapshots
-Geoalert/

@@ -1,0 +1,219 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Table matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <table
+      class="bp3-html-table bp3-html-table-striped table bp3-elevation-0"
+      role="table"
+    >
+      <thead>
+        <tr
+          role="row"
+        >
+          <th
+            class="header"
+            colspan="1"
+            role="columnheader"
+            title="Toggle SortBy"
+          >
+            <div
+              class="header-cell"
+            >
+              id
+              <span
+                class="sorting-icon"
+              >
+                <span
+                  class="bp3-icon bp3-icon-double-caret-vertical"
+                  icon="double-caret-vertical"
+                >
+                  <svg
+                    data-icon="double-caret-vertical"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    width="16"
+                  >
+                    <desc>
+                      double-caret-vertical
+                    </desc>
+                    <path
+                      d="M5 7h6a1.003 1.003 0 00.71-1.71l-3-3C8.53 2.11 8.28 2 8 2s-.53.11-.71.29l-3 3A1.003 1.003 0 005 7zm6 2H5a1.003 1.003 0 00-.71 1.71l3 3c.18.18.43.29.71.29s.53-.11.71-.29l3-3A1.003 1.003 0 0011 9z"
+                      fill-rule="evenodd"
+                    />
+                  </svg>
+                </span>
+              </span>
+            </div>
+          </th>
+          <th
+            class="header"
+            colspan="1"
+            role="columnheader"
+            title="Toggle SortBy"
+          >
+            <div
+              class="header-cell"
+            >
+              Name
+              <span
+                class="sorting-icon"
+              >
+                <span
+                  class="bp3-icon bp3-icon-double-caret-vertical"
+                  icon="double-caret-vertical"
+                >
+                  <svg
+                    data-icon="double-caret-vertical"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    width="16"
+                  >
+                    <desc>
+                      double-caret-vertical
+                    </desc>
+                    <path
+                      d="M5 7h6a1.003 1.003 0 00.71-1.71l-3-3C8.53 2.11 8.28 2 8 2s-.53.11-.71.29l-3 3A1.003 1.003 0 005 7zm6 2H5a1.003 1.003 0 00-.71 1.71l3 3c.18.18.43.29.71.29s.53-.11.71-.29l3-3A1.003 1.003 0 0011 9z"
+                      fill-rule="evenodd"
+                    />
+                  </svg>
+                </span>
+              </span>
+            </div>
+          </th>
+          <th
+            class="header"
+            colspan="1"
+            role="columnheader"
+            title="Toggle SortBy"
+          >
+            <div
+              class="header-cell"
+            >
+              Description
+              <span
+                class="sorting-icon"
+              >
+                <span
+                  class="bp3-icon bp3-icon-double-caret-vertical"
+                  icon="double-caret-vertical"
+                >
+                  <svg
+                    data-icon="double-caret-vertical"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    width="16"
+                  >
+                    <desc>
+                      double-caret-vertical
+                    </desc>
+                    <path
+                      d="M5 7h6a1.003 1.003 0 00.71-1.71l-3-3C8.53 2.11 8.28 2 8 2s-.53.11-.71.29l-3 3A1.003 1.003 0 005 7zm6 2H5a1.003 1.003 0 00-.71 1.71l3 3c.18.18.43.29.71.29s.53-.11.71-.29l3-3A1.003 1.003 0 0011 9z"
+                      fill-rule="evenodd"
+                    />
+                  </svg>
+                </span>
+              </span>
+            </div>
+          </th>
+          <th
+            class="header"
+            colspan="1"
+            role="columnheader"
+            style="pointer-events: none;"
+          >
+            <div
+              class="header-cell"
+            >
+              Static
+              <span
+                class="sorting-icon"
+              />
+            </div>
+          </th>
+        </tr>
+      </thead>
+      <tbody
+        class="table__body"
+        role="rowgroup"
+      >
+        <tr
+          role="row"
+        >
+          <td
+            role="cell"
+          >
+            1
+          </td>
+          <td
+            role="cell"
+          >
+            third name
+          </td>
+          <td
+            role="cell"
+          >
+            second description
+          </td>
+          <td
+            role="cell"
+          >
+            this is static
+          </td>
+        </tr>
+        <tr
+          role="row"
+        >
+          <td
+            role="cell"
+          >
+            2
+          </td>
+          <td
+            role="cell"
+          >
+            first name
+          </td>
+          <td
+            role="cell"
+          >
+            third description
+          </td>
+          <td
+            role="cell"
+          >
+            this is static
+          </td>
+        </tr>
+        <tr
+          role="row"
+        >
+          <td
+            role="cell"
+          >
+            3
+          </td>
+          <td
+            role="cell"
+          >
+            second name
+          </td>
+          <td
+            role="cell"
+          >
+            first description
+          </td>
+          <td
+            role="cell"
+          >
+            this is static
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</DocumentFragment>
+`;

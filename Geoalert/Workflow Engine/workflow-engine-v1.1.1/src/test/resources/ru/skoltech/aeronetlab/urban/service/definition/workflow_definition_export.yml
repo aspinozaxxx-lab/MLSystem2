@@ -1,0 +1,22 @@
+---
+name: "Test WD"
+version: 0
+stages:
+  build-cog:
+    description: "Description 2"
+    action: "build-cog"
+    dependsOn:
+    - "select-source"
+    config:
+      retries: 0
+      retry_interval: 0
+      params: {}
+  select-source:
+    description: "Description"
+    action: "select-source"
+    dependsOn: []
+    config:
+      retries: 3
+      retry_interval: 17
+      params:
+        foo: "bar"

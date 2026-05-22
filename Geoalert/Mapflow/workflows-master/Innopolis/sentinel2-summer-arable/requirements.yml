@@ -1,0 +1,6 @@
+version: 1.0
+sources:
+  local:
+    required:
+      nchannels: 7
+  sentinel_l2a: null

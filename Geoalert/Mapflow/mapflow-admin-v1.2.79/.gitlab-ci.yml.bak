@@ -1,0 +1,114 @@
+#image: node:16-alpine
+variables:
+  PROJ_NAME: ${CI_PROJECT_NAME}
+
+stages:
+  #  - test
+  - build
+  - deploy
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_SLUG
+
+.matrix:
+  parallel:
+    matrix:
+      - TIER: [dev, demo, test, prod, rcod]
+
+#test:
+#  stage: test
+#  script:
+#    - npm ci
+# TODO: Fix running tests
+#    - npm run test
+#  tags:
+#    - shell
+
+build:
+  extends: .matrix
+  stage: build
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE:$IMAGE_TAG-$TIER -f ./Dockerfile --build-arg REACT_APP_VERSION=$IMAGE_TAG --build-arg IMAGE=$NODE_DOCKER_IMAGE --build-arg NPM_REGISTRY=$NPM_REGISTRY --build-arg TIER=$TIER .
+    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG-$TIER
+    - docker rmi $CI_REGISTRY_IMAGE:$IMAGE_TAG-$TIER
+  interruptible: true
+  tags:
+    - docker
+    - debug
+
+
+deploy:
+  extends: .matrix
+  stage: deploy
+  image: $DEBIAN_DOCKER_IMAGE
+  rules:
+    - if: $TIER == 'dev' && $CI_COMMIT_TAG != null
+  before_script:
+    - export PROJECT_NAME=$(echo "${PROJ_NAME}" | tr '-' '_')
+  tags:
+    - docker
+    - hub
+  script:
+    - |
+      echo "IMAGE_NAME: ${CI_REGISTRY_IMAGE}:${CI_COMMIT_TAG}-dev" \
+      && echo "APPS: ${PROJECT_NAME}" \
+      && echo "TIER: dev" \
+      && curl -sSf -X POST \
+        -F token=} \
+        -F ref=${DEPLOY_PROJECT_REF} \
+        -F "variables[IMAGE_NAME]=${CI_REGISTRY_IMAGE}:${CI_COMMIT_TAG}-dev" \
+        -F "variables[APPS]=${PROJECT_NAME}" \
+        -F "variables[TIER]=dev" \
+        ${CI_API_V4_URL}/projects/${DEPLOY_PROJECT_ID}/trigger/pipeline > result.json \
+      && id=$(jq -r '.id' result.json) \
+      && status=$(jq -r '.status' result.json) \
+      && url=$(jq -r '.web_url' result.json) \
+      && echo "Pipeline $id $status, url: $url" \
+      && sleep 15 \
+      && count=1 \
+      && while [ $count -le 20 ]; \
+          do downstream_ids=$( \
+            curl -sSf -H "PRIVATE-TOKEN: }" \
+              "${CI_API_V4_URL}/projects/${DEPLOY_PROJECT_ID}/pipelines/${id}/bridges" \
+              | jq '.[] | .downstream_pipeline |  .id' \
+          ); \
+          if [[ "${downstream_ids}" =~ "null" || "${downstream_ids}" == "" ]]; \
+            then \
+              sleep 5; \
+              count=$(( $count + 1 )); \
+              continue; \
+          else break; \
+          fi; \
+         done \
+      && if [[ "${downstream_ids}" =~ "null" || "${downstream_ids}" == "" ]]; \
+            then echo "Cannot get downstream pipeline"; exit 1; \
+         fi \
+      && function check_ds { \
+           statuses=(); \
+           for did in ${downstream_ids}; do \
+             statuses+=("$(curl -sSf  -H "PRIVATE-TOKEN: }" \
+               "${CI_API_V4_URL}/projects/${DEPLOY_PROJECT_ID}/pipelines/$did" | jq '.status')"); \
+           done \
+         } \
+      && count=1 \
+      && while [ $count -le 20 ]; \
+           do check_ds; count=$(( $count + 1 )); \
+           if [[ "${statuses[@]}" =~ "failed"  ]]; \
+             then echo "Pipeline failed"; exit 1; \
+           elif [[ "${statuses[@]}" =~ "success" && ! "${statuses[@]}" =~ "created" \
+                   && ! "${statuses[@]}" =~ "pending" && ! "${statuses[@]}" =~ "running" \
+                  && ! "${statuses[@]}" =~ "waiting_for_resource" ]]; \
+           then echo 'Pipeline success'; exit 0; \
+           fi; \
+           sleep 5; \
+         done

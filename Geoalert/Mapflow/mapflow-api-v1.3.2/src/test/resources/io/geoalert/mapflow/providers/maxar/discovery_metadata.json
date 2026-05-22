@@ -1,0 +1,482 @@
+{
+  "fields": [
+    {
+      "alias": "objectid",
+      "domain": null,
+      "type": "esriFieldTypeOID",
+      "name": "objectid"
+    },
+    {
+      "alias": "category",
+      "domain": {
+        "splitPolicy": "esriSPTDefaultValue",
+        "codedValues": [
+          {
+            "code": 0,
+            "name": "Unknown"
+          },
+          {
+            "code": 1,
+            "name": "Primary"
+          },
+          {
+            "code": 2,
+            "name": "Overview"
+          },
+          {
+            "code": 3,
+            "name": "Unprocessed Overview"
+          },
+          {
+            "code": 4,
+            "name": "Partial Overview"
+          },
+          {
+            "code": 5,
+            "name": "Inactive"
+          },
+          {
+            "code": 253,
+            "name": "Uploaded"
+          },
+          {
+            "code": 254,
+            "name": "Incomplete"
+          },
+          {
+            "code": 255,
+            "name": "Custom"
+          }
+        ],
+        "mergePolicy": "esriMPTDefaultValue",
+        "description": "Catalog item categories.",
+        "type": "codedValue",
+        "name": "MosaicCatalogItemCategoryDomain"
+      },
+      "type": "esriFieldTypeInteger",
+      "name": "category"
+    },
+    {
+      "length": 50,
+      "alias": "image_identifier",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "image_identifier"
+    },
+    {
+      "length": 8,
+      "alias": "catalog_update_date",
+      "domain": null,
+      "type": "esriFieldTypeDate",
+      "name": "catalog_update_date"
+    },
+    {
+      "length": 80,
+      "alias": "vehicle_name",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "vehicle_name"
+    },
+    {
+      "length": 80,
+      "alias": "sensor_name",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "sensor_name"
+    },
+    {
+      "length": 8,
+      "alias": "collect_time_start",
+      "domain": null,
+      "type": "esriFieldTypeDate",
+      "name": "collect_time_start"
+    },
+    {
+      "length": 8,
+      "alias": "collect_time_end",
+      "domain": null,
+      "type": "esriFieldTypeDate",
+      "name": "collect_time_end"
+    },
+    {
+      "length": 80,
+      "alias": "image_band_name",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "image_band_name"
+    },
+    {
+      "alias": "cloud_cover_percentage",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "cloud_cover_percentage"
+    },
+    {
+      "alias": "has_stereo_pair",
+      "domain": null,
+      "type": "esriFieldTypeSmallInteger",
+      "name": "has_stereo_pair"
+    },
+    {
+      "length": 50,
+      "alias": "legacy_identifier_reference",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "legacy_identifier_reference"
+    },
+    {
+      "length": 8,
+      "alias": "source_update_date",
+      "domain": null,
+      "type": "esriFieldTypeDate",
+      "name": "source_update_date"
+    },
+    {
+      "length": 10,
+      "alias": "scan_direction",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "scan_direction"
+    },
+    {
+      "alias": "off_nadir_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "off_nadir_avg"
+    },
+    {
+      "alias": "off_nadir_start",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "off_nadir_start"
+    },
+    {
+      "alias": "off_nadir_end",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "off_nadir_end"
+    },
+    {
+      "alias": "off_nadir_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "off_nadir_min"
+    },
+    {
+      "alias": "off_nadir_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "off_nadir_max"
+    },
+    {
+      "alias": "pan_resolution_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "pan_resolution_avg"
+    },
+    {
+      "alias": "pan_resolution_start",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "pan_resolution_start"
+    },
+    {
+      "alias": "pan_resolution_end",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "pan_resolution_end"
+    },
+    {
+      "alias": "pan_resolution_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "pan_resolution_min"
+    },
+    {
+      "alias": "pan_resolution_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "pan_resolution_max"
+    },
+    {
+      "alias": "multi_resolution_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "multi_resolution_avg"
+    },
+    {
+      "alias": "multi_resolution_start",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "multi_resolution_start"
+    },
+    {
+      "alias": "multi_resolution_end",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "multi_resolution_end"
+    },
+    {
+      "alias": "multi_resolution_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "multi_resolution_min"
+    },
+    {
+      "alias": "multi_resolution_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "multi_resolution_max"
+    },
+    {
+      "alias": "target_azimuth_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "target_azimuth_avg"
+    },
+    {
+      "alias": "target_azimuth_start",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "target_azimuth_start"
+    },
+    {
+      "alias": "target_azimuth_end",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "target_azimuth_end"
+    },
+    {
+      "alias": "target_azimuth_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "target_azimuth_min"
+    },
+    {
+      "alias": "target_azimuth_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "target_azimuth_max"
+    },
+    {
+      "alias": "sun_elevation_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_elevation_avg"
+    },
+    {
+      "alias": "sun_elevation_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_elevation_min"
+    },
+    {
+      "alias": "sun_elevation_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_elevation_max"
+    },
+    {
+      "alias": "sun_azimuth_avg",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_azimuth_avg"
+    },
+    {
+      "alias": "sun_azimuth_min",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_azimuth_min"
+    },
+    {
+      "alias": "sun_azimuth_max",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "sun_azimuth_max"
+    },
+    {
+      "alias": "area_cloud_cover_percentage",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "area_cloud_cover_percentage"
+    },
+    {
+      "alias": "area_avg_off_nadir_angle",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "area_avg_off_nadir_angle"
+    },
+    {
+      "alias": "shape",
+      "domain": null,
+      "type": "esriFieldTypeGeometry",
+      "name": "shape"
+    },
+    {
+      "alias": "is_public",
+      "domain": null,
+      "type": "esriFieldTypeSmallInteger",
+      "name": "is_public"
+    },
+    {
+      "alias": "absolute_geolocation_accuracy",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "absolute_geolocation_accuracy"
+    },
+    {
+      "alias": "relative_geolocation_accuracy",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "relative_geolocation_accuracy"
+    },
+    {
+      "length": 250,
+      "alias": "browse_url",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "browse_url"
+    },
+    {
+      "alias": "rda_available",
+      "domain": null,
+      "type": "esriFieldTypeSmallInteger",
+      "name": "rda_available"
+    },
+    {
+      "length": 1000,
+      "alias": "asset_location",
+      "domain": null,
+      "type": "esriFieldTypeString",
+      "name": "asset_location"
+    },
+    {
+      "alias": "shape_Length",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "shape_Length"
+    },
+    {
+      "alias": "shape_Area",
+      "domain": null,
+      "type": "esriFieldTypeDouble",
+      "name": "shape_Area"
+    }
+  ],
+  "geometryType": "esriGeometryPolygon",
+  "features": [
+    {
+      "geometry": {
+        "rings": [
+          [
+            [
+              62.37618831000003,
+              56.87802380000005
+            ],
+            [
+              62.626925750000055,
+              56.86501547000006
+            ],
+            [
+              62.626586760000066,
+              56.833250270000065
+            ],
+            [
+              62.62642255000003,
+              56.80141312000006
+            ],
+            [
+              62.62631458000004,
+              56.76959457000004
+            ],
+            [
+              62.62626529000005,
+              56.74853992000004
+            ],
+            [
+              62.377057570000034,
+              56.76143782000008
+            ],
+            [
+              62.37697790000004,
+              56.782350690000044
+            ],
+            [
+              62.37676172000005,
+              56.81418177000006
+            ],
+            [
+              62.376342700000066,
+              56.84615672000007
+            ],
+            [
+              62.37618831000003,
+              56.87802380000005
+            ]
+          ]
+        ],
+        "spatialReference": {
+          "wkid": 4326,
+          "latestWkid": 4326
+        }
+      },
+      "attributes": {
+        "sun_elevation_avg": 50.539753000000005,
+        "off_nadir_min": 22.121264,
+        "objectid": 12125136,
+        "area_cloud_cover_percentage": null,
+        "sun_azimuth_avg": 160.3864,
+        "shape_Length": 0.7336839257557698,
+        "cloud_cover_percentage": 18,
+        "collect_time_end": 1652424864000,
+        "sun_elevation_min": 50.473910000000004,
+        "shape_Area": 0.02911423876648974,
+        "asset_location": null,
+        "is_public": 1,
+        "pan_resolution_avg": 0.35775998000000003,
+        "target_azimuth_max": 315.05072,
+        "category": 1,
+        "target_azimuth_end": 315.05072,
+        "sun_azimuth_min": 160.3648,
+        "rda_available": 0,
+        "multi_resolution_max": 1.4331416000000001,
+        "relative_geolocation_accuracy": 2.334487,
+        "absolute_geolocation_accuracy": 20.458009999999998,
+        "target_azimuth_start": 314.6993,
+        "pan_resolution_end": 0.35714725,
+        "area_avg_off_nadir_angle": null,
+        "off_nadir_max": 22.355836999999998,
+        "target_azimuth_avg": 314.8741,
+        "sun_elevation_max": 50.605568,
+        "off_nadir_start": 22.355836999999998,
+        "pan_resolution_min": 0.35714725,
+        "pan_resolution_start": 0.3583431,
+        "off_nadir_end": 22.121264,
+        "pan_resolution_max": 0.3583431,
+        "multi_resolution_min": 1.4283631,
+        "source_update_date": 1652435831000,
+        "vehicle_name": "WV03",
+        "catalog_update_date": 1655120680000,
+        "has_stereo_pair": 0,
+        "sun_azimuth_max": 160.408,
+        "collect_time_start": 1652424862000,
+        "browse_url": "https://api.discover.digitalglobe.com/show?id=1040010076537200",
+        "sensor_name": "VNIR",
+        "image_identifier": "1040010076537200",
+        "image_band_name": "8-BANDS",
+        "multi_resolution_end": 1.4283631,
+        "target_azimuth_min": 314.6993,
+        "scan_direction": "Forward",
+        "off_nadir_avg": 22.238484999999997,
+        "legacy_identifier_reference": "1040010076537200",
+        "multi_resolution_avg": 1.4308115000000001,
+        "multi_resolution_start": 1.4331416000000001
+      }
+    }
+  ],
+  "objectIdFieldName": "objectid",
+  "spatialReference": {
+    "wkid": 4326,
+    "latestWkid": 4326
+  }
+}

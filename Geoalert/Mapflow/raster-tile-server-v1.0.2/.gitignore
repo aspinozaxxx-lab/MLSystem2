@@ -1,0 +1,15 @@
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+.bsp
+out/
+
+### sbt ###
+project/target/
+project/metals.sbt
+target/
+
+.metals/
+.vscode/

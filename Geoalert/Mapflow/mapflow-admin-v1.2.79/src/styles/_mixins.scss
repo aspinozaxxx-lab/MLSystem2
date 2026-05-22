@@ -1,0 +1,55 @@
+@mixin flex-centred($justify: center, $align: center, $direction: row) {
+  display: flex;
+  flex-direction: $direction;
+  justify-content: $justify;
+  align-items: $align;
+}
+
+@mixin on-dark-theme {
+  .#{$ns}-dark & {
+    @content;
+  }
+}
+
+@mixin for-size($size) {
+  @if $size == phone {
+    @media (max-width: $breakpoint-mobile) {
+      @content;
+    }
+  } @else if $size == tablet {
+    @media (min-width: $breakpoint-tablet) {
+      @content;
+    }
+  } @else if $size == desktop {
+    @media (min-width: $breakpoint-desktop) {
+      @content;
+    }
+  }
+}
+
+@mixin content-container(
+  $vertical-padding: 4,
+  $desktop-padding: 4,
+  $phone-padding: 2
+) {
+  height: 100%;
+  width: 100%;
+  padding: $pt-grid-size * $vertical-padding $pt-grid-size * $desktop-padding $pt-grid-size * $vertical-padding;
+
+  @include for-size(phone) {
+    padding: $pt-grid-size * $vertical-padding $pt-grid-size * $phone-padding $pt-grid-size * $vertical-padding;
+  }
+
+  // margin-top: ;
+  // margin-bottom: ;
+}
+
+@mixin use-background-color(
+  $light: $pt-app-background-color,
+  $dark: $dark-gray7
+) {
+  background: $light;
+  @include on-dark-theme {
+    background: $dark;
+  }
+}

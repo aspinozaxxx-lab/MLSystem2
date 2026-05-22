@@ -1,0 +1,8 @@
+fastapi==0.78.0
+loguru==0.6.0
+Pillow==9.2.0
+pydantic==1.9.1
+requests==2.27.1
+uvicorn==0.17.6
+scikit-image==0.17.2
+imageio[opencv]

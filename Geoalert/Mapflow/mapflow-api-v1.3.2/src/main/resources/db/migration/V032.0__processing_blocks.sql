@@ -1,0 +1,1 @@
+ALTER TABLE processing ADD COLUMN blocks JSON DEFAULT NULL;

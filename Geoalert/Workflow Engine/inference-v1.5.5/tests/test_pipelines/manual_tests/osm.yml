@@ -1,0 +1,13 @@
+config:
+    _class: Compose
+    bricks:
+        #-   _class: LoadOSMBuildingsLike
+        #    input: rt
+        #    output: 100-osm
+        -   _class: MergeByReplace
+            input: rt
+            prior: 100-osm
+            min_iou: 0.7
+            output: merged_with_osm
+            tag: shape_type
+            value: OSM

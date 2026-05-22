@@ -1,0 +1,12 @@
+{
+  "task_id": "234",
+  "runcheck_url": "http://localhost:3000",
+  "input": {
+    "requirements": "dmVyc2lvbjogMS4wCnNvdXJjZXM6IAogIHNlbnRpbmVsX2wyYToge30=",
+    "request": {
+      "source_type": "sentinel_l2a",
+      "zoom": 18,
+      "url": "L1C_T38VNP_A022398_20210620T084436"
+    }
+  }
+}

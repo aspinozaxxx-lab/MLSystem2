@@ -1,0 +1,17 @@
+.aoi-list-header-coll {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover > .aoi-list-header-coll__sort-indicator {
+    opacity: 1;
+  }
+
+  // .aoi-list-header-coll__label {}
+
+  .aoi-list-header-coll__sort-indicator {
+    top: 1px;
+    right: -20px;
+    position: absolute;
+  }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE data_provider ADD COLUMN preview_url VARCHAR(2048) DEFAULT NULL;

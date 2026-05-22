@@ -1,0 +1,102 @@
+name: "Дороги - НСПД-2"
+description: "Модель по умолчанию: сегментация дорог. Участки дорог по возможности объединяются в сеть,
+              а затем заменяются полигонами для лучшего отображения"
+price_per_sq_km: 5
+version: 0
+partition_size: 0.05
+
+blocks:
+  - name: Segmentation
+    price: 1
+    optional: false
+    default_enabled: true
+    display_name: Сегментация
+  - name: Generalization
+    price: 0
+    optional: true
+    default_enabled: false
+    display_name: Генерализация
+  - name: Postprocessing
+    price: 0
+    optional: false
+    default_enabled: true
+    display_name: Постобработка
+
+blocks:
+  - name: Segmentation
+    price: 1
+    optional: false
+    default_enabled: true
+    display_name: Сегментация
+  - name: Generalization
+    price: 0
+    optional: true
+    default_enabled: false
+    display_name: Генерализация
+  - name: Postprocessing
+    price: 0
+    optional: false
+    default_enabled: true
+    display_name: Постобработка
+
+stages:
+  select-source:
+    description: Source selection
+    action: select-source
+    config:
+      params:
+        auto_confirm: true
+        source_type: xyz
+        zoom: 18
+        projection: epsg:3857
+  validate-source:
+    description: Source validation
+    action: validate-source
+    dependsOn:
+      - select-source
+    config:
+      params:
+        requirements: requirements.yml
+  load-data:
+    description: Downloading data
+    action: dataloader
+    dependsOn:
+    - validate-source
+    config:
+      retries: 1
+      retry_interval: 60
+      params:
+        bucket: ml-workflow-data
+        workers: 16
+        buffer: 200m
+        use_cache: true
+  build-cog:
+    description: Preparing imagery
+    action: build-cog
+    dependsOn:
+    - load-data
+    config:
+      params:
+        bucket: ml-rasters
+        buffer: 10m
+  inference:
+    description: Detecting buildings
+    action: inference
+    dependsOn:
+    - load-data
+    config:
+      retries: 2
+      retry_interval: 30
+      params:
+        buffer: 200m
+        pipeline: inference.yml
+        bucket: ml-workflow-data
+  import-vector:
+    description: Saving results
+    action: import-vector
+    dependsOn:
+    - inference
+    config:
+      params:
+        crop_to_mask: true
+        merge_strategy: NONE

@@ -1,0 +1,1 @@
+DELETE FROM app_user WHERE email = 'admin@admin.com';

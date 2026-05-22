@@ -1,0 +1,1 @@
+ALTER TABLE aoi ADD COLUMN IF NOT EXISTS "completion_date" TIMESTAMP;

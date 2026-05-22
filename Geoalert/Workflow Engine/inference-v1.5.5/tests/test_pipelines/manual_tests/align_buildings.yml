@@ -1,0 +1,13 @@
+config:
+    _class: Compose
+    bricks:
+              - _class: AlignBuildings
+                cluster_distance: 5.0
+                input: '100'
+                max_building_area: 600.0
+                output: '100'
+                roads: 301-osm
+                shape_types:
+                    - RECTANGLE
+                    - L-SHAPE
+                    - GRID_SNAP

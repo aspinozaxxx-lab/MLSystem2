@@ -1,0 +1,35 @@
+# stage cannot be removed if we have "!" before stage name
+# pipeline-input: [input.tif]
+
+config:
+    _class: Compose
+    bricks:
+        -   _class: SimplifyAsShapes
+            input: features
+            output: simplified
+            iou_confidence_tag: "simplification_confidence_score"
+            verbose: true
+            simplification_params:
+                - shape_type: CIRCLE
+                  max_hausdorff: 2.0
+                  min_area: 0.0
+                  min_iou: 0.9
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: L-SHAPE
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+                - shape_type: RECTANGLE
+                  max_hausdorff: 7.0
+                  min_area: 200.0
+                  min_iou: 0.8
+                - shape_type: GRID_SNAP
+                  max_hausdorff: 7.0
+                  min_area: 0.0
+                  min_iou: 0.8
+    namespace: null
+date: '2020-04-30'
+version: 0.1.4

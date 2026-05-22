@@ -1,0 +1,62 @@
+.project-card {
+  height: 160px;
+  width: 370px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  padding: 25px 60px 20px 30px;
+
+  &:hover {
+    cursor: pointer;
+  }
+
+  &__email:hover {
+    cursor: pointer;
+  }
+
+  position: relative;
+
+  &__open-new-tab {
+    @include flex-centred;
+
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    padding: 5px 10px;
+    margin: 25px 30px 20px;
+    width: 40px;
+    height: 40px;
+  }
+
+  &__remove-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    margin: 25px 30px;
+  }
+
+  &__name {
+    margin-bottom: 8px;
+    padding: 0;
+  }
+  .project-card__description {
+    font-size: 12px;
+  }
+
+  &__date {
+    font-size: 12px;
+    font-weight: 500;
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+  }
+}
+
+.details-dialog {
+  width: 60%;
+}
+
+.dialog-body {
+  padding: 30px;
+}

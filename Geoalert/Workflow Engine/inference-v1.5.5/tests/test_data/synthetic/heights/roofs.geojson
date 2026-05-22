@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "roofs",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 37.425736996029862, 55.817042507582634 ], [ 37.425219840100674, 55.816922235136666 ], [ 37.425315417219771, 55.816792448490951 ], [ 37.425833428477709, 55.816916783503352 ], [ 37.425736996029862, 55.817042507582634 ] ] ] } }
+]
+}

@@ -1,0 +1,115 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`TextLoader should shows custom length 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class=""
+    >
+      <span
+        class="bp3-skeleton"
+      >
+        __________
+      </span>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TextLoader should shows skeleton loader if text if nullable 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class=""
+    >
+      <span
+        class="bp3-skeleton"
+      >
+        _____
+      </span>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TextLoader should shows text if text is not nullable and loading is false 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class=""
+    >
+      <span
+        class=""
+      >
+        text
+      </span>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TextLoader should use custom wrapper tag 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class=""
+    >
+      <p
+        class=""
+      >
+        text
+      </p>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TextLoader should use div wrapper with fill option 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class="full-width"
+    >
+      <div
+        class=""
+      >
+        text
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`TextLoader should use span as default 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class=""
+    >
+      <span
+        class=""
+      >
+        text
+      </span>
+    </div>
+  </div>
+</DocumentFragment>
+`;

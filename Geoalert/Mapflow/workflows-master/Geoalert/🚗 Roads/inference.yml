@@ -1,0 +1,162 @@
+shared:
+    model_name: &segm_model_name triton-roads-segm-mos-gc-rus-rgb-000060-01
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    blocks:
+        -   name: Segmentation
+            optional: false
+            inputs:
+              - input.tif
+            outputs:
+              - 307.geojson
+            bricks:
+            -   _class: SplitRaster
+                input: input
+                input_ext: tif
+                output:
+                  - RED
+                  - GRN
+                  - BLU
+            -   _class: Segmentation
+                bounds: 128
+                adapter:
+                    _class: TritonAdapter
+                    host: *segm_model_host
+                    port: *port
+                    name: *segm_model_name
+                    use_batch_dim: false
+                    timeout: 60
+                crs: utm
+                input_dtype: uint8
+                input_rasters:
+                    - RED
+                    - GRN
+                    - BLU
+                nodata: 0
+                output_dtype: uint8
+                output_labels:
+                    - '307'
+                res:
+                    - 0.33
+                    - 0.33
+                n_workers: 1
+                sample_size: &id001
+                  - 1024
+                  - 1024
+                verbose: true
+                vectorize: false
+            -   _class: VectorizeMasks
+                input_rasters:
+                  - '307'
+        -   name: Generalization
+            optional: true
+            inputs:
+              - 307.geojson
+            outputs:
+              - 307.geojson
+            bricks:
+                - _class: MaskMorphology
+                  bound: 20
+                  input_masks:
+                      - '307'
+                  mask_operation: binary_closing
+                  n_workers: 1
+                  out_masks:
+                      - '307_closing'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  selem: 'disk'
+                  selem_size: 5
+                  verbose: true
+                - _class: MaskMorphology
+                  bound: 10
+                  input_masks:
+                      - '307_closing'
+                  mask_operation: skeletonize
+                  n_workers: 1
+                  out_masks:
+                      - '307_skelet'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  verbose: true
+                - _class: MaskMorphology
+                  bound: 10
+                  connectivity: 2
+                  input_masks:
+                      - '307_skelet'
+                  mask_operation: remove_small_objects
+                  min_size: 40
+                  n_workers: 1
+                  out_masks:
+                      - '307_clean'
+                  sample_size:
+                      - 1024
+                      - 1024
+                  verbose: true
+                - _class: VectorizeAsLines
+                  approx: 2
+                  mask_raster: '307'
+                  skeleton_raster: '307_clean'
+                  polygonize: false
+                  min_width: 7
+                  max_width: 25
+                  merge: true
+                  min_terminal_length: 10
+                  out_vector: 'lines_raw'
+                - _class: RefineCrossroads
+                  input: 'lines_raw'
+                  output: 'lines_cr'
+                  snap_dist: 5
+                  merge_dist: 10
+                - _class: SnapLines
+                  input: 'lines_cr'
+                  output: 'lines_snapped'
+                  angle: 35
+                - _class: FilterShortLines
+                  input: 'lines_snapped'
+                  output: 'lines_filt'
+                  min_length: 20
+                  min_connections: 2
+                - _class: TopoSimplify
+                  input: 'lines_filt'
+                  output: '307'
+                  tolerance: 4
+                - _class: AddAttributes
+                  input: '307'
+                  output: '307'
+                  add_processing_id: false
+                  add_timestamp: false
+                  attributes:
+                    generalization: 'true'
+        -   name: Postprocessing
+            optional: false
+            inputs:
+              - 307.geojson
+            outputs:
+              - output.geojson
+            bricks:
+              - _class: RemoveTags
+                remove_underscore_tags: true
+                input: '307'
+                output: '307'
+              - _class: AddAttributes
+                input: '307'
+                output: output
+                add_processing_id: true
+                add_timestamp: true
+                attributes:
+                      neural_network_type: 'aerial-roads-linear'
+                      neural_network_version: '2'
+                      object_class: 'ROAD'
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

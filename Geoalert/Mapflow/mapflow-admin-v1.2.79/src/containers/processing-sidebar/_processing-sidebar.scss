@@ -1,0 +1,70 @@
+.processing-sidebar {
+  display: flex;
+  flex-flow: column nowrap;
+
+  @include use-background-color($dark: $dark-gray3);
+
+  .processing-sidebar__header {
+    padding: 15px 20px 18px;
+    @include use-background-color($light: $light-gray4, $dark: $dark-gray2);
+
+    &-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      & button {
+        height: fit-content;
+      }
+
+      .processing-title {
+        flex: 1;
+        min-width: 0; // Allow flex item to shrink below content size
+        * {
+          margin: 0;
+        }
+        .processing-title__name {
+          margin-bottom: 2px;
+        }
+        
+        // Ensure H2 doesn't overflow
+        h2 {
+          margin: 0;
+          line-height: 1.3;
+          word-wrap: break-word;
+          word-break: break-word;
+        }
+      }
+    }
+  }
+
+  // .processing-wd {}
+
+  .processing-sidebar__body {
+    padding: 15px 20px;
+
+    flex: 1;
+    display: flex;
+    flex-flow: column nowrap;
+
+    overflow: auto;
+
+    .upload-aoi-button {
+      margin-top: $pt-grid-size;
+    }
+
+    .run-processing-button {
+      font-weight: 500;
+    }
+  }
+}
+
+.processing-colout {
+  margin-top: 10px;
+}
+
+.processing-blocks__element {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

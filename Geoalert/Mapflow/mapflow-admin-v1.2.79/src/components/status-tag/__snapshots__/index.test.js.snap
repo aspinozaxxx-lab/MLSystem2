@@ -1,0 +1,18 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`StatusTag matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <span
+      class="bp3-tag bp3-minimal bp3-round"
+    >
+      <span
+        class="bp3-text-overflow-ellipsis bp3-fill"
+      />
+    </span>
+  </div>
+</DocumentFragment>
+`;

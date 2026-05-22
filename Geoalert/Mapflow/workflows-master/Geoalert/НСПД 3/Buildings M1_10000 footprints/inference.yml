@@ -1,0 +1,214 @@
+shared:
+  segm_model_name: &segm_model_name nspd-sh-wl-roof-cnt-segm-argmax-rgb-000060-01-cpu
+  segm_model_host: &segm_model_host models-serving.service.consul
+
+  port: &port 18070
+
+config:
+  _class: Compose
+  inputs:
+    - input.tif
+  outputs:
+    - output.geojson
+
+  blocks:
+    - name: Segmentation
+      optional: false
+      inputs:
+        - input.tif
+      outputs:
+        - rt.geojson
+        - sh.geojson
+        - wl.geojson
+        - RED.tif
+        - GRN.tif
+        - BLU.tif
+      bricks:
+        - _class: SplitRaster
+          input: input
+          input_ext: tif
+          output:
+            - RED
+            - GRN
+            - BLU
+        - _class: Segmentation
+          res:
+            - 0.6
+            - 0.6
+          crs: epsg:3857
+          bounds: 128
+          sample_size:
+            - 768
+            - 768
+          vectorize: False
+          input_rasters:
+            - RED
+            - GRN
+            - BLU
+          output_labels:
+            - sh
+            - wl
+            - markers
+            - bound
+          adapter:
+            _class: TritonAdapter
+            name: *segm_model_name
+            host: *segm_model_host
+            port: *port
+            input_ndim: 4
+            output_ndim: 3
+          postprocessors:
+            - _class: LabelsToOnehot
+              class_map: 3, 4, 1, 2
+        - _class: ApplyMask
+          child_masks:
+            - 'bound'
+          parent_mask: 'markers'
+          out_masks:
+            - 'rt'
+          mask_operation: or
+          reverse_parent: false
+          sample_size:
+            - 2000
+            - 2000
+        - _class: VectorizeMasks
+          input_rasters:
+            - rt
+            - sh
+            - wl
+    - name: Postprocessing1
+      optional: false
+      inputs:
+        - rt.geojson
+      outputs:
+        - rt.geojson
+      bricks:
+        - _class: UnifiedVectorProcessing
+          input: 'rt'
+          output: 'rt'
+          crs: utm
+          bricks:
+            - _class: FilterBigObjects
+              max_area_sq_m: 100000
+            - _class: FilterSmallObjects
+              input: '100'
+              min_area: 30.0
+              output: '100'
+            - _class: RemoveSmallHoles
+              input: '100'
+              min_hole_area: 50.0
+              output: '100'
+    - name: FpShiftMeasureCorrect
+      optional: false
+      inputs:
+        - rt.geojson
+        - wl.geojson
+      outputs:
+        - rt.geojson
+      bricks:
+        - _class: MeasureShift
+          roofs: 'rt'
+          walls: 'wl'
+          output: 'rt_shift'
+          max_shift: 50
+          max_iterations: 50
+        - _class: GenerateFootprints
+          roofs: rt_shift
+          output: output_fp
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          confidence_shift_thr: 0.2
+        - _class: CorrectShift
+          footprints: 'output_fp'
+          walls: 'wl'
+          output: 'output_fp_corrected'
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          corr_x_shift_tag: _x_shift_corr
+          corr_y_shift_tag: _y_shift_corr
+          corr_confidence_shift_tag: _confidence_shift_corr
+          corr_threshold: 0.05
+        - _class: GenerateFootprints
+          roofs: output_fp_corrected
+          output: rt
+          x_shift_tag: _x_shift_corr
+          y_shift_tag: _y_shift_corr
+          confidence_shift_tag: _confidence_shift_corr
+          confidence_shift_thr: 0.05
+    - name: Simplification
+      optional: true
+      inputs:
+        - rt.geojson
+      outputs:
+        - rt.geojson
+      bricks:
+        - _class: SimplifyAsShapes
+          input: 'rt'
+          output: 'rt'
+          iou_confidence_tag: "simplification_confidence_score"
+          verbose: true
+          simplification_params:
+            - shape_type: CIRCLE
+              max_hausdorff: 2.0
+              min_area: 0.0
+              min_iou: 0.9
+            - shape_type: RECTANGLE
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+            - shape_type: L-SHAPE
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+            - shape_type: RECTANGLE
+              max_hausdorff: 7.0
+              min_area: 200.0
+              min_iou: 0.8
+            - shape_type: GRID_SNAP
+              max_hausdorff: 7.0
+              min_area: 0.0
+              min_iou: 0.8
+        - _class: AddAttributes
+          input: 'rt'
+          output: 'rt'
+          add_processing_id: false
+          add_timestamp: false
+          attributes:
+            simplification: 'true'
+    - name: Postprocessing2
+      optional: false
+      inputs:
+        - rt.geojson
+      outputs:
+        - output.geojson
+      bricks:
+        - _class: UnifiedVectorProcessing
+          input: 'rt'
+          output: 'output'
+          crs: utm
+          bricks:
+            - _class: FilterSmallObjects
+              min_area: 5.0
+              area_tag: 'area'
+            - _class: RemoveTags
+              tags:
+                - "sat_azimuth"
+                - "sat_elevation"
+                - "sun_azimuth"
+                - "sun_elevation"
+                - "x_shift"
+                - "y_shift"
+                - "fp_shift_height"
+                - "sat_azimuth_from_fp_shift"
+              remove_underscore_tags: true
+            - _class: AddAttributes
+              add_timestamp: true
+              attributes:
+                  neural_network_type: 'aerial-buildings-10000-instance'
+                  neural_network_version: '1'
+                  shift: "true"
+                  object_class: 'OKS'
+date: '2023-06-27'
+version: 0.1.0

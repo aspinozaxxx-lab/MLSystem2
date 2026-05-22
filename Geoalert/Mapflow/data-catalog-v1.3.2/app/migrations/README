@@ -1,0 +1,9 @@
+Generic single-database configuration.
+
+After modifying database models in app.model package:
+    $ alembic revision --autogenerate -m "Modified/added some table"
+
+    go to app/migrations/versions dir and check last migration file, and make modifications if needed
+
+    $ alembic upgrade heads
+

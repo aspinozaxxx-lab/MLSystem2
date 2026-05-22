@@ -1,0 +1,107 @@
+shared:
+    model_name: &segm_model_name aerial-summer-buildings-instance
+    model_host: &segm_model_host models-serving.service.consul
+    port: &port 18070
+
+config:
+    _class: Compose
+    inputs:
+        - input.tif
+    outputs:
+        - output.geojson
+    blocks:
+        -   name: Segmentation
+            optional: false
+            inputs:
+                - input.tif
+            outputs:
+                - output.geojson
+            bricks:
+            - _class: SplitRaster
+              input: input
+              input_ext: tif
+              output:
+                  - RED
+                  - GRN
+                  - BLU
+            -   _class: Segmentation
+                bounds: 256
+                adapter:
+                    _class: TritonAdapter
+                    host: *segm_model_host
+                    port: *port
+                    name: *segm_model_name
+                    use_batch_dim: false
+                    timeout: 60
+                input_rasters:
+                - RED
+                - GRN
+                - BLU
+                nodata: 0
+                crs: "utm"
+                res:
+                - 0.15
+                - 0.15
+                output_labels:
+                - 'output'
+                n_workers: 1
+                sample_size:
+                - 832
+                - 832
+                verbose: true
+                bound_mode: drop
+                padding: none
+                nodata_mask_mode: false
+                vectorize: false
+            -   _class: VectorizeMasks
+                input_rasters:
+                - 'output'
+            -   _class: Simplify
+                crs: null
+                input: 'output'
+                output: 'output'
+                rate: 0.000006
+            -   _class: FilterSmallObjects
+                input: 'output'
+                output: 'output'
+                area_tag: "area"
+                min_area: 0
+        -   name: Generalization
+            optional: true
+            inputs:
+                - output.geojson
+            outputs:
+                - output.geojson
+            bricks:
+            -   _class: Polygons2Points
+                method: optimal
+                input: 'output'
+                output: 'output'
+        -   name: Postprocessing
+            optional: false
+            inputs:
+              - output.geojson
+            outputs:
+              - output.geojson
+            bricks:
+            -   _class: UnifiedVectorProcessing
+                input: 'output'
+                output: 'output'
+                crs: utm
+                bricks:
+                -   _class: CorrectTopology
+                    distance_step: 1.0
+                    correct_by_subtraction: 1
+                    buffer: 0.0
+                -   _class: AddAttributes
+                    add_processing_id: true
+                    add_timestamp: true
+                    attributes:
+                          neural_network_type: 'aerial-buildings-instance'
+                          neural_network_version: '1'
+                          object_class: 'OKS'
+
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

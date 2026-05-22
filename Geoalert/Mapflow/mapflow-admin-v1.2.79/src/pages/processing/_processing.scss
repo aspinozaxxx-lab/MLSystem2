@@ -1,0 +1,26 @@
+.processing-page {
+  grid-row: 1 / -1;
+  display: grid;
+  height: 100%;
+  width: 100%;
+  grid-template-columns: minmax(256px, 1fr) minmax(128px, 430px);
+  grid-template-rows: max-content 1fr;
+
+  .processing-breadcrumbs {
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+  }
+
+  .processing-map {
+    height: 100%;
+    grid-column: 1 / 2;
+    grid-row: 2 / 3;
+  }
+
+  .processing-sidebar {
+    grid-column: 2 / 3;
+    grid-row: 1 / -1;
+    display: flex;
+    flex-direction: column;
+  }
+}

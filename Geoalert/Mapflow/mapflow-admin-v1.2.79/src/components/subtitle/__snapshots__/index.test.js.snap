@@ -1,0 +1,15 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Subtitle matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class=""
+    style="height: 100%; width: 100%;"
+  >
+    <div
+      class="bp3-text-muted"
+      style="margin-left: 0px; font-weight: normal; font-size: unset;"
+    />
+  </div>
+</DocumentFragment>
+`;

@@ -1,0 +1,17 @@
+config:
+    _class: Compose
+    bricks:
+      - _class: SimplifyAsShape
+        input: '100'
+        max_hausdorff: 7.0
+        min_area: 0.0
+        min_iou: 0.8
+        output: '100'
+        shape_type: RECTANGLE
+        iou_confidence_tag: "simplification_confidence_score"
+        verbose: true
+        rect_neg_buffer: -0.5
+        rect_min_hole_area: 50.0
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

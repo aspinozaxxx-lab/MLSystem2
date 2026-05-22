@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "paths": {
+      "~@blueprintjs": ["./node_modules/@blueprintjs"]
+    }
+  },
+  "include": ["src"]
+}

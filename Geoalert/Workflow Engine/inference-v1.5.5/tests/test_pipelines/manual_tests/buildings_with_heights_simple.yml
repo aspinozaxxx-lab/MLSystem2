@@ -1,0 +1,178 @@
+shared:
+    segm_model: &segm_model_name sh-wl-roof-cnt-segm-argmax-rgb-000060-04
+    segm_model_host: &segm_model_host 'localhost'
+
+    class_model: &class_model_name roofs-clssegm-russia-rgb-000060-03
+    class_model_host: &class_model_host 'localhost'
+
+    regr_name: &regr_model_name triton-height-regression-rgb-000060-02
+    regr_host: &regr_model_host 'localhost'
+
+
+    port: &port 8000
+
+config:
+    _class: Compose
+
+    bricks:
+#        - _class: SplitRaster
+#          input: input
+#          input_ext: tif
+#          output:
+#            - RED
+#            - GRN
+#            - BLU
+#        - _class: BrightnessNormalization
+#          input:
+#            - RED_
+#            - GRN_
+#            - BLU_
+#          output:
+#            - RED
+#            - GRN
+#            - BLU
+#          std_width: 3
+        - _class: Segmentation
+          bounds: 128
+          sample_size:
+            - 768
+            - 768
+          vectorize: False
+          input_rasters:
+            - RED
+            - GRN
+            - BLU
+          output_labels:
+            - sh
+            - wl
+            - rt
+          adapter:
+            _class: TritonAdapter
+            name: *segm_model_name
+            host: *segm_model_host
+            port: *port
+            input_ndim: 4
+            output_ndim: 3
+          postprocessors:
+            - _class: LabelsToOnehot
+              class_map: 1, 2, 3, 4
+            - _class: SeparateInstances
+              channel: 2
+              aux_channel: 3
+              mode: markers_and_borders
+        - _class: VectorizeMasks
+          input_rasters:
+            - rt
+            - wl
+            - sh
+
+        -   _class: UnifiedVectorProcessing
+            input: rt
+            output: rt
+            crs: utm
+            bricks:
+            -   _class: FilterBigObjects
+                max_area_sq_m: 100000
+            -   _class: FilterSmallObjects
+                min_area: 30.0
+            -   _class: RemoveSmallHoles
+                min_hole_area: 50.0
+
+        -   _class: RasterizeLike
+            band: RED
+            input: rt
+
+        - _class: Segmentation
+          bounds: 128
+          res:
+              - 0.6
+              - 0.6
+          crs: epsg:3857
+          sample_size:
+              - 768
+              - 768
+          vectorize: False
+          input_rasters:
+              - RED
+              - GRN
+              - BLU
+              - rt
+          output_labels:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+          adapter:
+              _class: TritonAdapter
+              name: *class_model_name
+              host: *class_model_host
+              port: *port
+              input_ndim: 4
+              output_ndim: 3
+          postprocessors:
+              - _class: LabelsToOnehot
+                class_map: 1, 2, 3, 4, 5
+
+        - _class: VectorizeMasks
+          input_rasters:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+          output_fcs:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+
+        - _class: ClassifyByIntersection
+          semantic_mask: rt
+          class_mask:
+              - '101'
+              - '102'
+              - '103'
+              - '104'
+              - '105'
+
+        - _class: ComputeMetaAngles
+          meta: meta
+          output: meta
+          shadows: shadows_labels
+          walls: walls_labels
+
+        - _class: MeasureHeight
+          meta: meta
+          output: rt_sw
+          roofs: rt
+          shadows: sh
+          walls: wl
+          sw_height_tag: _sw_height
+
+        - _class: InstanceRegression
+          adapter:
+              _class: TritonAdapter
+              host: *regr_model_host
+              port: *port
+              name: *regr_model_name
+              input_ndim: 4
+              output_dtype: float32
+              output_ndim: 1
+              n_retries: 1
+          input_rasters:
+              - RED
+              - GRN
+              - BLU
+          sample_size: [ 512, 512 ]
+          input_vector: rt_sw
+          output_vector: rt_regr
+
+        - _class: DefinitiveHeights
+          fc: rt_regr
+          output: rt_out
+
+
+date: '2020-04-30'
+version: 0.1.4

@@ -1,0 +1,7 @@
+.idea
+.DS_Store
+configs/tmp/*
+*wd_base64.yml
+*wd_base64.yaml
+.env
+*__pycache__*

@@ -1,0 +1,1418 @@
+{
+  "type": "FeatureCollection",
+  "totalFeatures": 23,
+  "features": [
+    {
+      "type": "Feature",
+      "id": "5ef5e102c195dc8d8e44191e01647721",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.94939947,
+              40.82877459
+            ],
+            [
+              -73.84055826,
+              40.81853431
+            ],
+            [
+              -73.73171705,
+              40.80829404
+            ],
+            [
+              -73.73240394,
+              40.74137252
+            ],
+            [
+              -73.73309082,
+              40.674451
+            ],
+            [
+              -73.84048001,
+              40.68318056
+            ],
+            [
+              -73.94786919,
+              40.69191011
+            ],
+            [
+              -73.94863433,
+              40.76034235
+            ],
+            [
+              -73.94939947,
+              40.82877459
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2022-09-10 15:42:12",
+        "source": "GE01",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0.0012740794,
+        "offNadirAngle": 24.135431,
+        "groundSampleDistance": 0.48,
+        "colorBandOrder": "RGB",
+        "legacyId": "105001002E926B00"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "f0139ab0265928e32a07572a0fe51a10",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.99386,
+              40.805811
+            ],
+            [
+              -73.861731,
+              40.8207645
+            ],
+            [
+              -73.729602,
+              40.835718
+            ],
+            [
+              -73.729404,
+              40.73872725
+            ],
+            [
+              -73.729206,
+              40.6417365
+            ],
+            [
+              -73.8614475,
+              40.6258785
+            ],
+            [
+              -73.993689,
+              40.6100205
+            ],
+            [
+              -73.9937745,
+              40.70791575
+            ],
+            [
+              -73.99386,
+              40.805811
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2022-02-21 18:40:57",
+        "source": "WV01",
+        "productType": "Panchromatic",
+        "cloudCover": 0,
+        "offNadirAngle": 28.954731,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "",
+        "legacyId": "10200100BF194700"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "e947e5005e7df6acb8bd062fa3e4b7d8",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.1483405,
+              40.8662055
+            ],
+            [
+              -74.04039675,
+              40.86313875
+            ],
+            [
+              -73.932453,
+              40.860072
+            ],
+            [
+              -73.9330335,
+              40.69953
+            ],
+            [
+              -73.933614,
+              40.538988
+            ],
+            [
+              -74.04037875,
+              40.54200975
+            ],
+            [
+              -74.1471435,
+              40.5450315
+            ],
+            [
+              -74.147742,
+              40.7056185
+            ],
+            [
+              -74.1483405,
+              40.8662055
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2022-02-20 15:44:57",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 17.066,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100CE1C5A00"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "fb6e62b2c213c13f700254514aa54860",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.025144,
+              40.922118
+            ],
+            [
+              -73.91736225,
+              40.92152175
+            ],
+            [
+              -73.8095805,
+              40.9209255
+            ],
+            [
+              -73.81002375,
+              40.7991825
+            ],
+            [
+              -73.810467,
+              40.6774395
+            ],
+            [
+              -73.9174545,
+              40.6781685
+            ],
+            [
+              -74.024442,
+              40.6788975
+            ],
+            [
+              -74.024793,
+              40.80050775
+            ],
+            [
+              -74.025144,
+              40.922118
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2022-02-20 15:44:45",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 16.413929,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100CE95A000"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "c8f3269b731678af74d95c06aa1b15f5",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.03721467,
+              40.53472467
+            ],
+            [
+              -74.03707019,
+              40.6960735
+            ],
+            [
+              -74.0369257,
+              40.85742234
+            ],
+            [
+              -73.95133271,
+              40.86084892
+            ],
+            [
+              -73.86573971,
+              40.8642755
+            ],
+            [
+              -73.86555568,
+              40.70310004
+            ],
+            [
+              -73.86537165,
+              40.54192459
+            ],
+            [
+              -73.95126274,
+              40.53797178
+            ],
+            [
+              -74.03715384,
+              40.53401897
+            ],
+            [
+              -74.03718425,
+              40.53401897
+            ],
+            [
+              -74.03721467,
+              40.53401897
+            ],
+            [
+              -74.03721467,
+              40.53437182
+            ],
+            [
+              -74.03721467,
+              40.53472467
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2022-01-22 15:59:52",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 18.234924,
+        "groundSampleDistance": 0.34,
+        "colorBandOrder": "RGB",
+        "legacyId": "1040010070991700"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "01b57a1bed633da080c2269dd4e94a34",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.07029872,
+              40.80517305
+            ],
+            [
+              -74.06903411,
+              40.80526406
+            ],
+            [
+              -74.06776951,
+              40.80535508
+            ],
+            [
+              -73.97927575,
+              40.81147533
+            ],
+            [
+              -73.890782,
+              40.81759558
+            ],
+            [
+              -73.89098478,
+              40.75521149
+            ],
+            [
+              -73.89118756,
+              40.6928274
+            ],
+            [
+              -73.98053557,
+              40.68648201
+            ],
+            [
+              -74.06988357,
+              40.68013662
+            ],
+            [
+              -74.07009115,
+              40.74265483
+            ],
+            [
+              -74.07029872,
+              40.80517305
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-11-25 15:44:55",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 22.410574,
+        "groundSampleDistance": 0.35,
+        "colorBandOrder": "RGB",
+        "legacyId": "1040010071704900"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "3f87a0486ab932ce6aacdb54e6f8a44a",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.062908,
+              40.8193785
+            ],
+            [
+              -73.9416825,
+              40.80698325
+            ],
+            [
+              -73.820457,
+              40.794588
+            ],
+            [
+              -73.82162475,
+              40.60010925
+            ],
+            [
+              -73.8227925,
+              40.4056305
+            ],
+            [
+              -73.94191425,
+              40.41124425
+            ],
+            [
+              -74.061036,
+              40.416858
+            ],
+            [
+              -74.061972,
+              40.61811825
+            ],
+            [
+              -74.062908,
+              40.8193785
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-11-09 15:36:37",
+        "source": "GE01",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 27.835232,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10500100283B4400"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "ac5d5a29d619e5993e091a62ea08fbbb",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.12134883,
+              40.54646495
+            ],
+            [
+              -74.12125817,
+              40.70463407
+            ],
+            [
+              -74.12116751,
+              40.8628032
+            ],
+            [
+              -74.03771933,
+              40.8599392
+            ],
+            [
+              -73.95427116,
+              40.85707521
+            ],
+            [
+              -73.95414334,
+              40.69740498
+            ],
+            [
+              -73.95401553,
+              40.53773475
+            ],
+            [
+              -74.0376584,
+              40.54047241
+            ],
+            [
+              -74.12130127,
+              40.54321007
+            ],
+            [
+              -74.12132505,
+              40.54321156
+            ],
+            [
+              -74.12134883,
+              40.54321305
+            ],
+            [
+              -74.12134883,
+              40.544839
+            ],
+            [
+              -74.12134883,
+              40.54646495
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-11-07 16:00:19",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 15.855021,
+        "groundSampleDistance": 0.33,
+        "colorBandOrder": "RGB",
+        "legacyId": "104001006FBAE500"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "f380d91235bea42b7d4ef2b3868ed1af",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.15568615,
+              41.17023171
+            ],
+            [
+              -74.04507571,
+              41.15791684
+            ],
+            [
+              -73.93446528,
+              41.14560196
+            ],
+            [
+              -73.93710356,
+              40.94825364
+            ],
+            [
+              -73.93974184,
+              40.75090532
+            ],
+            [
+              -74.04504968,
+              40.75932787
+            ],
+            [
+              -74.15035751,
+              40.76775041
+            ],
+            [
+              -74.15302183,
+              40.96899106
+            ],
+            [
+              -74.15568615,
+              41.17023171
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-10-21 15:43:07",
+        "source": "GE01",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 25.47841,
+        "groundSampleDistance": 0.48,
+        "colorBandOrder": "RGB",
+        "legacyId": "1050010027C6AE00"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "b0435ef900d1f79b4234fdd124cb3e6d",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.1261375,
+              40.604373
+            ],
+            [
+              -74.126088,
+              40.68605925
+            ],
+            [
+              -74.1260385,
+              40.7677455
+            ],
+            [
+              -74.09340225,
+              40.7676015
+            ],
+            [
+              -74.060766,
+              40.7674575
+            ],
+            [
+              -73.980864,
+              40.7670795
+            ],
+            [
+              -73.900962,
+              40.7667015
+            ],
+            [
+              -73.90093725,
+              40.6838205
+            ],
+            [
+              -73.9009125,
+              40.6009395
+            ],
+            [
+              -74.013525,
+              40.60181475
+            ],
+            [
+              -74.1261375,
+              40.60269
+            ],
+            [
+              -74.1261375,
+              40.6035315
+            ],
+            [
+              -74.1261375,
+              40.604373
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-09-12 18:56:13",
+        "source": "WV01",
+        "productType": "Panchromatic",
+        "cloudCover": 0,
+        "offNadirAngle": 14.891372,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "",
+        "legacyId": "10200100B6393400"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "edafa2479ecdc5ecce7209c530f6d7ed",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.03124129,
+              40.55748359
+            ],
+            [
+              -74.03122175,
+              40.71050119
+            ],
+            [
+              -74.03120221,
+              40.86351879
+            ],
+            [
+              -73.94831717,
+              40.86038629
+            ],
+            [
+              -73.86543213,
+              40.85725379
+            ],
+            [
+              -73.86543514,
+              40.69723165
+            ],
+            [
+              -73.86543815,
+              40.53720951
+            ],
+            [
+              -73.94833972,
+              40.54035554
+            ],
+            [
+              -74.03124129,
+              40.54350157
+            ],
+            [
+              -74.03124129,
+              40.55049258
+            ],
+            [
+              -74.03124129,
+              40.55748359
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-09-11 15:58:26",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 16.780022,
+        "groundSampleDistance": 0.33,
+        "colorBandOrder": "RGB",
+        "legacyId": "104001006D4F9100"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "ff0ec3f3b5c780ee51352016b461fa14",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.148228,
+              41.0815845
+            ],
+            [
+              -74.02690125,
+              41.06994525
+            ],
+            [
+              -73.9055745,
+              41.058306
+            ],
+            [
+              -73.90657125,
+              40.8433005
+            ],
+            [
+              -73.907568,
+              40.628295
+            ],
+            [
+              -74.0271105,
+              40.63224825
+            ],
+            [
+              -74.146653,
+              40.6362015
+            ],
+            [
+              -74.1474405,
+              40.858893
+            ],
+            [
+              -74.148228,
+              41.0815845
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-09-07 15:36:11",
+        "source": "GE01",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0.0019861914,
+        "offNadirAngle": 27.99447,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "1050010026D5C800"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "f094ff1c064951b87cf1c5a4b906bf5c",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.139651,
+              41.0557455
+            ],
+            [
+              -74.02416075,
+              41.067936
+            ],
+            [
+              -73.9086705,
+              41.0801265
+            ],
+            [
+              -73.902447,
+              41.080752
+            ],
+            [
+              -73.8962235,
+              41.0813775
+            ],
+            [
+              -73.89635625,
+              40.85862525
+            ],
+            [
+              -73.896489,
+              40.635873
+            ],
+            [
+              -74.01751425,
+              40.6228185
+            ],
+            [
+              -74.1385395,
+              40.609764
+            ],
+            [
+              -74.13909525,
+              40.83275475
+            ],
+            [
+              -74.139651,
+              41.0557455
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-08-14 15:41:24",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 26.8588,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100C4078300"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "1921f425da18f08f622dd1241af1aaa6",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.0746935,
+              40.863024
+            ],
+            [
+              -73.96675425,
+              40.8609
+            ],
+            [
+              -73.858815,
+              40.858776
+            ],
+            [
+              -73.85936175,
+              40.69912725
+            ],
+            [
+              -73.8599085,
+              40.5394785
+            ],
+            [
+              -73.96672275,
+              40.541589
+            ],
+            [
+              -74.073537,
+              40.5436995
+            ],
+            [
+              -74.07411525,
+              40.70336175
+            ],
+            [
+              -74.0746935,
+              40.863024
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-05-11 15:42:01",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0.004950336,
+        "offNadirAngle": 16.928362,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100BE638800"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "697b0455086f897d6b0b78dd4324db05",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.07477258,
+              40.92218037
+            ],
+            [
+              -73.9929954,
+              40.92267412
+            ],
+            [
+              -73.91121822,
+              40.92316787
+            ],
+            [
+              -73.91187847,
+              40.68623438
+            ],
+            [
+              -73.91253871,
+              40.44930089
+            ],
+            [
+              -73.99299683,
+              40.44878418
+            ],
+            [
+              -74.07345495,
+              40.44826746
+            ],
+            [
+              -74.07411377,
+              40.68522392
+            ],
+            [
+              -74.07477258,
+              40.92218037
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-03-30 15:47:26",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 11.43225,
+        "groundSampleDistance": 0.32,
+        "colorBandOrder": "RGB",
+        "legacyId": "1040010065450500"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "fa6ee84f9bd4367914b0e2b994f48101",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.95466811,
+              41.01279205
+            ],
+            [
+              -73.87336464,
+              41.01114447
+            ],
+            [
+              -73.79206116,
+              41.00949689
+            ],
+            [
+              -73.79250003,
+              40.73511133
+            ],
+            [
+              -73.79293889,
+              40.46072578
+            ],
+            [
+              -73.87334838,
+              40.46169365
+            ],
+            [
+              -73.95375787,
+              40.46266151
+            ],
+            [
+              -73.95421299,
+              40.73772678
+            ],
+            [
+              -73.95466811,
+              41.01279205
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-03-11 15:49:27",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 15.055578,
+        "groundSampleDistance": 0.33,
+        "colorBandOrder": "RGB",
+        "legacyId": "1040010066092A00"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "0bdbef086c33e7a61d702511aab863f0",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.09763538,
+              40.8592378
+            ],
+            [
+              -73.99583378,
+              40.86113977
+            ],
+            [
+              -73.89403219,
+              40.86304175
+            ],
+            [
+              -73.89409268,
+              40.70432651
+            ],
+            [
+              -73.89415316,
+              40.54561128
+            ],
+            [
+              -73.99586291,
+              40.54427161
+            ],
+            [
+              -74.09757265,
+              40.54293194
+            ],
+            [
+              -74.09760402,
+              40.70108487
+            ],
+            [
+              -74.09763538,
+              40.8592378
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-02-21 15:52:57",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 16.099525,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100B7961600"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "b704db456de7ee36728dd441b0a2d66d",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.95076354,
+              41.04639838
+            ],
+            [
+              -73.86395195,
+              41.04809332
+            ],
+            [
+              -73.77714035,
+              41.04978826
+            ],
+            [
+              -73.77808549,
+              40.7713237
+            ],
+            [
+              -73.77903063,
+              40.49285914
+            ],
+            [
+              -73.86398951,
+              40.49535948
+            ],
+            [
+              -73.94894839,
+              40.49785982
+            ],
+            [
+              -73.94985597,
+              40.7721291
+            ],
+            [
+              -73.95076354,
+              41.04639838
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2021-02-08 16:01:31",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 16.821218,
+        "groundSampleDistance": 0.33,
+        "colorBandOrder": "RGB",
+        "legacyId": "1040010065A44800"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "5d6daea220f430e11f44d2f6c6bac651",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.03254979,
+              40.85772229
+            ],
+            [
+              -73.94867122,
+              40.86113456
+            ],
+            [
+              -73.86479265,
+              40.86454683
+            ],
+            [
+              -73.86515504,
+              40.70451869
+            ],
+            [
+              -73.86551743,
+              40.54449055
+            ],
+            [
+              -73.94864229,
+              40.54115593
+            ],
+            [
+              -74.03176715,
+              40.53782132
+            ],
+            [
+              -74.03215847,
+              40.6977718
+            ],
+            [
+              -74.03254979,
+              40.85772229
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2020-11-04 15:50:43",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 18.458475,
+        "groundSampleDistance": 0.34,
+        "colorBandOrder": "RGB",
+        "legacyId": "10400100615E6100"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "3b53564e27de283fdd6471aeeea8ae1d",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.1572955,
+              41.0115195
+            ],
+            [
+              -74.03763375,
+              41.01671475
+            ],
+            [
+              -73.917972,
+              41.02191
+            ],
+            [
+              -73.91945025,
+              40.505256
+            ],
+            [
+              -73.9209285,
+              39.988602
+            ],
+            [
+              -74.0376765,
+              39.98200725
+            ],
+            [
+              -74.1544245,
+              39.9754125
+            ],
+            [
+              -74.15586,
+              40.493466
+            ],
+            [
+              -74.1572955,
+              41.0115195
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2020-10-17 15:36:13",
+        "source": "WV02",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0,
+        "offNadirAngle": 23.692337,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "10300100AF95FF00"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "3e27a2172ec6ad2acd0411444fb2cfff",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.1726,
+              41.0165505
+            ],
+            [
+              -74.06037675,
+              41.0128785
+            ],
+            [
+              -73.9481535,
+              41.0092065
+            ],
+            [
+              -73.949544,
+              40.7929545
+            ],
+            [
+              -73.9509345,
+              40.5767025
+            ],
+            [
+              -74.0611215,
+              40.5795915
+            ],
+            [
+              -74.1713085,
+              40.5824805
+            ],
+            [
+              -74.17195425,
+              40.7995155
+            ],
+            [
+              -74.1726,
+              41.0165505
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2020-05-10 18:47:31",
+        "source": "WV01",
+        "productType": "Panchromatic",
+        "cloudCover": 0,
+        "offNadirAngle": 15.01335,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "",
+        "legacyId": "10200100977A1900"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "0936b05ed1aae013b76352e69267d3a2",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.06052424,
+              41.0090492
+            ],
+            [
+              -73.97245426,
+              41.0116822
+            ],
+            [
+              -73.88438428,
+              41.0143152
+            ],
+            [
+              -73.88518179,
+              40.79781732
+            ],
+            [
+              -73.8859793,
+              40.58131945
+            ],
+            [
+              -73.97249079,
+              40.5787245
+            ],
+            [
+              -74.05900227,
+              40.57612955
+            ],
+            [
+              -74.05976325,
+              40.79258938
+            ],
+            [
+              -74.06052424,
+              41.0090492
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2020-04-28 15:52:32",
+        "source": "WV03_VNIR",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 0.004305276,
+        "offNadirAngle": 18.72222,
+        "groundSampleDistance": 0.34,
+        "colorBandOrder": "RGB",
+        "legacyId": "104001005B3CD300"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "122309083d84f3e16750a1355745c29c",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -74.0373345,
+              41.0135085
+            ],
+            [
+              -73.91305575,
+              41.02585425
+            ],
+            [
+              -73.788777,
+              41.0382
+            ],
+            [
+              -73.79239275,
+              40.81488525
+            ],
+            [
+              -73.7960085,
+              40.5915705
+            ],
+            [
+              -73.91323575,
+              40.587651
+            ],
+            [
+              -74.030463,
+              40.5837315
+            ],
+            [
+              -74.03389875,
+              40.79862
+            ],
+            [
+              -74.0373345,
+              41.0135085
+            ]
+          ]
+        ]
+      },
+      "geometry_name": "geometry",
+      "properties": {
+        "acquisitionDate": "2020-04-06 16:08:52",
+        "source": "GE01",
+        "productType": "Pan Sharpened Natural Color",
+        "cloudCover": 3.0620125E-4,
+        "offNadirAngle": 27.58565,
+        "groundSampleDistance": 0.5,
+        "colorBandOrder": "RGB",
+        "legacyId": "105001001C64A700"
+      }
+    }
+  ],
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::4326"
+    }
+  }
+}

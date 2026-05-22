@@ -1,0 +1,49 @@
+variables:
+  PROJ_NAME: ${CI_PROJECT_NAME}
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_NAME
+    - when: always
+      variables:
+        IMAGE_TAG: $CI_COMMIT_REF_SLUG
+
+stages:
+  - publish
+  - deploy
+
+publish:
+  stage: publish
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - > 
+      docker build 
+      --build-arg GITLAB_REGISTRY_TOKEN=} 
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      -t $CI_REGISTRY_IMAGE:$IMAGE_TAG -f ./Dockerfile .
+    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker rmi $CI_REGISTRY_IMAGE:$IMAGE_TAG
+  tags:
+    - docker
+
+deploy:
+  stage: deploy
+  image: $ALPINE_DOCKER_IMAGE
+  script:
+    - |
+      curl -sSf -X POST \
+        -F token= \
+        -F ref=master \
+        -F "variables[IMG_NAME]=${CI_REGISTRY_IMAGE}:${CI_COMMIT_TAG}" \
+        -F "variables[PROJ_NAME]=${PROJ_NAME}" \
+        ${CI_API_V4_URL}/projects/199/trigger/pipeline > result.json \
+      && id=$(jq -r '.id' result.json) \
+      && status=$(jq -r '.status' result.json) \
+      && url=$(jq -r '.web_url' result.json) \
+      && echo "Pipeline $id $status, url: $url"
+  rules:
+    - if: '$CI_COMMIT_TAG != null'

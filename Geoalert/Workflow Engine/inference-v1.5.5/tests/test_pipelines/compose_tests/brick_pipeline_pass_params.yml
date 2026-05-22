@@ -1,0 +1,33 @@
+#   variable_name: &variable_name ${variable_name:variable_default_value}
+
+params:
+    input: &input ${input:rgb }
+    input_ext: &input_ext tif
+    min_area: &min_area ${min_area:100.0}
+    box_threshold: &box_threshold ${box_threshold:-0.5 }
+    text_threshold: &text_threshold 0.100
+    model_name1: &model_name1 ${model_name1:triton-text2box-model-02}
+    model_name2: &model_name2 triton-building-model-03
+    text_prompt: &text_prompt ${text_prompt:red roof . car . 3 house}
+    text_prompt14: &text_prompt14 building
+    text_prompt2: &text_prompt2 ${text_prompt2:small circle . red . 3 }
+
+config:
+    _class: Compose
+    bricks:
+        - _class: SampleBrick
+          input0: input0
+          input: *input
+          input_ext: *input_ext
+          min_area: *min_area
+          box_threshold: *box_threshold
+          text_threshold: *text_threshold
+          model_name1: *model_name1
+          model_name2: *model_name2
+          text_prompt: *text_prompt
+          text_prompt14: *text_prompt14
+          text_prompt2: *text_prompt2
+
+    namespace: null
+date: '2022-09-08'
+version: 0.1.4

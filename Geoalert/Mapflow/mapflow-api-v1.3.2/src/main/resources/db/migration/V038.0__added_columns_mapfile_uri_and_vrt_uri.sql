@@ -1,0 +1,2 @@
+ALTER TABLE data_provider ADD COLUMN mapfile_uri VARCHAR NULL;
+ALTER TABLE aoi ADD COLUMN vrt_uri VARCHAR NULL;
