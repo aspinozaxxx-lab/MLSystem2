@@ -1,8 +1,11 @@
 import os
 import time
 import pickle
+import json
+import inspect
 import requests
 import numpy as np
+from pathlib import Path
 from typing import Optional, Any, Callable, Literal, Union
 from loguru import logger
 from pydantic import Field
@@ -23,6 +26,86 @@ IMAGE_INPUT_KEY = 'input'
 IMAGE_OUTPUT_KEY = 'output'
 
 # input image samples format for every adapter must be (C, H, W)
+
+
+def _safe_array_stats(arr: np.ndarray) -> dict:
+    if arr.size == 0:
+        return {
+            "min": None,
+            "max": None,
+            "mean": None,
+            "first_values": [],
+        }
+    return {
+        "min": float(np.nanmin(arr)),
+        "max": float(np.nanmax(arr)),
+        "mean": float(np.nanmean(arr)),
+        "first_values": arr.reshape(-1)[:16].tolist(),
+    }
+
+
+def _per_channel_stats(arr: np.ndarray) -> dict:
+    if arr.ndim < 3 or arr.size == 0:
+        return {
+            "per_channel_min": [],
+            "per_channel_max": [],
+            "per_channel_mean": [],
+        }
+
+    axis = 0 if arr.ndim == 3 else 1 if arr.ndim == 4 else None
+    if axis is None:
+        return {
+            "per_channel_min": [],
+            "per_channel_max": [],
+            "per_channel_mean": [],
+        }
+
+    channels = np.moveaxis(arr, axis, 0)
+    return {
+        "per_channel_min": [float(np.nanmin(ch)) for ch in channels],
+        "per_channel_max": [float(np.nanmax(ch)) for ch in channels],
+        "per_channel_mean": [float(np.nanmean(ch)) for ch in channels],
+    }
+
+
+def _dump_debug_tensor(prefix: str, name: str, arr: np.ndarray, extra: Optional[dict] = None) -> None:
+    if os.getenv("GEOALERT_DEBUG_TENSORS") != "1":
+        return
+
+    debug_dir = Path(os.getenv("GEOALERT_DEBUG_TENSORS_DIR", "Geoalert/_analysis/debug_tensors"))
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name)
+    stamp = int(time.time() * 1000)
+    base = debug_dir / f"{stamp}_{prefix}_{safe_name}"
+    np.save(str(base) + ".npy", arr)
+
+    frame = inspect.currentframe()
+    caller = frame.f_back if frame is not None else None
+    metadata = {
+        "code_path": f"{__file__}:{caller.f_lineno if caller else 'unknown'}",
+        "shape": list(arr.shape),
+        "dtype": str(arr.dtype),
+        "layout": "not_confirmed",
+        "is_contiguous": bool(arr.flags["C_CONTIGUOUS"]),
+        "nodata_value": None,
+        "nodata_count": None,
+        "window": {},
+        "input_rasters": [],
+        "use_batch_dim": None,
+        "input_dtype_param": None,
+    }
+    metadata.update(_safe_array_stats(arr))
+    metadata.update(_per_channel_stats(arr))
+    if np.issubdtype(arr.dtype, np.integer) and arr.size <= 16_777_216:
+        unique = np.unique(arr)
+        metadata["unique_values"] = unique[:256].tolist()
+        metadata["unique_values_truncated"] = bool(unique.size > 256)
+    if extra:
+        metadata.update(extra)
+
+    with open(str(base) + ".json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
 # adapter __call__ invokes following methods sequentially:
 #   - handle_input_type(): cast arbitrary input (usually, it is BandSample) to np.ndarray
 #   - preprocess_fn(): apply model-specific transformations to the array, such as add batch dim, transpose axes, etc.
@@ -410,6 +493,14 @@ class TritonAdapter(RemoteServerModelAdapter):
 
         inputs = []
         for i, inp in enumerate(self._input_metadata):
+            _dump_debug_tensor("triton_input", inp['name'], x[i], {
+                "layout": "CHW" if x[i].ndim == 3 else "NCHW_or_other",
+                "input_dtype_param": self.input_dtype,
+                "triton_input_name": inp['name'],
+                "triton_datatype": inp['datatype'],
+                "model_name": self.name,
+                "model_version": self.version,
+            })
             infer_input = self._client.InferInput(inp['name'], x[i].shape, inp['datatype'])
             infer_input.set_data_from_numpy(x[i])
             inputs.append(infer_input)
@@ -421,6 +512,15 @@ class TritonAdapter(RemoteServerModelAdapter):
                                      model_version=self.version,
                                      outputs=outputs)
         results = [response.as_numpy(outp['name']) for outp in self._output_metadata]
+        for outp, result in zip(self._output_metadata, results):
+            if isinstance(result, np.ndarray):
+                _dump_debug_tensor("triton_output", outp['name'], result, {
+                    "triton_output_name": outp['name'],
+                    "triton_datatype": outp.get('datatype'),
+                    "model_name": self.name,
+                    "model_version": self.version,
+                    "classes": self.classes,
+                })
         if len(results) == 1:
             results = results[0]
             

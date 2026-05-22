@@ -1,0 +1,872 @@
+﻿===== D:\Projects\MLSystem2\Geoalert\Mapflow\cog-builder-v1.1.2\requirements.txt =====
+aiohttp==3.8.1
+boto3==1.24.96
+gdal==3.3.2
+geojson==2.5.0
+kombu==5.2.4
+loguru==0.6.0
+pydantic==2.3.0
+rasterio==1.3.3
+shapely==1.8.5
+tqdm==4.64.1
+===== D:\Projects\MLSystem2\Geoalert\Mapflow\data-catalog-v1.3.2\requirements.txt =====
+aiohttp==3.8.1
+alembic==1.13.1
+boto3==1.26.0
+fastapi==0.78.0
+geoalchemy2==0.11.1
+geotiff==0.2.6
+loguru==0.6.0
+minio==7.1.8
+Pillow==9.2.0
+psycopg2-binary==2.9.3
+pydantic==1.9.1
+python-jose==3.3.0
+python-multipart==0.0.5
+pyyaml==6.0
+rasterio==1.3.2
+requests==2.27.1
+shapely==1.7.1
+sqlalchemy==1.4.36
+urllib3==1.26.14
+uvicorn==0.17.6
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\cog-builder-v1.1.2\requirements.txt =====
+aiohttp==3.8.1
+boto3==1.24.96
+gdal==3.3.2
+geojson==2.5.0
+kombu==5.2.4
+loguru==0.6.0
+pydantic==2.3.0
+rasterio==1.3.3
+shapely==1.8.5
+tqdm==4.64.1
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\dataloader-v1.5.3\modules\nspd_loader\requirements.txt =====
+aiohttp==3.8.1
+tqdm==4.19.9
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\dataloader-v1.5.3\modules\nspd_loader\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Note: To use the 'upload' functionality of this file, you must:
+#   $ pip install twine
+
+import io
+import os
+import sys
+from shutil import rmtree
+
+from setuptools import find_packages, setup, Command
+
+# Package meta-data.
+NAME = 'nspd_loader'
+DESCRIPTION = 'Tool for loading raster data from NSPD data storage'
+URL = ''
+EMAIL = 'help@geoalert.com'
+AUTHOR = 'Alexey Trekin'
+REQUIRES_PYTHON = '>=3.8.0'
+VERSION = "1.0.0"
+
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+# What packages are required for this module to be executed?
+REQUIRED = [
+
+]
+
+# What packages are required for this module to be executed?
+try:
+    with open(os.path.join(here, 'requirements.txt'), encoding='utf-8') as f:
+        REQUIRED = f.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    'tests': ['pytest'],
+}
+
+
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+try:
+    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+        long_description = '\n' + f.read()
+except FileNotFoundError:
+    long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, 'nspd_loader/__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+class UploadCommand(Command):
+    """Support setup.py upload."""
+
+    description = 'Build and publish the package.'
+    user_options = []
+
+    @staticmethod
+    def status(s):
+        """Prints things in bold."""
+        print(s)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        try:
+            self.status('Removing previous builds...')
+            rmtree(os.path.join(here, 'dist'))
+        except OSError:
+            pass
+
+        self.status('Building Source and Wheel (universal) distribution...')
+        os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
+
+        self.status('Uploading the package to PyPI via Twine...')
+        os.system('twine upload dist/*')
+
+        self.status('Pushing git tags...')
+        os.system('git tag v{0}'.format(about['__version__']))
+        os.system('git push --tags')
+
+        sys.exit()
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    # If your package is a single module, use this instead of 'packages':
+    # py_modules=['aeronet'],
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    include_package_data=True,
+    license='MIT',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={
+        'upload': UploadCommand,
+    },
+)
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\dataloader-v1.5.3\modules\xyz_loader\requirements.txt =====
+aiohttp==3.8.1
+click==7.0
+networkx==2.5.1
+numpy==1.17.2
+pillow==9.2.0
+pyproj==1.9.5.1
+rasterio==1.2.6
+requests==2.26.0
+scikit-image==0.17.2
+scipy==1.5.0
+shapely==1.7.0
+tqdm==4.19.9
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\dataloader-v1.5.3\modules\xyz_loader\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Note: To use the 'upload' functionality of this file, you must:
+#   $ pip install twine
+
+import io
+import os
+import sys
+from shutil import rmtree
+
+from setuptools import find_packages, setup, Command
+
+# Package meta-data.
+NAME = 'maploader'
+DESCRIPTION = 'Tool for loading raster data'
+URL = ''
+EMAIL = 'qubvel@gmail.com'
+AUTHOR = 'Pavel Yakubovskiy'
+REQUIRES_PYTHON = '>=3.5.0'
+VERSION = None
+
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+# What packages are required for this module to be executed?
+REQUIRED = [
+
+]
+
+# What packages are required for this module to be executed?
+try:
+    with open(os.path.join(here, 'requirements.txt'), encoding='utf-8') as f:
+        REQUIRED = f.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    'tests': ['pytest'],
+}
+
+
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+try:
+    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+        long_description = '\n' + f.read()
+except FileNotFoundError:
+    long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, '__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+class UploadCommand(Command):
+    """Support setup.py upload."""
+
+    description = 'Build and publish the package.'
+    user_options = []
+
+    @staticmethod
+    def status(s):
+        """Prints things in bold."""
+        print(s)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        try:
+            self.status('Removing previous builds...')
+            rmtree(os.path.join(here, 'dist'))
+        except OSError:
+            pass
+
+        self.status('Building Source and Wheel (universal) distribution...')
+        os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
+
+        self.status('Uploading the package to PyPI via Twine...')
+        os.system('twine upload dist/*')
+
+        self.status('Pushing git tags...')
+        os.system('git tag v{0}'.format(about['__version__']))
+        os.system('git push --tags')
+
+        sys.exit()
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    # If your package is a single module, use this instead of 'packages':
+    # py_modules=['aeronet'],
+
+    entry_points='''
+        [console_scripts]
+        maploader=maploader.cli.main:cli
+        
+        [maploader.maploader_commands]
+        download=maploader.cli.download:download
+    ''',
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    include_package_data=True,
+    license='MIT',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={
+        'upload': UploadCommand,
+    },
+)
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\dataloader-v1.5.3\tests\mock_server\requirements.txt =====
+fastapi==0.78.0
+loguru==0.6.0
+Pillow==9.2.0
+pydantic==1.9.1
+requests==2.27.1
+uvicorn==0.17.6
+scikit-image==0.17.2
+imageio[opencv]
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\aeronet_raster\requirements.txt =====
+numpy>=1.15.4
+rasterio>=1.4.0
+tqdm>=4.36.1,<4.65
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\aeronet_raster\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Note: To use the 'upload' functionality of this file, you must:
+#   $ pip install twine
+
+import io
+import os
+import sys
+from shutil import rmtree
+
+from setuptools import find_packages, setup, Command
+
+# Package meta-data.
+NAME = 'aeronet_raster'
+DESCRIPTION = 'Raster operations for deep learning with remote sensing data. Based on Rasterio.'
+URL = ''
+EMAIL = 'hello@geoalert.io'
+AUTHOR = 'Geoalert'
+REQUIRES_PYTHON = '>=3.6.0'
+VERSION = None
+
+# What packages are required for this module to be executed?
+here = os.path.abspath(os.path.dirname(__file__))
+
+try:
+    with open(os.path.join(here, 'requirements.txt')) as src:
+        REQUIRED = src.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    # 'fancy feature': ['django'],
+}
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+# try:
+#    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+#        long_description = '\n' + f.read()
+# except FileNotFoundError:
+long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, '__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+class UploadCommand(Command):
+    """Support setup.py upload."""
+
+    description = 'Build and publish the package.'
+    user_options = []
+
+    @staticmethod
+    def status(s):
+        """Prints things in bold."""
+        print(s)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        try:
+            self.status('Removing previous builds...')
+            rmtree(os.path.join(here, 'dist'))
+        except OSError:
+            pass
+
+        self.status('Building Source and Wheel (universal) distribution...')
+        os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
+
+        self.status('Uploading the package to PyPI via Twine...')
+        os.system('twine upload dist/*')
+
+        self.status('Pushing git tags...')
+        os.system('git tag v{0}'.format(about['__version__']))
+        os.system('git push --tags')
+
+        sys.exit()
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    # If your package is a single module, use this instead of 'packages':
+    # py_modules=['aeronet_raster'],
+
+    # entry_points={
+    #     'console_scripts': ['mycli=mymodule:cli'],
+    # },
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    include_package_data=True,
+    license='MIT',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={
+        'upload': UploadCommand,
+    },
+)
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\gpdadapter\requirements.txt =====
+geopandas>=1.0.1
+numpy
+pyproj
+shapely
+loguru
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\gpdadapter\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Note: To use the 'upload' functionality of this file, you must:
+#   $ pip install twine
+
+import io
+import os
+import sys
+from shutil import rmtree
+
+from setuptools import find_packages, setup, Command
+
+# Package meta-data.
+NAME = 'gpdadapter'
+DESCRIPTION = 'FeatureCollection interface for GeoPandas'
+URL = ''
+EMAIL = 'hello@geoalert.io'
+AUTHOR = 'Geoalert'
+REQUIRES_PYTHON = '>=3.6.0'
+VERSION = None
+
+# What packages are required for this module to be executed?
+here = os.path.abspath(os.path.dirname(__file__))
+
+try:
+    with open(os.path.join(here, 'requirements.txt')) as src:
+        REQUIRED = src.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    # 'fancy feature': ['django'],
+}
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+# try:
+#    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+#        long_description = '\n' + f.read()
+# except FileNotFoundError:
+long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, '__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+class UploadCommand(Command):
+    """Support setup.py upload."""
+
+    description = 'Build and publish the package.'
+    user_options = []
+
+    @staticmethod
+    def status(s):
+        """Prints things in bold."""
+        print(s)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        try:
+            self.status('Removing previous builds...')
+            rmtree(os.path.join(here, 'dist'))
+        except OSError:
+            pass
+
+        self.status('Building Source and Wheel (universal) distribution...')
+        os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
+
+        self.status('Uploading the package to PyPI via Twine...')
+        os.system('twine upload dist/*')
+
+        self.status('Pushing git tags...')
+        os.system('git tag v{0}'.format(about['__version__']))
+        os.system('git push --tags')
+
+        sys.exit()
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    # If your package is a single module, use this instead of 'packages':
+    # py_modules=['aeronet_raster'],
+
+    # entry_points={
+    #     'console_scripts': ['mycli=mymodule:cli'],
+    # },
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    include_package_data=True,
+    license='MIT',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={
+        'upload': UploadCommand,
+    },
+)
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\urban\requirements.txt =====
+loguru==0.4.1
+numpy >= 1.19.5
+networkx==2.1.0
+opencv-python >= 4.2.0.34
+overpass==0.7
+pymongo==3.7.2
+pyproj==3.2.1
+PyYAML==5.4.1
+rasterio >=1.2.10
+requests==2.26.0
+scikit-image >= 0.17.2
+scikit-learn >= 0.22.1
+scipy==1.5.0
+shapely
+tqdm==4.62.3
+topojson==1.3
+rasterstats==0.16.0
+sknw
+attrdict
+aeronet[raster]
+geopandas
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\inference-v1.5.5\modules\urban\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Note: To use the 'upload' functionality of this file, you must:
+#   $ pip install twine
+
+import io
+import os
+import sys
+from shutil import rmtree
+
+from setuptools import find_packages, setup, Command
+
+# Package meta-data.
+NAME = 'urban'
+DESCRIPTION = 'Deep learning with remote sensing data.'
+URL = ''
+EMAIL = 'qubvel@gmail.com'
+AUTHOR = 'Pavel Yakubovskiy'
+REQUIRES_PYTHON = '>=3.6.0'
+VERSION = None
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+# What packages are required for this module to be executed?
+try:
+    with open(os.path.join(here, 'requirements.txt'), encoding='utf-8') as f:
+        REQUIRED = f.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    # 'fancy feature': ['django'],
+}
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+try:
+    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+        long_description = '\n' + f.read()
+except FileNotFoundError:
+    long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, '__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+class UploadCommand(Command):
+    """Support setup.py upload."""
+
+    description = 'Build and publish the package.'
+    user_options = []
+
+    @staticmethod
+    def status(s):
+        """Prints things in bold."""
+        print(s)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        try:
+            self.status('Removing previous builds...')
+            rmtree(os.path.join(here, 'dist'))
+        except OSError:
+            pass
+
+        self.status('Building Source and Wheel (universal) distribution...')
+        os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
+
+        self.status('Uploading the package to PyPI via Twine...')
+        os.system('twine upload dist/*')
+
+        self.status('Pushing git tags...')
+        os.system('git tag v{0}'.format(about['__version__']))
+        os.system('git push --tags')
+
+        sys.exit()
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    package_data={'urban': ['height_histograms/russia.csv']},
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    include_package_data=True,
+    entry_points="",
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    license='MIT',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={
+        'upload': UploadCommand,
+    },
+)
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\source-validator-v1.1.3\data-validator-lib\requirements.txt =====
+flask>=2.0
+gunicorn>=20.0
+pyyaml>=6.0
+loguru>=0.5
+rasterio>=1.2.8
+tifffile>=2021.6.6
+boto3>=1.21
+===== D:\Projects\MLSystem2\Geoalert\Workflow Engine\source-validator-v1.1.3\data-validator-lib\setup.py =====
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import io
+import os
+
+from setuptools import find_packages, setup
+
+# Package meta-data.
+NAME = 'data_validator_lib'
+DESCRIPTION = 'Data parameters validation'
+URL = ''
+EMAIL = 'a.trekin@geoalert.io'
+AUTHOR = 'Alexey Trekin'
+REQUIRES_PYTHON = '>=3.8'
+VERSION = '1.0a'
+
+# The rest you shouldn't have to touch too much :)
+# ------------------------------------------------
+# Except, perhaps the License and Trove Classifiers!
+# If you do change the License, remember to change the Trove Classifier for that!
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+# What packages are required for this module to be executed?
+try:
+    with open(os.path.join(here, 'requirements.txt'), encoding='utf-8') as f:
+        REQUIRED = f.read().split('\n')
+except:
+    REQUIRED = []
+
+# What packages are optional?
+EXTRAS = {
+    # 'fancy feature': ['django'],
+}
+
+# Import the README and use it as the long-description.
+# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
+try:
+    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+        long_description = '\n' + f.read()
+except FileNotFoundError:
+    long_description = DESCRIPTION
+
+# Load the package's __version__.py module as a dictionary.
+about = {}
+if not VERSION:
+    with open(os.path.join(here, NAME, '__version__.py')) as f:
+        exec(f.read(), about)
+else:
+    about['__version__'] = VERSION
+
+
+# Where the magic happens:
+setup(
+    name=NAME,
+    version=about['__version__'],
+    description=DESCRIPTION,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    author=AUTHOR,
+    author_email=EMAIL,
+    python_requires=REQUIRES_PYTHON,
+    url=URL,
+    packages=find_packages(exclude=('tests', 'docs', 'notebooks')),
+    entry_points="",
+    install_requires=REQUIRED,
+    extras_require=EXTRAS,
+    package_data={'data_validator_lib': ['static/mgrs_grid.csv']},
+    include_package_data=True,
+    license='proprietary',
+    classifiers=[
+        # Trove classifiers
+        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: Implementation :: CPython',
+        'Programming Language :: Python :: Implementation :: PyPy'
+    ],
+    # $ setup.py publish support.
+    cmdclass={},
+)
