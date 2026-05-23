@@ -64,8 +64,9 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
             model=model,
             artifact=CheckpointArtifact(uri=request.checkpoint_uri, format="torch_pt"),
         ),
-        train_model=lambda request: _train_result(),
+        train_model=lambda request, progress_sink=None: _train_result(),
         log_dataset_preparation=lambda run, report: None,
+        log_training_epoch=lambda run, metrics: None,
         log_training_metrics=lambda run, result: None,
         log_training_artifacts=lambda run, result: None,
         log_timing_report=lambda run, report: None,
@@ -77,6 +78,49 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
 
     assert result.status.value == "succeeded"
     assert calls == ["load_checkpoint"]
+
+
+def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
+    logged_epochs: list[int] = []
+    metrics = _train_result().history[0]
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=object(),
+    )
+
+    def train_model(request, progress_sink=None):
+        if progress_sink is not None:
+            from mlsystem2.train.contracts import TrainProgressEvent
+
+            progress_sink(TrainProgressEvent(epoch=1, message="epoch_finished", metrics=metrics))
+        return _train_result()
+
+    deps = _runner._PipelineDependencies(
+        get_settings=lambda: _settings(initial_checkpoint_uri=None),
+        start_run=lambda request: MLflowRunRef(
+            run_id="run",
+            experiment_name=request.experiment_name,
+            tracking_uri=request.tracking_uri,
+            active=True,
+        ),
+        prepare_dataset=lambda request: _dataset_result(),
+        create_tile_dataloader=lambda request: object(),
+        create_model=lambda spec: model,
+        load_checkpoint=lambda request: None,
+        train_model=train_model,
+        log_dataset_preparation=lambda run, report: None,
+        log_training_epoch=lambda run, item: logged_epochs.append(item.epoch),
+        log_training_metrics=lambda run, result: None,
+        log_training_artifacts=lambda run, result: None,
+        log_timing_report=lambda run, report: None,
+        log_pipeline_report=lambda run, report: None,
+        end_run=lambda run, status: None,
+    )
+
+    result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
+
+    assert result.status.value == "succeeded"
+    assert logged_epochs == [1]
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:

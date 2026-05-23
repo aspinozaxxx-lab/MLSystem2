@@ -54,6 +54,46 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert result.history[0].val_loss >= 0.0
 
 
+def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=TinySegmentationModel(),
+    )
+    result = train_model(
+        TrainRequest(
+            model=model,
+            train_loader=_fake_loader(torch),
+            val_loader=_fake_loader(torch),
+            config=TrainConfig(
+                epochs=1,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=1,
+                max_train_batches_per_epoch=1,
+                max_val_batches_per_epoch=1,
+            ),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+        )
+    )
+
+    assert result.epochs_total == 1
+    assert len(result.history) == 1
+
+
 def _fake_loader(torch):
     images = torch.zeros((2, 4, 16, 16), dtype=torch.float32)
     masks = torch.zeros((2, 1, 16, 16), dtype=torch.float32)

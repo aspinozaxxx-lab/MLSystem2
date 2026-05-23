@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from mlsystem2.dataset_preparing.api import prepare_dataset
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest, DatasetPreparationResult
@@ -12,6 +13,7 @@ from mlsystem2.mlflow_adapter.api import (
     log_pipeline_report,
     log_timing_report,
     log_training_artifacts,
+    log_training_epoch,
     log_training_metrics,
     start_run,
 )
@@ -23,7 +25,7 @@ from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
 from mlsystem2.train.api import train_model
-from mlsystem2.train.contracts import TrainConfig, TrainRequest, TrainResult
+from mlsystem2.train.contracts import TrainConfig, TrainProgressEvent, TrainRequest, TrainResult
 
 from ._timing import elapsed_since, now, timed_call
 from .contracts import (
@@ -47,6 +49,7 @@ class _PipelineDependencies:
     load_checkpoint: object
     train_model: object
     log_dataset_preparation: object
+    log_training_epoch: object
     log_training_metrics: object
     log_training_artifacts: object
     log_timing_report: object
@@ -64,6 +67,7 @@ def _default_dependencies() -> _PipelineDependencies:
         load_checkpoint=load_checkpoint,
         train_model=train_model,
         log_dataset_preparation=log_dataset_preparation,
+        log_training_epoch=log_training_epoch,
         log_training_metrics=log_training_metrics,
         log_training_artifacts=log_training_artifacts,
         log_timing_report=log_timing_report,
@@ -152,9 +156,17 @@ def run_train_pipeline(
         train_loader, val_loader = loaders
 
         model = _load_or_create_model(settings, deps)
+
+        def progress_sink(event: TrainProgressEvent) -> None:
+            if event.metrics is not None:
+                measure_mlflow(lambda: deps.log_training_epoch(run, event.metrics))
+
         train_result, timing = timed_call(
             "train",
-            lambda: deps.train_model(_train_request(settings, model, train_loader, val_loader)),
+            lambda: deps.train_model(
+                _train_request(settings, model, train_loader, val_loader),
+                progress_sink=progress_sink,
+            ),
         )
         timings.append(timing)
         train_result = _expect_train_result(train_result)
@@ -209,7 +221,10 @@ def _mlflow_start_request(
         tracking_uri=settings.mlflow.tracking_uri,
         experiment_name=settings.mlflow.experiment_name,
         run_name=request.run_name,
-        tags={"pipeline": "train"},
+        tags={
+            "pipeline": "train",
+            "class": Path(settings.dataset.annotation_file).stem,
+        },
     )
 
 
@@ -282,6 +297,8 @@ def _train_request(
             tversky_beta=settings.train.tversky_beta,
             threshold=settings.train.threshold,
             early_stopping_patience=settings.train.early_stopping_patience,
+            max_train_batches_per_epoch=settings.train.max_train_batches_per_epoch,
+            max_val_batches_per_epoch=settings.train.max_val_batches_per_epoch,
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
     )

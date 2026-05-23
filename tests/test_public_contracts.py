@@ -13,6 +13,7 @@ EXPECTED_API = {
     "mlflow_adapter.api": [
         "start_run",
         "log_dataset_preparation",
+        "log_training_epoch",
         "log_training_metrics",
         "log_training_artifacts",
         "log_timing_report",

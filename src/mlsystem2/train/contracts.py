@@ -28,6 +28,8 @@ class TrainConfig(BaseModel):
     tversky_beta: float = Field(default=0.6, gt=0.0)
     threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     early_stopping_patience: int = Field(gt=0)
+    max_train_batches_per_epoch: int | None = Field(default=None, gt=0)
+    max_val_batches_per_epoch: int | None = Field(default=None, gt=0)
 
 
 class EpochMetrics(BaseModel):

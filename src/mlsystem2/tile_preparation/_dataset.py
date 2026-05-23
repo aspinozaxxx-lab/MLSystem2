@@ -12,7 +12,7 @@ from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import rasterize_window_mask
 from ._vrt import open_vrt_reader, open_vrt_xml
-from ._windows import TileWindow, build_vrt_source_windows
+from ._windows import build_vrt_source_windows
 
 
 class TileDataset:
@@ -48,7 +48,7 @@ class TileDataset:
                 tile_size,
                 stride,
             )
-            self._windows = self._filter_non_nodata_windows(dataset, candidate_windows)
+            self._windows = candidate_windows
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -105,19 +105,6 @@ class TileDataset:
             self._annotation_index = load_annotation_index(self._annotation_file, self._vrt_crs)
         return self._annotation_index
 
-    def _filter_non_nodata_windows(
-        self,
-        dataset: DatasetReader,
-        windows: list[TileWindow],
-    ) -> list[TileWindow]:
-        filtered: list[TileWindow] = []
-        for tile_window in windows:
-            window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
-            sample = self._read_image_raw(dataset, window)
-            if not _is_fully_nodata(sample, self._nodata):
-                filtered.append(tile_window)
-        return filtered
-
     def _read_image_raw(self, dataset: DatasetReader, window: Window) -> np.ndarray:
         return dataset.read(
             window=window,
@@ -150,12 +137,6 @@ def _resolve_nodata(dataset: DatasetReader) -> object:
         if nodata is not None:
             return nodata
     return 0
-
-
-def _is_fully_nodata(image: np.ndarray, nodata: object) -> bool:
-    if _is_nan(nodata):
-        return bool(np.all(np.isnan(image)))
-    return bool(np.all(image == nodata))
 
 
 def _nodata_pixels(image: np.ndarray, nodata: object) -> np.ndarray:

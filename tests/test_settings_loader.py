@@ -83,6 +83,8 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.tversky_beta == 0.6
     assert settings.train.threshold == 0.5
     assert settings.train.early_stopping_patience == 5
+    assert settings.train.max_train_batches_per_epoch is None
+    assert settings.train.max_val_batches_per_epoch is None
 
 
 def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:

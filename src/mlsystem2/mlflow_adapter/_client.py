@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationReport
-from mlsystem2.train.contracts import TrainResult
+from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.contracts import PipelineReport, TimingReport
 
 from .contracts import MLflowAdapterError, MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
@@ -23,7 +24,8 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
     try:
         mlflow.set_tracking_uri(request.tracking_uri)
         mlflow.set_experiment(request.experiment_name)
-        run = mlflow.start_run(run_name=request.run_name, tags=request.tags)
+        run_name = request.run_name or _auto_run_name(mlflow, request.experiment_name, request.tags)
+        run = mlflow.start_run(run_name=run_name, tags=request.tags)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось начать запуск MLflow") from exc
     return MLflowRunRef(
@@ -40,18 +42,26 @@ def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport)
     _log_dict(_model_dump(report), "reports/dataset_preparation.json")
 
 
+def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
+    if not run.active:
+        return
+    mlflow = _mlflow()
+    try:
+        mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
+        mlflow.log_metric("val/pixel_precision", metrics.val_pixel_precision, step=metrics.epoch)
+        mlflow.log_metric("val/pixel_recall", metrics.val_pixel_recall, step=metrics.epoch)
+        mlflow.log_metric("val/pixel_f1", metrics.val_pixel_f1, step=metrics.epoch)
+        mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
+
+
 def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
     if not run.active:
         return
     mlflow = _mlflow()
     try:
-        for item in result.history:
-            mlflow.log_metric("train/loss", item.train_loss, step=item.epoch)
-            mlflow.log_metric("val/loss", item.val_loss, step=item.epoch)
-            mlflow.log_metric("val/pixel_precision", item.val_pixel_precision, step=item.epoch)
-            mlflow.log_metric("val/pixel_recall", item.val_pixel_recall, step=item.epoch)
-            mlflow.log_metric("val/pixel_f1", item.val_pixel_f1, step=item.epoch)
-            mlflow.log_metric("train/epoch_time_sec", item.epoch_time_sec, step=item.epoch)
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         if result.history:
@@ -99,8 +109,41 @@ def _mlflow():
     try:
         import mlflow
     except ImportError as exc:
-        raise MLflowAdapterError("MLflow обязателен, когда логирование MLflow включено") from exc
+        raise MLflowAdapterError(
+            "MLflow обязателен, когда логирование MLflow включено"
+        ) from exc
     return mlflow
+
+
+def _auto_run_name(mlflow, experiment_name: str, tags: dict[str, str]) -> str | None:
+    class_slug = tags.get("class")
+    if not class_slug:
+        return None
+
+    date = datetime.now().strftime("%d%m")
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        return _next_run_name([], class_slug, date)
+
+    try:
+        client = mlflow.tracking.MlflowClient()
+        runs = client.search_runs([experiment.experiment_id], max_results=1000)
+        existing_names = [run.data.tags.get("mlflow.runName", "") for run in runs]
+    except Exception:
+        existing_names = []
+    return _next_run_name(existing_names, class_slug, date)
+
+
+def _next_run_name(existing_names: list[str], class_slug: str, date: str) -> str:
+    prefix = f"{class_slug}_{date}_"
+    max_number = 0
+    for name in existing_names:
+        if not name.startswith(prefix):
+            continue
+        suffix = name.removeprefix(prefix)
+        if suffix.isdigit():
+            max_number = max(max_number, int(suffix))
+    return f"{prefix}{max_number + 1}"
 
 
 def _log_dict(payload: dict[str, object], artifact_file: str) -> None:
@@ -108,7 +151,9 @@ def _log_dict(payload: dict[str, object], artifact_file: str) -> None:
     try:
         mlflow.log_dict(payload, artifact_file)
     except Exception as exc:
-        raise MLflowAdapterError(f"Не удалось записать артефакт MLflow: {artifact_file}") from exc
+        raise MLflowAdapterError(
+            f"Не удалось записать артефакт MLflow: {artifact_file}"
+        ) from exc
 
 
 def _log_artifact(path: str, artifact_path: str) -> None:
@@ -116,7 +161,9 @@ def _log_artifact(path: str, artifact_path: str) -> None:
     try:
         mlflow.log_artifact(path, artifact_path=artifact_path)
     except Exception as exc:
-        raise MLflowAdapterError(f"Не удалось записать файл артефакта MLflow: {path}") from exc
+        raise MLflowAdapterError(
+            f"Не удалось записать файл артефакта MLflow: {path}"
+        ) from exc
 
 
 def _model_dump(value: object) -> dict[str, object]:

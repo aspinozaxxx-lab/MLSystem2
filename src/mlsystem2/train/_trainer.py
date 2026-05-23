@@ -99,7 +99,7 @@ def _train_epoch(torch, model, loader: object, optimizer: object, device: object
     model.train()
     total_loss = 0.0
     batches = 0
-    for images, masks in loader:
+    for batch_index, (images, masks) in enumerate(loader, start=1):
         images = images.to(device=device, dtype=torch.float32)
         masks = masks.to(device=device, dtype=torch.float32)
         optimizer.zero_grad(set_to_none=True)
@@ -109,6 +109,11 @@ def _train_epoch(torch, model, loader: object, optimizer: object, device: object
         optimizer.step()
         total_loss += float(loss.detach().item())
         batches += 1
+        if (
+            config.max_train_batches_per_epoch is not None
+            and batch_index >= config.max_train_batches_per_epoch
+        ):
+            break
     if batches == 0:
         raise TrainError("Train DataLoader не вернул ни одного batch.")
     return total_loss / batches
@@ -122,7 +127,7 @@ def _validate_epoch(torch, model, loader: object, device: object, config) -> dic
     false_positive = 0
     false_negative = 0
     with torch.no_grad():
-        for images, masks in loader:
+        for batch_index, (images, masks) in enumerate(loader, start=1):
             images = images.to(device=device, dtype=torch.float32)
             masks = masks.to(device=device, dtype=torch.float32)
             logits = _forward_logits(torch, model, images, masks)
@@ -136,6 +141,11 @@ def _validate_epoch(torch, model, loader: object, device: object, config) -> dic
             true_positive += int((pred & true).sum().item())
             false_positive += int((pred & ~true).sum().item())
             false_negative += int((~pred & true).sum().item())
+            if (
+                config.max_val_batches_per_epoch is not None
+                and batch_index >= config.max_val_batches_per_epoch
+            ):
+                break
 
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")

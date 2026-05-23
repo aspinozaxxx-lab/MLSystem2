@@ -2,27 +2,33 @@
 
 ## Назначение
 
-`settings` загружает YAML-конфиг и возвращает типизированные настройки для модулей.
+`settings` загружает YAML-конфиг и возвращает типизированные настройки для остальных модулей. Модуль является единственным местом валидации конфигурации процесса.
 
 ## Публичный интерфейс
 
-- `load_settings(path: str | Path) -> SystemSettings` — читает YAML-файл, валидирует `SystemSettings`, сохраняет его как текущие настройки процесса и возвращает. Повторный вызов заменяет текущие настройки.
-- `get_settings() -> SystemSettings` — возвращает текущие настройки процесса. Если `load_settings` еще не вызывался, бросает `SettingsError`.
+- `load_settings(path: str | Path) -> SystemSettings` - читает YAML, валидирует `SystemSettings`, сохраняет его как текущие настройки процесса и возвращает.
+- `get_settings() -> SystemSettings` - возвращает текущие настройки процесса. Если `load_settings` еще не вызывался, бросает `SettingsError`.
 
 ## Публичные контракты
 
-- `SettingsError` — ошибка загрузки или валидации.
-- `DatasetSettings` — поля `images_dir`, `scenes_file`, `annotation_file`, `val_fraction`.
-- `RuntimeSettings` — поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
-- `TilePreparationSettings` — поля `tile_size`, `stride`, `num_workers = 16`, `prefetch_factor = 2`, `seed = 42`, `augmentation_level = 0`.
-- `TrainSettings` — настройки обучения SegFormer B2: `model_name`, `input_channels`, `output_channels`, `pretrained = false`, `initial_checkpoint_uri = null`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss: Literal["bce_dice", "focal_dice", "focal_tversky"]`, `focal_alpha = 0.6`, `pos_weight = 1.0`, `tversky_alpha = 0.4`, `tversky_beta = 0.6`, `threshold = 0.5`, `early_stopping_patience`. Эти поля использовались в tuning runs или необходимы для train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносятся в settings, пока нет необходимости менять их как гиперпараметры.
-- `InferenceSettings`, `MLflowSettings` — настройки соответствующих модулей конвейера.
-- `SystemSettings` — корневой DTO настроек.
+- `SettingsError` - ошибка загрузки или валидации.
+- `RuntimeSettings` - поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
+- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `val_fraction`.
+- `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`.
+- `TrainSettings` - поля `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`.
+- `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
+- `SystemSettings` - корневой DTO настроек.
 
 ## Список используемых данным модулем модулей и с какой целью
 
-Модуль не использует публичные API других модулей.
+Модуль не использует публичные API других модулей. YAML читается через `PyYAML`, валидация выполняется через Pydantic.
 
 ## Алгоритм работы и его особенности
 
-Модуль проверяет, что путь настроек существует и является файлом, читает YAML через `PyYAML`, ожидает корневой словарь и валидирует его через Pydantic `SystemSettings`. `load_settings` сохраняет результат в module-level current object, `get_settings` отдает этот объект остальным модулям. CLI вызывает `load_settings` один раз в начале запуска. Лишние секции отклоняются. Проверяются `stride <= tile_size`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны и tversky/pos_weight > 0.
+`load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. Результат сохраняется в module-level current object, `get_settings` отдает этот объект остальным модулям. Лишние секции и поля отклоняются.
+
+Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
+
+`max_train_batches_per_epoch` и `max_val_batches_per_epoch` добавлены только для диагностических коротких запусков. В полном обучении они остаются `null`. Лимит wall-clock задается внешним `timeout`, поэтому отдельное поле времени запуска не добавляется.
+
+Проверяется: `stride <= tile_size`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.

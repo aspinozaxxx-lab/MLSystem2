@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import builtins
+from time import perf_counter
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
+from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TilePreparationError
 
 
@@ -170,8 +172,8 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     loader.dataset.close()
 
 
-def test_create_tile_dataloader_skips_fully_nodata_tiles(tmp_path: Path) -> None:
-    pytest.importorskip("torch")
+def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
     raster_path = tmp_path / "nodata.tif"
     data = np.zeros((1, 4, 4), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
@@ -189,8 +191,74 @@ def test_create_tile_dataloader_skips_fully_nodata_tiles(tmp_path: Path) -> None
         )
     )
 
-    assert len(loader.dataset) == 0
+    images, masks = next(iter(loader))
+    assert len(loader.dataset) == 1
+    assert torch.all(images == 0.0)
+    assert torch.all(masks == 0.0)
 
+    loader.dataset.close()
+
+
+def test_tile_dataset_does_not_read_windows_during_initialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raster_path = tmp_path / "lazy.tif"
+    data = np.ones((1, 8, 8), dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    read_calls = 0
+
+    def fake_read_image_raw(self, dataset, window):
+        nonlocal read_calls
+        read_calls += 1
+        return np.ones((1, 4, 4), dtype=np.uint16)
+
+    monkeypatch.setattr(TileDataset, "_read_image_raw", fake_read_image_raw)
+
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    assert len(dataset) == 4
+    assert read_calls == 0
+    image, mask = dataset[0]
+    assert read_calls == 1
+    assert image.shape == (1, 4, 4)
+    assert mask.shape == (1, 4, 4)
+    dataset.close()
+
+
+def test_create_tile_dataloader_is_fast_on_synthetic_data(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "fast.tif"
+    data = np.ones((1, 16, 16), dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    started = perf_counter()
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="val",
+        )
+    )
+
+    assert perf_counter() - started < 2.0
+    assert len(loader.dataset) == 16
     loader.dataset.close()
 
 
