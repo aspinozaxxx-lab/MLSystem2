@@ -42,9 +42,10 @@ mlsystem2-infer --config configs/example.server.yaml
 3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
-5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для `train_vrt_xml` и `val_vrt_xml`. `tile_preparation` не выполняет split, а создает один torch DataLoader по одному VRT XML и GeoJSON.
-6. `train` обучает модель.
-7. `mlflow_adapter` записывает метрики, артефакты, модель или чекпойнт, отчет времени и итоговый
+5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для `train_vrt_xml` и `val_vrt_xml`. `tile_preparation` не выполняет split, а создает один torch DataLoader по одному VRT XML и GeoJSON. Image tensors уже соответствуют Geoalert ABI: raw `float32`, `C,H,W` на sample и `B,C,H,W` в batch.
+6. `train_pipeline` создает `segformer_b2` через `models.create_model` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан.
+7. `train` выполняет PyTorch обучение SegFormer B2: AdamW, cosine scheduler, BCE/Dice-family loss, validation по pixel precision/recall/f1, early stopping и best/final checkpoints.
+8. `mlflow_adapter` записывает train/val метрики, артефакты, модель или чекпойнт, отчет времени и итоговый
    отчет.
 
 ## Конвейер Инференса

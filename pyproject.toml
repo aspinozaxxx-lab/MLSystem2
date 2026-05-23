@@ -23,6 +23,7 @@ dependencies = [
 torch = [
   "torch",
   "torchvision",
+  "transformers",
 ]
 dev = [
   "pytest",

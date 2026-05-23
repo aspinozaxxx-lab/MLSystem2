@@ -19,12 +19,23 @@ tile_preparation:
   augmentation_level: 0
 
 train:
-  model_name: unet
-  input_channels: 3
+  model_name: segformer_b2
+  input_channels: 4
   output_channels: 1
+  pretrained: false
+  initial_checkpoint_uri: null
   epochs: 2
   batch_size: 2
   device: cpu
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: bce_dice
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.5
+  early_stopping_patience: 2
 
 inference:
   checkpoint_uri: ./checkpoints/latest.pt

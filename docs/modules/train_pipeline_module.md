@@ -25,9 +25,9 @@
 - `mlflow_adapter.api` — управлять запуском MLflow и записывать результаты.
 - `dataset_preparing.api` — подготовить split и получить `train_vrt_xml`, `val_vrt_xml`, `annotation_file`.
 - `tile_preparation.api` — создать `train_loader` и `val_loader`.
-- `models.api` — создать модель.
+- `models.api` — создать модель или загрузить checkpoint.
 - `train.api` — обучить модель на готовых DataLoader.
 
 ## Алгоритм работы и его особенности
 
-Получает settings через `get_settings`, открывает запуск MLflow, вызывает `dataset_preparing` по `settings.dataset`. После успешной подготовки вызывает `create_tile_dataloader` два раза: для `train_vrt_xml` с `mode="train"` и для `val_vrt_xml` с `mode="val"`. В оба запроса передает `annotation_file` и `train.batch_size`. Затем создает модель и вызывает `train`, передавая готовые `train_loader` и `val_loader`. Ошибки и итоговые отчеты фиксируются через `mlflow_adapter`.
+Получает settings через `get_settings`, открывает запуск MLflow, вызывает `dataset_preparing` по `settings.dataset`. После успешной подготовки вызывает `create_tile_dataloader` для train/val VRT с `annotation_file` и `train.batch_size`. Если `settings.train.initial_checkpoint_uri` задан, вызывает `models.load_checkpoint` с `ModelSpec`; иначе вызывает `models.create_model`. В `TrainConfig` передает train-гиперпараметры из settings, затем вызывает `train` с готовыми loader. Ошибки и итоговые отчеты фиксируются через `mlflow_adapter`.

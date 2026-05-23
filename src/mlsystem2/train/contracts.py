@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,13 +19,26 @@ class TrainConfig(BaseModel):
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str
+    learning_rate: float = Field(gt=0.0)
+    weight_decay: float = Field(ge=0.0)
+    loss: Literal["bce_dice", "focal_dice", "focal_tversky"]
+    focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
+    pos_weight: float = Field(default=1.0, gt=0.0)
+    tversky_alpha: float = Field(default=0.4, gt=0.0)
+    tversky_beta: float = Field(default=0.6, gt=0.0)
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    early_stopping_patience: int = Field(gt=0)
 
 
 class EpochMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     epoch: int = Field(ge=0)
-    f1_pixel: float = Field(ge=0.0, le=1.0)
+    train_loss: float = Field(ge=0.0)
+    val_loss: float = Field(ge=0.0)
+    val_pixel_precision: float = Field(ge=0.0, le=1.0)
+    val_pixel_recall: float = Field(ge=0.0, le=1.0)
+    val_pixel_f1: float = Field(ge=0.0, le=1.0)
     epoch_time_sec: float = Field(ge=0.0)
 
 

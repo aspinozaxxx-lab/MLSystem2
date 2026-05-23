@@ -346,12 +346,23 @@ tile_preparation:
   augmentation_level: {augmentation_level}
 
 train:
-  model_name: unet
+  model_name: segformer_b2
   input_channels: {input_channels}
   output_channels: 1
+  pretrained: false
+  initial_checkpoint_uri: null
   epochs: 1
   batch_size: {batch_size}
   device: cpu
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: bce_dice
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.5
+  early_stopping_patience: 2
 
 inference:
   checkpoint_uri: {tmp_path.as_posix()}/latest.pt

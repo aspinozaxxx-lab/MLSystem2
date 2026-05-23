@@ -46,10 +46,17 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
     mlflow = _mlflow()
     try:
         for item in result.history:
-            mlflow.log_metric("train/f1_pixel", item.f1_pixel, step=item.epoch)
+            mlflow.log_metric("train/loss", item.train_loss, step=item.epoch)
+            mlflow.log_metric("val/loss", item.val_loss, step=item.epoch)
+            mlflow.log_metric("val/pixel_precision", item.val_pixel_precision, step=item.epoch)
+            mlflow.log_metric("val/pixel_recall", item.val_pixel_recall, step=item.epoch)
+            mlflow.log_metric("val/pixel_f1", item.val_pixel_f1, step=item.epoch)
             mlflow.log_metric("train/epoch_time_sec", item.epoch_time_sec, step=item.epoch)
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
+        if result.history:
+            mlflow.log_metric("val/best_pixel_f1", max(item.val_pixel_f1 for item in result.history))
+            mlflow.log_metric("val/final_pixel_f1", result.history[-1].val_pixel_f1)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
 

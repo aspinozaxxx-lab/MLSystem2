@@ -11,17 +11,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-SRC_DIR = Path(__file__).resolve().parents[2]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
 import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from mlsystem2.settings.api import load_settings
-from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+SRC_DIR = Path(__file__).resolve().parents[2]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 
 INPUT_DIR = Path(r"D:\Projects\TestDataset")
@@ -54,6 +50,10 @@ def main() -> int:
 
 
 def _run_test(input_raster: Path, result_dir: Path) -> dict[str, Any]:
+    from mlsystem2.settings.api import load_settings
+    from mlsystem2.tile_preparation.api import create_tile_dataloader
+    from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+
     tile_size = _env_positive_int("MLSYSTEM_GEOALERT_TENSOR_TEST_TILE_SIZE", 512)
     stride = _env_positive_int("MLSYSTEM_GEOALERT_TENSOR_TEST_STRIDE", tile_size)
     samples_requested = _env_positive_int("MLSYSTEM_GEOALERT_TENSOR_TEST_SAMPLES", 10)
@@ -284,12 +284,23 @@ tile_preparation:
   augmentation_level: 0
 
 train:
-  model_name: unet
+  model_name: segformer_b2
   input_channels: {input_channels}
   output_channels: 1
+  pretrained: false
+  initial_checkpoint_uri: null
   epochs: 1
   batch_size: 1
   device: cpu
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: bce_dice
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.5
+  early_stopping_patience: 2
 
 inference:
   checkpoint_uri: {_yaml_string(result_dir / "latest.pt")}

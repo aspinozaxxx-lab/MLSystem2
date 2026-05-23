@@ -16,8 +16,8 @@ from mlsystem2.mlflow_adapter.api import (
     start_run,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
-from mlsystem2.models.api import create_model
-from mlsystem2.models.contracts import ModelSpec
+from mlsystem2.models.api import create_model, load_checkpoint
+from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec
 from mlsystem2.settings.api import get_settings
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
@@ -44,6 +44,7 @@ class _PipelineDependencies:
     prepare_dataset: object
     create_tile_dataloader: object
     create_model: object
+    load_checkpoint: object
     train_model: object
     log_dataset_preparation: object
     log_training_metrics: object
@@ -60,6 +61,7 @@ def _default_dependencies() -> _PipelineDependencies:
         prepare_dataset=prepare_dataset,
         create_tile_dataloader=create_tile_dataloader,
         create_model=create_model,
+        load_checkpoint=load_checkpoint,
         train_model=train_model,
         log_dataset_preparation=log_dataset_preparation,
         log_training_metrics=log_training_metrics,
@@ -149,7 +151,7 @@ def run_train_pipeline(
         timings.append(timing)
         train_loader, val_loader = loaders
 
-        model = deps.create_model(_model_spec(settings))
+        model = _load_or_create_model(settings, deps)
         train_result, timing = timed_call(
             "train",
             lambda: deps.train_model(_train_request(settings, model, train_loader, val_loader)),
@@ -239,7 +241,22 @@ def _model_spec(settings: SystemSettings) -> ModelSpec:
         name=settings.train.model_name,
         input_channels=settings.train.input_channels,
         output_channels=settings.train.output_channels,
+        pretrained=settings.train.pretrained,
     )
+
+
+def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies):
+    spec = _model_spec(settings)
+    if settings.train.initial_checkpoint_uri:
+        loaded = deps.load_checkpoint(
+            LoadCheckpointRequest(
+                checkpoint_uri=settings.train.initial_checkpoint_uri,
+                model_spec=spec,
+                map_location=settings.train.device,
+            )
+        )
+        return loaded.model
+    return deps.create_model(spec)
 
 
 def _train_request(
@@ -256,6 +273,15 @@ def _train_request(
             epochs=settings.train.epochs,
             batch_size=settings.train.batch_size,
             device=settings.train.device,
+            learning_rate=settings.train.learning_rate,
+            weight_decay=settings.train.weight_decay,
+            loss=settings.train.loss,
+            focal_alpha=settings.train.focal_alpha,
+            pos_weight=settings.train.pos_weight,
+            tversky_alpha=settings.train.tversky_alpha,
+            tversky_beta=settings.train.tversky_beta,
+            threshold=settings.train.threshold,
+            early_stopping_patience=settings.train.early_stopping_patience,
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
     )

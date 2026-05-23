@@ -64,6 +64,39 @@ def test_load_settings_rejects_stride_larger_than_tile_size(tmp_path: Path) -> N
         api.load_settings(settings_path)
 
 
+def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(_minimal_config(), encoding="utf-8")
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.train.model_name == "segformer_b2"
+    assert settings.train.pretrained is False
+    assert settings.train.initial_checkpoint_uri is None
+    assert settings.train.learning_rate == 0.00001
+    assert settings.train.weight_decay == 0.0001
+    assert settings.train.loss == "bce_dice"
+    assert settings.train.focal_alpha == 0.6
+    assert settings.train.pos_weight == 1.0
+    assert settings.train.tversky_alpha == 0.4
+    assert settings.train.tversky_beta == 0.6
+    assert settings.train.threshold == 0.5
+    assert settings.train.early_stopping_patience == 5
+
+
+def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace("  loss: bce_dice", "  loss: dice_only"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError):
+        api.load_settings(settings_path)
+
+
 def _minimal_config(
     *,
     images_dir: str = "/data/mlsystem2/prepared_images/kanopus",
@@ -92,12 +125,23 @@ tile_preparation:
   augmentation_level: 0
 
 train:
-  model_name: unet
-  input_channels: 3
+  model_name: segformer_b2
+  input_channels: 4
   output_channels: 1
+  pretrained: false
+  initial_checkpoint_uri: null
   epochs: 50
   batch_size: 8
   device: cuda
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: bce_dice
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.5
+  early_stopping_patience: 5
 
 inference:
   checkpoint_uri: /data/mlsystem2/models/latest.pt
