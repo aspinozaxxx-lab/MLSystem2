@@ -94,6 +94,57 @@ def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     assert len(result.history) == 1
 
 
+def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    model_impl = TinySegmentationModel()
+    hook_calls = 0
+
+    def first_gradient_is_nan(gradient):
+        nonlocal hook_calls
+        hook_calls += 1
+        if hook_calls == 1:
+            return torch.full_like(gradient, float("nan"))
+        return gradient
+
+    model_impl.conv.weight.register_hook(first_gradient_is_nan)
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=1),
+        model=model_impl,
+    )
+
+    result = train_model(
+        TrainRequest(
+            model=model,
+            train_loader=_fake_loader(torch),
+            val_loader=_fake_loader(torch),
+            config=TrainConfig(
+                epochs=1,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=1,
+            ),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+        )
+    )
+
+    assert hook_calls >= 2
+    assert result.epochs_total == 1
+    assert len(result.history) == 1
+
+
 def _fake_loader(torch):
     images = torch.zeros((2, 4, 16, 16), dtype=torch.float32)
     masks = torch.zeros((2, 1, 16, 16), dtype=torch.float32)

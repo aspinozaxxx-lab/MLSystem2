@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+from math import isfinite
 from time import perf_counter
 
 from mlsystem2.models.api import save_checkpoint
@@ -48,10 +50,20 @@ def train_model(
             _emit(progress_sink, epoch, "epoch_started", None)
             epoch_started = perf_counter()
 
-            train_loss = _train_epoch(torch, model, request.train_loader, optimizer, device, config)
-            val = _validate_epoch(torch, model, request.val_loader, device, config)
+            train_loss = _train_epoch(
+                torch,
+                model,
+                request.train_loader,
+                optimizer,
+                device,
+                config,
+                epoch,
+            )
+            val = _validate_epoch(torch, model, request.val_loader, device, config, epoch)
             scheduler.step()
 
+            _ensure_finite_scalar(train_loss, "train_loss", epoch)
+            _ensure_finite_scalar(val["loss"], "val_loss", epoch)
             metrics = EpochMetrics(
                 epoch=epoch,
                 train_loss=train_loss,
@@ -95,18 +107,50 @@ def train_model(
         raise TrainError("Ошибка во время обучения модели") from exc
 
 
-def _train_epoch(torch, model, loader: object, optimizer: object, device: object, config) -> float:
+def _train_epoch(
+    torch,
+    model,
+    loader: object,
+    optimizer: object,
+    device: object,
+    config,
+    epoch: int,
+) -> float:
     model.train()
     total_loss = 0.0
     batches = 0
+    optimizer_steps = 0
     for batch_index, (images, masks) in enumerate(loader, start=1):
         images = images.to(device=device, dtype=torch.float32)
         masks = masks.to(device=device, dtype=torch.float32)
+        _ensure_finite_tensor(torch, images, "images", epoch, batch_index)
+        _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index)
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
+        _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index)
         loss = _loss(torch, logits, masks, config)
+        _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index)
         loss.backward()
+        bad_gradient = _first_nonfinite_gradient(torch, model)
+        if bad_gradient is not None:
+            warnings.warn(
+                "Пропущен optimizer step из-за non-finite gradient: "
+                f"epoch={epoch}, batch={batch_index}, parameter={bad_gradient}",
+                stacklevel=2,
+            )
+            optimizer.zero_grad(set_to_none=True)
+            total_loss += float(loss.detach().item())
+            batches += 1
+            if (
+                config.max_train_batches_per_epoch is not None
+                and batch_index >= config.max_train_batches_per_epoch
+            ):
+                break
+            continue
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index)
         optimizer.step()
+        optimizer_steps += 1
         total_loss += float(loss.detach().item())
         batches += 1
         if (
@@ -116,10 +160,12 @@ def _train_epoch(torch, model, loader: object, optimizer: object, device: object
             break
     if batches == 0:
         raise TrainError("Train DataLoader не вернул ни одного batch.")
+    if optimizer_steps == 0:
+        raise TrainError(f"За эпоху {epoch} не выполнено ни одного optimizer step.")
     return total_loss / batches
 
 
-def _validate_epoch(torch, model, loader: object, device: object, config) -> dict[str, float]:
+def _validate_epoch(torch, model, loader: object, device: object, config, epoch: int) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     batches = 0
@@ -130,8 +176,12 @@ def _validate_epoch(torch, model, loader: object, device: object, config) -> dic
         for batch_index, (images, masks) in enumerate(loader, start=1):
             images = images.to(device=device, dtype=torch.float32)
             masks = masks.to(device=device, dtype=torch.float32)
+            _ensure_finite_tensor(torch, images, "images", epoch, batch_index)
+            _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index)
             logits = _forward_logits(torch, model, images, masks)
+            _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index)
             loss = _loss(torch, logits, masks, config)
+            _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index)
             total_loss += float(loss.detach().item())
             batches += 1
 
@@ -220,6 +270,25 @@ def _tversky_loss(torch, logits, masks, config):
         + smooth
     )
     return 1.0 - tversky
+
+
+def _ensure_finite_tensor(torch, tensor, name: str, epoch: int, batch_index: int) -> None:
+    if not bool(torch.isfinite(tensor).all()):
+        raise TrainError(
+            f"Non-finite tensor at epoch={epoch}, batch={batch_index}, tensor={name}"
+        )
+
+
+def _ensure_finite_scalar(value: float, name: str, epoch: int) -> None:
+    if not isfinite(value):
+        raise TrainError(f"Non-finite metric at epoch={epoch}, metric={name}, value={value}")
+
+
+def _first_nonfinite_gradient(torch, model) -> str | None:
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all()):
+            return name
+    return None
 
 
 def _save_training_checkpoint(
