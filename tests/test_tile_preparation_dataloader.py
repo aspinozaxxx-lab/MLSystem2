@@ -64,7 +64,7 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     images, masks, batch_meta = batch
     assert images.shape == (4, 3, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0}
+    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 1}
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
@@ -101,7 +101,7 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
     images, masks, batch_meta = next(iter(loader))
     assert images.shape == (1, 2, 4, 4)
     assert masks.shape == (1, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0}
+    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
     assert images.dtype == torch.float32
     assert torch.equal(images[0], torch.as_tensor(data.astype(np.float32)))
     assert float(images.max().item()) == 2000.0
@@ -139,7 +139,7 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
 
     images, _masks, batch_meta = next(iter(loader))
     assert float(images.max().item()) > 1.0
-    assert batch_meta == {"augmented_tile_count": 1}
+    assert batch_meta == {"augmented_tile_count": 1, "positive_tile_count": 0}
 
     loader.dataset.close()
 
@@ -169,7 +169,7 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     edge_tile = images[1, 0]
     assert images.shape == (4, 1, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0}
+    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
     assert torch.equal(edge_tile[:, 0], torch.as_tensor(data[0, 0:4, 4].astype(np.float32)))
     assert torch.all(edge_tile[:, 1:] == -1.0)
 
@@ -199,7 +199,7 @@ def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) ->
     assert len(loader.dataset) == 1
     assert torch.all(images == 0.0)
     assert torch.all(masks == 0.0)
-    assert batch_meta == {"augmented_tile_count": 0}
+    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
 
     loader.dataset.close()
 
@@ -231,6 +231,7 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
         mode="val",
         seed=42,
         augmentation_level=0,
+        smart_tiling=False,
     )
 
     assert len(dataset) == 4
@@ -239,7 +240,7 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
     assert read_calls == 1
     assert image.shape == (1, 4, 4)
     assert mask.shape == (1, 4, 4)
-    assert sample_meta == {"augmented": False}
+    assert sample_meta == {"augmented": False, "positive": False}
     dataset.close()
 
 
@@ -290,7 +291,8 @@ def test_train_loader_is_stable_with_same_seed_when_augmentation_is_disabled(
 
     assert torch.equal(first_images, second_images)
     assert torch.equal(first_masks, second_masks)
-    assert first_meta == second_meta == {"augmented_tile_count": 0}
+    assert first_meta == second_meta
+    assert first_meta["augmented_tile_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -318,7 +320,80 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
     images, masks, batch_meta = next(iter(loader))
     assert images.shape == (2, 3, 4, 4)
     assert masks.shape == (2, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0}
+    assert batch_meta["augmented_tile_count"] == 0
+
+
+def test_smart_tiling_augments_only_positive_tiles(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "smart_aug.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="train",
+        seed=42,
+        augmentation_level=2,
+        smart_tiling=True,
+    )
+
+    _positive_image, _positive_mask, positive_meta = dataset[0]
+    _negative_image, _negative_mask, negative_meta = dataset[1]
+
+    assert positive_meta == {"augmented": True, "positive": True}
+    assert negative_meta == {"augmented": False, "positive": False}
+    dataset.close()
+
+
+def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "smart_sampler.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=1,
+            smart_tiling=True,
+        )
+    )
+
+    train_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="train",
+        )
+    )
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="val",
+        )
+    )
+
+    assert isinstance(train_loader.sampler, torch.utils.data.WeightedRandomSampler)
+    assert not isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
+    assert train_loader.dataset.estimated_positive_tiles == 1
+    assert train_loader.dataset.estimated_negative_tiles == 1
+    assert train_loader.dataset.uses_vrt_source_rects is True
+    train_loader.dataset.close()
+    val_loader.dataset.close()
 
 
 def _write_raster(path: Path) -> None:
@@ -381,6 +456,30 @@ def _write_annotation(path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_annotation_height4(path: Path) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [0.5, 2.5],
+                        [1.5, 2.5],
+                        [1.5, 3.5],
+                        [0.5, 3.5],
+                        [0.5, 2.5],
+                    ]],
+                },
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _write_empty_annotation(path: Path) -> None:
     path.write_text(
         json.dumps({"type": "FeatureCollection", "features": []}),
@@ -397,6 +496,7 @@ def _write_config(
     num_workers: int = 0,
     input_channels: int = 3,
     augmentation_level: int = 0,
+    smart_tiling: bool = False,
 ) -> Path:
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -420,6 +520,7 @@ tile_preparation:
   prefetch_factor: 2
   seed: 42
   augmentation_level: {augmentation_level}
+  smart_tiling: {str(smart_tiling).lower()}
 
 train:
   model_name: segformer_b2

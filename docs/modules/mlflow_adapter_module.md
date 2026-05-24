@@ -38,6 +38,6 @@
 
 `log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
 
-`log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует с `step=metrics.epoch`: `train/loss`, `val/loss`, `val/pixel_precision`, `val/pixel_recall`, `val/pixel_f1`, `val/positive_pixels`, `val/pred_positive_pixels`, `val/true_positive`, `val/false_positive`, `val/false_negative`, `train/epoch_time_sec`. Это обеспечивает появление метрик в MLflow во время долгого обучения.
+`log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует с `step=metrics.epoch`: `train/loss`, `train/optimizer_steps`, `train/skipped_optimizer_steps`, `val/loss`, `val/pixel_precision`, `val/pixel_recall`, `val/pixel_f1`, `val/positive_pixels`, `val/pred_positive_pixels`, `val/true_positive`, `val/false_positive`, `val/false_negative`, `train/epoch_time_sec`. Это обеспечивает появление метрик в MLflow во время долгого обучения.
 
 `log_training_metrics` не дублирует per-epoch метрики. Он пишет только итоговые значения: `train/epochs_total`, `train/training_time_sec`, `val/best_pixel_f1`, `val/final_pixel_f1`. `log_training_artifacts` пишет полную историю обучения в JSON и сохраняет существующие best/final checkpoint-файлы.

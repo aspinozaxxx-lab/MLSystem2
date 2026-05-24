@@ -132,6 +132,12 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
 
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
+        source_rect_count = 1
+        candidate_window_count = 5
+        uses_vrt_source_rects = True
+        estimated_positive_tiles = 2
+        estimated_negative_tiles = 3
+
         def __len__(self) -> int:
             return 5
 
@@ -146,7 +152,7 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
             yield (
                 Images(2),
                 object(),
-                {"augmented_tile_count": 1},
+                {"augmented_tile_count": 1, "positive_tile_count": 2},
             )
             yield Images(1), object()
 
@@ -159,10 +165,17 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     assert loader.snapshot() == {
         "tile_count": 5,
         "batch_count": 2,
+        "source_rect_count": 1,
+        "candidate_window_count": 5,
+        "uses_vrt_source_rects": True,
+        "estimated_positive_tiles": 2,
+        "estimated_negative_tiles": 3,
         "observed_batches": 2,
         "observed_tiles": 3,
+        "observed_positive_tiles": 2,
         "observed_augmented_tiles": 1,
         "observed_real_tiles": 2,
+        "warnings": [],
     }
 
 
@@ -238,6 +251,8 @@ def _train_result() -> TrainResult:
             EpochMetrics(
                 epoch=1,
                 train_loss=1.0,
+                train_optimizer_steps=1,
+                train_skipped_optimizer_steps=0,
                 val_loss=1.0,
                 val_pixel_precision=0.0,
                 val_pixel_recall=0.0,

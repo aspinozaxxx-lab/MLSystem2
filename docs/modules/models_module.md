@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`models` создает поддерживаемые SegFormer-модели и загружает или сохраняет локальные checkpoint-файлы. Модуль не нормализует входные tensors и не знает о DataLoader.
+`models` создает поддерживаемые SegFormer-модели и загружает или сохраняет локальные checkpoint-файлы. Модуль принимает raw Geoalert-compatible tensors и не знает о DataLoader.
 
 ## Публичный интерфейс
 
@@ -23,11 +23,11 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
-Модуль не использует публичные API других модулей. `torch` и `transformers` импортируются лениво внутри реализации.
+Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании SegFormer.
 
 ## Алгоритм работы и его особенности
 
-Поддерживаются только `segformer_b0` и `segformer_b2`. `create_model` строит Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`.
+Поддерживаются только `segformer_b0` и `segformer_b2`. `create_model` строит Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачивает его приватным wrapper. Wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer. Внешний параметр normalization не добавляется.
 
 Конфигурация `segformer_b0`: `depths=[2, 2, 2, 2]`, `hidden_sizes=[32, 64, 160, 256]`, `decoder_hidden_size=256`, pretrained источник `nvidia/segformer-b0-finetuned-ade-512-512`.
 

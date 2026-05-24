@@ -89,6 +89,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.early_stopping_patience == 5
     assert settings.train.max_train_batches_per_epoch is None
     assert settings.train.max_val_batches_per_epoch is None
+    assert settings.tile_preparation.smart_tiling is False
 
 
 def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:
@@ -129,6 +130,7 @@ tile_preparation:
   prefetch_factor: 2
   seed: 42
   augmentation_level: 0
+  smart_tiling: false
 
 train:
   model_name: segformer_b2

@@ -53,3 +53,25 @@ def test_create_segformer_b0_forward() -> None:
     assert hasattr(outputs, "logits")
     assert outputs.logits.shape[0] == 1
     assert outputs.logits.shape[1] == 1
+
+
+def test_raw_input_wrapper_scales_uint8_range_to_unit_range() -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.models._factory import _SegFormerRawInputWrapper
+
+    class Recorder(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = None
+
+        def forward(self, x):
+            self.seen = x.detach().clone()
+            return x
+
+    recorder = Recorder()
+    wrapper = _SegFormerRawInputWrapper(recorder)
+
+    output = wrapper(torch.full((1, 4, 2, 2), 255.0))
+
+    assert torch.allclose(recorder.seen, torch.ones((1, 4, 2, 2)))
+    assert torch.allclose(output, torch.ones((1, 4, 2, 2)))

@@ -294,6 +294,7 @@ class _CountingLoader:
         self.observed_batches = 0
         self.observed_tiles = 0
         self.observed_augmented_tiles = 0
+        self.observed_positive_tiles = 0
 
     def __iter__(self):
         for batch in self.loader:
@@ -301,9 +302,11 @@ class _CountingLoader:
             tile_count = int(images.shape[0])
             meta = batch[2] if len(batch) > 2 else {}
             aug_count = int(meta.get("augmented_tile_count", 0)) if isinstance(meta, dict) else 0
+            positive_count = int(meta.get("positive_tile_count", 0)) if isinstance(meta, dict) else 0
             self.observed_batches += 1
             self.observed_tiles += tile_count
             self.observed_augmented_tiles += aug_count
+            self.observed_positive_tiles += positive_count
             yield batch
 
     def __len__(self) -> int:
@@ -314,13 +317,24 @@ class _CountingLoader:
         return getattr(self.loader, "dataset", None)
 
     def snapshot(self) -> dict[str, object]:
+        source_rect_count = _dataset_attr(self.dataset, "source_rect_count")
+        warnings = []
+        if source_rect_count == 0:
+            warnings.append("VRT source rects не найдены, используется fallback на всю VRT grid.")
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
+            "source_rect_count": source_rect_count,
+            "candidate_window_count": _dataset_attr(self.dataset, "candidate_window_count"),
+            "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
+            "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
+            "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
             "observed_batches": self.observed_batches,
             "observed_tiles": self.observed_tiles,
+            "observed_positive_tiles": self.observed_positive_tiles,
             "observed_augmented_tiles": self.observed_augmented_tiles,
             "observed_real_tiles": self.observed_tiles - self.observed_augmented_tiles,
+            "warnings": warnings,
         }
 
 
@@ -334,6 +348,7 @@ def _tile_preparation_report(
         "stride": settings.tile_preparation.stride,
         "batch_size": settings.train.batch_size,
         "augmentation_level": settings.tile_preparation.augmentation_level,
+        "smart_tiling_enabled": settings.tile_preparation.smart_tiling,
         "splits": {
             "train": train_loader.snapshot(),
             "val": val_loader.snapshot(),
@@ -346,6 +361,12 @@ def _safe_len(value: object) -> int | None:
         return int(len(value))
     except TypeError:
         return None
+
+
+def _dataset_attr(dataset: object, name: str) -> object:
+    if dataset is None:
+        return None
+    return getattr(dataset, name, None)
 
 
 def _train_request(

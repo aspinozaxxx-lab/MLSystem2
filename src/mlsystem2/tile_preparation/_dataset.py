@@ -12,7 +12,7 @@ from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import rasterize_window_mask
 from ._vrt import open_vrt_reader, open_vrt_xml
-from ._windows import build_vrt_source_windows
+from ._windows import build_vrt_source_windows_with_diagnostics
 
 
 class TileDataset:
@@ -26,6 +26,7 @@ class TileDataset:
         mode: str,
         seed: int,
         augmentation_level: int,
+        smart_tiling: bool,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file)
@@ -33,15 +34,17 @@ class TileDataset:
         self._mode = mode
         self._seed = seed
         self._augmentation_level = augmentation_level
+        self._smart_tiling = smart_tiling
         self._memory_file: MemoryFile | None = None
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
+        self._positive_hint_by_index: list[bool] | None = None
 
         with open_vrt_xml(vrt_xml) as dataset:
             self._count = dataset.count
             self._nodata = _resolve_nodata(dataset)
             self._vrt_crs = dataset.crs.to_string() if dataset.crs is not None else None
-            candidate_windows = build_vrt_source_windows(
+            candidate_windows, diagnostics = build_vrt_source_windows_with_diagnostics(
                 vrt_xml,
                 dataset.width,
                 dataset.height,
@@ -49,6 +52,11 @@ class TileDataset:
                 stride,
             )
             self._windows = candidate_windows
+            self._source_rect_count = diagnostics.source_rect_count
+            self._candidate_window_count = diagnostics.candidate_window_count
+            self._uses_vrt_source_rects = diagnostics.uses_vrt_source_rects
+            if self._smart_tiling and self._mode == "train":
+                self._positive_hint_by_index = self._build_positive_hints(dataset)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -63,8 +71,10 @@ class TileDataset:
         image = image_raw.astype(np.float32, copy=False)
 
         mask = self._read_annotation_mask(dataset, window, nodata_pixels)
+        positive = bool(np.count_nonzero(mask) > 0)
         augmented = False
-        if self._mode == "train" and self._augmentation_level > 0:
+        should_augment = self._mode == "train" and self._augmentation_level > 0
+        if should_augment and (not self._smart_tiling or positive):
             image, mask, augmented = apply_augmentations(
                 image,
                 mask,
@@ -76,8 +86,48 @@ class TileDataset:
         return (
             np.ascontiguousarray(image),
             np.ascontiguousarray(mask),
-            {"augmented": augmented},
+            {"augmented": augmented, "positive": positive},
         )
+
+    @property
+    def source_rect_count(self) -> int:
+        return self._source_rect_count
+
+    @property
+    def candidate_window_count(self) -> int:
+        return self._candidate_window_count
+
+    @property
+    def uses_vrt_source_rects(self) -> bool:
+        return self._uses_vrt_source_rects
+
+    @property
+    def smart_tiling_enabled(self) -> bool:
+        return self._smart_tiling
+
+    @property
+    def estimated_positive_tiles(self) -> int | None:
+        if self._positive_hint_by_index is None:
+            return None
+        return sum(1 for item in self._positive_hint_by_index if item)
+
+    @property
+    def estimated_negative_tiles(self) -> int | None:
+        if self._positive_hint_by_index is None:
+            return None
+        return sum(1 for item in self._positive_hint_by_index if not item)
+
+    def sampling_weights(self) -> list[float] | None:
+        if self._positive_hint_by_index is None:
+            return None
+        positive_count = self.estimated_positive_tiles or 0
+        negative_count = self.estimated_negative_tiles or 0
+        if positive_count == 0 or negative_count == 0:
+            return None
+        return [
+            1.0 / positive_count if positive else 1.0 / negative_count
+            for positive in self._positive_hint_by_index
+        ]
 
     def close(self) -> None:
         if self._dataset is not None:
@@ -133,6 +183,14 @@ class TileDataset:
         )
         mask[nodata_pixels] = 0
         return mask.astype(np.float32, copy=False)[None, :, :]
+
+    def _build_positive_hints(self, dataset: DatasetReader) -> list[bool]:
+        annotation_index = self._annotation_index_or_load()
+        hints: list[bool] = []
+        for tile_window in self._windows:
+            window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
+            hints.append(bool(annotation_index.query_bounds(dataset.window_bounds(window))))
+        return hints
 
 
 def _resolve_nodata(dataset: DatasetReader) -> object:

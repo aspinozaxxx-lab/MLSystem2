@@ -13,6 +13,9 @@ from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgre
 from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
 
+MAX_SKIPPED_OPTIMIZER_STEPS_PER_EPOCH = 1
+
+
 def train_model(
     request: TrainRequest,
     progress_sink: TrainProgressSink | None = None,
@@ -50,7 +53,7 @@ def train_model(
             _emit(progress_sink, epoch, "epoch_started", None)
             epoch_started = perf_counter()
 
-            train_loss = _train_epoch(
+            train_epoch = _train_epoch(
                 torch,
                 model,
                 request.train_loader,
@@ -62,11 +65,13 @@ def train_model(
             val = _validate_epoch(torch, model, request.val_loader, device, config, epoch)
             scheduler.step()
 
-            _ensure_finite_scalar(train_loss, "train_loss", epoch)
+            _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
             _ensure_finite_scalar(val["loss"], "val_loss", epoch)
             metrics = EpochMetrics(
                 epoch=epoch,
-                train_loss=train_loss,
+                train_loss=train_epoch["loss"],
+                train_optimizer_steps=train_epoch["optimizer_steps"],
+                train_skipped_optimizer_steps=train_epoch["skipped_optimizer_steps"],
                 val_loss=val["loss"],
                 val_pixel_precision=val["precision"],
                 val_pixel_recall=val["recall"],
@@ -120,11 +125,12 @@ def _train_epoch(
     device: object,
     config,
     epoch: int,
-) -> float:
+) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
     batches = 0
     optimizer_steps = 0
+    skipped_optimizer_steps = 0
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
@@ -139,12 +145,18 @@ def _train_epoch(
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
         if bad_gradient is not None:
+            skipped_optimizer_steps += 1
             warnings.warn(
                 "Пропущен optimizer step из-за non-finite gradient: "
                 f"epoch={epoch}, batch={batch_index}, parameter={bad_gradient}",
                 stacklevel=2,
             )
             optimizer.zero_grad(set_to_none=True)
+            if skipped_optimizer_steps > MAX_SKIPPED_OPTIMIZER_STEPS_PER_EPOCH:
+                raise TrainError(
+                    "Слишком много non-finite gradients за эпоху: "
+                    f"epoch={epoch}, skipped_optimizer_steps={skipped_optimizer_steps}"
+                )
             total_loss += float(loss.detach().item())
             batches += 1
             if (
@@ -168,7 +180,11 @@ def _train_epoch(
         raise TrainError("Train DataLoader не вернул ни одного batch.")
     if optimizer_steps == 0:
         raise TrainError(f"За эпоху {epoch} не выполнено ни одного optimizer step.")
-    return total_loss / batches
+    return {
+        "loss": total_loss / batches,
+        "optimizer_steps": optimizer_steps,
+        "skipped_optimizer_steps": skipped_optimizer_steps,
+    }
 
 
 def _validate_epoch(
@@ -358,6 +374,8 @@ def _save_training_checkpoint(
                 "val_pixel_f1": metrics.val_pixel_f1,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
+                "train_optimizer_steps": metrics.train_optimizer_steps,
+                "train_skipped_optimizer_steps": metrics.train_skipped_optimizer_steps,
                 "train_config": request.config.model_dump(mode="json"),
             },
         )

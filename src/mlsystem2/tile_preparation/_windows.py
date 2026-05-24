@@ -15,6 +15,13 @@ class TileWindow:
     height: int
 
 
+@dataclass(frozen=True, slots=True)
+class WindowBuildDiagnostics:
+    source_rect_count: int
+    candidate_window_count: int
+    uses_vrt_source_rects: bool
+
+
 def regular_axis_origins(start: int, length: int, stride: int) -> list[int]:
     if length <= 0:
         return []
@@ -36,9 +43,31 @@ def build_vrt_source_windows(
     tile_size: int,
     stride: int,
 ) -> list[TileWindow]:
+    windows, _diagnostics = build_vrt_source_windows_with_diagnostics(
+        vrt_xml,
+        width,
+        height,
+        tile_size,
+        stride,
+    )
+    return windows
+
+
+def build_vrt_source_windows_with_diagnostics(
+    vrt_xml: str,
+    width: int,
+    height: int,
+    tile_size: int,
+    stride: int,
+) -> tuple[list[TileWindow], WindowBuildDiagnostics]:
     source_rects = _parse_source_rects(vrt_xml)
     if not source_rects:
-        return build_tile_windows(width, height, tile_size, stride)
+        windows = build_tile_windows(width, height, tile_size, stride)
+        return windows, WindowBuildDiagnostics(
+            source_rect_count=0,
+            candidate_window_count=len(windows),
+            uses_vrt_source_rects=False,
+        )
 
     windows: list[TileWindow] = []
     seen: set[tuple[int, int]] = set()
@@ -50,7 +79,11 @@ def build_vrt_source_windows(
                     continue
                 seen.add(key)
                 windows.append(TileWindow(x=x, y=y, width=tile_size, height=tile_size))
-    return windows
+    return windows, WindowBuildDiagnostics(
+        source_rect_count=len(source_rects),
+        candidate_window_count=len(windows),
+        uses_vrt_source_rects=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)

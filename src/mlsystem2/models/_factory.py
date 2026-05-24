@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from .contracts import ModelHandle, ModelSpec, ModelsError
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 
 _SEGFORMER_B0 = "segformer_b0"
 _SEGFORMER_B2 = "segformer_b2"
@@ -59,6 +64,11 @@ def _create_segformer(spec: ModelSpec):
             "Для создания SegFormer требуется optional dependency transformers. "
             "Установите пакет через `pip install -e .[torch]`."
         ) from exc
+    if torch is None:
+        raise ModelsError(
+            "Для создания SegFormer требуется optional dependency torch. "
+            "Установите пакет через `pip install -e .[torch]`."
+        )
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     config = SegformerConfig(
@@ -70,11 +80,33 @@ def _create_segformer(spec: ModelSpec):
     )
     if spec.pretrained:
         try:
-            return SegformerForSemanticSegmentation.from_pretrained(
+            model = SegformerForSemanticSegmentation.from_pretrained(
                 model_config["pretrained"],
                 config=config,
                 ignore_mismatched_sizes=True,
             )
+            return _SegFormerRawInputWrapper(model)
         except Exception as exc:
             raise ModelsError(f"Не удалось загрузить pretrained {spec.name} из Hugging Face") from exc
-    return SegformerForSemanticSegmentation(config)
+    return _SegFormerRawInputWrapper(SegformerForSemanticSegmentation(config))
+
+
+if torch is not None:
+
+    class _SegFormerRawInputWrapper(torch.nn.Module):
+        def __init__(self, model, input_scale: float = 255.0) -> None:
+            super().__init__()
+            self.model = model
+            self.input_scale = float(input_scale)
+
+        def forward(self, x):
+            return self.model(x.float() / self.input_scale)
+
+else:
+
+    class _SegFormerRawInputWrapper:
+        def __init__(self, model, input_scale: float = 255.0) -> None:
+            raise ModelsError(
+                "Для создания SegFormer требуется optional dependency torch. "
+                "Установите пакет через `pip install -e .[torch]`."
+            )

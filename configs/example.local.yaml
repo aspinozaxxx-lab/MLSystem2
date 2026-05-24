@@ -17,6 +17,7 @@ tile_preparation:
   prefetch_factor: 2
   seed: 42
   augmentation_level: 0
+  smart_tiling: false
 
 train:
   model_name: segformer_b2

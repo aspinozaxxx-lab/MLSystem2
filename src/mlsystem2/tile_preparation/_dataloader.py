@@ -22,6 +22,7 @@ def create_tile_dataloader(
     try:
         import torch
         from torch.utils.data import DataLoader
+        from torch.utils.data import WeightedRandomSampler
     except ImportError as exc:
         raise TilePreparationError(
             "Для создания tile DataLoader требуется установленный PyTorch."
@@ -37,6 +38,7 @@ def create_tile_dataloader(
             mode=request.mode,
             seed=tile_settings.seed,
             augmentation_level=tile_settings.augmentation_level,
+            smart_tiling=tile_settings.smart_tiling,
         )
     except TilePreparationError:
         raise
@@ -46,15 +48,28 @@ def create_tile_dataloader(
     generator = torch.Generator()
     generator.manual_seed(tile_settings.seed)
 
+    sampler = None
+    if request.mode == "train" and tile_settings.smart_tiling:
+        weights = dataset.sampling_weights()
+        if weights is not None:
+            sampler = WeightedRandomSampler(
+                weights=weights,
+                num_samples=len(dataset),
+                replacement=True,
+                generator=generator,
+            )
+
     dataloader_kwargs = {
         "dataset": dataset,
         "batch_size": request.batch_size,
-        "shuffle": request.mode == "train",
+        "shuffle": request.mode == "train" and sampler is None,
         "num_workers": tile_settings.num_workers,
         "collate_fn": _collate_tile_batch,
         "generator": generator,
         "worker_init_fn": _seed_tile_worker,
     }
+    if sampler is not None:
+        dataloader_kwargs["sampler"] = sampler
     if tile_settings.num_workers > 0:
         dataloader_kwargs["prefetch_factor"] = tile_settings.prefetch_factor
         dataloader_kwargs["persistent_workers"] = True
@@ -79,7 +94,10 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, bo
     batch_meta = {
         "augmented_tile_count": sum(
             1 for sample in samples if len(sample) > 2 and sample[2].get("augmented", False)
-        )
+        ),
+        "positive_tile_count": sum(
+            1 for sample in samples if len(sample) > 2 and sample[2].get("positive", False)
+        ),
     }
     return images, masks, batch_meta
 

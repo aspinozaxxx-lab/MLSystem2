@@ -67,6 +67,12 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _mlflow()
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        mlflow.log_metric("train/optimizer_steps", metrics.train_optimizer_steps, step=metrics.epoch)
+        mlflow.log_metric(
+            "train/skipped_optimizer_steps",
+            metrics.train_skipped_optimizer_steps,
+            step=metrics.epoch,
+        )
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
         mlflow.log_metric("val/pixel_precision", metrics.val_pixel_precision, step=metrics.epoch)
         mlflow.log_metric("val/pixel_recall", metrics.val_pixel_recall, step=metrics.epoch)

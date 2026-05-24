@@ -37,6 +37,8 @@ class EpochMetrics(BaseModel):
 
     epoch: int = Field(ge=0)
     train_loss: float = Field(ge=0.0)
+    train_optimizer_steps: int = Field(ge=0)
+    train_skipped_optimizer_steps: int = Field(ge=0)
     val_loss: float = Field(ge=0.0)
     val_pixel_precision: float = Field(ge=0.0, le=1.0)
     val_pixel_recall: float = Field(ge=0.0, le=1.0)
