@@ -28,6 +28,7 @@ class TileDataset:
         seed: int,
         augmentation_level: int,
         smart_tiling: bool,
+        positive_factor: float = 0.5,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file)
@@ -36,6 +37,7 @@ class TileDataset:
         self._seed = seed
         self._augmentation_level = augmentation_level
         self._smart_tiling = smart_tiling
+        self._positive_factor = positive_factor
         self._memory_file: MemoryFile | None = None
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
@@ -157,8 +159,10 @@ class TileDataset:
         negative_count = self.estimated_negative_tiles or 0
         if positive_count == 0 or negative_count == 0:
             return None
+        positive_weight = self._positive_factor / positive_count
+        negative_weight = (1.0 - self._positive_factor) / negative_count
         return [
-            1.0 / positive_count if positive else 1.0 / negative_count
+            positive_weight if positive else negative_weight
             for positive in self._positive_hint_by_index
         ]
 

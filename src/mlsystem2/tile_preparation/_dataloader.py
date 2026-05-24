@@ -39,6 +39,7 @@ def create_tile_dataloader(
             seed=tile_settings.seed,
             augmentation_level=tile_settings.augmentation_level,
             smart_tiling=tile_settings.smart_tiling,
+            positive_factor=tile_settings.positive_factor,
         )
     except TilePreparationError:
         raise

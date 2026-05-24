@@ -33,6 +33,7 @@ PREFETCH_FACTOR = 2
 SEED = 42
 AUGMENTATION_LEVEL = 3
 SMART_TILING = True
+POSITIVE_FACTOR = 0.8
 BATCH_SIZE = 4
 REQUESTED_BATCHES = 100
 MODE = "train"
@@ -200,6 +201,7 @@ tile_preparation:
   seed: {SEED}
   augmentation_level: {AUGMENTATION_LEVEL}
   smart_tiling: {str(SMART_TILING).lower()}
+  positive_factor: {POSITIVE_FACTOR}
 
 train:
   model_name: segformer_b2
@@ -355,6 +357,7 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "loader_len": _safe_len(loader),
         "augmentation_level": AUGMENTATION_LEVEL,
         "smart_tiling": SMART_TILING,
+        "positive_factor": POSITIVE_FACTOR,
         "black_detector": {
             "method": "sparse_grid_all_channels",
             "step": BLACK_SAMPLE_STEP,
@@ -554,13 +557,16 @@ def _save_tiles_as_png(images: object, masks: object, batch_dir: Path) -> list[d
     for tile_index in range(image_array.shape[0]):
         preview_path = batch_dir / f"tile_{tile_index:04d}_preview_rgb.png"
         mask_path = batch_dir / f"tile_{tile_index:04d}_mask.png"
+        overlay_path = batch_dir / f"tile_{tile_index:04d}_preview_mask_overlay.png"
         channel_files = _save_image_channels_png(image_array[tile_index], batch_dir, tile_index)
         _save_preview_png(image_array[tile_index], preview_path)
         _save_mask_png(mask_array[tile_index], mask_path)
+        _save_preview_mask_overlay_png(image_array[tile_index], mask_array[tile_index], overlay_path)
         tile_files.append(
             {
                 "preview_rgb": preview_path.name,
                 "mask": mask_path.name,
+                "preview_mask_overlay": overlay_path.name,
                 "channels": channel_files,
             }
         )
@@ -576,6 +582,20 @@ def _to_numpy(tensor: object):
 def _save_preview_png(image_chw, path: Path) -> None:
     from PIL import Image
 
+    Image.fromarray(_preview_rgb_uint8(image_chw), mode="RGB").save(path)
+
+
+def _save_preview_mask_overlay_png(image_chw, mask_chw, path: Path) -> None:
+    from PIL import Image
+
+    image_u8 = _preview_rgb_uint8(image_chw)
+    edge = _mask_edge(mask_chw)
+    image_u8 = image_u8.copy()
+    image_u8[edge] = np.array([255, 0, 0], dtype=np.uint8)
+    Image.fromarray(image_u8, mode="RGB").save(path)
+
+
+def _preview_rgb_uint8(image_chw):
     channels = image_chw.shape[0]
     if channels >= 3:
         image_hwc = image_chw[:3].transpose(1, 2, 0)
@@ -584,8 +604,29 @@ def _save_preview_png(image_chw, path: Path) -> None:
     else:
         raise RuntimeError("Image tile должен содержать хотя бы один канал.")
 
-    image_u8 = _stretch_image_to_uint8(image_hwc)
-    Image.fromarray(image_u8, mode="RGB").save(path)
+    return _stretch_image_to_uint8(image_hwc)
+
+
+def _mask_edge(mask_chw):
+    if mask_chw.shape[0] != 1:
+        raise RuntimeError("Mask tile должен иметь один канал.")
+    mask = mask_chw[0] > 0.5
+    if not bool(np.any(mask)):
+        return np.zeros(mask.shape, dtype=bool)
+
+    padded = np.pad(mask, 1, mode="constant", constant_values=False)
+    interior = (
+        padded[1:-1, 1:-1]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+        & padded[:-2, :-2]
+        & padded[:-2, 2:]
+        & padded[2:, :-2]
+        & padded[2:, 2:]
+    )
+    return mask & ~interior
 
 
 def _save_image_channels_png(image_chw, batch_dir: Path, tile_index: int) -> list[str]:
@@ -817,6 +858,7 @@ def _params(*, saved_batches: int) -> dict[str, Any]:
         "seed": SEED,
         "augmentation_level": AUGMENTATION_LEVEL,
         "smart_tiling": SMART_TILING,
+        "positive_factor": POSITIVE_FACTOR,
         "batch_size": BATCH_SIZE,
         "requested_batches": REQUESTED_BATCHES,
         "saved_batches": saved_batches,

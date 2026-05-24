@@ -49,6 +49,16 @@ class EpochMetrics(BaseModel):
     val_true_positive: int = Field(ge=0)
     val_false_positive: int = Field(ge=0)
     val_false_negative: int = Field(ge=0)
+    val_best_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_pixel_f1: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_precision: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_recall: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_mean: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_min: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_max: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_p50: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_p90: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_p99: float = Field(default=0.0, ge=0.0, le=1.0)
     epoch_time_sec: float = Field(ge=0.0)
 
 

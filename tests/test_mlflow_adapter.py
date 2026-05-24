@@ -104,3 +104,5 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
 
     assert ("train/optimizer_steps", 71, 3) in logged
     assert ("train/skipped_optimizer_steps", 1, 3) in logged
+    assert ("val/best_threshold", 0.0, 3) in logged
+    assert ("val/prob_mean", 0.0, 3) in logged

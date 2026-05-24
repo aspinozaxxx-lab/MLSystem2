@@ -366,6 +366,7 @@ def _tile_preparation_report(
         "batch_size": settings.train.batch_size,
         "augmentation_level": settings.tile_preparation.augmentation_level,
         "smart_tiling_enabled": settings.tile_preparation.smart_tiling,
+        "positive_factor": settings.tile_preparation.positive_factor,
         "splits": {
             "train": train_loader.snapshot(),
             "val": val_loader.snapshot(),

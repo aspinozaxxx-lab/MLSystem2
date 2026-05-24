@@ -39,6 +39,7 @@ class TilePreparationSettings(BaseModel):
     seed: int = 42
     augmentation_level: int = Field(default=0, ge=0, le=3)
     smart_tiling: bool = False
+    positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
 
     @model_validator(mode="after")
     def validate_stride(self) -> Self:

@@ -214,6 +214,9 @@ def test_validation_pixel_f1_counts_known_confusion_matrix() -> None:
     assert result["positive_pixels"] == 2
     assert result["pred_positive_pixels"] == 2
     assert result["f1"] == 0.5
+    assert result["best_threshold"] == 0.3
+    assert result["best_threshold_pixel_f1"] == 0.5
+    assert 0.0 <= result["prob_p50"] <= 1.0
 
 
 def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
@@ -252,6 +255,7 @@ def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
     assert result["true_positive"] == 0
     assert result["false_negative"] == 0
     assert result["f1"] == 0.0
+    assert result["best_threshold_pixel_f1"] == 0.0
 
 
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:

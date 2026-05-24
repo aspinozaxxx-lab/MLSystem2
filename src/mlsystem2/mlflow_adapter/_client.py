@@ -86,6 +86,28 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("val/true_positive", metrics.val_true_positive, step=metrics.epoch)
         mlflow.log_metric("val/false_positive", metrics.val_false_positive, step=metrics.epoch)
         mlflow.log_metric("val/false_negative", metrics.val_false_negative, step=metrics.epoch)
+        mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/best_threshold_pixel_f1",
+            metrics.val_best_threshold_pixel_f1,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric(
+            "val/best_threshold_precision",
+            metrics.val_best_threshold_precision,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric(
+            "val/best_threshold_recall",
+            metrics.val_best_threshold_recall,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric("val/prob_mean", metrics.val_prob_mean, step=metrics.epoch)
+        mlflow.log_metric("val/prob_min", metrics.val_prob_min, step=metrics.epoch)
+        mlflow.log_metric("val/prob_max", metrics.val_prob_max, step=metrics.epoch)
+        mlflow.log_metric("val/prob_p50", metrics.val_prob_p50, step=metrics.epoch)
+        mlflow.log_metric("val/prob_p90", metrics.val_prob_p90, step=metrics.epoch)
+        mlflow.log_metric("val/prob_p99", metrics.val_prob_p99, step=metrics.epoch)
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc

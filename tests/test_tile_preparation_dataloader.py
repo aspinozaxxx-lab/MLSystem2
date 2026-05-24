@@ -15,6 +15,7 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
+from mlsystem2.tile_preparation._augmentations import _cutout
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TilePreparationError
 
@@ -157,6 +158,18 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     }
 
     loader.dataset.close()
+
+
+def test_cutout_zeros_matching_image_and_mask_region() -> None:
+    image = np.ones((2, 32, 32), dtype=np.float32)
+    mask = np.ones((1, 32, 32), dtype=np.float32)
+
+    augmented_image, augmented_mask = _cutout(image, mask, np.random.default_rng(20260525))
+
+    cutout_pixels = np.all(augmented_image == 0.0, axis=0)
+    assert np.count_nonzero(cutout_pixels) > 0
+    assert np.all(augmented_mask[:, cutout_pixels] == 0.0)
+    assert np.all(augmented_image[:, augmented_mask[0] == 0.0] == 0.0)
 
 
 def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill(
@@ -455,6 +468,18 @@ def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> No
     val_loader.dataset.close()
 
 
+def test_smart_tiling_sampling_weights_follow_positive_factor() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, True, *([False] * 8)]
+    dataset._positive_factor = 0.8
+
+    weights = dataset.sampling_weights()
+
+    assert weights is not None
+    assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if positive) == pytest.approx(0.8)
+    assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if not positive) == pytest.approx(0.2)
+
+
 def _write_raster(path: Path) -> None:
     base = np.arange(36, dtype=np.uint8).reshape(6, 6)
     data = np.stack([base + 10, base + 40, base + 70])
@@ -580,6 +605,7 @@ tile_preparation:
   seed: 42
   augmentation_level: {augmentation_level}
   smart_tiling: {str(smart_tiling).lower()}
+  positive_factor: 0.5
 
 train:
   model_name: segformer_b2

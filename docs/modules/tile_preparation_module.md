@@ -23,7 +23,7 @@ Batch DataLoader:
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`, `smart_tiling`.
+- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`.
 - `rasterio` - открыть VRT и лениво читать image windows с `boundless=True`.
 - `shapely` и `rasterio.features` - загрузить GeoJSON и rasterize mask в окно tile.
 - `torch.utils.data` - создать Dataset/DataLoader и обеспечить prefetch через `num_workers` и `prefetch_factor`.
@@ -47,6 +47,6 @@ Batch DataLoader:
 
 В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target. Sample возвращает `{"augmented": bool, "positive": bool}`, а collate собирает batch `(images, masks, batch_meta)` с aggregate-счетчиками и per-tile flags для диагностики.
 
-При `smart_tiling=true` и `mode="train"` Dataset строит cheap-index: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Если есть positive/negative hints, DataLoader использует `WeightedRandomSampler` с примерно равной суммарной вероятностью positive и negative окон; иначе остается обычный sampler. Аугментация применяется только к positive tiles. Для `val` sampler deterministic, shuffle и augmentation выключены.
+При `smart_tiling=true` и `mode="train"` Dataset строит cheap-index: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Если есть positive/negative hints, DataLoader использует `WeightedRandomSampler`: суммарный вес positive окон равен `positive_factor`, суммарный вес negative окон равен `1 - positive_factor`; иначе остается обычный sampler. Аугментация применяется только к positive tiles. Cutout/dropout аугментация зануляет один и тот же прямоугольник в image и mask, чтобы train pair оставался согласованным. Для `val` sampler deterministic, shuffle и augmentation выключены.
 
 Полностью black/nodata-only tiles фильтруются заранее через coarse valid-data footprint и не попадают в DataLoader. Диагностика Dataset доступна как внутренние attributes: `candidate_window_count_before_valid_filter`, `black_filtered_window_count`, `valid_footprint_stride`, `valid_footprint_valid_cells`, `valid_footprint_total_cells`.
