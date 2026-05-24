@@ -196,8 +196,8 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     loader.dataset.close()
 
 
-def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) -> None:
-    torch = pytest.importorskip("torch")
+def test_create_tile_dataloader_filters_fully_nodata_tiles(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
     raster_path = tmp_path / "nodata.tif"
     data = np.zeros((1, 4, 4), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
@@ -215,16 +215,48 @@ def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) ->
         )
     )
 
-    images, masks, batch_meta = next(iter(loader))
+    assert len(loader.dataset) == 0
+    assert loader.dataset.candidate_window_count_before_valid_filter == 1
+    assert loader.dataset.black_filtered_window_count == 1
+    with pytest.raises(StopIteration):
+        next(iter(loader))
+
+    loader.dataset.close()
+
+
+def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
+    tmp_path: Path,
+) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "mixed.tif"
+    data = np.zeros((1, 64, 128), dtype=np.uint16)
+    data[:, :, 64:] = 1000
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=64, stride=64, batch_size=2, input_channels=1))
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+        )
+    )
+
     assert len(loader.dataset) == 1
-    assert torch.all(images == 0.0)
+    assert loader.dataset.candidate_window_count_before_valid_filter == 2
+    assert loader.dataset.candidate_window_count == 1
+    assert loader.dataset.black_filtered_window_count == 1
+    assert loader.dataset.valid_footprint_stride == 64
+    images, masks, batch_meta = next(iter(loader))
+    assert images.shape == (1, 1, 64, 64)
+    assert torch.all(images == 1000.0)
     assert torch.all(masks == 0.0)
-    assert batch_meta == {
-        "augmented_tile_count": 0,
-        "positive_tile_count": 0,
-        "tile_augmented": [False],
-        "tile_positive": [False],
-    }
+    assert batch_meta["tile_augmented"] == [False]
+    assert batch_meta["tile_positive"] == [False]
 
     loader.dataset.close()
 

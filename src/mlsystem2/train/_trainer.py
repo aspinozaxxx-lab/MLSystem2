@@ -93,6 +93,8 @@ def train_model(
                 patience += 1
 
             _emit(progress_sink, epoch, "epoch_finished", metrics)
+            if _training_time_exceeded(config, total_started):
+                break
             if patience >= config.early_stopping_patience:
                 break
 
@@ -388,6 +390,13 @@ def _checkpoint_dir(path: str):
     checkpoint_dir = Path(path)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     return checkpoint_dir
+
+
+def _training_time_exceeded(config, total_started: float) -> bool:
+    max_training_time_sec = getattr(config, "max_training_time_sec", None)
+    if max_training_time_sec is None:
+        return False
+    return perf_counter() - total_started >= max_training_time_sec
 
 
 def _emit(

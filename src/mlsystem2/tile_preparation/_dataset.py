@@ -11,6 +11,7 @@ from rasterio.windows import Window
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import rasterize_window_mask
+from ._valid_footprint import filter_valid_windows
 from ._vrt import open_vrt_reader, open_vrt_xml
 from ._windows import build_vrt_source_windows_with_diagnostics
 
@@ -51,10 +52,22 @@ class TileDataset:
                 tile_size,
                 stride,
             )
-            self._windows = candidate_windows
+            valid_windows, valid_diagnostics = filter_valid_windows(
+                dataset,
+                candidate_windows,
+                nodata=self._nodata,
+            )
+            self._windows = valid_windows
             self._source_rect_count = diagnostics.source_rect_count
-            self._candidate_window_count = diagnostics.candidate_window_count
+            self._candidate_window_count = valid_diagnostics.valid_window_count
             self._uses_vrt_source_rects = diagnostics.uses_vrt_source_rects
+            self._candidate_window_count_before_valid_filter = (
+                valid_diagnostics.candidate_window_count_before_valid_filter
+            )
+            self._black_filtered_window_count = valid_diagnostics.black_filtered_window_count
+            self._valid_footprint_stride = valid_diagnostics.valid_footprint_stride
+            self._valid_footprint_valid_cells = valid_diagnostics.valid_footprint_valid_cells
+            self._valid_footprint_total_cells = valid_diagnostics.valid_footprint_total_cells
             if self._smart_tiling and self._mode == "train":
                 self._positive_hint_by_index = self._build_positive_hints(dataset)
 
@@ -96,6 +109,26 @@ class TileDataset:
     @property
     def candidate_window_count(self) -> int:
         return self._candidate_window_count
+
+    @property
+    def candidate_window_count_before_valid_filter(self) -> int:
+        return self._candidate_window_count_before_valid_filter
+
+    @property
+    def black_filtered_window_count(self) -> int:
+        return self._black_filtered_window_count
+
+    @property
+    def valid_footprint_stride(self) -> int:
+        return self._valid_footprint_stride
+
+    @property
+    def valid_footprint_valid_cells(self) -> int:
+        return self._valid_footprint_valid_cells
+
+    @property
+    def valid_footprint_total_cells(self) -> int:
+        return self._valid_footprint_total_cells
 
     @property
     def uses_vrt_source_rects(self) -> bool:

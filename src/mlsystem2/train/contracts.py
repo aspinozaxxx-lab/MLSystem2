@@ -30,6 +30,7 @@ class TrainConfig(BaseModel):
     early_stopping_patience: int = Field(gt=0)
     max_train_batches_per_epoch: int | None = Field(default=None, gt=0)
     max_val_batches_per_epoch: int | None = Field(default=None, gt=0)
+    max_training_time_sec: int | None = Field(default=None, gt=0)
 
 
 class EpochMetrics(BaseModel):

@@ -33,7 +33,8 @@ Batch DataLoader:
 При создании Dataset разрешено:
 - открыть VRT;
 - прочитать metadata: `width`, `height`, `count`, CRS, nodata;
-- построить список окон по VRT/source rects.
+- построить список окон по VRT/source rects;
+- построить coarse valid-data footprint одним низкоразрешенным чтением VRT и отфильтровать black/nodata-only окна.
 
 При создании Dataset запрещено:
 - читать raster data по всем окнам;
@@ -42,8 +43,10 @@ Batch DataLoader:
 
 Окна строятся регулярной Geoalert-compatible сеткой: `0, stride, 2*stride, ...` до границы source rect или raster. Shifted last tile не добавляется. Окно всегда имеет размер `tile_size x tile_size`; выход за bounds закрывается `rasterio.read(boundless=True, fill_value=nodata)`.
 
+После построения candidate windows модуль строит внутренний coarse valid-data footprint с фиксированным шагом `64` пикселя: сначала читает masks VRT в низком разрешении, затем низкоразрешенные raw values и считает valid cell только там, где mask valid и хотя бы один канал не равен нулю с eps `1e-6`. Candidate window должен пересекать valid cell. Затем выполняется точная sparse-проверка только по глобальным пикселям, которые соответствуют диагностической сетке tile (`0, 64, ..., center, last`). Это не читает каждый tile целиком и убирает black/nodata-only окна до DataLoader.
+
 В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target. Sample возвращает `{"augmented": bool, "positive": bool}`, а collate собирает batch `(images, masks, batch_meta)` с aggregate-счетчиками и per-tile flags для диагностики.
 
 При `smart_tiling=true` и `mode="train"` Dataset строит cheap-index: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Если есть positive/negative hints, DataLoader использует `WeightedRandomSampler` с примерно равной суммарной вероятностью positive и negative окон; иначе остается обычный sampler. Аугментация применяется только к positive tiles. Для `val` sampler deterministic, shuffle и augmentation выключены.
 
-Полностью nodata tiles не фильтруются заранее: они могут попасть в DataLoader как image с nodata-fill и zero mask. Это сохраняет быстрый старт loader и не меняет batch contract.
+Полностью black/nodata-only tiles фильтруются заранее через coarse valid-data footprint и не попадают в DataLoader. Диагностика Dataset доступна как внутренние attributes: `candidate_window_count_before_valid_filter`, `black_filtered_window_count`, `valid_footprint_stride`, `valid_footprint_valid_cells`, `valid_footprint_total_cells`.

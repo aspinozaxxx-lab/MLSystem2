@@ -134,6 +134,11 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
         source_rect_count = 1
         candidate_window_count = 5
+        candidate_window_count_before_valid_filter = 7
+        black_filtered_window_count = 2
+        valid_footprint_stride = 64
+        valid_footprint_valid_cells = 10
+        valid_footprint_total_cells = 12
         uses_vrt_source_rects = True
         estimated_positive_tiles = 2
         estimated_negative_tiles = 3
@@ -167,6 +172,11 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "batch_count": 2,
         "source_rect_count": 1,
         "candidate_window_count": 5,
+        "candidate_window_count_before_valid_filter": 7,
+        "black_filtered_window_count": 2,
+        "valid_footprint_stride": 64,
+        "valid_footprint_valid_cells": 10,
+        "valid_footprint_total_cells": 12,
         "uses_vrt_source_rects": True,
         "estimated_positive_tiles": 2,
         "estimated_negative_tiles": 3,

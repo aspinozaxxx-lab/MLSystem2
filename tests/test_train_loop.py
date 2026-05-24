@@ -96,6 +96,49 @@ def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     assert len(result.history) == 1
 
 
+def test_train_model_stops_after_training_time_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    monkeypatch.setattr(_trainer, "_training_time_exceeded", lambda config, total_started: True)
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=TinySegmentationModel(),
+    )
+
+    result = train_model(
+        TrainRequest(
+            model=model,
+            train_loader=_fake_loader(torch),
+            val_loader=_fake_loader(torch),
+            config=TrainConfig(
+                epochs=3,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=3,
+                max_training_time_sec=1,
+            ),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+        )
+    )
+
+    assert result.epochs_total == 1
+    assert Path(result.final_checkpoint_path).is_file()
+
+
 def test_train_model_accepts_batch_metadata(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 

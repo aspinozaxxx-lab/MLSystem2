@@ -121,6 +121,24 @@ def main() -> int:
             print(error, file=sys.stderr)
             return 1
 
+        if tile_scan["black_tiles"] > 0 or tile_scan["positive_black_tiles"] > 0:
+            error = (
+                "tile_preparation вернул черные tiles: "
+                f"black_tiles={tile_scan['black_tiles']}, "
+                f"positive_black_tiles={tile_scan['positive_black_tiles']}"
+            )
+            _write_timing_report(
+                status="error",
+                error=error,
+                paths=paths,
+                params=params,
+                timings=_finish_timings(timings, total_started),
+                batches=batches,
+                tile_scan=tile_scan,
+            )
+            print(error, file=sys.stderr)
+            return 1
+
         _write_timing_report(
             status="ok",
             error=None,
@@ -324,6 +342,14 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "mask_positive_pixels_total": 0,
         "source_rect_count": _dataset_attr(dataset, "source_rect_count"),
         "candidate_window_count": _dataset_attr(dataset, "candidate_window_count"),
+        "candidate_window_count_before_valid_filter": _dataset_attr(
+            dataset,
+            "candidate_window_count_before_valid_filter",
+        ),
+        "black_filtered_window_count": _dataset_attr(dataset, "black_filtered_window_count"),
+        "valid_footprint_stride": _dataset_attr(dataset, "valid_footprint_stride"),
+        "valid_footprint_valid_cells": _dataset_attr(dataset, "valid_footprint_valid_cells"),
+        "valid_footprint_total_cells": _dataset_attr(dataset, "valid_footprint_total_cells"),
         "uses_vrt_source_rects": _dataset_attr(dataset, "uses_vrt_source_rects"),
         "dataset_len": _safe_len(dataset),
         "loader_len": _safe_len(loader),

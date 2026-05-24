@@ -326,6 +326,23 @@ class _CountingLoader:
             "batch_count": _safe_len(self),
             "source_rect_count": source_rect_count,
             "candidate_window_count": _dataset_attr(self.dataset, "candidate_window_count"),
+            "candidate_window_count_before_valid_filter": _dataset_attr(
+                self.dataset,
+                "candidate_window_count_before_valid_filter",
+            ),
+            "black_filtered_window_count": _dataset_attr(
+                self.dataset,
+                "black_filtered_window_count",
+            ),
+            "valid_footprint_stride": _dataset_attr(self.dataset, "valid_footprint_stride"),
+            "valid_footprint_valid_cells": _dataset_attr(
+                self.dataset,
+                "valid_footprint_valid_cells",
+            ),
+            "valid_footprint_total_cells": _dataset_attr(
+                self.dataset,
+                "valid_footprint_total_cells",
+            ),
             "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
             "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
@@ -394,6 +411,7 @@ def _train_request(
             early_stopping_patience=settings.train.early_stopping_patience,
             max_train_batches_per_epoch=settings.train.max_train_batches_per_epoch,
             max_val_batches_per_epoch=settings.train.max_val_batches_per_epoch,
+            max_training_time_sec=settings.train.max_training_time_sec,
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
     )
