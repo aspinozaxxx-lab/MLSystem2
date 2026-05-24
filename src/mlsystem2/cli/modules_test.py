@@ -241,9 +241,9 @@ def _save_batches(loader: object) -> list[dict[str, Any]]:
 
 
 def _expect_batch(batch: object) -> tuple[object, object]:
-    if not isinstance(batch, tuple) or len(batch) != 2:
-        raise RuntimeError("DataLoader batch должен быть ровно tuple(images, masks).")
-    return batch
+    if not isinstance(batch, tuple) or len(batch) not in {2, 3}:
+        raise RuntimeError("DataLoader batch должен быть tuple(images, masks[, batch_meta]).")
+    return batch[0], batch[1]
 
 
 def _save_tiles_as_png(images: object, masks: object, batch_dir: Path) -> list[dict[str, Any]]:

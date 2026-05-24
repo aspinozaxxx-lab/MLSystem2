@@ -5,9 +5,9 @@ runtime:
   cleanup_scratch_after_mlflow_log: true
 
 dataset:
-  images_dir: /data/mlsystem2/prepared_images/kanopus
-  scenes_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.txt
-  annotation_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.geojson
+  images_dir: /data/mlsystem2/prepared_images/
+  scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
+  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
 
 tile_preparation:
@@ -36,6 +36,8 @@ train:
   tversky_beta: 0.6
   threshold: 0.5
   early_stopping_patience: 5
+  max_train_batches_per_epoch: 72
+  max_val_batches_per_epoch: 24
 
 inference:
   checkpoint_uri: /data/mlsystem2/models/latest.pt

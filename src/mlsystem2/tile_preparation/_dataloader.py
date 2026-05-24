@@ -62,21 +62,26 @@ def create_tile_dataloader(
     return DataLoader(**dataloader_kwargs)
 
 
-def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray]]):
+def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, bool]]]):
     try:
         import torch
     except ImportError as exc:
         raise TilePreparationError("Для сборки batch требуется установленный PyTorch.") from exc
 
     images = torch.stack(
-        [torch.as_tensor(image, dtype=torch.float32) for image, _ in samples],
+        [torch.as_tensor(sample[0], dtype=torch.float32) for sample in samples],
         dim=0,
     )
     masks = torch.stack(
-        [torch.as_tensor(mask, dtype=torch.float32) for _, mask in samples],
+        [torch.as_tensor(sample[1], dtype=torch.float32) for sample in samples],
         dim=0,
     )
-    return images, masks
+    batch_meta = {
+        "augmented_tile_count": sum(
+            1 for sample in samples if len(sample) > 2 and sample[2].get("augmented", False)
+        )
+    }
+    return images, masks, batch_meta
 
 
 def _seed_tile_worker(worker_id: int) -> None:

@@ -41,6 +41,11 @@ class EpochMetrics(BaseModel):
     val_pixel_precision: float = Field(ge=0.0, le=1.0)
     val_pixel_recall: float = Field(ge=0.0, le=1.0)
     val_pixel_f1: float = Field(ge=0.0, le=1.0)
+    val_positive_pixels: int = Field(ge=0)
+    val_pred_positive_pixels: int = Field(ge=0)
+    val_true_positive: int = Field(ge=0)
+    val_false_positive: int = Field(ge=0)
+    val_false_negative: int = Field(ge=0)
     epoch_time_sec: float = Field(ge=0.0)
 
 

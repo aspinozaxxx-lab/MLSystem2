@@ -71,6 +71,11 @@ def train_model(
                 val_pixel_precision=val["precision"],
                 val_pixel_recall=val["recall"],
                 val_pixel_f1=val["f1"],
+                val_positive_pixels=val["positive_pixels"],
+                val_pred_positive_pixels=val["pred_positive_pixels"],
+                val_true_positive=val["true_positive"],
+                val_false_positive=val["false_positive"],
+                val_false_negative=val["false_negative"],
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -120,16 +125,17 @@ def _train_epoch(
     total_loss = 0.0
     batches = 0
     optimizer_steps = 0
-    for batch_index, (images, masks) in enumerate(loader, start=1):
+    for batch_index, batch in enumerate(loader, start=1):
+        images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
         masks = masks.to(device=device, dtype=torch.float32)
-        _ensure_finite_tensor(torch, images, "images", epoch, batch_index)
-        _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index)
+        _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "train")
+        _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
-        _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index)
+        _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         loss = _loss(torch, logits, masks, config)
-        _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index)
+        _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
         if bad_gradient is not None:
@@ -148,7 +154,7 @@ def _train_epoch(
                 break
             continue
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index)
+        _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index, "train")
         optimizer.step()
         optimizer_steps += 1
         total_loss += float(loss.detach().item())
@@ -165,29 +171,41 @@ def _train_epoch(
     return total_loss / batches
 
 
-def _validate_epoch(torch, model, loader: object, device: object, config, epoch: int) -> dict[str, float]:
+def _validate_epoch(
+    torch,
+    model,
+    loader: object,
+    device: object,
+    config,
+    epoch: int,
+) -> dict[str, float | int]:
     model.eval()
     total_loss = 0.0
     batches = 0
     true_positive = 0
     false_positive = 0
     false_negative = 0
+    positive_pixels = 0
+    pred_positive_pixels = 0
     with torch.no_grad():
-        for batch_index, (images, masks) in enumerate(loader, start=1):
+        for batch_index, batch in enumerate(loader, start=1):
+            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
             masks = masks.to(device=device, dtype=torch.float32)
-            _ensure_finite_tensor(torch, images, "images", epoch, batch_index)
-            _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index)
+            _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
+            _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
-            _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index)
+            _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
             loss = _loss(torch, logits, masks, config)
-            _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index)
+            _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
 
             probs = torch.sigmoid(logits)
             pred = probs >= config.threshold
             true = masks >= 0.5
+            positive_pixels += int(true.sum().item())
+            pred_positive_pixels += int(pred.sum().item())
             true_positive += int((pred & true).sum().item())
             false_positive += int((pred & ~true).sum().item())
             false_negative += int((~pred & true).sum().item())
@@ -208,7 +226,33 @@ def _validate_epoch(torch, model, loader: object, device: object, config, epoch:
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "positive_pixels": positive_pixels,
+        "pred_positive_pixels": pred_positive_pixels,
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
     }
+
+
+def _split_batch(batch: object, epoch: int, batch_index: int, stage: str):
+    try:
+        batch_len = len(batch)
+    except TypeError as exc:
+        raise TrainError(
+            f"Некорректный batch at stage={stage}, epoch={epoch}, batch={batch_index}: "
+            "ожидался batch длины 2 или 3."
+        ) from exc
+
+    if batch_len == 2:
+        images, masks = batch
+        return images, masks, {}
+    if batch_len == 3:
+        images, masks, meta = batch
+        return images, masks, meta
+    raise TrainError(
+        f"Некорректный batch at stage={stage}, epoch={epoch}, batch={batch_index}: "
+        f"ожидалась длина 2 или 3, получено {batch_len}."
+    )
 
 
 def _forward_logits(torch, model, images, masks):
@@ -272,10 +316,17 @@ def _tversky_loss(torch, logits, masks, config):
     return 1.0 - tversky
 
 
-def _ensure_finite_tensor(torch, tensor, name: str, epoch: int, batch_index: int) -> None:
+def _ensure_finite_tensor(
+    torch,
+    tensor,
+    name: str,
+    epoch: int,
+    batch_index: int,
+    stage: str,
+) -> None:
     if not bool(torch.isfinite(tensor).all()):
         raise TrainError(
-            f"Non-finite tensor at epoch={epoch}, batch={batch_index}, tensor={name}"
+            f"Non-finite tensor at stage={stage}, epoch={epoch}, batch={batch_index}, tensor={name}"
         )
 
 

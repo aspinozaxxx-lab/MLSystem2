@@ -244,9 +244,9 @@ def _compare_and_save_sample(
 
 def _next_mlsystem_image(iterator: object) -> np.ndarray:
     batch = next(iterator)
-    if not isinstance(batch, tuple) or len(batch) != 2:
-        raise RuntimeError("DataLoader batch должен быть tuple(images, masks).")
-    images, _masks = batch
+    if not isinstance(batch, tuple) or len(batch) not in {2, 3}:
+        raise RuntimeError("DataLoader batch должен быть tuple(images, masks[, batch_meta]).")
+    images = batch[0]
     if list(images.shape[:1]) != [1]:
         raise RuntimeError("Golden-test ожидает batch_size=1.")
     return images[0].detach().cpu().numpy()

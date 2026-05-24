@@ -14,6 +14,8 @@ def test_get_settings_before_load_raises() -> None:
 
     with pytest.raises(SettingsError):
         api.get_settings()
+    with pytest.raises(SettingsError):
+        api.get_settings_path()
 
 
 def test_load_settings_without_storage_section(tmp_path: Path) -> None:
@@ -23,8 +25,9 @@ def test_load_settings_without_storage_section(tmp_path: Path) -> None:
 
     settings = api.load_settings(settings_path)
 
-    assert settings.dataset.images_dir == "/data/mlsystem2/prepared_images/kanopus"
+    assert settings.dataset.images_dir == "/data/mlsystem2/prepared_images/"
     assert api.get_settings() is settings
+    assert api.get_settings_path() == settings_path.resolve()
 
 
 def test_repeated_load_settings_replaces_current_settings(tmp_path: Path) -> None:
@@ -40,6 +43,7 @@ def test_repeated_load_settings_replaces_current_settings(tmp_path: Path) -> Non
     assert first_settings.dataset.images_dir == "/first"
     assert second_settings.dataset.images_dir == "/second"
     assert api.get_settings() is second_settings
+    assert api.get_settings_path() == second_config.resolve()
 
 
 def test_load_settings_rejects_storage_section(tmp_path: Path) -> None:
@@ -101,7 +105,7 @@ def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:
 
 def _minimal_config(
     *,
-    images_dir: str = "/data/mlsystem2/prepared_images/kanopus",
+    images_dir: str = "/data/mlsystem2/prepared_images/",
     tile_size: int = 512,
     stride: int = 256,
 ) -> str:
@@ -114,8 +118,8 @@ runtime:
 
 dataset:
   images_dir: {images_dir}
-  scenes_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.txt
-  annotation_file: /data/mlsystem/MLMarkup/Вырубки/deforestation.geojson
+  scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
+  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
 
 tile_preparation:

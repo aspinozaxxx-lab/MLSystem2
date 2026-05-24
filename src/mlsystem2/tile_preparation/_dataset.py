@@ -53,7 +53,7 @@ class TileDataset:
     def __len__(self) -> int:
         return len(self._windows)
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, dict[str, bool]]:
         tile_window = self._windows[index]
         dataset = self._open_dataset()
         window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
@@ -63,8 +63,9 @@ class TileDataset:
         image = image_raw.astype(np.float32, copy=False)
 
         mask = self._read_annotation_mask(dataset, window, nodata_pixels)
+        augmented = False
         if self._mode == "train" and self._augmentation_level > 0:
-            image, mask = apply_augmentations(
+            image, mask, augmented = apply_augmentations(
                 image,
                 mask,
                 level=self._augmentation_level,
@@ -72,7 +73,11 @@ class TileDataset:
                 sample_index=index,
             )
 
-        return np.ascontiguousarray(image), np.ascontiguousarray(mask)
+        return (
+            np.ascontiguousarray(image),
+            np.ascontiguousarray(mask),
+            {"augmented": augmented},
+        )
 
     def close(self) -> None:
         if self._dataset is not None:

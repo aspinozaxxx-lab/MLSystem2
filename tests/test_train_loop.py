@@ -94,6 +94,121 @@ def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     assert len(result.history) == 1
 
 
+def test_train_model_accepts_batch_metadata(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=TinySegmentationModel(),
+    )
+    result = train_model(
+        TrainRequest(
+            model=model,
+            train_loader=_fake_loader(torch, with_meta=True),
+            val_loader=_fake_loader(torch, with_meta=True),
+            config=TrainConfig(
+                epochs=1,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=1,
+            ),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+        )
+    )
+
+    assert result.epochs_total == 1
+    assert result.history[0].val_positive_pixels > 0
+
+
+def test_validation_pixel_f1_counts_known_confusion_matrix() -> None:
+    torch = pytest.importorskip("torch")
+
+    class IdentityModel(torch.nn.Module):
+        def forward(self, images):
+            return images
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.tensor([[[[-10.0, 10.0], [10.0, -10.0]]]], dtype=torch.float32)
+    masks = torch.tensor([[[[0.0, 0.0], [1.0, 1.0]]]], dtype=torch.float32)
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    result = _trainer._validate_epoch(
+        torch,
+        IdentityModel(),
+        [(logits, masks, {"augmented_tile_count": 0})],
+        torch.device("cpu"),
+        config,
+        1,
+    )
+
+    assert result["true_positive"] == 1
+    assert result["false_positive"] == 1
+    assert result["false_negative"] == 1
+    assert result["positive_pixels"] == 2
+    assert result["pred_positive_pixels"] == 2
+    assert result["f1"] == 0.5
+
+
+def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
+    torch = pytest.importorskip("torch")
+
+    class IdentityModel(torch.nn.Module):
+        def forward(self, images):
+            return images
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.ones((1, 1, 2, 2), dtype=torch.float32)
+    masks = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    result = _trainer._validate_epoch(
+        torch,
+        IdentityModel(),
+        [(logits, masks)],
+        torch.device("cpu"),
+        config,
+        1,
+    )
+
+    assert result["positive_pixels"] == 0
+    assert result["pred_positive_pixels"] == 4
+    assert result["true_positive"] == 0
+    assert result["false_negative"] == 0
+    assert result["f1"] == 0.0
+
+
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 
@@ -145,8 +260,13 @@ def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
     assert len(result.history) == 1
 
 
-def _fake_loader(torch):
+def _fake_loader(torch, *, with_meta: bool = False):
     images = torch.zeros((2, 4, 16, 16), dtype=torch.float32)
     masks = torch.zeros((2, 1, 16, 16), dtype=torch.float32)
     masks[:, :, 4:8, 4:8] = 1.0
+    if with_meta:
+        return [
+            (images, masks, {"augmented_tile_count": 2}),
+            (images + 0.1, masks, {"augmented_tile_count": 1}),
+        ]
     return [(images, masks), (images + 0.1, masks)]

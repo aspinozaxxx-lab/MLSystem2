@@ -40,7 +40,7 @@ def test_create_tile_dataloader_reports_missing_torch(monkeypatch: pytest.Monkey
         )
 
 
-def test_create_tile_dataloader_returns_image_mask_tuple(tmp_path: Path) -> None:
+def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "image.tif"
     _write_raster(raster_path)
@@ -60,10 +60,11 @@ def test_create_tile_dataloader_returns_image_mask_tuple(tmp_path: Path) -> None
 
     batch = next(iter(loader))
     assert isinstance(batch, tuple)
-    assert len(batch) == 2
-    images, masks = batch
+    assert len(batch) == 3
+    images, masks, batch_meta = batch
     assert images.shape == (4, 3, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
+    assert batch_meta == {"augmented_tile_count": 0}
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
@@ -97,9 +98,10 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
         )
     )
 
-    images, masks = next(iter(loader))
+    images, masks, batch_meta = next(iter(loader))
     assert images.shape == (1, 2, 4, 4)
     assert masks.shape == (1, 1, 4, 4)
+    assert batch_meta == {"augmented_tile_count": 0}
     assert images.dtype == torch.float32
     assert torch.equal(images[0], torch.as_tensor(data.astype(np.float32)))
     assert float(images.max().item()) == 2000.0
@@ -135,8 +137,9 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
         )
     )
 
-    images, _masks = next(iter(loader))
+    images, _masks, batch_meta = next(iter(loader))
     assert float(images.max().item()) > 1.0
+    assert batch_meta == {"augmented_tile_count": 1}
 
     loader.dataset.close()
 
@@ -162,10 +165,11 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
         )
     )
 
-    images, masks = next(iter(loader))
+    images, masks, batch_meta = next(iter(loader))
     edge_tile = images[1, 0]
     assert images.shape == (4, 1, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
+    assert batch_meta == {"augmented_tile_count": 0}
     assert torch.equal(edge_tile[:, 0], torch.as_tensor(data[0, 0:4, 4].astype(np.float32)))
     assert torch.all(edge_tile[:, 1:] == -1.0)
 
@@ -191,10 +195,11 @@ def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) ->
         )
     )
 
-    images, masks = next(iter(loader))
+    images, masks, batch_meta = next(iter(loader))
     assert len(loader.dataset) == 1
     assert torch.all(images == 0.0)
     assert torch.all(masks == 0.0)
+    assert batch_meta == {"augmented_tile_count": 0}
 
     loader.dataset.close()
 
@@ -230,10 +235,11 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
 
     assert len(dataset) == 4
     assert read_calls == 0
-    image, mask = dataset[0]
+    image, mask, sample_meta = dataset[0]
     assert read_calls == 1
     assert image.shape == (1, 4, 4)
     assert mask.shape == (1, 4, 4)
+    assert sample_meta == {"augmented": False}
     dataset.close()
 
 
@@ -279,11 +285,12 @@ def test_train_loader_is_stable_with_same_seed_when_augmentation_is_disabled(
         batch_size=2,
         mode="train",
     )
-    first_images, first_masks = next(iter(create_tile_dataloader(request)))
-    second_images, second_masks = next(iter(create_tile_dataloader(request)))
+    first_images, first_masks, first_meta = next(iter(create_tile_dataloader(request)))
+    second_images, second_masks, second_meta = next(iter(create_tile_dataloader(request)))
 
     assert torch.equal(first_images, second_images)
     assert torch.equal(first_masks, second_masks)
+    assert first_meta == second_meta == {"augmented_tile_count": 0}
 
 
 @pytest.mark.skipif(
@@ -308,9 +315,10 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
         )
     )
 
-    images, masks = next(iter(loader))
+    images, masks, batch_meta = next(iter(loader))
     assert images.shape == (2, 3, 4, 4)
     assert masks.shape == (2, 1, 4, 4)
+    assert batch_meta == {"augmented_tile_count": 0}
 
 
 def _write_raster(path: Path) -> None:

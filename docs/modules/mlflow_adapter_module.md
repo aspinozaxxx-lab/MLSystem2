@@ -8,6 +8,8 @@
 
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
+- `log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None` - пишет отчет подготовки тайлов.
+- `log_run_config(run: MLflowRunRef, config_path: str | Path) -> None` - пишет YAML-конфиг запуска.
 - `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет метрики одной эпохи сразу после ее завершения.
 - `log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None` - пишет итоговые метрики обучения.
 - `log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None` - пишет историю обучения и checkpoint-файлы.
@@ -34,6 +36,8 @@
 
 `start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
 
-`log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует с `step=metrics.epoch`: `train/loss`, `val/loss`, `val/pixel_precision`, `val/pixel_recall`, `val/pixel_f1`, `train/epoch_time_sec`. Это обеспечивает появление метрик в MLflow во время долгого обучения.
+`log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
+
+`log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует с `step=metrics.epoch`: `train/loss`, `val/loss`, `val/pixel_precision`, `val/pixel_recall`, `val/pixel_f1`, `val/positive_pixels`, `val/pred_positive_pixels`, `val/true_positive`, `val/false_positive`, `val/false_negative`, `train/epoch_time_sec`. Это обеспечивает появление метрик в MLflow во время долгого обучения.
 
 `log_training_metrics` не дублирует per-epoch метрики. Он пишет только итоговые значения: `train/epochs_total`, `train/training_time_sec`, `val/best_pixel_f1`, `val/final_pixel_f1`. `log_training_artifacts` пишет полную историю обучения в JSON и сохраняет существующие best/final checkpoint-файлы.

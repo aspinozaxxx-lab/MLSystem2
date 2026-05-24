@@ -8,6 +8,7 @@
 
 - `load_settings(path: str | Path) -> SystemSettings` - читает YAML, валидирует `SystemSettings`, сохраняет его как текущие настройки процесса и возвращает.
 - `get_settings() -> SystemSettings` - возвращает текущие настройки процесса. Если `load_settings` еще не вызывался, бросает `SettingsError`.
+- `get_settings_path() -> Path` - возвращает путь к текущему YAML-конфигу. Если `load_settings` еще не вызывался, бросает `SettingsError`.
 
 ## Публичные контракты
 
@@ -25,7 +26,7 @@
 
 ## Алгоритм работы и его особенности
 
-`load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. Результат сохраняется в module-level current object, `get_settings` отдает этот объект остальным модулям. Лишние секции и поля отклоняются.
+`load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. Результат и абсолютный путь YAML сохраняются в module-level current object; `get_settings` и `get_settings_path` отдают их остальным модулям. Лишние секции и поля отклоняются.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 

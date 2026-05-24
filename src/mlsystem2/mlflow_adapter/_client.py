@@ -42,6 +42,25 @@ def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport)
     _log_dict(_model_dump(report), "reports/dataset_preparation.json")
 
 
+def log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None:
+    if not run.active:
+        return
+    _log_dict(report, "reports/tile_preparation.json")
+
+
+def log_run_config(run: MLflowRunRef, config_path: str | Path) -> None:
+    if not run.active:
+        return
+    path = Path(config_path)
+    if not path.is_file():
+        raise MLflowAdapterError(f"Файл настроек для MLflow не найден: {path}")
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise MLflowAdapterError(f"Не удалось прочитать файл настроек для MLflow: {path}") from exc
+    _log_text(content, "config/train_config.yaml")
+
+
 def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     if not run.active:
         return
@@ -52,6 +71,15 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("val/pixel_precision", metrics.val_pixel_precision, step=metrics.epoch)
         mlflow.log_metric("val/pixel_recall", metrics.val_pixel_recall, step=metrics.epoch)
         mlflow.log_metric("val/pixel_f1", metrics.val_pixel_f1, step=metrics.epoch)
+        mlflow.log_metric("val/positive_pixels", metrics.val_positive_pixels, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/pred_positive_pixels",
+            metrics.val_pred_positive_pixels,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric("val/true_positive", metrics.val_true_positive, step=metrics.epoch)
+        mlflow.log_metric("val/false_positive", metrics.val_false_positive, step=metrics.epoch)
+        mlflow.log_metric("val/false_negative", metrics.val_false_negative, step=metrics.epoch)
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
@@ -153,6 +181,16 @@ def _log_dict(payload: dict[str, object], artifact_file: str) -> None:
     except Exception as exc:
         raise MLflowAdapterError(
             f"Не удалось записать артефакт MLflow: {artifact_file}"
+        ) from exc
+
+
+def _log_text(content: str, artifact_file: str) -> None:
+    mlflow = _mlflow()
+    try:
+        mlflow.log_text(content, artifact_file)
+    except Exception as exc:
+        raise MLflowAdapterError(
+            f"Не удалось записать текстовый артефакт MLflow: {artifact_file}"
         ) from exc
 
 

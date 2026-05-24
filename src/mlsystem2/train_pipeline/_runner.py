@@ -11,6 +11,8 @@ from mlsystem2.mlflow_adapter.api import (
     end_run,
     log_dataset_preparation,
     log_pipeline_report,
+    log_run_config,
+    log_tile_preparation,
     log_timing_report,
     log_training_artifacts,
     log_training_epoch,
@@ -20,7 +22,7 @@ from mlsystem2.mlflow_adapter.api import (
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
 from mlsystem2.models.api import create_model, load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec
-from mlsystem2.settings.api import get_settings
+from mlsystem2.settings.api import get_settings, get_settings_path
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
@@ -42,6 +44,7 @@ from .contracts import (
 @dataclass(frozen=True)
 class _PipelineDependencies:
     get_settings: object
+    get_settings_path: object
     start_run: object
     prepare_dataset: object
     create_tile_dataloader: object
@@ -49,6 +52,8 @@ class _PipelineDependencies:
     load_checkpoint: object
     train_model: object
     log_dataset_preparation: object
+    log_tile_preparation: object
+    log_run_config: object
     log_training_epoch: object
     log_training_metrics: object
     log_training_artifacts: object
@@ -60,6 +65,7 @@ class _PipelineDependencies:
 def _default_dependencies() -> _PipelineDependencies:
     return _PipelineDependencies(
         get_settings=get_settings,
+        get_settings_path=get_settings_path,
         start_run=start_run,
         prepare_dataset=prepare_dataset,
         create_tile_dataloader=create_tile_dataloader,
@@ -67,6 +73,8 @@ def _default_dependencies() -> _PipelineDependencies:
         load_checkpoint=load_checkpoint,
         train_model=train_model,
         log_dataset_preparation=log_dataset_preparation,
+        log_tile_preparation=log_tile_preparation,
+        log_run_config=log_run_config,
         log_training_epoch=log_training_epoch,
         log_training_metrics=log_training_metrics,
         log_training_artifacts=log_training_artifacts,
@@ -101,6 +109,7 @@ def run_train_pipeline(
         settings = _expect_settings(settings)
 
         run = deps.start_run(_mlflow_start_request(settings, request))
+        measure_mlflow(lambda: deps.log_run_config(run, deps.get_settings_path()))
 
         dataset_result, timing = timed_call(
             "dataset_preparing",
@@ -154,6 +163,8 @@ def run_train_pipeline(
         )
         timings.append(timing)
         train_loader, val_loader = loaders
+        train_loader = _CountingLoader(train_loader, "train")
+        val_loader = _CountingLoader(val_loader, "val")
 
         model = _load_or_create_model(settings, deps)
 
@@ -173,6 +184,8 @@ def run_train_pipeline(
 
         measure_mlflow(lambda: deps.log_training_metrics(run, train_result))
         measure_mlflow(lambda: deps.log_training_artifacts(run, train_result))
+        tile_report = _tile_preparation_report(settings, train_loader, val_loader)
+        measure_mlflow(lambda: deps.log_tile_preparation(run, tile_report))
 
         report = PipelineReport(
             status=PipelineStatus.SUCCEEDED,
@@ -272,6 +285,67 @@ def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies)
         )
         return loaded.model
     return deps.create_model(spec)
+
+
+class _CountingLoader:
+    def __init__(self, loader: object, split: str) -> None:
+        self.loader = loader
+        self.split = split
+        self.observed_batches = 0
+        self.observed_tiles = 0
+        self.observed_augmented_tiles = 0
+
+    def __iter__(self):
+        for batch in self.loader:
+            images = batch[0]
+            tile_count = int(images.shape[0])
+            meta = batch[2] if len(batch) > 2 else {}
+            aug_count = int(meta.get("augmented_tile_count", 0)) if isinstance(meta, dict) else 0
+            self.observed_batches += 1
+            self.observed_tiles += tile_count
+            self.observed_augmented_tiles += aug_count
+            yield batch
+
+    def __len__(self) -> int:
+        return len(self.loader)
+
+    @property
+    def dataset(self):
+        return getattr(self.loader, "dataset", None)
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "tile_count": _safe_len(self.dataset),
+            "batch_count": _safe_len(self),
+            "observed_batches": self.observed_batches,
+            "observed_tiles": self.observed_tiles,
+            "observed_augmented_tiles": self.observed_augmented_tiles,
+            "observed_real_tiles": self.observed_tiles - self.observed_augmented_tiles,
+        }
+
+
+def _tile_preparation_report(
+    settings: SystemSettings,
+    train_loader: _CountingLoader,
+    val_loader: _CountingLoader,
+) -> dict[str, object]:
+    return {
+        "tile_size": settings.tile_preparation.tile_size,
+        "stride": settings.tile_preparation.stride,
+        "batch_size": settings.train.batch_size,
+        "augmentation_level": settings.tile_preparation.augmentation_level,
+        "splits": {
+            "train": train_loader.snapshot(),
+            "val": val_loader.snapshot(),
+        },
+    }
+
+
+def _safe_len(value: object) -> int | None:
+    try:
+        return int(len(value))
+    except TypeError:
+        return None
 
 
 def _train_request(

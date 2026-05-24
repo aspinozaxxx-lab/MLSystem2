@@ -4,7 +4,7 @@ import importlib
 
 
 EXPECTED_API = {
-    "settings.api": ["load_settings", "get_settings"],
+    "settings.api": ["load_settings", "get_settings", "get_settings_path"],
     "dataset_preparing.api": ["prepare_dataset"],
     "tile_preparation.api": ["create_tile_dataloader"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],
@@ -13,6 +13,8 @@ EXPECTED_API = {
     "mlflow_adapter.api": [
         "start_run",
         "log_dataset_preparation",
+        "log_tile_preparation",
+        "log_run_config",
         "log_training_epoch",
         "log_training_metrics",
         "log_training_artifacts",

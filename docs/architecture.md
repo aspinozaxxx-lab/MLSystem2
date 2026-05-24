@@ -38,7 +38,7 @@ mlsystem2-infer --config configs/example.server.yaml
 ## Конвейер Обучения
 
 1. CLI получает путь `--config`, вызывает `settings.api.load_settings` и инициализирует текущие настройки процесса.
-2. Создать или открыть запуск MLflow через `mlflow_adapter`.
+2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML-конфиг запуска в артефакты.
 3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
@@ -46,7 +46,7 @@ mlsystem2-infer --config configs/example.server.yaml
 6. `train_pipeline` создает поддерживаемый SegFormer (`segformer_b0` или `segformer_b2`) через `models.create_model` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан.
 7. `train` выполняет PyTorch обучение SegFormer: AdamW, cosine scheduler, BCE/Dice-family loss, validation по pixel precision/recall/f1, early stopping и best/final checkpoints.
 8. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.
-9. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет времени и итоговый
+9. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет tile preparation, отчет времени и итоговый
    отчет.
 
 ## Конвейер Инференса

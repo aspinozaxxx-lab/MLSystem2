@@ -13,6 +13,7 @@
 Batch DataLoader:
 - `images: torch.float32 [B, C, tile_size, tile_size]`;
 - `masks: torch.float32 [B, 1, tile_size, tile_size]`;
+- `batch_meta: dict` с единственным полем `augmented_tile_count`;
 - mask binary `0/1`.
 
 ## Публичные контракты
@@ -41,6 +42,6 @@ Batch DataLoader:
 
 Окна строятся регулярной Geoalert-compatible сеткой: `0, stride, 2*stride, ...` до границы source rect или raster. Shifted last tile не добавляется. Окно всегда имеет размер `tile_size x tile_size`; выход за bounds закрывается `rasterio.read(boundless=True, fill_value=nodata)`.
 
-В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target.
+В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target. Sample возвращает `{"augmented": bool}`, а collate собирает batch `(images, masks, batch_meta)`; для `val` и `augmentation_level=0` счетчик augmented равен `0`.
 
 Полностью nodata tiles не фильтруются заранее: они могут попасть в DataLoader как image с nodata-fill и zero mask. Это сохраняет быстрый старт loader и не меняет batch contract.

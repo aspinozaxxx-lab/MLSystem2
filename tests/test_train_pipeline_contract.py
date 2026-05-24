@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from typing import get_type_hints
 
 from mlsystem2.dataset_preparing.contracts import (
@@ -50,6 +51,7 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
     )
     deps = _runner._PipelineDependencies(
         get_settings=lambda: _settings(initial_checkpoint_uri="/tmp/initial.pt"),
+        get_settings_path=lambda: Path("config.yaml"),
         start_run=lambda request: MLflowRunRef(
             run_id="disabled",
             experiment_name=request.experiment_name,
@@ -66,6 +68,8 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
         ),
         train_model=lambda request, progress_sink=None: _train_result(),
         log_dataset_preparation=lambda run, report: None,
+        log_tile_preparation=lambda run, report: None,
+        log_run_config=lambda run, config_path: None,
         log_training_epoch=lambda run, metrics: None,
         log_training_metrics=lambda run, result: None,
         log_training_artifacts=lambda run, result: None,
@@ -97,6 +101,7 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
 
     deps = _runner._PipelineDependencies(
         get_settings=lambda: _settings(initial_checkpoint_uri=None),
+        get_settings_path=lambda: Path("config.yaml"),
         start_run=lambda request: MLflowRunRef(
             run_id="run",
             experiment_name=request.experiment_name,
@@ -109,6 +114,8 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
         load_checkpoint=lambda request: None,
         train_model=train_model,
         log_dataset_preparation=lambda run, report: None,
+        log_tile_preparation=lambda run, report: None,
+        log_run_config=lambda run, config_path: None,
         log_training_epoch=lambda run, item: logged_epochs.append(item.epoch),
         log_training_metrics=lambda run, result: None,
         log_training_artifacts=lambda run, result: None,
@@ -121,6 +128,42 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
 
     assert result.status.value == "succeeded"
     assert logged_epochs == [1]
+
+
+def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
+    class Dataset:
+        def __len__(self) -> int:
+            return 5
+
+    class Images:
+        def __init__(self, batch_size: int) -> None:
+            self.shape = (batch_size, 1, 4, 4)
+
+    class Loader:
+        dataset = Dataset()
+
+        def __iter__(self):
+            yield (
+                Images(2),
+                object(),
+                {"augmented_tile_count": 1},
+            )
+            yield Images(1), object()
+
+        def __len__(self) -> int:
+            return 2
+
+    loader = _runner._CountingLoader(Loader(), "train")
+
+    assert len(list(loader)) == 2
+    assert loader.snapshot() == {
+        "tile_count": 5,
+        "batch_count": 2,
+        "observed_batches": 2,
+        "observed_tiles": 3,
+        "observed_augmented_tiles": 1,
+        "observed_real_tiles": 2,
+    }
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:
@@ -199,6 +242,11 @@ def _train_result() -> TrainResult:
                 val_pixel_precision=0.0,
                 val_pixel_recall=0.0,
                 val_pixel_f1=0.0,
+                val_positive_pixels=0,
+                val_pred_positive_pixels=0,
+                val_true_positive=0,
+                val_false_positive=0,
+                val_false_negative=0,
                 epoch_time_sec=0.1,
             )
         ],

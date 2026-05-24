@@ -12,38 +12,44 @@ def apply_augmentations(
     level: int,
     seed: int,
     sample_index: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, bool]:
     if level <= 0:
-        return np.ascontiguousarray(image), np.ascontiguousarray(mask)
+        return np.ascontiguousarray(image), np.ascontiguousarray(mask), False
 
     rng = np.random.default_rng(seed + sample_index)
-    image, mask = _geometric(image, mask, rng)
+    image, mask, augmented = _geometric(image, mask, rng)
 
     if level >= 2:
         image = _photometric(image, rng)
+        augmented = True
     if level >= 3:
         image = _cutout(image, rng)
+        augmented = True
 
-    return np.ascontiguousarray(image), np.ascontiguousarray(mask)
+    return np.ascontiguousarray(image), np.ascontiguousarray(mask), augmented
 
 
 def _geometric(
     image: np.ndarray,
     mask: np.ndarray,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    augmented = False
     if rng.random() < 0.5:
         image = np.flip(image, axis=2)
         mask = np.flip(mask, axis=2)
+        augmented = True
     if rng.random() < 0.5:
         image = np.flip(image, axis=1)
         mask = np.flip(mask, axis=1)
+        augmented = True
 
     rotations = int(rng.integers(0, 4))
     if rotations:
         image = np.rot90(image, rotations, axes=(1, 2))
         mask = np.rot90(mask, rotations, axes=(1, 2))
-    return image, mask
+        augmented = True
+    return image, mask, augmented
 
 
 def _photometric(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
