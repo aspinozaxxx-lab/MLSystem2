@@ -64,7 +64,12 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     images, masks, batch_meta = batch
     assert images.shape == (4, 3, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 1}
+    assert batch_meta == {
+        "augmented_tile_count": 0,
+        "positive_tile_count": 1,
+        "tile_augmented": [False, False, False, False],
+        "tile_positive": [True, False, False, False],
+    }
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
@@ -101,7 +106,12 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
     images, masks, batch_meta = next(iter(loader))
     assert images.shape == (1, 2, 4, 4)
     assert masks.shape == (1, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
+    assert batch_meta == {
+        "augmented_tile_count": 0,
+        "positive_tile_count": 0,
+        "tile_augmented": [False],
+        "tile_positive": [False],
+    }
     assert images.dtype == torch.float32
     assert torch.equal(images[0], torch.as_tensor(data.astype(np.float32)))
     assert float(images.max().item()) == 2000.0
@@ -139,7 +149,12 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
 
     images, _masks, batch_meta = next(iter(loader))
     assert float(images.max().item()) > 1.0
-    assert batch_meta == {"augmented_tile_count": 1, "positive_tile_count": 0}
+    assert batch_meta == {
+        "augmented_tile_count": 1,
+        "positive_tile_count": 0,
+        "tile_augmented": [True],
+        "tile_positive": [False],
+    }
 
     loader.dataset.close()
 
@@ -169,7 +184,12 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     edge_tile = images[1, 0]
     assert images.shape == (4, 1, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
+    assert batch_meta == {
+        "augmented_tile_count": 0,
+        "positive_tile_count": 0,
+        "tile_augmented": [False, False, False, False],
+        "tile_positive": [False, False, False, False],
+    }
     assert torch.equal(edge_tile[:, 0], torch.as_tensor(data[0, 0:4, 4].astype(np.float32)))
     assert torch.all(edge_tile[:, 1:] == -1.0)
 
@@ -199,7 +219,12 @@ def test_create_tile_dataloader_keeps_fully_nodata_tiles_lazy(tmp_path: Path) ->
     assert len(loader.dataset) == 1
     assert torch.all(images == 0.0)
     assert torch.all(masks == 0.0)
-    assert batch_meta == {"augmented_tile_count": 0, "positive_tile_count": 0}
+    assert batch_meta == {
+        "augmented_tile_count": 0,
+        "positive_tile_count": 0,
+        "tile_augmented": [False],
+        "tile_positive": [False],
+    }
 
     loader.dataset.close()
 
@@ -293,6 +318,8 @@ def test_train_loader_is_stable_with_same_seed_when_augmentation_is_disabled(
     assert torch.equal(first_masks, second_masks)
     assert first_meta == second_meta
     assert first_meta["augmented_tile_count"] == 0
+    assert len(first_meta["tile_augmented"]) == 2
+    assert len(first_meta["tile_positive"]) == 2
 
 
 @pytest.mark.skipif(

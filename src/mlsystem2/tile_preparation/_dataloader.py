@@ -91,13 +91,14 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, bo
         [torch.as_tensor(sample[1], dtype=torch.float32) for sample in samples],
         dim=0,
     )
+    metas = [sample[2] if len(sample) > 2 else {} for sample in samples]
+    tile_augmented = [bool(meta.get("augmented", False)) for meta in metas]
+    tile_positive = [bool(meta.get("positive", False)) for meta in metas]
     batch_meta = {
-        "augmented_tile_count": sum(
-            1 for sample in samples if len(sample) > 2 and sample[2].get("augmented", False)
-        ),
-        "positive_tile_count": sum(
-            1 for sample in samples if len(sample) > 2 and sample[2].get("positive", False)
-        ),
+        "augmented_tile_count": sum(1 for item in tile_augmented if item),
+        "positive_tile_count": sum(1 for item in tile_positive if item),
+        "tile_augmented": tile_augmented,
+        "tile_positive": tile_positive,
     }
     return images, masks, batch_meta
 

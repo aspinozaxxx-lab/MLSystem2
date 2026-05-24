@@ -13,7 +13,7 @@
 Batch DataLoader:
 - `images: torch.float32 [B, C, tile_size, tile_size]`;
 - `masks: torch.float32 [B, 1, tile_size, tile_size]`;
-- `batch_meta: dict` с полями `augmented_tile_count`, `positive_tile_count`;
+- `batch_meta: dict` с полями `augmented_tile_count`, `positive_tile_count`, `tile_augmented`, `tile_positive`;
 - mask binary `0/1`.
 
 ## Публичные контракты
@@ -42,7 +42,7 @@ Batch DataLoader:
 
 Окна строятся регулярной Geoalert-compatible сеткой: `0, stride, 2*stride, ...` до границы source rect или raster. Shifted last tile не добавляется. Окно всегда имеет размер `tile_size x tile_size`; выход за bounds закрывается `rasterio.read(boundless=True, fill_value=nodata)`.
 
-В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target. Sample возвращает `{"augmented": bool, "positive": bool}`, а collate собирает batch `(images, masks, batch_meta)`.
+В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT. Mask rasterize выполняется в том же окне, возвращает shape `1,H,W`, dtype `float32`, значения `0/1`. Mask зануляется там, где все image channels равны nodata, чтобы padding/nodata не попадал в target. Sample возвращает `{"augmented": bool, "positive": bool}`, а collate собирает batch `(images, masks, batch_meta)` с aggregate-счетчиками и per-tile flags для диагностики.
 
 При `smart_tiling=true` и `mode="train"` Dataset строит cheap-index: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Если есть positive/negative hints, DataLoader использует `WeightedRandomSampler` с примерно равной суммарной вероятностью positive и negative окон; иначе остается обычный sampler. Аугментация применяется только к positive tiles. Для `val` sampler deterministic, shuffle и augmentation выключены.
 
