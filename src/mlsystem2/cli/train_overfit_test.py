@@ -56,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-f1", type=float, default=DEFAULT_MIN_F1)
     parser.add_argument("--matrix", action="store_true")
     parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--samples-output-dir", default=None)
+    parser.add_argument("--export-samples-only", action="store_true")
+    parser.add_argument(
+        "--positive-selection",
+        choices=["first", "largest", "both"],
+        default="both",
+    )
+    parser.add_argument("--export-negative-samples", action="store_true")
     args = parser.parse_args(argv)
 
     started = perf_counter()
@@ -70,12 +78,33 @@ def main(argv: list[str] | None = None) -> int:
     torch = _torch()
 
     if args.synthetic:
-        images, masks, collected = _make_synthetic_dataset(torch, settings.train.input_channels)
+        images, masks, collected, sample_records = _make_synthetic_dataset(
+            torch,
+            settings.train.input_channels,
+        )
         sample_dir = report_path.parent / "synthetic_overfit_samples"
     else:
-        images, masks, collected = _collect_real_dataset(settings)
+        images, masks, collected, sample_records = _collect_real_dataset(settings)
         sample_dir = report_path.parent / "overfit_samples"
     sample_previews = _save_sample_previews(images, masks, sample_dir)
+
+    sample_export_report = None
+    if args.samples_output_dir is not None:
+        groups = _collect_export_groups(
+            settings=settings,
+            tiny_records=sample_records,
+            positive_selection=args.positive_selection,
+            export_negative_samples=args.export_negative_samples,
+            synthetic=args.synthetic,
+        )
+        sample_export_report = _export_sample_groups(
+            groups=groups,
+            output_dir=Path(args.samples_output_dir),
+            config_path=config_path,
+        )
+        if args.export_samples_only:
+            print(json.dumps(sample_export_report, ensure_ascii=False, indent=2))
+            return 0
 
     steps = args.steps or (DEFAULT_MATRIX_STEPS if args.matrix else DEFAULT_STEPS)
     if args.matrix:
@@ -123,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         "positive_tiles_used": collected["positive_tiles"],
         "negative_tiles_used": collected["negative_tiles"],
         "sample_previews": sample_previews,
+        "sample_export_report": sample_export_report,
         "elapsed_sec": perf_counter() - started,
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -339,19 +369,27 @@ def _collect_tiny_dataset(loader: object):
     torch = _torch()
     positive_images = []
     positive_masks = []
+    positive_records = []
     negative_images = []
     negative_masks = []
+    negative_records = []
 
     for batch in loader:
         images, masks = batch[0], batch[1]
         positive_by_tile = (masks > 0.5).flatten(1).sum(dim=1) > 0
         for tile_index, positive in enumerate(positive_by_tile.tolist()):
             if positive and len(positive_images) < N_POSITIVE:
-                positive_images.append(images[tile_index].detach().cpu())
-                positive_masks.append(masks[tile_index].detach().cpu())
+                image = images[tile_index].detach().cpu()
+                mask = masks[tile_index].detach().cpu()
+                positive_images.append(image)
+                positive_masks.append(mask)
+                positive_records.append(_sample_record(image, mask, source="overfit_collector"))
             elif not positive and len(negative_images) < N_NEGATIVE:
-                negative_images.append(images[tile_index].detach().cpu())
-                negative_masks.append(masks[tile_index].detach().cpu())
+                image = images[tile_index].detach().cpu()
+                mask = masks[tile_index].detach().cpu()
+                negative_images.append(image)
+                negative_masks.append(mask)
+                negative_records.append(_sample_record(image, mask, source="overfit_collector"))
         if len(positive_images) >= N_POSITIVE and len(negative_images) >= N_NEGATIVE:
             break
 
@@ -367,7 +405,7 @@ def _collect_tiny_dataset(loader: object):
     return images, masks, {
         "positive_tiles": len(positive_images),
         "negative_tiles": len(negative_images),
-    }
+    }, [*positive_records, *negative_records]
 
 
 def _make_synthetic_dataset(torch, input_channels: int):
@@ -392,10 +430,19 @@ def _make_synthetic_dataset(torch, input_channels: int):
             images[index, 2, y : y + height, x : x + width] = 120.0
         if input_channels > 3:
             images[index, 3, y : y + height, x : x + width] = 220.0
+    records = [
+        _sample_record(
+            images[index],
+            masks[index],
+            source="synthetic",
+            source_index=index,
+        )
+        for index in range(int(images.shape[0]))
+    ]
     return images, masks, {
         "positive_tiles": SYNTHETIC_POSITIVE,
         "negative_tiles": SYNTHETIC_NEGATIVE,
-    }
+    }, records
 
 
 def _make_loaders(torch, images, masks, seed: int):
@@ -414,6 +461,280 @@ def _make_loaders(torch, images, masks, seed: int):
         shuffle=False,
     )
     return tiny_loader, eval_loader
+
+
+def _collect_export_groups(
+    *,
+    settings,
+    tiny_records: list[dict[str, object]],
+    positive_selection: str,
+    export_negative_samples: bool,
+    synthetic: bool,
+) -> dict[str, list[dict[str, object]]]:
+    groups: dict[str, list[dict[str, object]]] = {}
+    if positive_selection in {"first", "both"}:
+        groups["positive_first_16"] = [
+            record for record in tiny_records if bool(record["positive"])
+        ][:N_POSITIVE]
+    if positive_selection in {"largest", "both"}:
+        if synthetic:
+            largest = [record for record in tiny_records if bool(record["positive"])]
+            largest = sorted(
+                largest,
+                key=lambda item: int(item["positive_mask_pixels"]),
+                reverse=True,
+            )
+        else:
+            largest = _collect_largest_positive_records(settings)
+        groups["positive_largest_16"] = largest[:N_POSITIVE]
+    if export_negative_samples:
+        groups["negative_16"] = [
+            record for record in tiny_records if not bool(record["positive"])
+        ][:N_NEGATIVE]
+    return groups
+
+
+def _collect_largest_positive_records(settings) -> list[dict[str, object]]:
+    torch = _torch()
+    dataset_result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=settings.dataset.images_dir,
+            scenes_file=settings.dataset.scenes_file,
+            annotation_file=settings.dataset.annotation_file,
+            val_fraction=settings.dataset.val_fraction,
+        )
+    )
+    if dataset_result.dataset is None:
+        raise SystemExit(f"dataset_preparing failed: {dataset_result.report.errors}")
+
+    source_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=dataset_result.dataset.train_vrt_xml,
+            annotation_file=dataset_result.dataset.annotation_file,
+            batch_size=settings.train.batch_size,
+            mode="val",
+        )
+    )
+    dataset = getattr(source_loader, "dataset", None)
+    if dataset is None:
+        raise RuntimeError("DataLoader не вернул dataset для diagnostic samples export.")
+
+    try:
+        sequential_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=settings.train.batch_size,
+            shuffle=False,
+            num_workers=settings.tile_preparation.num_workers,
+            collate_fn=_collate_export_batch,
+        )
+        best_records: list[dict[str, object]] = []
+        for batch_index, batch in enumerate(sequential_loader):
+            images, masks = batch[0], batch[1]
+            positive_pixels = (masks > 0.5).flatten(1).sum(dim=1)
+            for tile_index, pixel_count_tensor in enumerate(positive_pixels.tolist()):
+                pixel_count = int(pixel_count_tensor)
+                if pixel_count <= 0:
+                    continue
+                source_index = batch_index * settings.train.batch_size + tile_index
+                image = images[tile_index].detach().cpu()
+                mask = masks[tile_index].detach().cpu()
+                best_records.append(
+                    _sample_record(
+                        image,
+                        mask,
+                        source="largest_positive_scan",
+                        source_index=source_index,
+                        window=_dataset_window(dataset, source_index),
+                    )
+                )
+                best_records.sort(
+                    key=lambda item: int(item["positive_mask_pixels"]),
+                    reverse=True,
+                )
+                del best_records[N_POSITIVE:]
+        return best_records
+    finally:
+        _close_loader(source_loader)
+
+
+def _collate_export_batch(samples):
+    torch = _torch()
+    images = torch.stack(
+        [torch.as_tensor(sample[0], dtype=torch.float32) for sample in samples],
+        dim=0,
+    )
+    masks = torch.stack(
+        [torch.as_tensor(sample[1], dtype=torch.float32) for sample in samples],
+        dim=0,
+    )
+    return images, masks
+
+
+def _dataset_window(dataset: object, index: int) -> dict[str, int] | None:
+    windows = getattr(dataset, "_windows", None)
+    if windows is None or index >= len(windows):
+        return None
+    window = windows[index]
+    return {
+        "x": int(getattr(window, "x")),
+        "y": int(getattr(window, "y")),
+        "width": int(getattr(window, "width")),
+        "height": int(getattr(window, "height")),
+    }
+
+
+def _sample_record(
+    image,
+    mask,
+    *,
+    source: str,
+    source_index: int | None = None,
+    window: dict[str, int] | None = None,
+) -> dict[str, object]:
+    positive_mask_pixels = int((mask > 0.5).sum().item())
+    height = int(mask.shape[-2])
+    width = int(mask.shape[-1])
+    return {
+        "image": image.detach().cpu().clone(),
+        "mask": mask.detach().cpu().clone(),
+        "source": source,
+        "source_index": source_index,
+        "window": window,
+        "positive": positive_mask_pixels > 0,
+        "positive_mask_pixels": positive_mask_pixels,
+        "positive_fraction": positive_mask_pixels / float(height * width),
+    }
+
+
+def _export_sample_groups(
+    *,
+    groups: dict[str, list[dict[str, object]]],
+    output_dir: Path,
+    config_path: Path,
+) -> dict[str, object]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for group_name in ("positive_first_16", "positive_largest_16", "negative_16"):
+        group_dir = output_dir / group_name
+        if group_dir.exists():
+            import shutil
+
+            shutil.rmtree(group_dir)
+
+    report_groups = {}
+    for group_name, records in groups.items():
+        group_dir = output_dir / group_name
+        group_dir.mkdir(parents=True, exist_ok=True)
+        exported = []
+        for index, record in enumerate(records):
+            exported.append(_export_sample_record(record, group_dir, group_name, index))
+        report_groups[group_name] = _group_summary(exported)
+
+    report = {
+        "status": "ok",
+        "config": str(config_path),
+        "output_dir": str(output_dir),
+        "groups": report_groups,
+    }
+    (output_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
+
+def _export_sample_record(
+    record: dict[str, object],
+    group_dir: Path,
+    group_name: str,
+    index: int,
+) -> dict[str, object]:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Для экспорта PNG требуется pillow.") from exc
+
+    torch = _torch()
+    image = record["image"]
+    mask = record["mask"]
+    image_np = image.numpy()
+    mask_np = mask.numpy()
+
+    sample_dir = group_dir / f"sample_{index:04d}"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    preview = _preview_rgb_uint8(image_np)
+    mask_u8 = (mask_np[0].clip(0.0, 1.0) * 255).astype("uint8")
+    edge = _mask_edge(mask_np)
+    overlay = preview.copy()
+    overlay[edge] = [255, 0, 0]
+
+    Image.fromarray(preview, mode="RGB").save(sample_dir / "preview_rgb.png")
+    Image.fromarray(overlay, mode="RGB").save(sample_dir / "preview_mask_overlay.png")
+    Image.fromarray(mask_u8, mode="L").save(sample_dir / "mask.png")
+    for channel_index, channel in enumerate(image_np):
+        Image.fromarray(_stretch_channel_to_uint8(channel), mode="L").save(
+            sample_dir / f"channel_{channel_index:02d}.png"
+        )
+
+    meta = _sample_export_meta(record, group_name, index)
+    torch.save(
+        {
+            "image": image,
+            "mask": mask,
+            "meta": meta,
+        },
+        sample_dir / "sample.pt",
+    )
+    (sample_dir / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return meta
+
+
+def _sample_export_meta(
+    record: dict[str, object],
+    group_name: str,
+    index: int,
+) -> dict[str, object]:
+    image = record["image"]
+    mask = record["mask"]
+    image_np = image.numpy()
+    mask_np = mask.numpy()
+    return {
+        "group": group_name,
+        "sample_index": index,
+        "source": record.get("source"),
+        "source_index": record.get("source_index"),
+        "positive": bool(record["positive"]),
+        "positive_mask_pixels": int(record["positive_mask_pixels"]),
+        "positive_fraction": float(record["positive_fraction"]),
+        "image_shape": list(image.shape),
+        "mask_shape": list(mask.shape),
+        "image_dtype": str(image_np.dtype),
+        "mask_dtype": str(mask_np.dtype),
+        "channel_min": _channel_stat(image_np, "min"),
+        "channel_max": _channel_stat(image_np, "max"),
+        "channel_mean": _channel_stat(image_np, "mean"),
+        "all_channels_equal": _all_channels_equal(image_np),
+        "nonzero_channel_count": _nonzero_channel_count(image_np),
+        "window": record.get("window"),
+        "alignment_stats": _sample_alignment_stats(image_np, mask_np),
+    }
+
+
+def _group_summary(records: list[dict[str, object]]) -> dict[str, object]:
+    fractions = [float(item["positive_fraction"]) for item in records]
+    pixels = [int(item["positive_mask_pixels"]) for item in records]
+    return {
+        "count": len(records),
+        "positive_mask_pixels_min": min(pixels) if pixels else None,
+        "positive_mask_pixels_max": max(pixels) if pixels else None,
+        "positive_mask_pixels_mean": sum(pixels) / len(pixels) if pixels else None,
+        "positive_fraction_min": min(fractions) if fractions else None,
+        "positive_fraction_max": max(fractions) if fractions else None,
+        "positive_fraction_mean": sum(fractions) / len(fractions) if fractions else None,
+    }
 
 
 def _create_overfit_model(
@@ -533,6 +854,41 @@ def _sample_alignment_stats(image_chw, mask_chw) -> dict[str, object]:
         "outside_channel_mean": outside_means,
         "inside_outside_abs_diff": abs_diffs,
     }
+
+
+def _channel_stat(image_chw, stat: str) -> list[float | None]:
+    import numpy as np
+
+    values: list[float | None] = []
+    for channel in image_chw:
+        finite = channel[np.isfinite(channel)]
+        if finite.size == 0:
+            values.append(None)
+            continue
+        if stat == "min":
+            values.append(float(finite.min()))
+        elif stat == "max":
+            values.append(float(finite.max()))
+        elif stat == "mean":
+            values.append(float(finite.mean()))
+        else:
+            raise RuntimeError(f"Неподдерживаемая статистика канала: {stat}")
+    return values
+
+
+def _all_channels_equal(image_chw) -> bool:
+    import numpy as np
+
+    if image_chw.shape[0] <= 1:
+        return False
+    first = image_chw[0]
+    return all(bool(np.array_equal(first, image_chw[index])) for index in range(1, image_chw.shape[0]))
+
+
+def _nonzero_channel_count(image_chw) -> int:
+    import numpy as np
+
+    return sum(1 for channel in image_chw if int(np.count_nonzero(channel)) > 0)
 
 
 def _preview_rgb_uint8(image_chw):
