@@ -59,6 +59,16 @@ class EpochMetrics(BaseModel):
     val_prob_p50: float = Field(default=0.0, ge=0.0, le=1.0)
     val_prob_p90: float = Field(default=0.0, ge=0.0, le=1.0)
     val_prob_p99: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_p999: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_positive_mean: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_positive_p50: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_positive_p90: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_positive_p99: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_negative_mean: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_negative_p50: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_negative_p90: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_prob_negative_p99: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_threshold_sweep: dict[str, dict[str, float]] = Field(default_factory=dict)
     epoch_time_sec: float = Field(ge=0.0)
 
 

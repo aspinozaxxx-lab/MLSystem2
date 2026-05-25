@@ -34,6 +34,7 @@ SEED = 42
 AUGMENTATION_LEVEL = 3
 SMART_TILING = True
 POSITIVE_FACTOR = 0.8
+VAL_POSITIVE_FACTOR = 0.5
 BATCH_SIZE = 4
 REQUESTED_BATCHES = 100
 MODE = "train"
@@ -173,7 +174,11 @@ def main() -> int:
 
 def _prepare_output_dir() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for child in (OUT_DIR / "tile_batches", OUT_DIR / "black_tile_examples"):
+    for child in (
+        OUT_DIR / "tile_batches",
+        OUT_DIR / "black_tile_examples",
+        OUT_DIR / "tensor_integrity",
+    ):
         if child.exists():
             shutil.rmtree(child)
         child.mkdir(parents=True, exist_ok=True)
@@ -202,6 +207,7 @@ tile_preparation:
   augmentation_level: {AUGMENTATION_LEVEL}
   smart_tiling: {str(SMART_TILING).lower()}
   positive_factor: {POSITIVE_FACTOR}
+  val_positive_factor: {VAL_POSITIVE_FACTOR}
 
 train:
   model_name: segformer_b2
@@ -266,6 +272,12 @@ def _scan_and_save_batches(loader: object) -> tuple[list[dict[str, Any]], dict[s
                 warnings=warnings,
             )
             _update_scan_summary(scan_summary, tile_details)
+            if scan_summary["tensor_integrity"] is None:
+                scan_summary["tensor_integrity"] = _try_save_tensor_integrity_example(
+                    image_array=image_array,
+                    mask_array=mask_array,
+                    tile_details=tile_details,
+                )
 
             tile_files: list[dict[str, Any]] = []
             save_sec = 0.0
@@ -342,6 +354,8 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "negative_black_tiles": 0,
         "positive_mask_pixels": 0,
         "mask_positive_pixels_total": 0,
+        "image_min": None,
+        "image_max": None,
         "source_rect_count": _dataset_attr(dataset, "source_rect_count"),
         "candidate_window_count": _dataset_attr(dataset, "candidate_window_count"),
         "candidate_window_count_before_valid_filter": _dataset_attr(
@@ -358,6 +372,8 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "augmentation_level": AUGMENTATION_LEVEL,
         "smart_tiling": SMART_TILING,
         "positive_factor": POSITIVE_FACTOR,
+        "val_positive_factor": VAL_POSITIVE_FACTOR,
+        "tensor_integrity": None,
         "black_detector": {
             "method": "sparse_grid_all_channels",
             "step": BLACK_SAMPLE_STEP,
@@ -432,6 +448,11 @@ def _tile_stats(image_chw, mask_chw, augmented: bool | None) -> dict[str, Any]:
         "positive_mask_pixels": positive_mask_pixels,
         "image_min": image_min,
         "image_max": image_max,
+        "channel_min": _per_channel_stat(image_chw, "min"),
+        "channel_max": _per_channel_stat(image_chw, "max"),
+        "channel_mean": _per_channel_stat(image_chw, "mean"),
+        "all_channels_equal": _all_channels_equal(image_chw),
+        "nonzero_channel_count": _nonzero_channel_count(image_chw),
     }
 
 
@@ -450,6 +471,35 @@ def _image_finite_stats(image_chw) -> tuple[int, float | None, float | None]:
         image_min = channel_min if image_min is None else min(image_min, channel_min)
         image_max = channel_max if image_max is None else max(image_max, channel_max)
     return nonfinite_pixels, image_min, image_max
+
+
+def _per_channel_stat(image_chw, stat: str) -> list[float | None]:
+    values: list[float | None] = []
+    for channel in image_chw:
+        finite = channel[np.isfinite(channel)]
+        if finite.size == 0:
+            values.append(None)
+            continue
+        if stat == "min":
+            values.append(float(finite.min()))
+        elif stat == "max":
+            values.append(float(finite.max()))
+        elif stat == "mean":
+            values.append(float(finite.mean()))
+        else:
+            raise RuntimeError(f"Unsupported channel stat: {stat}")
+    return values
+
+
+def _all_channels_equal(image_chw) -> bool:
+    if image_chw.shape[0] <= 1:
+        return False
+    first = image_chw[0]
+    return all(bool(np.array_equal(first, image_chw[index])) for index in range(1, image_chw.shape[0]))
+
+
+def _nonzero_channel_count(image_chw) -> int:
+    return sum(1 for channel in image_chw if int(np.count_nonzero(channel)) > 0)
 
 
 def _is_black_tile(image_chw) -> bool:
@@ -482,6 +532,14 @@ def _update_scan_summary(scan_summary: dict[str, Any], tile_details: list[dict[s
         black = bool(detail["black"])
         scan_summary["positive_mask_pixels"] += int(detail["positive_mask_pixels"])
         scan_summary["mask_positive_pixels_total"] += int(detail["positive_mask_pixels"])
+        image_min = detail["image_min"]
+        image_max = detail["image_max"]
+        if image_min is not None:
+            current = scan_summary["image_min"]
+            scan_summary["image_min"] = image_min if current is None else min(current, image_min)
+        if image_max is not None:
+            current = scan_summary["image_max"]
+            scan_summary["image_max"] = image_max if current is None else max(current, image_max)
         if int(detail["nonfinite_image_pixels"]) > 0:
             scan_summary["nonfinite_image_tiles"] += 1
         if black:
@@ -539,6 +597,41 @@ def _save_black_examples(
                 "tile_detail": detail,
             }
         )
+
+
+def _try_save_tensor_integrity_example(
+    *,
+    image_array,
+    mask_array,
+    tile_details: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    for detail in tile_details:
+        if not detail["positive"]:
+            continue
+        tile_index = int(detail["tile_index"])
+        example_dir = OUT_DIR / "tensor_integrity"
+        example_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = example_dir / "first_positive_preview_rgb.png"
+        mask_path = example_dir / "first_positive_mask.png"
+        overlay_path = example_dir / "first_positive_preview_mask_overlay.png"
+        _save_preview_png(image_array[tile_index], preview_path)
+        _save_mask_png(mask_array[tile_index], mask_path)
+        _save_preview_mask_overlay_png(image_array[tile_index], mask_array[tile_index], overlay_path)
+        channel_files = _save_image_channels_png(image_array[tile_index], example_dir, 0)
+        return {
+            "channels": int(image_array[tile_index].shape[0]),
+            "channel_min": detail["channel_min"],
+            "channel_max": detail["channel_max"],
+            "channel_mean": detail["channel_mean"],
+            "all_channels_equal": detail["all_channels_equal"],
+            "nonzero_channel_count": detail["nonzero_channel_count"],
+            "positive_mask_pixels": detail["positive_mask_pixels"],
+            "preview_rgb": str(preview_path),
+            "mask": str(mask_path),
+            "preview_mask_overlay": str(overlay_path),
+            "channels_png": [str(example_dir / name) for name in channel_files],
+        }
+    return None
 
 
 def _validate_batch_arrays(image_array, mask_array) -> None:
@@ -845,6 +938,7 @@ def _paths() -> dict[str, str]:
         "val_vrt": str(OUT_DIR / "val.vrt"),
         "tile_batches_dir": str(OUT_DIR / "tile_batches"),
         "black_examples_dir": str(OUT_DIR / "black_tile_examples"),
+        "tensor_integrity_dir": str(OUT_DIR / "tensor_integrity"),
     }
 
 
@@ -859,6 +953,7 @@ def _params(*, saved_batches: int) -> dict[str, Any]:
         "augmentation_level": AUGMENTATION_LEVEL,
         "smart_tiling": SMART_TILING,
         "positive_factor": POSITIVE_FACTOR,
+        "val_positive_factor": VAL_POSITIVE_FACTOR,
         "batch_size": BATCH_SIZE,
         "requested_batches": REQUESTED_BATCHES,
         "saved_batches": saved_batches,

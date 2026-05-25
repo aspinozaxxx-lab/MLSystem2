@@ -50,8 +50,18 @@ def create_tile_dataloader(
     generator.manual_seed(tile_settings.seed)
 
     sampler = None
+    sampler_positive_factor = None
     if request.mode == "train" and tile_settings.smart_tiling:
-        weights = dataset.sampling_weights()
+        sampler_positive_factor = tile_settings.positive_factor
+    elif (
+        request.mode == "val"
+        and tile_settings.smart_tiling
+        and tile_settings.val_positive_factor is not None
+    ):
+        sampler_positive_factor = tile_settings.val_positive_factor
+
+    if sampler_positive_factor is not None:
+        weights = dataset.sampling_weights(sampler_positive_factor)
         if weights is not None:
             sampler = WeightedRandomSampler(
                 weights=weights,

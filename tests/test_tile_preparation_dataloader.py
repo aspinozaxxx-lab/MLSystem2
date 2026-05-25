@@ -150,6 +150,8 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
 
     images, _masks, batch_meta = next(iter(loader))
     assert float(images.max().item()) > 1.0
+    assert float(images.min().item()) >= 0.0
+    assert float(images.max().item()) <= 255.0
     assert batch_meta == {
         "augmented_tile_count": 1,
         "positive_tile_count": 0,
@@ -463,8 +465,45 @@ def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> No
     assert not isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
     assert train_loader.dataset.estimated_positive_tiles == 1
     assert train_loader.dataset.estimated_negative_tiles == 1
+    assert val_loader.dataset.estimated_positive_tiles == 1
+    assert val_loader.dataset.estimated_negative_tiles == 1
     assert train_loader.dataset.uses_vrt_source_rects is True
     train_loader.dataset.close()
+    val_loader.dataset.close()
+
+
+def test_smart_tiling_can_use_weighted_sampler_for_diagnostic_val(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "smart_val_sampler.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=1,
+            smart_tiling=True,
+            val_positive_factor=0.5,
+        )
+    )
+
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="val",
+        )
+    )
+
+    assert isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
+    assert val_loader.dataset.estimated_positive_tiles == 1
+    assert val_loader.dataset.estimated_negative_tiles == 1
     val_loader.dataset.close()
 
 
@@ -473,7 +512,7 @@ def test_smart_tiling_sampling_weights_follow_positive_factor() -> None:
     dataset._positive_hint_by_index = [True, True, *([False] * 8)]
     dataset._positive_factor = 0.8
 
-    weights = dataset.sampling_weights()
+    weights = dataset.sampling_weights(0.8)
 
     assert weights is not None
     assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if positive) == pytest.approx(0.8)
@@ -581,6 +620,7 @@ def _write_config(
     input_channels: int = 3,
     augmentation_level: int = 0,
     smart_tiling: bool = False,
+    val_positive_factor: float | None = None,
 ) -> Path:
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -606,6 +646,7 @@ tile_preparation:
   augmentation_level: {augmentation_level}
   smart_tiling: {str(smart_tiling).lower()}
   positive_factor: 0.5
+  val_positive_factor: {_yaml_nullable_float(val_positive_factor)}
 
 train:
   model_name: segformer_b2
@@ -640,3 +681,9 @@ mlflow:
         encoding="utf-8",
     )
     return settings_path
+
+
+def _yaml_nullable_float(value: float | None) -> str:
+    if value is None:
+        return "null"
+    return str(value)

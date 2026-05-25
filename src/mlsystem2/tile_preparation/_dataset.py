@@ -70,7 +70,7 @@ class TileDataset:
             self._valid_footprint_stride = valid_diagnostics.valid_footprint_stride
             self._valid_footprint_valid_cells = valid_diagnostics.valid_footprint_valid_cells
             self._valid_footprint_total_cells = valid_diagnostics.valid_footprint_total_cells
-            if self._smart_tiling and self._mode == "train":
+            if self._smart_tiling and self._mode in {"train", "val"}:
                 self._positive_hint_by_index = self._build_positive_hints(dataset)
 
     def __len__(self) -> int:
@@ -152,15 +152,16 @@ class TileDataset:
             return None
         return sum(1 for item in self._positive_hint_by_index if not item)
 
-    def sampling_weights(self) -> list[float] | None:
+    def sampling_weights(self, positive_factor: float | None = None) -> list[float] | None:
         if self._positive_hint_by_index is None:
             return None
         positive_count = self.estimated_positive_tiles or 0
         negative_count = self.estimated_negative_tiles or 0
         if positive_count == 0 or negative_count == 0:
             return None
-        positive_weight = self._positive_factor / positive_count
-        negative_weight = (1.0 - self._positive_factor) / negative_count
+        factor = self._positive_factor if positive_factor is None else positive_factor
+        positive_weight = factor / positive_count
+        negative_weight = (1.0 - factor) / negative_count
         return [
             positive_weight if positive else negative_weight
             for positive in self._positive_hint_by_index

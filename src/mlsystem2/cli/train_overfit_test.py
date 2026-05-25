@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from math import ceil
 from pathlib import Path
 from time import perf_counter
 
@@ -22,8 +23,10 @@ from mlsystem2.train import _trainer
 N_POSITIVE = 16
 N_NEGATIVE = 16
 DEFAULT_EPOCHS = 20
+DEFAULT_STEPS = 300
 DEFAULT_BATCH_SIZE = 4
 DEFAULT_LEARNING_RATE = 1e-4
+DEFAULT_MIN_F1 = 0.8
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,8 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="segformer_b0", choices=["segformer_b0", "segformer_b2"])
     parser.add_argument("--report", default=None, help="Путь к JSON-отчету.")
     parser.add_argument("--device", default=None, help="Переопределение train.device.")
-    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--threshold-sweep", action="store_true")
+    parser.add_argument("--min-f1", type=float, default=DEFAULT_MIN_F1)
     args = parser.parse_args(argv)
 
     started = perf_counter()
@@ -85,6 +91,12 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=DEFAULT_BATCH_SIZE,
         shuffle=False,
     )
+    epochs = args.epochs or max(DEFAULT_EPOCHS, ceil(args.steps / len(tiny_loader)))
+    sample_previews = _save_sample_previews(
+        images,
+        masks,
+        report_path.parent / "overfit_samples",
+    )
 
     model = create_model(
         ModelSpec(
@@ -96,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     model.model.to(torch.device(device))
     train_config = TrainConfig(
-        epochs=args.epochs,
+        epochs=epochs,
         batch_size=DEFAULT_BATCH_SIZE,
         device=device,
         learning_rate=args.learning_rate,
@@ -107,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         tversky_alpha=settings.train.tversky_alpha,
         tversky_beta=settings.train.tversky_beta,
         threshold=settings.train.threshold,
-        early_stopping_patience=args.epochs,
+        early_stopping_patience=epochs,
     )
     initial = _trainer._validate_epoch(
         torch,
@@ -127,11 +139,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     final = result.history[-1]
+    best_threshold_f1 = max(item.val_best_threshold_pixel_f1 for item in result.history)
+    best_epoch = max(result.history, key=lambda item: item.val_best_threshold_pixel_f1)
+    success = best_threshold_f1 >= args.min_f1
     report = {
-        "status": "ok",
+        "status": "ok" if success else "failed",
         "config": str(config_path),
         "model": args.model,
         "device": device,
+        "requested_steps": args.steps,
+        "actual_optimizer_steps": sum(item.train_optimizer_steps for item in result.history),
+        "success_min_best_threshold_f1": args.min_f1,
         "positive_tiles_used": collected["positive_tiles"],
         "negative_tiles_used": collected["negative_tiles"],
         "initial_f1": initial["f1"],
@@ -142,9 +160,17 @@ def main(argv: list[str] | None = None) -> int:
         "final_recall": final.val_pixel_recall,
         "final_best_threshold": final.val_best_threshold,
         "final_best_threshold_f1": final.val_best_threshold_pixel_f1,
+        "best_epoch": best_epoch.epoch,
+        "best_threshold": best_epoch.val_best_threshold,
+        "best_threshold_f1": best_threshold_f1,
+        "best_threshold_precision": best_epoch.val_best_threshold_precision,
+        "best_threshold_recall": best_epoch.val_best_threshold_recall,
+        "final_prob_positive_mean": final.val_prob_positive_mean,
+        "final_prob_negative_mean": final.val_prob_negative_mean,
         "train_loss_history": [item.train_loss for item in result.history],
         "f1_history": [item.val_pixel_f1 for item in result.history],
         "best_threshold_f1_history": [item.val_best_threshold_pixel_f1 for item in result.history],
+        "sample_previews": sample_previews,
         "epochs_total": result.epochs_total,
         "training_time_sec": result.training_time_sec,
         "elapsed_sec": perf_counter() - started,
@@ -153,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if success else 1
 
 
 def _collect_tiny_dataset(loader: object):
@@ -196,6 +222,94 @@ def _close_loader(loader: object) -> None:
     close = getattr(dataset, "close", None)
     if callable(close):
         close()
+
+
+def _save_sample_previews(images, masks, output_dir: Path) -> list[dict[str, object]]:
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, object]] = []
+    max_samples = min(8, int(images.shape[0]))
+    for index in range(max_samples):
+        image = images[index].numpy()
+        mask = masks[index].numpy()
+        preview = _preview_rgb_uint8(image)
+        mask_u8 = (mask[0].clip(0.0, 1.0) * 255).astype("uint8")
+        edge = _mask_edge(mask)
+        overlay = preview.copy()
+        overlay[edge] = [255, 0, 0]
+        preview_path = output_dir / f"sample_{index:04d}_preview_rgb.png"
+        mask_path = output_dir / f"sample_{index:04d}_mask.png"
+        overlay_path = output_dir / f"sample_{index:04d}_overlay.png"
+        Image.fromarray(preview, mode="RGB").save(preview_path)
+        Image.fromarray(mask_u8, mode="L").save(mask_path)
+        Image.fromarray(overlay, mode="RGB").save(overlay_path)
+        records.append(
+            {
+                "sample_index": index,
+                "positive": bool(mask.sum() > 0),
+                "preview_rgb": str(preview_path),
+                "mask": str(mask_path),
+                "overlay": str(overlay_path),
+            }
+        )
+    return records
+
+
+def _preview_rgb_uint8(image_chw):
+    import numpy as np
+
+    if image_chw.shape[0] >= 3:
+        image_hwc = image_chw[:3].transpose(1, 2, 0)
+    else:
+        image_hwc = np.repeat(image_chw[0:1], 3, axis=0).transpose(1, 2, 0)
+    channels = [_stretch_channel_to_uint8(image_hwc[:, :, index]) for index in range(3)]
+    return np.stack(channels, axis=2)
+
+
+def _stretch_channel_to_uint8(channel):
+    import numpy as np
+
+    image = channel.astype(np.float32, copy=False)
+    finite = image[np.isfinite(image)]
+    if finite.size == 0:
+        return np.zeros(image.shape, dtype=np.uint8)
+    nonzero = finite[finite > 0]
+    values = nonzero if nonzero.size else finite
+    min_value = float(np.percentile(values, 1))
+    max_value = float(np.percentile(values, 99))
+    if max_value <= min_value:
+        min_value = float(values.min())
+        max_value = float(values.max())
+    if max_value <= min_value:
+        return np.zeros(image.shape, dtype=np.uint8)
+    return np.clip((image - min_value) / (max_value - min_value) * 255.0, 0.0, 255.0).astype(
+        np.uint8
+    )
+
+
+def _mask_edge(mask_chw):
+    import numpy as np
+
+    mask = mask_chw[0] > 0.5
+    if not bool(np.any(mask)):
+        return np.zeros(mask.shape, dtype=bool)
+    padded = np.pad(mask, 1, mode="constant", constant_values=False)
+    interior = (
+        padded[1:-1, 1:-1]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+        & padded[:-2, :-2]
+        & padded[:-2, 2:]
+        & padded[2:, :-2]
+        & padded[2:, 2:]
+    )
+    return mask & ~interior
 
 
 def _torch():

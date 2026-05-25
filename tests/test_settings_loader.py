@@ -92,6 +92,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.max_training_time_sec is None
     assert settings.tile_preparation.smart_tiling is False
     assert settings.tile_preparation.positive_factor == 0.5
+    assert settings.tile_preparation.val_positive_factor is None
 
 
 def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:

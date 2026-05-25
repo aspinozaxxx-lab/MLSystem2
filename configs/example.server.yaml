@@ -19,6 +19,7 @@ tile_preparation:
   augmentation_level: 0
   smart_tiling: true
   positive_factor: 0.8
+  val_positive_factor: 0.5
 
 train:
   model_name: segformer_b2

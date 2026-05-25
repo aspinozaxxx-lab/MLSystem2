@@ -163,8 +163,32 @@ def run_train_pipeline(
         )
         timings.append(timing)
         train_loader, val_loader = loaders
-        train_loader = _CountingLoader(train_loader, "train")
-        val_loader = _CountingLoader(val_loader, "val")
+        train_loader = _CountingLoader(
+            train_loader,
+            "train",
+            sampling_mode="weighted_positive_factor" if settings.tile_preparation.smart_tiling else "sequential",
+            positive_factor_used=(
+                settings.tile_preparation.positive_factor
+                if settings.tile_preparation.smart_tiling
+                else None
+            ),
+            is_diagnostic_sampling=False,
+        )
+        val_diagnostic_sampling = (
+            settings.tile_preparation.smart_tiling
+            and settings.tile_preparation.val_positive_factor is not None
+        )
+        val_loader = _CountingLoader(
+            val_loader,
+            "val",
+            sampling_mode="weighted_positive_factor" if val_diagnostic_sampling else "sequential",
+            positive_factor_used=(
+                settings.tile_preparation.val_positive_factor
+                if val_diagnostic_sampling
+                else None
+            ),
+            is_diagnostic_sampling=val_diagnostic_sampling,
+        )
 
         model = _load_or_create_model(settings, deps)
 
@@ -288,9 +312,20 @@ def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies)
 
 
 class _CountingLoader:
-    def __init__(self, loader: object, split: str) -> None:
+    def __init__(
+        self,
+        loader: object,
+        split: str,
+        *,
+        sampling_mode: str = "sequential",
+        positive_factor_used: float | None = None,
+        is_diagnostic_sampling: bool = False,
+    ) -> None:
         self.loader = loader
         self.split = split
+        self.sampling_mode = sampling_mode
+        self.positive_factor_used = positive_factor_used
+        self.is_diagnostic_sampling = is_diagnostic_sampling
         self.observed_batches = 0
         self.observed_tiles = 0
         self.observed_augmented_tiles = 0
@@ -346,6 +381,9 @@ class _CountingLoader:
             "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
             "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
+            "sampling_mode": self.sampling_mode,
+            "positive_factor_used": self.positive_factor_used,
+            "is_diagnostic_sampling": self.is_diagnostic_sampling,
             "observed_batches": self.observed_batches,
             "observed_tiles": self.observed_tiles,
             "observed_positive_tiles": self.observed_positive_tiles,
@@ -367,6 +405,7 @@ def _tile_preparation_report(
         "augmentation_level": settings.tile_preparation.augmentation_level,
         "smart_tiling_enabled": settings.tile_preparation.smart_tiling,
         "positive_factor": settings.tile_preparation.positive_factor,
+        "val_positive_factor": settings.tile_preparation.val_positive_factor,
         "splits": {
             "train": train_loader.snapshot(),
             "val": val_loader.snapshot(),

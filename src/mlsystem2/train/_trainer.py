@@ -14,7 +14,7 @@ from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
 
 MAX_SKIPPED_OPTIMIZER_STEPS_PER_EPOCH = 1
-THRESHOLD_SWEEP = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9)
+THRESHOLD_SWEEP = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
 PROBABILITY_HISTOGRAM_BINS = 1000
 
 
@@ -93,6 +93,16 @@ def train_model(
                 val_prob_p50=val["prob_p50"],
                 val_prob_p90=val["prob_p90"],
                 val_prob_p99=val["prob_p99"],
+                val_prob_p999=val["prob_p999"],
+                val_prob_positive_mean=val["prob_positive_mean"],
+                val_prob_positive_p50=val["prob_positive_p50"],
+                val_prob_positive_p90=val["prob_positive_p90"],
+                val_prob_positive_p99=val["prob_positive_p99"],
+                val_prob_negative_mean=val["prob_negative_mean"],
+                val_prob_negative_p50=val["prob_negative_p50"],
+                val_prob_negative_p90=val["prob_negative_p90"],
+                val_prob_negative_p99=val["prob_negative_p99"],
+                val_threshold_sweep=val["threshold_sweep"],
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -221,7 +231,9 @@ def _validate_epoch(
         threshold: {"tp": 0, "fp": 0, "fn": 0}
         for threshold in THRESHOLD_SWEEP
     }
-    prob_stats = _ProbabilityStats(torch)
+    prob_stats = _ProbabilityStats(torch, "prob")
+    positive_prob_stats = _ProbabilityStats(torch, "prob_positive")
+    negative_prob_stats = _ProbabilityStats(torch, "prob_negative")
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
@@ -237,9 +249,11 @@ def _validate_epoch(
             batches += 1
 
             probs = torch.sigmoid(logits)
-            prob_stats.update(probs)
             pred = probs >= config.threshold
             true = masks >= 0.5
+            prob_stats.update(probs)
+            positive_prob_stats.update(probs, true)
+            negative_prob_stats.update(probs, ~true)
             positive_pixels += int(true.sum().item())
             pred_positive_pixels += int(pred.sum().item())
             true_positive += int((pred & true).sum().item())
@@ -262,8 +276,13 @@ def _validate_epoch(
     precision = _safe_div(true_positive, true_positive + false_positive)
     recall = _safe_div(true_positive, true_positive + false_negative)
     f1 = _safe_div(2.0 * precision * recall, precision + recall)
-    best_threshold, best_precision, best_recall, best_f1 = _best_threshold_metrics(sweep_counts)
-    prob_snapshot = prob_stats.snapshot()
+    threshold_sweep = _threshold_sweep_metrics(sweep_counts)
+    best_threshold, best_precision, best_recall, best_f1 = _best_threshold_metrics(threshold_sweep)
+    prob_snapshot = {
+        **prob_stats.snapshot(),
+        **positive_prob_stats.snapshot(),
+        **negative_prob_stats.snapshot(),
+    }
     return {
         "loss": total_loss / batches,
         "precision": precision,
@@ -278,6 +297,7 @@ def _validate_epoch(
         "best_threshold_pixel_f1": best_f1,
         "best_threshold_precision": best_precision,
         "best_threshold_recall": best_recall,
+        "threshold_sweep": threshold_sweep,
         **prob_snapshot,
     }
 
@@ -342,16 +362,19 @@ def _loss(torch, logits, masks, config):
 
 
 class _ProbabilityStats:
-    def __init__(self, torch) -> None:
+    def __init__(self, torch, prefix: str) -> None:
         self._torch = torch
+        self._prefix = prefix
         self._histogram = torch.zeros(PROBABILITY_HISTOGRAM_BINS, dtype=torch.long, device="cpu")
         self._count = 0
         self._sum = 0.0
         self._min = 1.0
         self._max = 0.0
 
-    def update(self, probs) -> None:
+    def update(self, probs, selector=None) -> None:
         detached = probs.detach()
+        if selector is not None:
+            detached = detached[selector.detach()]
         count = int(detached.numel())
         if count == 0:
             return
@@ -375,20 +398,22 @@ class _ProbabilityStats:
     def snapshot(self) -> dict[str, float]:
         if self._count == 0:
             return {
-                "prob_mean": 0.0,
-                "prob_min": 0.0,
-                "prob_max": 0.0,
-                "prob_p50": 0.0,
-                "prob_p90": 0.0,
-                "prob_p99": 0.0,
+                f"{self._prefix}_mean": 0.0,
+                f"{self._prefix}_min": 0.0,
+                f"{self._prefix}_max": 0.0,
+                f"{self._prefix}_p50": 0.0,
+                f"{self._prefix}_p90": 0.0,
+                f"{self._prefix}_p99": 0.0,
+                f"{self._prefix}_p999": 0.0,
             }
         return {
-            "prob_mean": self._sum / self._count,
-            "prob_min": self._min,
-            "prob_max": self._max,
-            "prob_p50": self._percentile(0.50),
-            "prob_p90": self._percentile(0.90),
-            "prob_p99": self._percentile(0.99),
+            f"{self._prefix}_mean": self._sum / self._count,
+            f"{self._prefix}_min": self._min,
+            f"{self._prefix}_max": self._max,
+            f"{self._prefix}_p50": self._percentile(0.50),
+            f"{self._prefix}_p90": self._percentile(0.90),
+            f"{self._prefix}_p99": self._percentile(0.99),
+            f"{self._prefix}_p999": self._percentile(0.999),
         }
 
     def _percentile(self, fraction: float) -> float:
@@ -398,24 +423,46 @@ class _ProbabilityStats:
         return min(1.0, (bin_index + 0.5) / PROBABILITY_HISTOGRAM_BINS)
 
 
-def _best_threshold_metrics(
+def _threshold_sweep_metrics(
     sweep_counts: dict[float, dict[str, int]],
-) -> tuple[float, float, float, float]:
-    best_threshold = THRESHOLD_SWEEP[0]
-    best_precision = 0.0
-    best_recall = 0.0
-    best_f1 = -1.0
+) -> dict[str, dict[str, float]]:
+    metrics: dict[str, dict[str, float]] = {}
     for threshold in THRESHOLD_SWEEP:
         counts = sweep_counts[threshold]
         precision = _safe_div(counts["tp"], counts["tp"] + counts["fp"])
         recall = _safe_div(counts["tp"], counts["tp"] + counts["fn"])
         f1 = _safe_div(2.0 * precision * recall, precision + recall)
+        metrics[_threshold_key(threshold)] = {
+            "threshold": threshold,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+    return metrics
+
+
+def _best_threshold_metrics(
+    sweep_metrics: dict[str, dict[str, float]],
+) -> tuple[float, float, float, float]:
+    best_threshold = THRESHOLD_SWEEP[0]
+    best_precision = 0.0
+    best_recall = 0.0
+    best_f1 = -1.0
+    for item in sweep_metrics.values():
+        threshold = item["threshold"]
+        precision = item["precision"]
+        recall = item["recall"]
+        f1 = item["f1"]
         if f1 > best_f1:
             best_threshold = threshold
             best_precision = precision
             best_recall = recall
             best_f1 = f1
     return best_threshold, best_precision, best_recall, max(best_f1, 0.0)
+
+
+def _threshold_key(threshold: float) -> str:
+    return f"{threshold:.3f}".replace(".", "_")
 
 
 def _dice_loss(torch, logits, masks):

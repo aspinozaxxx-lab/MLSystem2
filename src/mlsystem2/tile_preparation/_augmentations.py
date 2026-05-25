@@ -26,6 +26,7 @@ def apply_augmentations(
         image, mask = _cutout(image, mask, rng)
         augmented = True
 
+    image = np.clip(image, 0.0, 255.0)
     return np.ascontiguousarray(image), np.ascontiguousarray(mask), augmented
 
 

@@ -108,6 +108,35 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("val/prob_p50", metrics.val_prob_p50, step=metrics.epoch)
         mlflow.log_metric("val/prob_p90", metrics.val_prob_p90, step=metrics.epoch)
         mlflow.log_metric("val/prob_p99", metrics.val_prob_p99, step=metrics.epoch)
+        mlflow.log_metric("val/prob_p999", metrics.val_prob_p999, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/prob_positive_mean",
+            metrics.val_prob_positive_mean,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric("val/prob_positive_p50", metrics.val_prob_positive_p50, step=metrics.epoch)
+        mlflow.log_metric("val/prob_positive_p90", metrics.val_prob_positive_p90, step=metrics.epoch)
+        mlflow.log_metric("val/prob_positive_p99", metrics.val_prob_positive_p99, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/prob_negative_mean",
+            metrics.val_prob_negative_mean,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric("val/prob_negative_p50", metrics.val_prob_negative_p50, step=metrics.epoch)
+        mlflow.log_metric("val/prob_negative_p90", metrics.val_prob_negative_p90, step=metrics.epoch)
+        mlflow.log_metric("val/prob_negative_p99", metrics.val_prob_negative_p99, step=metrics.epoch)
+        for threshold_key, values in metrics.val_threshold_sweep.items():
+            mlflow.log_metric(f"val/sweep_{threshold_key}_f1", values["f1"], step=metrics.epoch)
+            mlflow.log_metric(
+                f"val/sweep_{threshold_key}_precision",
+                values["precision"],
+                step=metrics.epoch,
+            )
+            mlflow.log_metric(
+                f"val/sweep_{threshold_key}_recall",
+                values["recall"],
+                step=metrics.epoch,
+            )
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
