@@ -14,7 +14,14 @@ _SEGFORMER_B0 = "segformer_b0"
 _SEGFORMER_B2 = "segformer_b2"
 _SMP_SEGFORMER_B0 = "smp_segformer_b0"
 _SMP_SEGFORMER_B2 = "smp_segformer_b2"
-_SUPPORTED_NAMES = {_SEGFORMER_B0, _SEGFORMER_B2, _SMP_SEGFORMER_B0, _SMP_SEGFORMER_B2}
+_SMP_DEEPLABV3PLUS_RESNET50 = "smp_deeplabv3plus_resnet50"
+_SUPPORTED_NAMES = {
+    _SEGFORMER_B0,
+    _SEGFORMER_B2,
+    _SMP_SEGFORMER_B0,
+    _SMP_SEGFORMER_B2,
+    _SMP_DEEPLABV3PLUS_RESNET50,
+}
 _SMP_ENCODERS = {
     _SMP_SEGFORMER_B0: "mit_b0",
     _SMP_SEGFORMER_B2: "mit_b2",
@@ -67,6 +74,13 @@ def list_supported_models() -> list[ModelSpec]:
             pretrained=False,
             parameters={},
         ),
+        ModelSpec(
+            name=_SMP_DEEPLABV3PLUS_RESNET50,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
     ]
 
 
@@ -75,26 +89,51 @@ def create_model(spec: ModelSpec) -> ModelHandle:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
     if spec.name in _SMP_ENCODERS:
         return ModelHandle(spec=spec, model=_create_smp_segformer(spec))
+    if spec.name == _SMP_DEEPLABV3PLUS_RESNET50:
+        return ModelHandle(spec=spec, model=_create_smp_deeplabv3plus(spec))
     return ModelHandle(spec=spec, model=_create_segformer(spec))
 
 
-def _create_smp_segformer(spec: ModelSpec):
+def _import_smp():
     try:
         import segmentation_models_pytorch as smp
     except ImportError as exc:
         raise ModelsError(
-            "Для создания SMP SegFormer требуется optional dependency segmentation_models_pytorch. "
+            "Для создания SMP-моделей требуется optional dependency segmentation_models_pytorch. "
             "Установите пакет через `pip install segmentation-models-pytorch`."
         ) from exc
+    return smp
+
+
+def _ensure_torch_for_smp() -> None:
     if torch is None:
         raise ModelsError(
-            "Для создания SMP SegFormer требуется optional dependency torch. "
+            "Для создания SMP-моделей требуется optional dependency torch. "
             "Установите пакет через `pip install -e .[torch]`."
         )
+
+
+def _create_smp_segformer(spec: ModelSpec):
+    smp = _import_smp()
+    _ensure_torch_for_smp()
     if spec.pretrained:
         raise ModelsError("SMP SegFormer в MLSystem2 поддерживает только encoder_weights=None.")
     return smp.Segformer(
         encoder_name=_SMP_ENCODERS[spec.name],
+        encoder_weights=None,
+        in_channels=spec.input_channels,
+        classes=spec.output_channels,
+        activation=None,
+    )
+
+
+def _create_smp_deeplabv3plus(spec: ModelSpec):
+    smp = _import_smp()
+    _ensure_torch_for_smp()
+    if spec.pretrained:
+        raise ModelsError("SMP DeepLabV3Plus в MLSystem2 поддерживает только encoder_weights=None.")
+    return smp.DeepLabV3Plus(
+        encoder_name="resnet50",
         encoder_weights=None,
         in_channels=spec.input_channels,
         classes=spec.output_channels,
