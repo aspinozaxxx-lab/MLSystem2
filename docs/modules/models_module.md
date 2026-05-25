@@ -6,7 +6,7 @@
 
 ## Публичный интерфейс
 
-- `list_supported_models() -> list[ModelSpec]` - возвращает только `segformer_b0` и `segformer_b2`.
+- `list_supported_models() -> list[ModelSpec]` - возвращает `segformer_b0`, `segformer_b2`, `smp_segformer_b0`, `smp_segformer_b2`.
 - `create_model(spec: ModelSpec) -> ModelHandle` - создает модель по спецификации.
 - `load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint` - загружает локальный `.pt` checkpoint.
 - `save_checkpoint(request: SaveCheckpointRequest) -> CheckpointArtifact` - сохраняет локальный `.pt` checkpoint.
@@ -23,11 +23,13 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
-Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании SegFormer.
+Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer.
 
 ## Алгоритм работы и его особенности
 
-Поддерживаются только `segformer_b0` и `segformer_b2`. `create_model` строит Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачивает его приватным wrapper. Wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer. Внешний параметр normalization не добавляется.
+Поддерживаются две ветки SegFormer. `segformer_b0` и `segformer_b2` строятся через Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачиваются приватным wrapper. Wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer. Внешний параметр normalization не добавляется.
+
+`smp_segformer_b0` и `smp_segformer_b2` добавлены как диагностическая совместимость со старым MLSystem train path. Они строятся через `segmentation_models_pytorch.Segformer` с `encoder_name="mit_b0"` или `"mit_b2"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Для SMP-вариантов wrapper `x / 255.0` не применяется, чтобы проверить старое поведение без смешивания с текущей Hugging Face реализацией.
 
 Конфигурация `segformer_b0`: `depths=[2, 2, 2, 2]`, `hidden_sizes=[32, 64, 160, 256]`, `decoder_hidden_size=256`, pretrained источник `nvidia/segformer-b0-finetuned-ade-512-512`.
 

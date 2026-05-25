@@ -12,7 +12,13 @@ except ImportError:
 
 _SEGFORMER_B0 = "segformer_b0"
 _SEGFORMER_B2 = "segformer_b2"
-_SUPPORTED_NAMES = {_SEGFORMER_B0, _SEGFORMER_B2}
+_SMP_SEGFORMER_B0 = "smp_segformer_b0"
+_SMP_SEGFORMER_B2 = "smp_segformer_b2"
+_SUPPORTED_NAMES = {_SEGFORMER_B0, _SEGFORMER_B2, _SMP_SEGFORMER_B0, _SMP_SEGFORMER_B2}
+_SMP_ENCODERS = {
+    _SMP_SEGFORMER_B0: "mit_b0",
+    _SMP_SEGFORMER_B2: "mit_b2",
+}
 _PRETRAINED_B0 = "nvidia/segformer-b0-finetuned-ade-512-512"
 _PRETRAINED_B2 = "nvidia/segformer-b2-finetuned-ade-512-512"
 _SEGFORMER_CONFIGS = {
@@ -47,13 +53,53 @@ def list_supported_models() -> list[ModelSpec]:
             pretrained=False,
             parameters={},
         ),
+        ModelSpec(
+            name=_SMP_SEGFORMER_B0,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_SEGFORMER_B2,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
     ]
 
 
 def create_model(spec: ModelSpec) -> ModelHandle:
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
+    if spec.name in _SMP_ENCODERS:
+        return ModelHandle(spec=spec, model=_create_smp_segformer(spec))
     return ModelHandle(spec=spec, model=_create_segformer(spec))
+
+
+def _create_smp_segformer(spec: ModelSpec):
+    try:
+        import segmentation_models_pytorch as smp
+    except ImportError as exc:
+        raise ModelsError(
+            "Для создания SMP SegFormer требуется optional dependency segmentation_models_pytorch. "
+            "Установите пакет через `pip install segmentation-models-pytorch`."
+        ) from exc
+    if torch is None:
+        raise ModelsError(
+            "Для создания SMP SegFormer требуется optional dependency torch. "
+            "Установите пакет через `pip install -e .[torch]`."
+        )
+    if spec.pretrained:
+        raise ModelsError("SMP SegFormer в MLSystem2 поддерживает только encoder_weights=None.")
+    return smp.Segformer(
+        encoder_name=_SMP_ENCODERS[spec.name],
+        encoder_weights=None,
+        in_channels=spec.input_channels,
+        classes=spec.output_channels,
+        activation=None,
+    )
 
 
 def _create_segformer(spec: ModelSpec):

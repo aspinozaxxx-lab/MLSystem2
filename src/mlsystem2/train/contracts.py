@@ -38,6 +38,10 @@ class EpochMetrics(BaseModel):
 
     epoch: int = Field(ge=0)
     train_loss: float = Field(ge=0.0)
+    train_loss_focal: float | None = Field(default=None, ge=0.0)
+    train_loss_tversky: float | None = Field(default=None, ge=0.0)
+    train_loss_bce: float | None = Field(default=None, ge=0.0)
+    train_loss_dice: float | None = Field(default=None, ge=0.0)
     train_optimizer_steps: int = Field(ge=0)
     train_skipped_optimizer_steps: int = Field(ge=0)
     val_loss: float = Field(ge=0.0)

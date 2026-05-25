@@ -72,6 +72,10 @@ def train_model(
             metrics = EpochMetrics(
                 epoch=epoch,
                 train_loss=train_epoch["loss"],
+                train_loss_focal=train_epoch["loss_focal"],
+                train_loss_tversky=train_epoch["loss_tversky"],
+                train_loss_bce=train_epoch["loss_bce"],
+                train_loss_dice=train_epoch["loss_dice"],
                 train_optimizer_steps=train_epoch["optimizer_steps"],
                 train_skipped_optimizer_steps=train_epoch["skipped_optimizer_steps"],
                 val_loss=val["loss"],
@@ -149,9 +153,16 @@ def _train_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | None]:
     model.train()
     total_loss = 0.0
+    component_totals = {
+        "focal": 0.0,
+        "tversky": 0.0,
+        "bce": 0.0,
+        "dice": 0.0,
+    }
+    component_counts = {name: 0 for name in component_totals}
     batches = 0
     optimizer_steps = 0
     skipped_optimizer_steps = 0
@@ -164,8 +175,10 @@ def _train_epoch(
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
-        loss = _loss(torch, logits, masks, config)
+        loss_info = _loss_components(torch, logits, masks, config)
+        loss = loss_info["loss"]
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
+        _accumulate_loss_components(component_totals, component_counts, loss_info)
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
         if bad_gradient is not None:
@@ -206,6 +219,10 @@ def _train_epoch(
         raise TrainError(f"За эпоху {epoch} не выполнено ни одного optimizer step.")
     return {
         "loss": total_loss / batches,
+        "loss_focal": _average_component(component_totals, component_counts, "focal"),
+        "loss_tversky": _average_component(component_totals, component_counts, "tversky"),
+        "loss_bce": _average_component(component_totals, component_counts, "bce"),
+        "loss_dice": _average_component(component_totals, component_counts, "dice"),
         "optimizer_steps": optimizer_steps,
         "skipped_optimizer_steps": skipped_optimizer_steps,
     }
@@ -337,6 +354,10 @@ def _forward_logits(torch, model, images, masks):
 
 
 def _loss(torch, logits, masks, config):
+    return _loss_components(torch, logits, masks, config)["loss"]
+
+
+def _loss_components(torch, logits, masks, config) -> dict[str, object]:
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -344,7 +365,14 @@ def _loss(torch, logits, masks, config):
             masks,
             pos_weight=pos_weight,
         )
-        return bce + _dice_loss(torch, logits, masks)
+        dice = _dice_loss(torch, logits, masks)
+        return {
+            "loss": bce + dice,
+            "focal": None,
+            "tversky": None,
+            "bce": bce,
+            "dice": dice,
+        }
     if config.loss == "focal_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -354,11 +382,50 @@ def _loss(torch, logits, masks, config):
             reduction="none",
         )
         pt = torch.exp(-bce)
-        focal = config.focal_alpha * torch.pow(1.0 - pt, 2.0) * bce
-        return focal.mean() + _dice_loss(torch, logits, masks)
+        focal = (config.focal_alpha * torch.pow(1.0 - pt, 2.0) * bce).mean()
+        dice = _dice_loss(torch, logits, masks)
+        return {
+            "loss": focal + dice,
+            "focal": focal,
+            "tversky": None,
+            "bce": bce.mean(),
+            "dice": dice,
+        }
     if config.loss == "focal_tversky":
-        return torch.pow(_tversky_loss(torch, logits, masks, config), 2.0)
+        focal, bce = _focal_loss_with_bce(torch, logits, masks, config)
+        tversky = _tversky_loss(torch, logits, masks, config)
+        return {
+            "loss": focal + tversky,
+            "focal": focal,
+            "tversky": tversky,
+            "bce": bce,
+            "dice": None,
+        }
     raise TrainError(f"Неподдерживаемый loss: {config.loss}")
+
+
+def _accumulate_loss_components(
+    totals: dict[str, float],
+    counts: dict[str, int],
+    loss_info: dict[str, object],
+) -> None:
+    for name in totals:
+        value = loss_info[name]
+        if value is None:
+            continue
+        totals[name] += float(value.detach().item())
+        counts[name] += 1
+
+
+def _average_component(
+    totals: dict[str, float],
+    counts: dict[str, int],
+    name: str,
+) -> float | None:
+    count = counts[name]
+    if count == 0:
+        return None
+    return totals[name] / count
 
 
 class _ProbabilityStats:
@@ -463,6 +530,33 @@ def _best_threshold_metrics(
 
 def _threshold_key(threshold: float) -> str:
     return f"{threshold:.3f}".replace(".", "_")
+
+
+def _focal_loss(torch, logits, masks, config):
+    return _focal_loss_with_bce(torch, logits, masks, config)[0]
+
+
+def _focal_loss_with_bce(torch, logits, masks, config):
+    pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits,
+        masks,
+        pos_weight=pos_weight,
+        reduction="none",
+    )
+    probs = torch.sigmoid(logits)
+    pt = torch.where(masks > 0.5, probs, 1.0 - probs)
+    focal = torch.pow((1.0 - pt).clamp_min(0.0), 2.0) * bce
+
+    alpha = config.focal_alpha
+    if alpha is not None:
+        alpha_factor = torch.where(
+            masks > 0.5,
+            torch.as_tensor(alpha, device=logits.device, dtype=logits.dtype),
+            torch.as_tensor(1.0 - alpha, device=logits.device, dtype=logits.dtype),
+        )
+        focal = alpha_factor * focal
+    return focal.mean(), bce.mean()
 
 
 def _dice_loss(torch, logits, masks):

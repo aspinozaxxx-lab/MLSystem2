@@ -24,6 +24,7 @@ torch = [
   "torch",
   "torchvision",
   "transformers",
+  "segmentation-models-pytorch",
 ]
 dev = [
   "pytest",

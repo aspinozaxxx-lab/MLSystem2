@@ -53,6 +53,8 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert result.history[0].train_loss >= 0.0
     assert result.history[0].train_optimizer_steps == 2
     assert result.history[0].train_skipped_optimizer_steps == 0
+    assert result.history[0].train_loss_bce is not None
+    assert result.history[0].train_loss_dice is not None
     assert result.history[0].val_loss >= 0.0
 
 
@@ -256,6 +258,58 @@ def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
     assert result["false_negative"] == 0
     assert result["f1"] == 0.0
     assert result["best_threshold_pixel_f1"] == 0.0
+
+
+def test_focal_tversky_loss_is_focal_plus_tversky() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.tensor([[[[-1.0, 0.5], [1.5, -0.25]]]], dtype=torch.float32)
+    masks = torch.tensor([[[[0.0, 1.0], [1.0, 0.0]]]], dtype=torch.float32)
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="focal_tversky",
+        focal_alpha=0.6,
+        pos_weight=1.7,
+        tversky_alpha=0.4,
+        tversky_beta=0.6,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    loss = _trainer._loss(torch, logits, masks, config)
+    pos_weight = torch.tensor([config.pos_weight], dtype=logits.dtype)
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits,
+        masks,
+        pos_weight=pos_weight,
+        reduction="none",
+    )
+    probs = torch.sigmoid(logits)
+    pt = torch.where(masks > 0.5, probs, 1.0 - probs)
+    alpha_factor = torch.where(
+        masks > 0.5,
+        torch.as_tensor(config.focal_alpha, dtype=logits.dtype),
+        torch.as_tensor(1.0 - config.focal_alpha, dtype=logits.dtype),
+    )
+    focal = (alpha_factor * torch.pow((1.0 - pt).clamp_min(0.0), 2.0) * bce).mean()
+    true_positive = torch.sum(probs * masks)
+    false_positive = torch.sum(probs * (1.0 - masks))
+    false_negative = torch.sum((1.0 - probs) * masks)
+    tversky = 1.0 - (true_positive + 1.0) / (
+        true_positive
+        + config.tversky_alpha * false_positive
+        + config.tversky_beta * false_negative
+        + 1.0
+    )
+
+    assert torch.allclose(loss, focal + tversky)
+    assert not torch.allclose(loss, torch.pow(tversky, 2.0))
 
 
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:

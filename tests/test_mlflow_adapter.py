@@ -87,6 +87,10 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
         EpochMetrics(
             epoch=3,
             train_loss=1.0,
+            train_loss_focal=0.2,
+            train_loss_tversky=0.3,
+            train_loss_bce=0.4,
+            train_loss_dice=None,
             train_optimizer_steps=71,
             train_skipped_optimizer_steps=1,
             val_loss=1.0,
@@ -104,5 +108,9 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
 
     assert ("train/optimizer_steps", 71, 3) in logged
     assert ("train/skipped_optimizer_steps", 1, 3) in logged
+    assert ("train/loss_focal", 0.2, 3) in logged
+    assert ("train/loss_tversky", 0.3, 3) in logged
+    assert ("train/loss_bce", 0.4, 3) in logged
+    assert not any(item[0] == "train/loss_dice" for item in logged)
     assert ("val/best_threshold", 0.0, 3) in logged
     assert ("val/prob_mean", 0.0, 3) in logged

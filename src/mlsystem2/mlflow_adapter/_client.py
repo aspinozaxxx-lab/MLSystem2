@@ -67,6 +67,10 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _mlflow()
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        _log_optional_metric(mlflow, "train/loss_focal", metrics.train_loss_focal, metrics.epoch)
+        _log_optional_metric(mlflow, "train/loss_tversky", metrics.train_loss_tversky, metrics.epoch)
+        _log_optional_metric(mlflow, "train/loss_bce", metrics.train_loss_bce, metrics.epoch)
+        _log_optional_metric(mlflow, "train/loss_dice", metrics.train_loss_dice, metrics.epoch)
         mlflow.log_metric("train/optimizer_steps", metrics.train_optimizer_steps, step=metrics.epoch)
         mlflow.log_metric(
             "train/skipped_optimizer_steps",
@@ -140,6 +144,12 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
+
+
+def _log_optional_metric(mlflow, name: str, value: float | None, step: int) -> None:
+    if value is None:
+        return
+    mlflow.log_metric(name, value, step=step)
 
 
 def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
