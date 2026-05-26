@@ -171,7 +171,7 @@ def run_train_pipeline(
         train_loader = _CountingLoader(
             train_loader,
             "train",
-            sampling_mode="weighted_positive_factor" if settings.tile_preparation.smart_tiling else "sequential",
+            sampling_mode=_sampling_mode(settings, settings.tile_preparation.smart_tiling),
             positive_factor_used=(
                 settings.tile_preparation.positive_factor
                 if settings.tile_preparation.smart_tiling
@@ -186,7 +186,7 @@ def run_train_pipeline(
         val_loader = _CountingLoader(
             val_loader,
             "val",
-            sampling_mode="weighted_positive_factor" if val_diagnostic_sampling else "sequential",
+            sampling_mode=_sampling_mode(settings, val_diagnostic_sampling),
             positive_factor_used=(
                 settings.tile_preparation.val_positive_factor
                 if val_diagnostic_sampling
@@ -403,6 +403,22 @@ class _CountingLoader:
         warnings = []
         if source_rect_count == 0:
             warnings.append("VRT source rects не найдены, используется fallback на всю VRT grid.")
+        class_balance_warnings = _dataset_attr(self.dataset, "class_balance_warnings")
+        if isinstance(class_balance_warnings, list):
+            warnings.extend(str(item) for item in class_balance_warnings)
+        observed_positive_ratio = _safe_ratio(self.observed_positive_tiles, self.observed_tiles)
+        observed_negative_ratio = (
+            None if observed_positive_ratio is None else 1.0 - observed_positive_ratio
+        )
+        ratio_abs_error = (
+            None
+            if observed_positive_ratio is None or self.positive_factor_used is None
+            else abs(observed_positive_ratio - self.positive_factor_used)
+        )
+        if ratio_abs_error is not None and ratio_abs_error > 0.1:
+            warnings.append(
+                "observed_positive_ratio отклонился от target_positive_factor больше чем на 0.1."
+            )
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
@@ -428,12 +444,21 @@ class _CountingLoader:
             "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
             "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
+            "estimated_class_positive_tiles": _dataset_attr(
+                self.dataset,
+                "estimated_class_positive_tiles",
+            ),
             "sampling_mode": self.sampling_mode,
             "positive_factor_used": self.positive_factor_used,
+            "target_positive_factor": self.positive_factor_used,
+            "class_balance_enabled": _dataset_attr(self.dataset, "class_balance_enabled"),
             "is_diagnostic_sampling": self.is_diagnostic_sampling,
             "observed_batches": self.observed_batches,
             "observed_tiles": self.observed_tiles,
             "observed_positive_tiles": self.observed_positive_tiles,
+            "observed_positive_ratio": observed_positive_ratio,
+            "observed_negative_ratio": observed_negative_ratio,
+            "ratio_abs_error": ratio_abs_error,
             "observed_augmented_tiles": self.observed_augmented_tiles,
             "observed_class_positive_tile_counts": self.observed_class_positive_tile_counts,
             "observed_class_pixel_counts": self.observed_class_pixel_counts,
@@ -455,6 +480,7 @@ def _tile_preparation_report(
         "smart_tiling_enabled": settings.tile_preparation.smart_tiling,
         "positive_factor": settings.tile_preparation.positive_factor,
         "val_positive_factor": settings.tile_preparation.val_positive_factor,
+        "class_balance": settings.tile_preparation.class_balance,
         "splits": {
             "train": train_loader.snapshot(),
             "val": val_loader.snapshot(),
@@ -462,11 +488,25 @@ def _tile_preparation_report(
     }
 
 
+def _sampling_mode(settings: SystemSettings, enabled: bool) -> str:
+    if not enabled:
+        return "sequential"
+    if settings.dataset.classes and settings.tile_preparation.class_balance:
+        return "weighted_class_balance"
+    return "weighted_positive_factor"
+
+
 def _safe_len(value: object) -> int | None:
     try:
         return int(len(value))
     except TypeError:
         return None
+
+
+def _safe_ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
 
 
 def _dataset_attr(dataset: object, name: str) -> object:

@@ -635,12 +635,43 @@ def test_smart_tiling_sampling_weights_follow_positive_factor() -> None:
     dataset = TileDataset.__new__(TileDataset)
     dataset._positive_hint_by_index = [True, True, *([False] * 8)]
     dataset._positive_factor = 0.8
+    dataset._class_balance = False
+    dataset._smart_tiling = True
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
 
     weights = dataset.sampling_weights(0.8)
 
     assert weights is not None
     assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if positive) == pytest.approx(0.8)
     assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if not positive) == pytest.approx(0.2)
+
+
+def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, True, True, False, False]
+    dataset._class_hints_by_index = [
+        frozenset({1}),
+        frozenset({1}),
+        frozenset({2}),
+        frozenset(),
+        frozenset(),
+    ]
+    dataset._positive_factor = 0.8
+    dataset._class_balance = True
+    dataset._smart_tiling = True
+    dataset._class_annotations = [
+        TileClassAnnotation(class_id=1, slug="common", name="Common", annotation_file="a.geojson"),
+        TileClassAnnotation(class_id=2, slug="rare", name="Rare", annotation_file="b.geojson"),
+    ]
+
+    weights = dataset.sampling_weights(0.8)
+
+    assert weights is not None
+    assert weights[2] > weights[0]
+    assert sum(weights[:3]) == pytest.approx(0.8)
+    assert sum(weights[3:]) == pytest.approx(0.2)
+    assert dataset.estimated_class_positive_tiles == {"common": 2, "rare": 1}
 
 
 def _write_raster(path: Path) -> None:

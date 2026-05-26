@@ -105,6 +105,33 @@ def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:
     assert Path(result.final_checkpoint_path).is_file()
 
 
+def test_multiclass_cross_entropy_dice_loss_is_finite() -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train import _trainer
+
+    logits = torch.randn((2, 3, 8, 8), dtype=torch.float32)
+    masks = torch.zeros((2, 8, 8), dtype=torch.long)
+    masks[:, 2:5, 2:5] = 1
+    masks[:, 5:7, 5:7] = 2
+    config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=2,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="cross_entropy_dice",
+        threshold=0.5,
+        early_stopping_patience=1,
+        class_slugs=["class_a", "class_b"],
+    )
+
+    loss = _trainer._loss(torch, logits, masks, config)
+
+    assert torch.isfinite(loss)
+    assert float(loss.item()) > 0.0
+
+
 def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 

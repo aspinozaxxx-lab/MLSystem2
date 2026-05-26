@@ -489,14 +489,23 @@ def _loss(torch, logits, masks, config):
 
 def _loss_components(torch, logits, masks, config) -> dict[str, object]:
     if config.task == "multiclass":
-        if config.loss != "cross_entropy":
-            raise TrainError("multiclass train поддерживает только loss=cross_entropy")
+        if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
+            raise TrainError(
+                "multiclass train поддерживает только loss=cross_entropy или cross_entropy_dice"
+            )
+        cross_entropy = torch.nn.functional.cross_entropy(logits, masks)
+        if config.loss == "cross_entropy_dice":
+            dice = _multiclass_dice_loss(torch, logits, masks)
+            loss = cross_entropy + dice
+        else:
+            dice = None
+            loss = cross_entropy
         return {
-            "loss": torch.nn.functional.cross_entropy(logits, masks),
+            "loss": loss,
             "focal": None,
             "tversky": None,
             "bce": None,
-            "dice": None,
+            "dice": dice,
         }
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
@@ -705,6 +714,26 @@ def _dice_loss(torch, logits, masks):
     intersection = torch.sum(probs * masks)
     denominator = torch.sum(probs) + torch.sum(masks)
     return 1.0 - (2.0 * intersection + smooth) / (denominator + smooth)
+
+
+def _multiclass_dice_loss(torch, logits, masks):
+    probs = torch.softmax(logits, dim=1)
+    num_classes = int(logits.shape[1])
+    if num_classes <= 1:
+        return logits.sum() * 0.0
+    target = torch.nn.functional.one_hot(
+        masks.clamp(min=0, max=num_classes - 1),
+        num_classes=num_classes,
+    )
+    target = target.permute(0, 3, 1, 2).to(device=logits.device, dtype=probs.dtype)
+    probs = probs[:, 1:, :, :]
+    target = target[:, 1:, :, :]
+    smooth = 1.0
+    dims = (0, 2, 3)
+    intersection = torch.sum(probs * target, dim=dims)
+    denominator = torch.sum(probs, dim=dims) + torch.sum(target, dim=dims)
+    dice = (2.0 * intersection + smooth) / (denominator + smooth)
+    return 1.0 - dice.mean()
 
 
 def _tversky_loss(torch, logits, masks, config):

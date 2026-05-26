@@ -72,6 +72,7 @@ tile_preparation:
   smart_tiling: true
   positive_factor: 0.8
   val_positive_factor: 0.5
+  class_balance: false
 
 train:
   task: multiclass

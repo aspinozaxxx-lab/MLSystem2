@@ -31,6 +31,7 @@ class TileDataset:
         augmentation_level: int,
         smart_tiling: bool,
         positive_factor: float = 0.5,
+        class_balance: bool = False,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file) if annotation_file is not None else None
@@ -44,11 +45,13 @@ class TileDataset:
         self._augmentation_level = augmentation_level
         self._smart_tiling = smart_tiling
         self._positive_factor = positive_factor
+        self._class_balance = class_balance
         self._memory_file: MemoryFile | None = None
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
         self._class_annotation_indexes: dict[int, AnnotationIndex] = {}
         self._positive_hint_by_index: list[bool] | None = None
+        self._class_hints_by_index: list[frozenset[int]] | None = None
 
         with open_vrt_xml(vrt_xml) as dataset:
             self._count = dataset.count
@@ -78,7 +81,13 @@ class TileDataset:
             self._valid_footprint_valid_cells = valid_diagnostics.valid_footprint_valid_cells
             self._valid_footprint_total_cells = valid_diagnostics.valid_footprint_total_cells
             if self._smart_tiling and self._mode in {"train", "val"}:
-                self._positive_hint_by_index = self._build_positive_hints(dataset)
+                if self._class_annotations:
+                    self._class_hints_by_index = self._build_class_hints(dataset)
+                    self._positive_hint_by_index = [
+                        bool(hints) for hints in self._class_hints_by_index
+                    ]
+                else:
+                    self._positive_hint_by_index = self._build_positive_hints(dataset)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -160,6 +169,38 @@ class TileDataset:
             return None
         return sum(1 for item in self._positive_hint_by_index if not item)
 
+    @property
+    def estimated_class_positive_tiles(self) -> dict[str, int] | None:
+        if self._class_hints_by_index is None:
+            return None
+        counts = {annotation.slug: 0 for annotation in self._class_annotations}
+        slug_by_id = {annotation.class_id: annotation.slug for annotation in self._class_annotations}
+        for hints in self._class_hints_by_index:
+            for class_id in hints:
+                slug = slug_by_id.get(class_id)
+                if slug is not None:
+                    counts[slug] += 1
+        return counts
+
+    @property
+    def class_balance_enabled(self) -> bool:
+        return bool(self._smart_tiling and self._class_balance and self._class_annotations)
+
+    @property
+    def class_balance_warnings(self) -> list[str]:
+        if not self.class_balance_enabled:
+            return []
+        counts = self.estimated_class_positive_tiles
+        if counts is None:
+            return []
+        warnings: list[str] = []
+        for slug, count in counts.items():
+            if count == 0:
+                warnings.append(f"class_balance: для класса {slug} нет positive windows.")
+            elif count < 3:
+                warnings.append(f"class_balance: для класса {slug} найдено мало positive windows: {count}.")
+        return warnings
+
     def sampling_weights(self, positive_factor: float | None = None) -> list[float] | None:
         if self._positive_hint_by_index is None:
             return None
@@ -168,6 +209,8 @@ class TileDataset:
         if positive_count == 0 or negative_count == 0:
             return None
         factor = self._positive_factor if positive_factor is None else positive_factor
+        if self.class_balance_enabled and self._class_hints_by_index is not None:
+            return self._class_balanced_sampling_weights(factor, negative_count)
         positive_weight = factor / positive_count
         negative_weight = (1.0 - factor) / negative_count
         return [
@@ -281,6 +324,51 @@ class TileDataset:
                 annotation_index = self._annotation_index_or_load()
                 hints.append(bool(annotation_index.query_bounds(bounds)))
         return hints
+
+    def _build_class_hints(self, dataset: DatasetReader) -> list[frozenset[int]]:
+        hints: list[frozenset[int]] = []
+        for tile_window in self._windows:
+            window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
+            bounds = dataset.window_bounds(window)
+            class_ids = {
+                annotation.class_id
+                for annotation in self._class_annotations
+                if self._class_annotation_index_or_load(annotation).query_bounds(bounds)
+            }
+            hints.append(frozenset(class_ids))
+        return hints
+
+    def _class_balanced_sampling_weights(
+        self,
+        factor: float,
+        negative_count: int,
+    ) -> list[float] | None:
+        if self._class_hints_by_index is None:
+            return None
+        counts_by_id = {annotation.class_id: 0 for annotation in self._class_annotations}
+        for hints in self._class_hints_by_index:
+            for class_id in hints:
+                if class_id in counts_by_id:
+                    counts_by_id[class_id] += 1
+        positive_class_ids = [
+            class_id for class_id, count in counts_by_id.items() if count > 0
+        ]
+        if not positive_class_ids:
+            return None
+        class_budget = factor / len(positive_class_ids)
+        negative_weight = (1.0 - factor) / negative_count
+        weights: list[float] = []
+        for hints in self._class_hints_by_index:
+            if not hints:
+                weights.append(negative_weight)
+                continue
+            weight = sum(
+                class_budget / counts_by_id[class_id]
+                for class_id in hints
+                if counts_by_id.get(class_id, 0) > 0
+            )
+            weights.append(weight)
+        return weights
 
     def _sample_meta(self, mask: np.ndarray, augmented: bool) -> dict[str, object]:
         meta: dict[str, object] = {

@@ -74,6 +74,7 @@ class TilePreparationSettings(BaseModel):
     smart_tiling: bool = False
     positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
     val_positive_factor: float | None = Field(default=None, gt=0.0, lt=1.0)
+    class_balance: bool = False
 
     @model_validator(mode="after")
     def validate_stride(self) -> Self:
@@ -96,7 +97,7 @@ class TrainSettings(BaseModel):
     device: str
     learning_rate: float = Field(gt=0.0)
     weight_decay: float = Field(ge=0.0)
-    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy"]
+    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]
     focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     pos_weight: float = Field(default=1.0, gt=0.0)
     tversky_alpha: float = Field(default=0.4, gt=0.0)
@@ -109,10 +110,11 @@ class TrainSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
-        if self.task == "multiclass" and self.loss != "cross_entropy":
-            raise ValueError("multiclass train требует loss=cross_entropy")
-        if self.task == "binary" and self.loss == "cross_entropy":
-            raise ValueError("binary train не поддерживает loss=cross_entropy")
+        multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
+        if self.task == "multiclass" and self.loss not in multiclass_losses:
+            raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
+        if self.task == "binary" and self.loss in multiclass_losses:
+            raise ValueError("binary train не поддерживает multiclass loss")
         return self
 
 

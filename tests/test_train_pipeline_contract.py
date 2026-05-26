@@ -179,6 +179,9 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         uses_vrt_source_rects = True
         estimated_positive_tiles = 2
         estimated_negative_tiles = 3
+        estimated_class_positive_tiles = {"class_a": 1}
+        class_balance_enabled = False
+        class_balance_warnings: list[str] = []
 
         def __len__(self) -> int:
             return 5
@@ -222,18 +225,72 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "uses_vrt_source_rects": True,
         "estimated_positive_tiles": 2,
         "estimated_negative_tiles": 3,
+        "estimated_class_positive_tiles": {"class_a": 1},
         "sampling_mode": "sequential",
         "positive_factor_used": None,
+        "target_positive_factor": None,
+        "class_balance_enabled": False,
         "is_diagnostic_sampling": False,
         "observed_batches": 2,
         "observed_tiles": 3,
         "observed_positive_tiles": 2,
+        "observed_positive_ratio": 2 / 3,
+        "observed_negative_ratio": 1.0 - 2 / 3,
+        "ratio_abs_error": None,
         "observed_augmented_tiles": 1,
         "observed_class_positive_tile_counts": {"class_a": 1},
         "observed_class_pixel_counts": {"class_a": 32},
         "observed_real_tiles": 2,
         "warnings": [],
     }
+
+
+def test_counting_loader_reports_target_positive_ratio() -> None:
+    class Dataset:
+        source_rect_count = 1
+        candidate_window_count = 4
+        candidate_window_count_before_valid_filter = 4
+        black_filtered_window_count = 0
+        valid_footprint_stride = 64
+        valid_footprint_valid_cells = 4
+        valid_footprint_total_cells = 4
+        uses_vrt_source_rects = True
+        estimated_positive_tiles = 2
+        estimated_negative_tiles = 2
+        estimated_class_positive_tiles = {"class_a": 2}
+        class_balance_enabled = True
+        class_balance_warnings: list[str] = []
+
+        def __len__(self) -> int:
+            return 4
+
+    class Images:
+        shape = (4, 1, 4, 4)
+
+    class Loader:
+        dataset = Dataset()
+
+        def __iter__(self):
+            yield Images(), object(), {"positive_tile_count": 2}
+
+        def __len__(self) -> int:
+            return 1
+
+    loader = _runner._CountingLoader(
+        Loader(),
+        "train",
+        sampling_mode="weighted_class_balance",
+        positive_factor_used=0.5,
+    )
+
+    list(loader)
+    snapshot = loader.snapshot()
+
+    assert snapshot["target_positive_factor"] == 0.5
+    assert snapshot["observed_positive_ratio"] == 0.5
+    assert snapshot["observed_negative_ratio"] == 0.5
+    assert snapshot["ratio_abs_error"] == 0.0
+    assert snapshot["estimated_class_positive_tiles"] == {"class_a": 2}
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:

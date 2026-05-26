@@ -46,6 +46,22 @@ def test_load_settings_accepts_multiclass_dataset(tmp_path: Path) -> None:
     assert settings.train.output_channels == 3
 
 
+def test_load_settings_accepts_multiclass_class_balance_and_ce_dice(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _multiclass_config()
+        .replace("  smart_tiling: false", "  smart_tiling: true\n  class_balance: true")
+        .replace("  loss: cross_entropy", "  loss: cross_entropy_dice"),
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.tile_preparation.class_balance is True
+    assert settings.train.loss == "cross_entropy_dice"
+
+
 def test_load_settings_rejects_mixed_binary_and_multiclass_dataset(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
@@ -138,6 +154,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.tile_preparation.smart_tiling is False
     assert settings.tile_preparation.positive_factor == 0.5
     assert settings.tile_preparation.val_positive_factor is None
+    assert settings.tile_preparation.class_balance is False
 
 
 def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:
