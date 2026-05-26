@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`models` создает поддерживаемые segmentation-модели и загружает или сохраняет локальные checkpoint-файлы. Модуль принимает raw Geoalert-compatible tensors и не знает о DataLoader.
+`models` создает поддерживаемые segmentation-модели и загружает или сохраняет локальные checkpoint-файлы. Модуль принимает raw Geoalert-compatible tensors и не знает о DataLoader или task.
 
 ## Публичный интерфейс
 
@@ -27,11 +27,13 @@
 
 ## Алгоритм работы и его особенности
 
+`ModelSpec.output_channels` задает число каналов logits. Для binary segmentation это `1`; для multiclass segmentation это `len(dataset.classes)+1`, где нулевой канал соответствует background.
+
 Поддерживаются две ветки SegFormer. `segformer_b0` и `segformer_b2` строятся через Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачиваются приватным wrapper. Wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer. Внешний параметр normalization не добавляется.
 
 `smp_segformer_b0` и `smp_segformer_b2` добавлены как диагностическая совместимость со старым MLSystem train path. Они строятся через `segmentation_models_pytorch.Segformer` с `encoder_name="mit_b0"` или `"mit_b2"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Для SMP-вариантов wrapper `x / 255.0` не применяется, чтобы проверить старое поведение без смешивания с текущей Hugging Face реализацией.
 
-`smp_deeplabv3plus_resnet50` добавлен как один необходимый вариант DeepLabV3Plus для проверки старого MLSystem-compatible train path. Модель строится через `segmentation_models_pytorch.DeepLabV3Plus` с `encoder_name="resnet50"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Input tensor остается `[B,4,H,W]` в raw Geoalert-compatible диапазоне. Output - logits `[B,1,H,W]`; activation внутри модели не применяется, а `train` сам выполняет sigmoid, loss и расчет метрик.
+`smp_deeplabv3plus_resnet50` добавлен как один необходимый вариант DeepLabV3Plus для проверки старого MLSystem-compatible train path. Модель строится через `segmentation_models_pytorch.DeepLabV3Plus` с `encoder_name="resnet50"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Input tensor остается `[B,4,H,W]` в raw Geoalert-compatible диапазоне. Output - logits `[B,output_channels,H,W]`; activation внутри модели не применяется, а `train` сам выполняет sigmoid/cross entropy, loss и расчет метрик.
 
 Конфигурация `segformer_b0`: `depths=[2, 2, 2, 2]`, `hidden_sizes=[32, 64, 160, 256]`, `decoder_hidden_size=256`, pretrained источник `nvidia/segformer-b0-finetuned-ade-512-512`.
 

@@ -5,6 +5,8 @@ from mlsystem2.dataset_preparing import contracts
 
 def test_dataset_preparing_contracts_all_is_exact() -> None:
     assert list(contracts.__all__) == [
+        "DatasetClassAnnotation",
+        "DatasetClassRequest",
         "DatasetPreparationError",
         "DatasetPreparationRequest",
         "PreparedDataset",

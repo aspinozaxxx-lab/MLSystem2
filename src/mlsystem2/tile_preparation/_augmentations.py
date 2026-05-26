@@ -38,17 +38,17 @@ def _geometric(
     augmented = False
     if rng.random() < 0.5:
         image = np.flip(image, axis=2)
-        mask = np.flip(mask, axis=2)
+        mask = np.flip(mask, axis=_mask_horizontal_axis(mask))
         augmented = True
     if rng.random() < 0.5:
         image = np.flip(image, axis=1)
-        mask = np.flip(mask, axis=1)
+        mask = np.flip(mask, axis=_mask_vertical_axis(mask))
         augmented = True
 
     rotations = int(rng.integers(0, 4))
     if rotations:
         image = np.rot90(image, rotations, axes=(1, 2))
-        mask = np.rot90(mask, rotations, axes=(1, 2))
+        mask = np.rot90(mask, rotations, axes=_mask_rotation_axes(mask))
         augmented = True
     return image, mask, augmented
 
@@ -104,5 +104,20 @@ def _cutout(
     image = image.copy()
     mask = mask.copy()
     image[:, y : y + cut_h, x : x + cut_w] = 0.0
-    mask[:, y : y + cut_h, x : x + cut_w] = 0.0
+    if mask.ndim == 2:
+        mask[y : y + cut_h, x : x + cut_w] = 0
+    else:
+        mask[:, y : y + cut_h, x : x + cut_w] = 0.0
     return image, mask
+
+
+def _mask_horizontal_axis(mask: np.ndarray) -> int:
+    return 1 if mask.ndim == 2 else 2
+
+
+def _mask_vertical_axis(mask: np.ndarray) -> int:
+    return 0 if mask.ndim == 2 else 1
+
+
+def _mask_rotation_axes(mask: np.ndarray) -> tuple[int, int]:
+    return (0, 1) if mask.ndim == 2 else (1, 2)

@@ -114,3 +114,56 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
     assert not any(item[0] == "train/loss_dice" for item in logged)
     assert ("val/best_threshold", 0.0, 3) in logged
     assert ("val/prob_mean", 0.0, 3) in logged
+
+
+def test_log_training_epoch_writes_multiclass_metrics(monkeypatch) -> None:
+    logged: list[tuple[str, float, int]] = []
+
+    class MLflow:
+        @staticmethod
+        def log_metric(name: str, value: float, step: int = 0) -> None:
+            logged.append((name, value, step))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+
+    _client.log_training_epoch(
+        run,
+        EpochMetrics(
+            epoch=2,
+            train_loss=1.0,
+            train_optimizer_steps=1,
+            train_skipped_optimizer_steps=0,
+            val_loss=1.0,
+            val_pixel_precision=0.5,
+            val_pixel_recall=0.25,
+            val_pixel_f1=0.333,
+            val_positive_pixels=10,
+            val_pred_positive_pixels=8,
+            val_true_positive=4,
+            val_false_positive=4,
+            val_false_negative=6,
+            val_macro_f1=0.333,
+            val_mean_iou=0.25,
+            val_pixel_accuracy=0.9,
+            val_per_class_metrics={
+                "class_a": {
+                    "precision": 0.5,
+                    "recall": 0.25,
+                    "f1": 0.333,
+                    "iou": 0.2,
+                    "support_pixels": 10.0,
+                }
+            },
+            epoch_time_sec=1.0,
+        ),
+    )
+
+    assert ("val/macro_f1", 0.333, 2) in logged
+    assert ("val/mean_iou", 0.25, 2) in logged
+    assert ("val/pixel_accuracy", 0.9, 2) in logged
+    assert ("val/class_a/f1", 0.333, 2) in logged
+    assert ("val/class_a/iou", 0.2, 2) in logged
+    assert ("val/class_a/precision", 0.5, 2) in logged
+    assert ("val/class_a/recall", 0.25, 2) in logged
+    assert ("val/class_a/support_pixels", 10.0, 2) in logged

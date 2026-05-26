@@ -10,6 +10,8 @@ from ._scene_matching import filter_existing_scenes, index_image_files, read_sce
 from ._split import split_train_val_by_object_counts
 from ._vrt import build_vrt_xml
 from .contracts import (
+    DatasetClassAnnotation,
+    DatasetClassRequest,
     DatasetPreparationReport,
     DatasetPreparationRequest,
     DatasetPreparationResult,
@@ -21,7 +23,15 @@ SPLIT_SEED = 42
 
 
 def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
+    if request.classes:
+        return _prepare_multiclass_dataset(request)
+    return _prepare_binary_dataset(request)
+
+
+def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
     images_dir = Path(request.images_dir)
+    if request.scenes_file is None or request.annotation_file is None:
+        raise AssertionError("binary request должен быть провалидирован до подготовки")
     scenes_file = Path(request.scenes_file)
     annotation_file = Path(request.annotation_file)
 
@@ -125,6 +135,143 @@ def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationRes
     return DatasetPreparationResult(dataset=dataset, report=report)
 
 
+def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
+    images_dir = Path(request.images_dir)
+    classes = list(request.classes or [])
+    errors: list[str] = []
+    scenes_by_class: dict[str, list[str]] = {}
+    annotation_by_slug: dict[str, Path] = {}
+
+    for class_request in classes:
+        scenes_file = Path(class_request.scenes_file)
+        annotation_file = Path(class_request.annotation_file)
+        scenes = _read_scenes_or_collect_error(scenes_file, errors)
+        scenes_by_class[class_request.slug] = scenes
+        annotation_by_slug[class_request.slug] = annotation_file
+        if not annotation_file.exists():
+            errors.append(
+                f"Файл разметки класса {class_request.slug} не существует: {annotation_file}"
+            )
+        elif not annotation_file.is_file():
+            errors.append(
+                f"Путь разметки класса {class_request.slug} не является файлом: {annotation_file}"
+            )
+
+    scenes = _unique_preserving_order(
+        scene
+        for class_scenes in scenes_by_class.values()
+        for scene in class_scenes
+    )
+    if not scenes:
+        errors.append("Список сцен пуст.")
+    if not images_dir.exists():
+        errors.append(f"Директория снимков не существует: {images_dir}")
+    elif not images_dir.is_dir():
+        errors.append(f"Путь снимков не является директорией: {images_dir}")
+
+    if errors:
+        report = _build_report(
+            scenes=scenes,
+            rows=[],
+            scene_to_image={},
+            train_names=set(),
+            val_names=set(),
+            missing_files=[],
+            errors=errors,
+        )
+        return DatasetPreparationResult(dataset=None, report=report)
+
+    image_index = _index_images_or_collect_error(images_dir, errors)
+    if image_index is None:
+        report = _build_report(
+            scenes=scenes,
+            rows=[],
+            scene_to_image={},
+            train_names=set(),
+            val_names=set(),
+            missing_files=[],
+            errors=errors,
+        )
+        return DatasetPreparationResult(dataset=None, report=report)
+
+    filtered = filter_existing_scenes(scenes, image_index)
+    missing_files = list(filtered.missing_scenes)
+    scene_to_image = {
+        scene: path.resolve()
+        for scene, path in filtered.scene_to_image.items()
+    }
+    if missing_files:
+        errors.append(f"Не найдены снимки для сцен: {', '.join(missing_files)}")
+    for scene, paths in filtered.ambiguous_scenes.items():
+        joined = "; ".join(path.resolve().as_posix() for path in paths)
+        errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
+
+    rows = _count_multiclass_objects_or_collect_errors(
+        classes,
+        scenes,
+        scene_to_image,
+        annotation_by_slug,
+        errors,
+    )
+    found_rows = [row for row in rows if row.scene_name in scene_to_image]
+    split = split_train_val_by_object_counts(
+        found_rows,
+        target_val_fraction=request.val_fraction,
+        seed=SPLIT_SEED,
+    )
+    train_scene_ids = [row.scene_name for row in split.train]
+    val_scene_ids = [row.scene_name for row in split.val]
+    train_names = set(train_scene_ids)
+    val_names = set(val_scene_ids)
+
+    if not found_rows:
+        errors.append("Не найдено ни одного снимка из списка сцен.")
+    elif not split.train or not split.val:
+        errors.append("Недостаточно найденных сцен для построения train и val VRT.")
+
+    validation = validate_rasters(scene_to_image) if scene_to_image else None
+    if validation is not None:
+        errors.extend(validation.errors)
+
+    dataset: PreparedDataset | None = None
+    if not errors and validation is not None:
+        raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
+        try:
+            train_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in train_scene_ids])
+            val_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in val_scene_ids])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Не удалось построить VRT: {exc}")
+        else:
+            dataset = PreparedDataset(
+                train_vrt_xml=train_vrt_xml,
+                val_vrt_xml=val_vrt_xml,
+                annotation_file=None,
+                class_annotations=[
+                    DatasetClassAnnotation(
+                        class_id=class_id,
+                        slug=class_request.slug,
+                        name=class_request.name,
+                        annotation_file=Path(class_request.annotation_file).resolve().as_posix(),
+                        priority=class_request.priority,
+                    )
+                    for class_id, class_request in enumerate(classes, start=1)
+                ],
+            )
+
+    report = _build_report(
+        scenes=scenes,
+        rows=rows,
+        scene_to_image=scene_to_image,
+        train_names=train_names,
+        val_names=val_names,
+        missing_files=missing_files,
+        errors=errors,
+    )
+    if errors:
+        dataset = None
+    return DatasetPreparationResult(dataset=dataset, report=report)
+
+
 def _read_scenes_or_collect_error(path: Path, errors: list[str]) -> list[str]:
     if not path.exists():
         errors.append(f"Файл списка сцен не существует: {path}")
@@ -161,6 +308,49 @@ def _count_objects_or_collect_error(
             SceneObjectCount(scene_name=scene, image_path=scene_to_image.get(scene), object_count=0)
             for scene in scenes
         ]
+
+
+def _count_multiclass_objects_or_collect_errors(
+    classes: list[DatasetClassRequest],
+    scenes: list[str],
+    scene_to_image: dict[str, Path],
+    annotation_by_slug: dict[str, Path],
+    errors: list[str],
+) -> list[SceneObjectCount]:
+    counts_by_scene = {
+        scene: SceneObjectCount(
+            scene_name=scene,
+            image_path=scene_to_image.get(scene),
+            object_count=0,
+        )
+        for scene in scenes
+    }
+    for class_request in classes:
+        class_rows = _count_objects_or_collect_error(
+            scenes,
+            scene_to_image,
+            annotation_by_slug[class_request.slug],
+            errors,
+        )
+        for row in class_rows:
+            existing = counts_by_scene[row.scene_name]
+            counts_by_scene[row.scene_name] = SceneObjectCount(
+                scene_name=row.scene_name,
+                image_path=existing.image_path or row.image_path,
+                object_count=existing.object_count + row.object_count,
+            )
+    return [counts_by_scene[scene] for scene in scenes]
+
+
+def _unique_preserving_order(values) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _build_report(

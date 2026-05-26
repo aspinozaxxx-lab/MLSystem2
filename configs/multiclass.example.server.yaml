@@ -1,0 +1,108 @@
+runtime:
+  project_root: /opt/mlsystem2/repo
+  scratch_root: /opt/mlsystem2/runtime/multiclass_smoke/scratch
+  logs_root: /opt/mlsystem2/runtime/multiclass_smoke/logs
+  cleanup_scratch_after_mlflow_log: false
+
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/
+  val_fraction: 0.2
+  classes:
+    - slug: abrasion
+      name: Абразия
+      scenes_file: /data/MLMarkup/Абразия/abrasion.txt
+      annotation_file: /data/MLMarkup/Абразия/abrasion.geojson
+    - slug: wind_erosion
+      name: Ветровая эрозия
+      scenes_file: /data/MLMarkup/Ветровая эрозия/wind_erosion.txt
+      annotation_file: /data/MLMarkup/Ветровая эрозия/wind_erosion.geojson
+    - slug: water_erosion
+      name: Водная эрозия
+      scenes_file: /data/MLMarkup/Водная эрозия/water_erosion.txt
+      annotation_file: /data/MLMarkup/Водная эрозия/water_erosion.geojson
+    - slug: deforestation
+      name: Вырубки
+      scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
+      annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
+    - slug: fire
+      name: Гари
+      scenes_file: /data/MLMarkup/Гари/burnt_forests.txt
+      annotation_file: /data/MLMarkup/Гари/burnt_forests.geojson
+    - slug: waterlogging
+      name: Заболачивание
+      scenes_file: /data/MLMarkup/Заболачивание/swampings.txt
+      annotation_file: /data/MLMarkup/Заболачивание/swampings.geojson
+    - slug: salinization
+      name: Засоления
+      scenes_file: /data/MLMarkup/Засоления/salty.txt
+      annotation_file: /data/MLMarkup/Засоления/salty.geojson
+    - slug: quarries
+      name: Карьеры
+      scenes_file: /data/MLMarkup/Карьеры/careers.txt
+      annotation_file: /data/MLMarkup/Карьеры/careers.geojson
+    - slug: landslide_scree
+      name: Обвально-оползневые и осыпные
+      scenes_file: /data/MLMarkup/Обвально-оползневые и осыпные/landslides.txt
+      annotation_file: /data/MLMarkup/Обвально-оползневые и осыпные/landslides.geojson
+    - slug: lakes
+      name: Озера
+      scenes_file: /data/MLMarkup/Озера/lakes.txt
+      annotation_file: /data/MLMarkup/Озера/lakes.geojson
+      priority: -100
+    - slug: desertification
+      name: Опустынивание
+      scenes_file: /data/MLMarkup/Опустынивание/desertification.txt
+      annotation_file: /data/MLMarkup/Опустынивание/desertification.geojson
+    - slug: arable_lands
+      name: Пашни
+      scenes_file: /data/MLMarkup/Пашни/areas_of_used_arable_land.txt
+      annotation_file: /data/MLMarkup/Пашни/areas_of_used_arable_land.geojson
+    - slug: rivers
+      name: Реки
+      scenes_file: /data/MLMarkup/Реки/rivers.txt
+      annotation_file: /data/MLMarkup/Реки/rivers.geojson
+
+tile_preparation:
+  tile_size: 1024
+  stride: 512
+  num_workers: 16
+  prefetch_factor: 2
+  seed: 20260513
+  augmentation_level: 1
+  smart_tiling: true
+  positive_factor: 0.8
+  val_positive_factor: 0.5
+
+train:
+  task: multiclass
+  model_name: smp_segformer_b2
+  input_channels: 4
+  output_channels: 14
+  pretrained: false
+  initial_checkpoint_uri: null
+  epochs: 2
+  batch_size: 2
+  device: cuda
+  learning_rate: 0.000002
+  weight_decay: 0.0001
+  loss: cross_entropy
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.5
+  early_stopping_patience: 2
+  max_train_batches_per_epoch: 16
+  max_val_batches_per_epoch: 16
+  max_training_time_sec: 1800
+
+inference:
+  checkpoint_uri: /opt/mlsystem2/runtime/multiclass_smoke/scratch/checkpoints/best.pt
+  threshold: 0.5
+  batch_size: 1
+  device: cuda
+
+mlflow:
+  enabled: true
+  tracking_uri: http://127.0.0.1:5000
+  experiment_name: MLSystem2-Multiclass

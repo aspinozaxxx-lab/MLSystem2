@@ -39,12 +39,12 @@ mlsystem2-infer --config configs/example.server.yaml
 
 1. CLI получает путь `--config`, вызывает `settings.api.load_settings` и инициализирует текущие настройки процесса.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML-конфиг запуска в артефакты.
-3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML.
+3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит разбиение и возвращает train/val VRT XML. Поддерживаются два режима датасета: binary через `dataset.scenes_file` + `dataset.annotation_file` и multiclass через `dataset.classes`.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
-5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для `train_vrt_xml` и `val_vrt_xml`. `tile_preparation` не выполняет split, а создает один torch DataLoader по одному VRT XML и GeoJSON. Image tensors уже соответствуют Geoalert ABI: raw `float32`, `C,H,W` на sample и `B,C,H,W` в batch.
-6. `train_pipeline` создает поддерживаемую segmentation-модель (`segformer_b0`, `segformer_b2`, диагностический SMP-совместимый `smp_segformer_b0`/`smp_segformer_b2` или `smp_deeplabv3plus_resnet50`) через `models.create_model` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан.
-7. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, BCE/Dice-family loss, validation по pixel precision/recall/f1, early stopping и best/final checkpoints.
+5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для `train_vrt_xml` и `val_vrt_xml`. `tile_preparation` не выполняет split, а создает один torch DataLoader по одному VRT XML и разметке. Image tensors уже соответствуют Geoalert ABI: raw `float32`, `C,H,W` на sample и `B,C,H,W` в batch. В binary режиме mask имеет `torch.float32 [B,1,H,W]`, в multiclass режиме mask имеет `torch.long [B,H,W]`, где `0` - background, `1..N` - class id по порядку `dataset.classes`.
+6. `train_pipeline` создает поддерживаемую segmentation-модель (`segformer_b0`, `segformer_b2`, диагностический SMP-совместимый `smp_segformer_b0`/`smp_segformer_b2` или `smp_deeplabv3plus_resnet50`) через `models.create_model` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Для multiclass `train.output_channels` должен быть равен `len(dataset.classes) + 1`.
+7. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy, validation metrics, early stopping и best/final checkpoints.
 8. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.
 9. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет tile preparation, отчет времени и итоговый
    отчет.

@@ -15,9 +15,13 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation._augmentations import _cutout
+from mlsystem2.tile_preparation._augmentations import _cutout, _geometric
 from mlsystem2.tile_preparation._dataset import TileDataset
-from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TilePreparationError
+from mlsystem2.tile_preparation.contracts import (
+    TileClassAnnotation,
+    TileDataloaderRequest,
+    TilePreparationError,
+)
 
 
 def test_create_tile_dataloader_reports_missing_torch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,6 +72,8 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     assert batch_meta == {
         "augmented_tile_count": 0,
         "positive_tile_count": 1,
+        "class_positive_tile_counts": {},
+        "class_pixel_counts": {},
         "tile_augmented": [False, False, False, False],
         "tile_positive": [True, False, False, False],
     }
@@ -110,6 +116,8 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
     assert batch_meta == {
         "augmented_tile_count": 0,
         "positive_tile_count": 0,
+        "class_positive_tile_counts": {},
+        "class_pixel_counts": {},
         "tile_augmented": [False],
         "tile_positive": [False],
     }
@@ -155,6 +163,8 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     assert batch_meta == {
         "augmented_tile_count": 1,
         "positive_tile_count": 0,
+        "class_positive_tile_counts": {},
+        "class_pixel_counts": {},
         "tile_augmented": [True],
         "tile_positive": [False],
     }
@@ -172,6 +182,118 @@ def test_cutout_zeros_matching_image_and_mask_region() -> None:
     assert np.count_nonzero(cutout_pixels) > 0
     assert np.all(augmented_mask[:, cutout_pixels] == 0.0)
     assert np.all(augmented_image[:, augmented_mask[0] == 0.0] == 0.0)
+
+
+def test_multiclass_cutout_zeros_matching_image_and_mask_region() -> None:
+    image = np.ones((2, 32, 32), dtype=np.float32)
+    mask = np.ones((32, 32), dtype=np.int64)
+
+    augmented_image, augmented_mask = _cutout(image, mask, np.random.default_rng(20260525))
+
+    cutout_pixels = np.all(augmented_image == 0.0, axis=0)
+    assert np.count_nonzero(cutout_pixels) > 0
+    assert np.all(augmented_mask[cutout_pixels] == 0)
+    assert np.all(augmented_image[:, augmented_mask == 0] == 0.0)
+
+
+def test_multiclass_geometric_augmentation_keeps_labels() -> None:
+    image = np.ones((1, 4, 4), dtype=np.float32)
+    mask = np.zeros((4, 4), dtype=np.int64)
+    mask[0:2, 0:2] = 1
+    mask[2:4, 2:4] = 2
+
+    _image, augmented_mask, augmented = _geometric(image, mask, _DeterministicRng())
+
+    assert augmented is True
+    assert augmented_mask.shape == (4, 4)
+    assert set(np.unique(augmented_mask).tolist()) == {0, 1, 2}
+
+
+def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "multiclass.tif"
+    data = np.full((1, 4, 4), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    class_a = tmp_path / "class_a.geojson"
+    class_b = tmp_path / "class_b.geojson"
+    _write_annotation_polygon(class_a, [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])
+    _write_annotation_polygon(class_b, [[2, 1], [3, 1], [3, 2], [2, 2], [2, 1]])
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            class_annotations=[
+                TileClassAnnotation(
+                    class_id=1,
+                    slug="class_a",
+                    name="Класс А",
+                    annotation_file=class_a,
+                ),
+                TileClassAnnotation(
+                    class_id=2,
+                    slug="class_b",
+                    name="Класс Б",
+                    annotation_file=class_b,
+                ),
+            ],
+            batch_size=1,
+            mode="val",
+        )
+    )
+
+    images, masks, batch_meta = next(iter(loader))
+    assert images.shape == (1, 1, 4, 4)
+    assert masks.shape == (1, 4, 4)
+    assert masks.dtype == torch.long
+    assert set(torch.unique(masks).tolist()) == {0, 1, 2}
+    assert batch_meta["positive_tile_count"] == 1
+    assert batch_meta["class_positive_tile_counts"] == {"class_a": 1, "class_b": 1}
+    assert batch_meta["class_pixel_counts"] == {"class_a": 1, "class_b": 1}
+    loader.dataset.close()
+
+
+def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "overlap.tif"
+    data = np.full((1, 4, 4), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    class_a = tmp_path / "overlap_a.geojson"
+    class_b = tmp_path / "overlap_b.geojson"
+    polygon = [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]]
+    _write_annotation_polygon(class_a, polygon)
+    _write_annotation_polygon(class_b, polygon)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            class_annotations=[
+                TileClassAnnotation(
+                    class_id=1,
+                    slug="class_a",
+                    name="Класс А",
+                    annotation_file=class_a,
+                    priority=10,
+                ),
+                TileClassAnnotation(
+                    class_id=2,
+                    slug="class_b",
+                    name="Класс Б",
+                    annotation_file=class_b,
+                    priority=-10,
+                ),
+            ],
+            batch_size=1,
+            mode="val",
+        )
+    )
+
+    _images, masks, _meta = next(iter(loader))
+    assert torch.equal(torch.unique(masks), torch.tensor([0, 1]))
+    loader.dataset.close()
 
 
 def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill(
@@ -202,6 +324,8 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     assert batch_meta == {
         "augmented_tile_count": 0,
         "positive_tile_count": 0,
+        "class_positive_tile_counts": {},
+        "class_pixel_counts": {},
         "tile_augmented": [False, False, False, False],
         "tile_positive": [False, False, False, False],
     }
@@ -603,6 +727,24 @@ def _write_annotation_height4(path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_annotation_polygon(path: Path, coordinates: list[list[float]]) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [coordinates],
+                },
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _write_empty_annotation(path: Path) -> None:
     path.write_text(
         json.dumps({"type": "FeatureCollection", "features": []}),
@@ -687,3 +829,12 @@ def _yaml_nullable_float(value: float | None) -> str:
     if value is None:
         return "null"
     return str(value)
+
+
+class _DeterministicRng:
+    def random(self) -> float:
+        return 0.0
+
+    def integers(self, low: int, high: int | None = None) -> int:
+        del low, high
+        return 1

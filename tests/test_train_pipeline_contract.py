@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import get_type_hints
 
 from mlsystem2.dataset_preparing.contracts import (
+    DatasetClassAnnotation,
     DatasetPreparationReport,
     DatasetPreparationResult,
     PreparedDataset,
@@ -12,6 +13,7 @@ from mlsystem2.dataset_preparing.contracts import (
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
 from mlsystem2.models.contracts import CheckpointArtifact, LoadedCheckpoint, ModelHandle, ModelSpec
 from mlsystem2.settings.contracts import (
+    DatasetClassSettings,
     DatasetSettings,
     InferenceSettings,
     MLflowSettings,
@@ -130,6 +132,41 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
     assert logged_epochs == [1]
 
 
+def test_train_pipeline_builds_multiclass_requests() -> None:
+    settings = _multiclass_settings()
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=3),
+        model=object(),
+    )
+    prepared = PreparedDataset(
+        train_vrt_xml="<VRTDataset />",
+        val_vrt_xml="<VRTDataset />",
+        class_annotations=[
+            DatasetClassAnnotation(
+                class_id=1,
+                slug="class_a",
+                name="Класс А",
+                annotation_file="./class_a.geojson",
+                priority=7,
+            )
+        ],
+    )
+
+    dataset_request = _runner._dataset_request(settings)
+    tile_request = _runner._tile_request("<VRTDataset />", prepared, 2, "train")
+    train_request = _runner._train_request(settings, model, object(), object())
+
+    assert dataset_request.classes is not None
+    assert [item.slug for item in dataset_request.classes] == ["class_a", "class_b"]
+    assert [item.priority for item in dataset_request.classes] == [5, 0]
+    assert tile_request.annotation_file is None
+    assert [item.slug for item in tile_request.class_annotations] == ["class_a"]
+    assert [item.priority for item in tile_request.class_annotations] == [7]
+    assert train_request.config.task == "multiclass"
+    assert train_request.config.loss == "cross_entropy"
+    assert train_request.config.class_slugs == ["class_a", "class_b"]
+
+
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
         source_rect_count = 1
@@ -157,7 +194,12 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
             yield (
                 Images(2),
                 object(),
-                {"augmented_tile_count": 1, "positive_tile_count": 2},
+                {
+                    "augmented_tile_count": 1,
+                    "positive_tile_count": 2,
+                    "class_positive_tile_counts": {"class_a": 1},
+                    "class_pixel_counts": {"class_a": 32},
+                },
             )
             yield Images(1), object()
 
@@ -187,6 +229,8 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "observed_tiles": 3,
         "observed_positive_tiles": 2,
         "observed_augmented_tiles": 1,
+        "observed_class_positive_tile_counts": {"class_a": 1},
+        "observed_class_pixel_counts": {"class_a": 32},
         "observed_real_tiles": 2,
         "warnings": [],
     }
@@ -219,6 +263,63 @@ def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:
             learning_rate=0.00001,
             weight_decay=0.0001,
             loss="bce_dice",
+            early_stopping_patience=1,
+        ),
+        inference=InferenceSettings(
+            checkpoint_uri="./checkpoint.pt",
+            threshold=0.5,
+            batch_size=1,
+            device="cpu",
+        ),
+        mlflow=MLflowSettings(
+            enabled=False,
+            tracking_uri="./mlruns",
+            experiment_name="test",
+        ),
+    )
+
+
+def _multiclass_settings() -> SystemSettings:
+    return SystemSettings(
+        runtime=RuntimeSettings(
+            project_root=".",
+            scratch_root="./scratch",
+            logs_root="./logs",
+            cleanup_scratch_after_mlflow_log=False,
+        ),
+        dataset=DatasetSettings(
+            images_dir="./images",
+            classes=[
+                DatasetClassSettings(
+                    slug="class_a",
+                    name="Класс А",
+                    scenes_file="./class_a.txt",
+                    annotation_file="./class_a.geojson",
+                    priority=5,
+                ),
+                DatasetClassSettings(
+                    slug="class_b",
+                    name="Класс Б",
+                    scenes_file="./class_b.txt",
+                    annotation_file="./class_b.geojson",
+                ),
+            ],
+            val_fraction=0.2,
+        ),
+        tile_preparation=TilePreparationSettings(tile_size=512, stride=512),
+        train=TrainSettings(
+            task="multiclass",
+            model_name="segformer_b2",
+            input_channels=4,
+            output_channels=3,
+            pretrained=False,
+            initial_checkpoint_uri=None,
+            epochs=1,
+            batch_size=1,
+            device="cpu",
+            learning_rate=0.00001,
+            weight_decay=0.0001,
+            loss="cross_entropy",
             early_stopping_patience=1,
         ),
         inference=InferenceSettings(

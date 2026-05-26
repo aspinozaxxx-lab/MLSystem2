@@ -9,7 +9,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from mlsystem2.dataset_preparing.api import prepare_dataset
-from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest
+from mlsystem2.dataset_preparing.contracts import DatasetClassRequest, DatasetPreparationRequest
 
 
 def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
@@ -40,6 +40,71 @@ def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
         result.dataset.train_vrt_xml.count("<SourceFilename"),
         result.dataset.val_vrt_xml.count("<SourceFilename"),
     ) >= 2
+    _assert_vrt_reads(result.dataset.train_vrt_xml)
+    _assert_vrt_reads(result.dataset.val_vrt_xml)
+
+
+def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    _write_raster(images / "scene_a.tif", 1, 0)
+    _write_raster(images / "scene_b.tif", 2, 4)
+    _write_raster(images / "scene_c.tif", 3, 8)
+    class_a_scenes = tmp_path / "class_a.txt"
+    class_b_scenes = tmp_path / "class_b.txt"
+    class_c_scenes = tmp_path / "class_c.txt"
+    class_a_scenes.write_text("scene_a\nscene_b\n", encoding="utf-8")
+    class_b_scenes.write_text("scene_b\nscene_c\n", encoding="utf-8")
+    class_c_scenes.write_text("", encoding="utf-8")
+    class_a_annotation = tmp_path / "class_a.geojson"
+    class_b_annotation = tmp_path / "class_b.geojson"
+    class_c_annotation = tmp_path / "class_c.geojson"
+    _write_annotation(class_a_annotation, ["scene_a.tif", "scene_b.tif"])
+    _write_annotation(class_b_annotation, ["scene_b.tif", "scene_c.tif"])
+    _write_annotation(class_c_annotation, ["scene_a.tif"])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            classes=[
+                DatasetClassRequest(
+                    slug="class_a",
+                    name="Класс А",
+                    scenes_file=str(class_a_scenes),
+                    annotation_file=str(class_a_annotation),
+                ),
+                DatasetClassRequest(
+                    slug="class_b",
+                    name="Класс Б",
+                    scenes_file=str(class_b_scenes),
+                    annotation_file=str(class_b_annotation),
+                ),
+                DatasetClassRequest(
+                    slug="class_c",
+                    name="Класс В",
+                    scenes_file=str(class_c_scenes),
+                    annotation_file=str(class_c_annotation),
+                ),
+            ],
+            val_fraction=0.5,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.report.scenes_total == 3
+    assert result.report.scenes_found == 3
+    assert result.report.objects_total == 5
+    assert result.dataset is not None
+    assert result.dataset.annotation_file is None
+    assert [item.class_id for item in result.dataset.class_annotations] == [1, 2, 3]
+    assert [item.slug for item in result.dataset.class_annotations] == [
+        "class_a",
+        "class_b",
+        "class_c",
+    ]
+    assert [item.priority for item in result.dataset.class_annotations] == [0, 0, 0]
     _assert_vrt_reads(result.dataset.train_vrt_xml)
     _assert_vrt_reads(result.dataset.val_vrt_xml)
 

@@ -14,6 +14,7 @@ from ._mask import rasterize_window_mask
 from ._valid_footprint import filter_valid_windows
 from ._vrt import open_vrt_reader, open_vrt_xml
 from ._windows import build_vrt_source_windows_with_diagnostics
+from .contracts import TileClassAnnotation, TilePreparationError
 
 
 class TileDataset:
@@ -21,7 +22,8 @@ class TileDataset:
         self,
         *,
         vrt_xml: str,
-        annotation_file: str | Path,
+        annotation_file: str | Path | None = None,
+        class_annotations: list[TileClassAnnotation] | None = None,
         tile_size: int,
         stride: int,
         mode: str,
@@ -31,7 +33,11 @@ class TileDataset:
         positive_factor: float = 0.5,
     ) -> None:
         self._vrt_xml = vrt_xml
-        self._annotation_file = Path(annotation_file)
+        self._annotation_file = Path(annotation_file) if annotation_file is not None else None
+        self._class_annotations = sorted(
+            list(class_annotations or []),
+            key=lambda item: (item.priority, item.class_id),
+        )
         self._tile_size = tile_size
         self._mode = mode
         self._seed = seed
@@ -41,6 +47,7 @@ class TileDataset:
         self._memory_file: MemoryFile | None = None
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
+        self._class_annotation_indexes: dict[int, AnnotationIndex] = {}
         self._positive_hint_by_index: list[bool] | None = None
 
         with open_vrt_xml(vrt_xml) as dataset:
@@ -86,10 +93,10 @@ class TileDataset:
         image = image_raw.astype(np.float32, copy=False)
 
         mask = self._read_annotation_mask(dataset, window, nodata_pixels)
-        positive = bool(np.count_nonzero(mask) > 0)
+        positive_before_augmentation = bool(np.count_nonzero(mask) > 0)
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
-        if should_augment and (not self._smart_tiling or positive):
+        if should_augment and (not self._smart_tiling or positive_before_augmentation):
             image, mask, augmented = apply_augmentations(
                 image,
                 mask,
@@ -98,10 +105,11 @@ class TileDataset:
                 sample_index=index,
             )
 
+        meta = self._sample_meta(mask, augmented)
         return (
             np.ascontiguousarray(image),
             np.ascontiguousarray(mask),
-            {"augmented": augmented, "positive": positive},
+            meta,
         )
 
     @property
@@ -180,6 +188,7 @@ class TileDataset:
         state["_memory_file"] = None
         state["_dataset"] = None
         state["_annotation_index"] = None
+        state["_class_annotation_indexes"] = {}
         return state
 
     def __del__(self) -> None:
@@ -194,9 +203,21 @@ class TileDataset:
         return self._dataset
 
     def _annotation_index_or_load(self) -> AnnotationIndex:
+        if self._annotation_file is None:
+            raise TilePreparationError("Для binary mask не задан annotation_file.")
         if self._annotation_index is None:
             self._annotation_index = load_annotation_index(self._annotation_file, self._vrt_crs)
         return self._annotation_index
+
+    def _class_annotation_index_or_load(
+        self,
+        annotation: TileClassAnnotation,
+    ) -> AnnotationIndex:
+        index = self._class_annotation_indexes.get(annotation.class_id)
+        if index is None:
+            index = load_annotation_index(annotation.annotation_file, self._vrt_crs)
+            self._class_annotation_indexes[annotation.class_id] = index
+        return index
 
     def _read_image_raw(self, dataset: DatasetReader, window: Window) -> np.ndarray:
         return dataset.read(
@@ -213,6 +234,8 @@ class TileDataset:
         window: Window,
         nodata_pixels: np.ndarray,
     ) -> np.ndarray:
+        if self._class_annotations:
+            return self._read_multiclass_annotation_mask(dataset, window, nodata_pixels)
         geometries = self._annotation_index_or_load().query_bounds(dataset.window_bounds(window))
         mask = rasterize_window_mask(
             geometries,
@@ -222,13 +245,58 @@ class TileDataset:
         mask[nodata_pixels] = 0
         return mask.astype(np.float32, copy=False)[None, :, :]
 
+    def _read_multiclass_annotation_mask(
+        self,
+        dataset: DatasetReader,
+        window: Window,
+        nodata_pixels: np.ndarray,
+    ) -> np.ndarray:
+        mask = np.zeros((self._tile_size, self._tile_size), dtype=np.int64)
+        for annotation in self._class_annotations:
+            geometries = self._class_annotation_index_or_load(annotation).query_bounds(
+                dataset.window_bounds(window)
+            )
+            class_mask = rasterize_window_mask(
+                geometries,
+                out_shape=(self._tile_size, self._tile_size),
+                transform=dataset.window_transform(window),
+            )
+            class_mask[nodata_pixels] = 0
+            mask[class_mask == 1] = annotation.class_id
+        return mask
+
     def _build_positive_hints(self, dataset: DatasetReader) -> list[bool]:
-        annotation_index = self._annotation_index_or_load()
         hints: list[bool] = []
         for tile_window in self._windows:
             window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
-            hints.append(bool(annotation_index.query_bounds(dataset.window_bounds(window))))
+            bounds = dataset.window_bounds(window)
+            if self._class_annotations:
+                hints.append(
+                    any(
+                        self._class_annotation_index_or_load(annotation).query_bounds(bounds)
+                        for annotation in self._class_annotations
+                    )
+                )
+            else:
+                annotation_index = self._annotation_index_or_load()
+                hints.append(bool(annotation_index.query_bounds(bounds)))
         return hints
+
+    def _sample_meta(self, mask: np.ndarray, augmented: bool) -> dict[str, object]:
+        meta: dict[str, object] = {
+            "augmented": augmented,
+            "positive": bool(np.count_nonzero(mask) > 0),
+        }
+        if self._class_annotations:
+            meta["class_positive"] = {
+                annotation.slug: bool(np.any(mask == annotation.class_id))
+                for annotation in self._class_annotations
+            }
+            meta["class_pixels"] = {
+                annotation.slug: int(np.count_nonzero(mask == annotation.class_id))
+                for annotation in self._class_annotations
+            }
+        return meta
 
 
 def _resolve_nodata(dataset: DatasetReader) -> object:

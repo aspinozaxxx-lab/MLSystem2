@@ -107,6 +107,10 @@ def train_model(
                 val_prob_negative_p90=val["prob_negative_p90"],
                 val_prob_negative_p99=val["prob_negative_p99"],
                 val_threshold_sweep=val["threshold_sweep"],
+                val_macro_f1=val.get("macro_f1"),
+                val_mean_iou=val.get("mean_iou"),
+                val_pixel_accuracy=val.get("pixel_accuracy"),
+                val_per_class_metrics=val.get("per_class_metrics", {}),
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -169,12 +173,14 @@ def _train_epoch(
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
-        masks = masks.to(device=device, dtype=torch.float32)
+        masks = _prepare_masks(torch, masks, config, device)
         _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "train")
         _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
+        if config.task == "multiclass":
+            _validate_multiclass_targets(torch, masks, logits.shape[1], epoch, batch_index, "train")
         loss_info = _loss_components(torch, logits, masks, config)
         loss = loss_info["loss"]
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
@@ -236,6 +242,9 @@ def _validate_epoch(
     config,
     epoch: int,
 ) -> dict[str, float | int]:
+    if config.task == "multiclass":
+        return _validate_multiclass_epoch(torch, model, loader, device, config, epoch)
+
     model.eval()
     total_loss = 0.0
     batches = 0
@@ -255,7 +264,7 @@ def _validate_epoch(
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
-            masks = masks.to(device=device, dtype=torch.float32)
+            masks = _prepare_masks(torch, masks, config, device)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
@@ -319,6 +328,118 @@ def _validate_epoch(
     }
 
 
+def _validate_multiclass_epoch(
+    torch,
+    model,
+    loader: object,
+    device: object,
+    config,
+    epoch: int,
+) -> dict[str, float | int | dict[str, dict[str, float]]]:
+    model.eval()
+    total_loss = 0.0
+    batches = 0
+    num_classes = 0
+    class_stats: dict[int, dict[str, int]] = {}
+    correct_pixels = 0
+    total_pixels = 0
+    positive_pixels = 0
+    pred_positive_pixels = 0
+
+    with torch.no_grad():
+        for batch_index, batch in enumerate(loader, start=1):
+            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
+            images = images.to(device=device, dtype=torch.float32)
+            masks = _prepare_masks(torch, masks, config, device)
+            _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
+            _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
+            logits = _forward_logits(torch, model, images, masks)
+            _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
+            num_classes = int(logits.shape[1])
+            _validate_multiclass_targets(torch, masks, num_classes, epoch, batch_index, "val")
+            loss = _loss(torch, logits, masks, config)
+            _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
+            total_loss += float(loss.detach().item())
+            batches += 1
+
+            preds = torch.argmax(logits, dim=1)
+            correct_pixels += int((preds == masks).sum().item())
+            total_pixels += int(masks.numel())
+            positive_pixels += int((masks > 0).sum().item())
+            pred_positive_pixels += int((preds > 0).sum().item())
+            for class_id in range(1, num_classes):
+                stats = class_stats.setdefault(
+                    class_id,
+                    {"tp": 0, "fp": 0, "fn": 0, "support_pixels": 0, "pred_pixels": 0},
+                )
+                pred_class = preds == class_id
+                true_class = masks == class_id
+                stats["tp"] += int((pred_class & true_class).sum().item())
+                stats["fp"] += int((pred_class & ~true_class).sum().item())
+                stats["fn"] += int((~pred_class & true_class).sum().item())
+                stats["support_pixels"] += int(true_class.sum().item())
+                stats["pred_pixels"] += int(pred_class.sum().item())
+
+            if (
+                config.max_val_batches_per_epoch is not None
+                and batch_index >= config.max_val_batches_per_epoch
+            ):
+                break
+
+    if batches == 0:
+        raise TrainError("Val DataLoader не вернул ни одного batch.")
+
+    per_class_metrics = _multiclass_per_class_metrics(class_stats, config)
+    foreground_keys = [
+        slug
+        for slug, values in per_class_metrics.items()
+        if values["support_pixels"] > 0
+    ]
+    macro_f1 = _mean([per_class_metrics[key]["f1"] for key in foreground_keys])
+    macro_precision = _mean([per_class_metrics[key]["precision"] for key in foreground_keys])
+    macro_recall = _mean([per_class_metrics[key]["recall"] for key in foreground_keys])
+    mean_iou = _mean([per_class_metrics[key]["iou"] for key in foreground_keys])
+    true_positive = sum(stats["tp"] for stats in class_stats.values())
+    false_positive = sum(stats["fp"] for stats in class_stats.values())
+    false_negative = sum(stats["fn"] for stats in class_stats.values())
+
+    return {
+        "loss": total_loss / batches,
+        "precision": macro_precision,
+        "recall": macro_recall,
+        "f1": macro_f1,
+        "positive_pixels": positive_pixels,
+        "pred_positive_pixels": pred_positive_pixels,
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+        "best_threshold": 0.0,
+        "best_threshold_pixel_f1": macro_f1,
+        "best_threshold_precision": macro_precision,
+        "best_threshold_recall": macro_recall,
+        "threshold_sweep": {},
+        "prob_mean": 0.0,
+        "prob_min": 0.0,
+        "prob_max": 0.0,
+        "prob_p50": 0.0,
+        "prob_p90": 0.0,
+        "prob_p99": 0.0,
+        "prob_p999": 0.0,
+        "prob_positive_mean": 0.0,
+        "prob_positive_p50": 0.0,
+        "prob_positive_p90": 0.0,
+        "prob_positive_p99": 0.0,
+        "prob_negative_mean": 0.0,
+        "prob_negative_p50": 0.0,
+        "prob_negative_p90": 0.0,
+        "prob_negative_p99": 0.0,
+        "macro_f1": macro_f1,
+        "mean_iou": mean_iou,
+        "pixel_accuracy": _safe_div(correct_pixels, total_pixels),
+        "per_class_metrics": per_class_metrics,
+    }
+
+
 def _split_batch(batch: object, epoch: int, batch_index: int, stage: str):
     try:
         batch_len = len(batch)
@@ -353,11 +474,30 @@ def _forward_logits(torch, model, images, masks):
     return logits
 
 
+def _prepare_masks(torch, masks, config, device):
+    if config.task == "multiclass":
+        prepared = masks.to(device=device)
+        if prepared.ndim == 4 and prepared.shape[1] == 1:
+            prepared = prepared[:, 0, :, :]
+        return prepared.to(dtype=torch.long)
+    return masks.to(device=device, dtype=torch.float32)
+
+
 def _loss(torch, logits, masks, config):
     return _loss_components(torch, logits, masks, config)["loss"]
 
 
 def _loss_components(torch, logits, masks, config) -> dict[str, object]:
+    if config.task == "multiclass":
+        if config.loss != "cross_entropy":
+            raise TrainError("multiclass train поддерживает только loss=cross_entropy")
+        return {
+            "loss": torch.nn.functional.cross_entropy(logits, masks),
+            "focal": None,
+            "tversky": None,
+            "bce": None,
+            "dice": None,
+        }
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -590,6 +730,8 @@ def _ensure_finite_tensor(
     batch_index: int,
     stage: str,
 ) -> None:
+    if hasattr(torch, "is_floating_point") and not torch.is_floating_point(tensor):
+        return
     if not bool(torch.isfinite(tensor).all()):
         raise TrainError(
             f"Non-finite tensor at stage={stage}, epoch={epoch}, batch={batch_index}, tensor={name}"
@@ -622,6 +764,9 @@ def _save_training_checkpoint(
                 "label": label,
                 "epoch": metrics.epoch,
                 "val_pixel_f1": metrics.val_pixel_f1,
+                "val_macro_f1": metrics.val_macro_f1,
+                "val_mean_iou": metrics.val_mean_iou,
+                "val_pixel_accuracy": metrics.val_pixel_accuracy,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
                 "train_optimizer_steps": metrics.train_optimizer_steps,
@@ -661,3 +806,58 @@ def _safe_div(numerator: float, denominator: float) -> float:
     if denominator == 0:
         return 0.0
     return float(numerator / denominator)
+
+
+def _validate_multiclass_targets(
+    torch,
+    masks,
+    num_classes: int,
+    epoch: int,
+    batch_index: int,
+    stage: str,
+) -> None:
+    if masks.ndim != 3:
+        raise TrainError(
+            f"Некорректная multiclass mask at stage={stage}, epoch={epoch}, "
+            f"batch={batch_index}: ожидалась форма [B,H,W], получено {tuple(masks.shape)}"
+        )
+    if int(masks.min().item()) < 0 or int(masks.max().item()) >= num_classes:
+        raise TrainError(
+            f"Некорректные значения multiclass mask at stage={stage}, epoch={epoch}, "
+            f"batch={batch_index}: ожидается диапазон 0..{num_classes - 1}"
+        )
+
+
+def _multiclass_per_class_metrics(
+    class_stats: dict[int, dict[str, int]],
+    config,
+) -> dict[str, dict[str, float]]:
+    metrics: dict[str, dict[str, float]] = {}
+    for class_id in sorted(class_stats):
+        stats = class_stats[class_id]
+        precision = _safe_div(stats["tp"], stats["tp"] + stats["fp"])
+        recall = _safe_div(stats["tp"], stats["tp"] + stats["fn"])
+        f1 = _safe_div(2.0 * precision * recall, precision + recall)
+        iou = _safe_div(stats["tp"], stats["tp"] + stats["fp"] + stats["fn"])
+        metrics[_class_slug(config, class_id)] = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "iou": iou,
+            "support_pixels": float(stats["support_pixels"]),
+            "pred_pixels": float(stats["pred_pixels"]),
+        }
+    return metrics
+
+
+def _class_slug(config, class_id: int) -> str:
+    index = class_id - 1
+    if 0 <= index < len(config.class_slugs):
+        return str(config.class_slugs[index])
+    return f"class_{class_id}"
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))

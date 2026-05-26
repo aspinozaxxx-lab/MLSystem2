@@ -22,15 +22,17 @@
 
 - `settings.api` - получить текущие настройки через `get_settings` и путь YAML через `get_settings_path`.
 - `mlflow_adapter.api` - открыть run, писать config, отчеты, live epoch metrics и итоговые артефакты.
-- `dataset_preparing.api` - подготовить split и получить `train_vrt_xml`, `val_vrt_xml`, `annotation_file`.
+- `dataset_preparing.api` - подготовить split и получить `train_vrt_xml`, `val_vrt_xml`, `annotation_file` или `class_annotations`.
 - `tile_preparation.api` - создать `train_loader` и `val_loader`.
 - `models.api` - создать модель или загрузить checkpoint.
 - `train.api` - обучить модель на готовых DataLoader.
 
 ## Алгоритм работы и его особенности
 
-`run_train_pipeline` получает settings, открывает MLflow run, пишет YAML-конфиг запуска и вызывает `dataset_preparing`. После отчета подготовки датасета создает train/val DataLoader и оборачивает их внутренним счетчиком tile batches, augmented/positive tiles, диагностик VRT source rects и valid-footprint filter. Если `settings.train.initial_checkpoint_uri` задан, вызывается `models.load_checkpoint` с `LoadCheckpointRequest`; иначе вызывается `models.create_model`.
+`run_train_pipeline` получает settings, открывает MLflow run, пишет YAML-конфиг запуска и вызывает `dataset_preparing`. Если `settings.dataset.classes` непустой, в `DatasetPreparationRequest` передается multiclass список `DatasetClassRequest`; иначе передаются binary `scenes_file` и `annotation_file`. После отчета подготовки датасета создаются train/val DataLoader: для multiclass в `TileDataloaderRequest` передаются `class_annotations`, для binary - `annotation_file`.
 
-В `TrainConfig` передаются train-гиперпараметры из settings, включая диагностические batch limits. В `train_model` передается progress sink. На событии `epoch_finished` sink вызывает `mlflow_adapter.log_training_epoch`, чтобы MLflow обновлялся сразу после каждой эпохи. Время live MLflow logging учитывается в timing как `mlflow_logging`.
+DataLoader оборачивается внутренним счетчиком tile batches, augmented/positive tiles, per-class positive tile counts, per-class pixel counts, диагностик VRT source rects и valid-footprint filter. Если `settings.train.initial_checkpoint_uri` задан, вызывается `models.load_checkpoint` с `LoadCheckpointRequest`; иначе вызывается `models.create_model`.
 
-Если `TrainPipelineRequest.run_name` не задан, в MLflow tags передается `class=Path(settings.dataset.annotation_file).stem`, чтобы `mlflow_adapter` мог сгенерировать имя вида `{class}_{DDMM}_{номер}`. После завершения обучения конвейер пишет итоговые metrics, training artifacts, `reports/tile_preparation.json`, timing report и pipeline report. Tile report содержит `smart_tiling_enabled`, `positive_factor`, `val_positive_factor`, source-rect diagnostics, valid-footprint diagnostics, estimated positive/negative tiles и observed counters. Для каждого split в отчете фиксируются `sampling_mode`, `positive_factor_used` и `is_diagnostic_sampling`, чтобы val metric с `val_positive_factor` была явно отделена от последовательной/full validation.
+В `ModelSpec.output_channels` передается `settings.train.output_channels`; для multiclass это `len(settings.dataset.classes)+1`. В `TrainConfig` передаются train-гиперпараметры из settings, включая `task`, диагностические batch limits и `class_slugs`. В `train_model` передается progress sink. На событии `epoch_finished` sink вызывает `mlflow_adapter.log_training_epoch`, чтобы MLflow обновлялся сразу после каждой эпохи. Время live MLflow logging учитывается в timing как `mlflow_logging`.
+
+Если `TrainPipelineRequest.run_name` не задан, в MLflow tags передается `class=Path(settings.dataset.annotation_file).stem` для binary или `class=multiclass` для multiclass, чтобы `mlflow_adapter` мог сгенерировать имя вида `{class}_{DDMM}_{номер}`. После завершения обучения конвейер пишет итоговые metrics, training artifacts, `reports/tile_preparation.json`, timing report и pipeline report. Tile report содержит `smart_tiling_enabled`, `positive_factor`, `val_positive_factor`, source-rect diagnostics, valid-footprint diagnostics, estimated positive/negative tiles и observed counters. Для каждого split в отчете фиксируются `sampling_mode`, `positive_factor_used` и `is_diagnostic_sampling`, чтобы val metric с `val_positive_factor` была явно отделена от последовательной/full validation.

@@ -81,6 +81,9 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("val/pixel_precision", metrics.val_pixel_precision, step=metrics.epoch)
         mlflow.log_metric("val/pixel_recall", metrics.val_pixel_recall, step=metrics.epoch)
         mlflow.log_metric("val/pixel_f1", metrics.val_pixel_f1, step=metrics.epoch)
+        _log_optional_metric(mlflow, "val/macro_f1", metrics.val_macro_f1, metrics.epoch)
+        _log_optional_metric(mlflow, "val/mean_iou", metrics.val_mean_iou, metrics.epoch)
+        _log_optional_metric(mlflow, "val/pixel_accuracy", metrics.val_pixel_accuracy, metrics.epoch)
         mlflow.log_metric("val/positive_pixels", metrics.val_positive_pixels, step=metrics.epoch)
         mlflow.log_metric(
             "val/pred_positive_pixels",
@@ -141,6 +144,16 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                 values["recall"],
                 step=metrics.epoch,
             )
+        for slug, values in metrics.val_per_class_metrics.items():
+            mlflow.log_metric(f"val/{slug}/f1", values["f1"], step=metrics.epoch)
+            mlflow.log_metric(f"val/{slug}/iou", values["iou"], step=metrics.epoch)
+            mlflow.log_metric(f"val/{slug}/precision", values["precision"], step=metrics.epoch)
+            mlflow.log_metric(f"val/{slug}/recall", values["recall"], step=metrics.epoch)
+            mlflow.log_metric(
+                f"val/{slug}/support_pixels",
+                values["support_pixels"],
+                step=metrics.epoch,
+            )
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
@@ -162,6 +175,14 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         if result.history:
             mlflow.log_metric("val/best_pixel_f1", max(item.val_pixel_f1 for item in result.history))
             mlflow.log_metric("val/final_pixel_f1", result.history[-1].val_pixel_f1)
+            macro_values = [
+                item.val_macro_f1
+                for item in result.history
+                if item.val_macro_f1 is not None
+            ]
+            if macro_values:
+                mlflow.log_metric("val/best_macro_f1", max(macro_values))
+                mlflow.log_metric("val/final_macro_f1", macro_values[-1])
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
 

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mlsystem2.dataset_preparing.api import prepare_dataset
-from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest, DatasetPreparationResult
+from mlsystem2.dataset_preparing.contracts import (
+    DatasetClassRequest,
+    DatasetPreparationRequest,
+    DatasetPreparationResult,
+    PreparedDataset,
+)
 from mlsystem2.mlflow_adapter.api import (
     end_run,
     log_dataset_preparation,
@@ -25,7 +30,7 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec
 from mlsystem2.settings.api import get_settings, get_settings_path
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+from mlsystem2.tile_preparation.contracts import TileClassAnnotation, TileDataloaderRequest
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import TrainConfig, TrainProgressEvent, TrainRequest, TrainResult
 
@@ -146,7 +151,7 @@ def run_train_pipeline(
                 deps.create_tile_dataloader(
                     _tile_request(
                         dataset_result.dataset.train_vrt_xml,
-                        dataset_result.dataset.annotation_file,
+                        dataset_result.dataset,
                         settings.train.batch_size,
                         "train",
                     )
@@ -154,7 +159,7 @@ def run_train_pipeline(
                 deps.create_tile_dataloader(
                     _tile_request(
                         dataset_result.dataset.val_vrt_xml,
-                        dataset_result.dataset.annotation_file,
+                        dataset_result.dataset,
                         settings.train.batch_size,
                         "val",
                     )
@@ -260,12 +265,28 @@ def _mlflow_start_request(
         run_name=request.run_name,
         tags={
             "pipeline": "train",
-            "class": Path(settings.dataset.annotation_file).stem,
+            "class": _mlflow_class_tag(settings),
+            "task": settings.train.task,
         },
     )
 
 
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
+    if settings.dataset.classes:
+        return DatasetPreparationRequest(
+            images_dir=settings.dataset.images_dir,
+            classes=[
+                DatasetClassRequest(
+                    slug=item.slug,
+                    name=item.name,
+                    scenes_file=item.scenes_file,
+                    annotation_file=item.annotation_file,
+                    priority=item.priority,
+                )
+                for item in settings.dataset.classes
+            ],
+            val_fraction=settings.dataset.val_fraction,
+        )
     return DatasetPreparationRequest(
         images_dir=settings.dataset.images_dir,
         scenes_file=settings.dataset.scenes_file,
@@ -276,13 +297,31 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
 
 def _tile_request(
     vrt_xml: str,
-    annotation_file: str,
+    dataset: PreparedDataset,
     batch_size: int,
     mode: str,
 ) -> TileDataloaderRequest:
+    if dataset.class_annotations:
+        return TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            class_annotations=[
+                TileClassAnnotation(
+                    class_id=item.class_id,
+                    slug=item.slug,
+                    name=item.name,
+                    annotation_file=item.annotation_file,
+                    priority=item.priority,
+                )
+                for item in dataset.class_annotations
+            ],
+            batch_size=batch_size,
+            mode=mode,
+        )
+    if dataset.annotation_file is None:
+        raise TrainPipelineError("PreparedDataset не содержит annotation_file для binary режима")
     return TileDataloaderRequest(
         vrt_xml=vrt_xml,
-        annotation_file=annotation_file,
+        annotation_file=dataset.annotation_file,
         batch_size=batch_size,
         mode=mode,
     )
@@ -330,6 +369,8 @@ class _CountingLoader:
         self.observed_tiles = 0
         self.observed_augmented_tiles = 0
         self.observed_positive_tiles = 0
+        self.observed_class_positive_tile_counts: dict[str, int] = {}
+        self.observed_class_pixel_counts: dict[str, int] = {}
 
     def __iter__(self):
         for batch in self.loader:
@@ -338,10 +379,16 @@ class _CountingLoader:
             meta = batch[2] if len(batch) > 2 else {}
             aug_count = int(meta.get("augmented_tile_count", 0)) if isinstance(meta, dict) else 0
             positive_count = int(meta.get("positive_tile_count", 0)) if isinstance(meta, dict) else 0
+            class_positive_counts = (
+                meta.get("class_positive_tile_counts", {}) if isinstance(meta, dict) else {}
+            )
+            class_pixel_counts = meta.get("class_pixel_counts", {}) if isinstance(meta, dict) else {}
             self.observed_batches += 1
             self.observed_tiles += tile_count
             self.observed_augmented_tiles += aug_count
             self.observed_positive_tiles += positive_count
+            _add_counts(self.observed_class_positive_tile_counts, class_positive_counts)
+            _add_counts(self.observed_class_pixel_counts, class_pixel_counts)
             yield batch
 
     def __len__(self) -> int:
@@ -388,6 +435,8 @@ class _CountingLoader:
             "observed_tiles": self.observed_tiles,
             "observed_positive_tiles": self.observed_positive_tiles,
             "observed_augmented_tiles": self.observed_augmented_tiles,
+            "observed_class_positive_tile_counts": self.observed_class_positive_tile_counts,
+            "observed_class_pixel_counts": self.observed_class_pixel_counts,
             "observed_real_tiles": self.observed_tiles - self.observed_augmented_tiles,
             "warnings": warnings,
         }
@@ -438,6 +487,7 @@ def _train_request(
         val_loader=val_loader,
         config=TrainConfig(
             epochs=settings.train.epochs,
+            task=settings.train.task,
             batch_size=settings.train.batch_size,
             device=settings.train.device,
             learning_rate=settings.train.learning_rate,
@@ -452,6 +502,7 @@ def _train_request(
             max_train_batches_per_epoch=settings.train.max_train_batches_per_epoch,
             max_val_batches_per_epoch=settings.train.max_val_batches_per_epoch,
             max_training_time_sec=settings.train.max_training_time_sec,
+            class_slugs=[item.slug for item in settings.dataset.classes],
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
     )
@@ -485,3 +536,19 @@ def _expect_train_result(value: object) -> TrainResult:
     if not isinstance(value, TrainResult):
         raise TrainPipelineError("train.train_model вернул неожиданное значение")
     return value
+
+
+def _mlflow_class_tag(settings: SystemSettings) -> str:
+    if settings.dataset.classes:
+        return "multiclass"
+    if settings.dataset.annotation_file is None:
+        return "unknown"
+    return Path(settings.dataset.annotation_file).stem
+
+
+def _add_counts(target: dict[str, int], source: object) -> None:
+    if not isinstance(source, dict):
+        return
+    for key, value in source.items():
+        slug = str(key)
+        target[slug] = target.get(slug, 0) + int(value)

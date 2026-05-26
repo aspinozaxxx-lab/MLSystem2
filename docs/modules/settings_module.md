@@ -14,9 +14,10 @@
 
 - `SettingsError` - ошибка загрузки или валидации.
 - `RuntimeSettings` - поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
-- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `val_fraction`.
+- `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, `priority`.
+- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`.
-- `TrainSettings` - поля `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
+- `TrainSettings` - поля `task`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
 - `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
 - `SystemSettings` - корневой DTO настроек.
 
@@ -35,3 +36,33 @@
 `max_train_batches_per_epoch` и `max_val_batches_per_epoch` добавлены только для диагностических коротких запусков. В полном обучении они могут оставаться `null`. `max_training_time_sec` - optional wall-clock лимит train loop; он проверяется после завершения эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
 
 Проверяется: `stride <= tile_size`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.
+
+`dataset` поддерживает два взаимоисключающих режима.
+
+Binary mode:
+
+```yaml
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/
+  scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
+  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
+  val_fraction: 0.2
+```
+
+Multiclass mode:
+
+```yaml
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/
+  val_fraction: 0.2
+  classes:
+    - slug: abrasion
+      name: Абразия
+      scenes_file: /data/MLMarkup/Абразия/abrasion.txt
+      annotation_file: /data/MLMarkup/Абразия/abrasion.geojson
+      priority: 0
+```
+
+Валидация `DatasetSettings`: либо заданы `classes`, либо заданы `scenes_file` + `annotation_file`; смешивать режимы нельзя. `classes` не должен быть пустым в multiclass режиме. `slug` и `name` должны быть уникальны. Class id назначается порядком в config: `background=0`, первый класс `1`. `priority` используется только при пересечении multiclass разметки: больший приоритет перекрывает меньший, при равном приоритете используется порядок `class_id`.
+
+Валидация `SystemSettings`: `dataset.classes` требует `train.task=multiclass`, `train.loss=cross_entropy` и `train.output_channels=len(dataset.classes)+1`. Binary dataset требует `train.task=binary`; `cross_entropy` в binary режиме запрещен.

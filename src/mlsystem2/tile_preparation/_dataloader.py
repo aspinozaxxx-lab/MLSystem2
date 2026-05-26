@@ -33,6 +33,7 @@ def create_tile_dataloader(
         dataset = TileDataset(
             vrt_xml=request.vrt_xml,
             annotation_file=request.annotation_file,
+            class_annotations=request.class_annotations,
             tile_size=tile_settings.tile_size,
             stride=tile_settings.stride,
             mode=request.mode,
@@ -88,7 +89,7 @@ def create_tile_dataloader(
     return DataLoader(**dataloader_kwargs)
 
 
-def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, bool]]]):
+def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, object]]]):
     try:
         import torch
     except ImportError as exc:
@@ -98,20 +99,53 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, bo
         [torch.as_tensor(sample[0], dtype=torch.float32) for sample in samples],
         dim=0,
     )
-    masks = torch.stack(
-        [torch.as_tensor(sample[1], dtype=torch.float32) for sample in samples],
-        dim=0,
-    )
+    masks = _collate_masks(torch, samples)
     metas = [sample[2] if len(sample) > 2 else {} for sample in samples]
     tile_augmented = [bool(meta.get("augmented", False)) for meta in metas]
     tile_positive = [bool(meta.get("positive", False)) for meta in metas]
     batch_meta = {
         "augmented_tile_count": sum(1 for item in tile_augmented if item),
         "positive_tile_count": sum(1 for item in tile_positive if item),
+        "class_positive_tile_counts": _class_positive_tile_counts(metas),
+        "class_pixel_counts": _class_pixel_counts(metas),
         "tile_augmented": tile_augmented,
         "tile_positive": tile_positive,
     }
     return images, masks, batch_meta
+
+
+def _collate_masks(torch, samples: list[tuple[np.ndarray, np.ndarray, dict[str, object]]]):
+    first_mask = samples[0][1]
+    dtype = torch.long if first_mask.ndim == 2 else torch.float32
+    return torch.stack(
+        [torch.as_tensor(sample[1], dtype=dtype) for sample in samples],
+        dim=0,
+    )
+
+
+def _class_positive_tile_counts(metas: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for meta in metas:
+        raw = meta.get("class_positive")
+        if not isinstance(raw, dict):
+            continue
+        for slug, is_positive in raw.items():
+            if bool(is_positive):
+                counts[str(slug)] = counts.get(str(slug), 0) + 1
+            else:
+                counts.setdefault(str(slug), 0)
+    return counts
+
+
+def _class_pixel_counts(metas: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for meta in metas:
+        raw = meta.get("class_pixels")
+        if not isinstance(raw, dict):
+            continue
+        for slug, pixel_count in raw.items():
+            counts[str(slug)] = counts.get(str(slug), 0) + int(pixel_count)
+    return counts
 
 
 def _seed_tile_worker(worker_id: int) -> None:

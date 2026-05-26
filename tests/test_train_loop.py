@@ -58,6 +58,53 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert result.history[0].val_loss >= 0.0
 
 
+def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinyMulticlassModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 3, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=3),
+        model=TinyMulticlassModel(),
+    )
+
+    result = train_model(
+        TrainRequest(
+            model=model,
+            train_loader=_fake_multiclass_loader(torch),
+            val_loader=_fake_multiclass_loader(torch),
+            config=TrainConfig(
+                task="multiclass",
+                epochs=1,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="cross_entropy",
+                threshold=0.5,
+                early_stopping_patience=1,
+                class_slugs=["class_a", "class_b"],
+            ),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+        )
+    )
+
+    metrics = result.history[0]
+    assert result.epochs_total == 1
+    assert metrics.val_macro_f1 is not None
+    assert metrics.val_mean_iou is not None
+    assert metrics.val_pixel_accuracy is not None
+    assert set(metrics.val_per_class_metrics) == {"class_a", "class_b"}
+    assert Path(result.best_checkpoint_path).is_file()
+    assert Path(result.final_checkpoint_path).is_file()
+
+
 def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 
@@ -423,3 +470,14 @@ def _fake_loader(torch, *, with_meta: bool = False):
             (images + 0.1, masks, {"augmented_tile_count": 1}),
         ]
     return [(images, masks), (images + 0.1, masks)]
+
+
+def _fake_multiclass_loader(torch):
+    images = torch.zeros((2, 4, 16, 16), dtype=torch.float32)
+    masks = torch.zeros((2, 16, 16), dtype=torch.long)
+    masks[:, 2:6, 2:6] = 1
+    masks[:, 9:13, 9:13] = 2
+    return [
+        (images, masks, {"class_positive_tile_counts": {"class_a": 2, "class_b": 2}}),
+        (images + 0.1, masks, {"class_positive_tile_counts": {"class_a": 2, "class_b": 2}}),
+    ]
