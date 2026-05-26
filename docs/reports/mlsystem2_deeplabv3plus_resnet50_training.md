@@ -51,3 +51,68 @@
 ## Промежуточный вывод
 
 DeepLabV3Plus ResNet50 стартовал устойчиво: память GPU достаточна, optimizer steps не пропускаются, loss конечный. Метрики в первые 30 минут растут, но пока ниже результата `smp_segformer_b2` continuation run. Окончательный вывод нужен после штатного завершения 10-часового запуска.
+
+## Итог обучения
+
+- Статус MLflow: `FINISHED`.
+- Завершение: по лимиту `epochs=300`, раньше `max_training_time_sec=36000`.
+- Эпох завершено: `300`.
+- `train/skipped_optimizer_steps`: `0` на всех эпохах.
+- Best checkpoint: `/opt/mlsystem2/runtime/first_train/deeplabv3plus_resnet50_10h_scratch/checkpoints/best.pt`.
+- Final checkpoint: `/opt/mlsystem2/runtime/first_train/deeplabv3plus_resnet50_10h_scratch/checkpoints/final.pt`.
+- Best checkpoint epoch: `146`.
+- Best checkpoint `val/pixel_f1` на threshold `0.75`: `0.37842743615953794`.
+- Best checkpoint precision/recall на threshold `0.75`: `0.5169249755682588 / 0.2984618146631699`.
+- Best checkpoint sweep-best F1: `0.4109503130224459` при threshold `0.5`.
+- Лучший sweep-best F1 за весь run: `0.4294970138346798` на step `131`, threshold `0.3`.
+- Лучший configured-threshold F1 за весь run: `0.37842743615953794` на step `146`.
+- Последний step `300`: `val/pixel_f1=0.2847776173090043`, `val/best_threshold_pixel_f1=0.30895870852763135`, `train/loss=0.6576315227430314`.
+
+| run | model | epochs | best F1 @configured threshold | best sweep F1 | notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `deforestation_2505_5` | `smp_segformer_b2` | 28 best epoch | 0.2627 | 0.2797 | первый 1h SMP B2 |
+| `deforestation_2505_6` | `smp_segformer_b2` | 82 | 0.3324 | 0.3324 | 3h continuation |
+| `deforestation_2505_7` | `smp_deeplabv3plus_resnet50` | 300 | 0.3784 | 0.4295 | текущий запуск |
+
+DeepLabV3Plus ResNet50 оказался лучше предыдущего SMP B2 diagnostic path по pixel F1, но после пика метрики заметно колебались и к финальной эпохе снизились. Для экспорта выбран `best.pt`, а не `final.pt`.
+
+## ONNX/Triton export
+
+- Triton model name: `mlsystem2_deforestation_deeplabv3plus_resnet50`.
+- Существующая модель `mlsystem2_deforestation` не затиралась.
+- Threshold export: `0.5`, потому на best checkpoint sweep-best threshold был `0.5`.
+- ONNX: `/opt/geoalert/triton_models/mlsystem2_deforestation_deeplabv3plus_resnet50/1/model.onnx`.
+- ONNX external data: `/opt/geoalert/triton_models/mlsystem2_deforestation_deeplabv3plus_resnet50/1/model.onnx.data`.
+- ONNX opset: `18`.
+- Export metadata: `/opt/geoalert/triton_models/mlsystem2_deforestation_deeplabv3plus_resnet50/export_metadata.json`.
+- Triton status после restart: `mlsystem2_deforestation=READY`, `mlsystem2_deforestation_deeplabv3plus_resnet50=READY`.
+
+Для нового ONNX output shape был `[1,1,-1,-1]`, поэтому `config.pbtxt` для DeepLab использует `dims: [ 1, 1, -1, -1 ]`. Это отличается от старого экспорта `mlsystem2_deforestation`, где output batch dimension динамический.
+
+## Geoalert inference
+
+- Pipeline: `/opt/geoalert/pipelines/mlsystem2_deforestation_deeplabv3plus_resnet50_triton.yaml`.
+- Server run root: `/opt/geoalert/runs/deforestation_deeplabv3plus_resnet50_10h`.
+- Scenes: `35`.
+- Processed: `35`.
+- Failed: `0`.
+- Missing inputs: `0`.
+- Threshold: `0.5`.
+- Total mask sum: `68123297`.
+- Total features: `11198`.
+- Elapsed: `255.152 sec`.
+- Server merged GeoJSON: `/opt/geoalert/runs/deforestation_deeplabv3plus_resnet50_10h/pseudolabels_merged.geojson`.
+- Local merged GeoJSON: `D:\Projects\razmetka\deforestation_pseudolabels_deeplabv3plus_resnet50_10h.geojson`.
+- Local summary: `D:\Projects\razmetka\deforestation_pseudolabels_deeplabv3plus_resnet50_10h_summary.json`.
+- Local export metadata: `D:\Projects\razmetka\deforestation_pseudolabels_deeplabv3plus_resnet50_10h_export_metadata.json`.
+
+Сравнение объема псевдоразметки:
+
+- Q3 accepted reference: `19070` features.
+- SMP B2 3h threshold `0.70`: `37097` features.
+- SMP B2 3h threshold `0.75`: `25118` features.
+- DeepLabV3Plus ResNet50 10h threshold `0.5`: `11198` features.
+
+## Вывод
+
+`smp_deeplabv3plus_resnet50` обучается устойчиво и дал лучшую diagnostic validation-метрику, чем предыдущий `smp_segformer_b2`: `0.3784` F1 на рабочем threshold `0.75` и `0.4295` лучший sweep F1. При этом Geoalert pseudo-label export на threshold `0.5` получился существенно компактнее Q3 reference и SMP B2 вариантов. Для визуальной приемки стоит смотреть DeepLab pseudo-label рядом с Q3 accepted и SMP B2 `thr075`: DeepLab, вероятно, более precision-oriented, но может недобирать recall.
