@@ -14,6 +14,7 @@ from ._windows import TileWindow
 
 _VALID_FOOTPRINT_STRIDE = 64
 _VALID_VALUE_EPS = 1e-6
+_MAX_FULL_FOOTPRINT_CELLS = 10_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,17 +27,43 @@ class ValidFootprintDiagnostics:
     valid_footprint_valid_cells: int
 
 
+@dataclass(frozen=True, slots=True)
+class _SparseValidDiagnostics:
+    total_cells: int
+    valid_cells: int
+
+
 def filter_valid_windows(
     dataset: DatasetReader,
     windows: list[TileWindow],
     *,
     nodata: object,
 ) -> tuple[list[TileWindow], ValidFootprintDiagnostics]:
+    footprint_cells = _full_footprint_cell_count(dataset)
+    if footprint_cells > _MAX_FULL_FOOTPRINT_CELLS:
+        valid_windows, sparse_diagnostics = _filter_sparse_black_windows(
+            dataset,
+            windows,
+            nodata=nodata,
+        )
+        return valid_windows, ValidFootprintDiagnostics(
+            candidate_window_count_before_valid_filter=len(windows),
+            valid_window_count=len(valid_windows),
+            black_filtered_window_count=len(windows) - len(valid_windows),
+            valid_footprint_stride=_VALID_FOOTPRINT_STRIDE,
+            valid_footprint_total_cells=sparse_diagnostics.total_cells,
+            valid_footprint_valid_cells=sparse_diagnostics.valid_cells,
+        )
+
     valid_footprint = _read_valid_footprint(dataset, nodata=nodata)
     coarse_valid_windows = [
         window for window in windows if _window_intersects_valid_footprint(window, valid_footprint)
     ]
-    valid_windows = _filter_sparse_black_windows(dataset, coarse_valid_windows, nodata=nodata)
+    valid_windows, _sparse_diagnostics = _filter_sparse_black_windows(
+        dataset,
+        coarse_valid_windows,
+        nodata=nodata,
+    )
     total_cells = int(valid_footprint.size)
     valid_cells = int(np.count_nonzero(valid_footprint))
     return valid_windows, ValidFootprintDiagnostics(
@@ -47,6 +74,12 @@ def filter_valid_windows(
         valid_footprint_total_cells=total_cells,
         valid_footprint_valid_cells=valid_cells,
     )
+
+
+def _full_footprint_cell_count(dataset: DatasetReader) -> int:
+    coarse_width = max(1, math.ceil(dataset.width / _VALID_FOOTPRINT_STRIDE))
+    coarse_height = max(1, math.ceil(dataset.height / _VALID_FOOTPRINT_STRIDE))
+    return coarse_width * coarse_height
 
 
 def _read_valid_footprint(dataset: DatasetReader, *, nodata: object) -> np.ndarray:
@@ -88,40 +121,43 @@ def _filter_sparse_black_windows(
     windows: list[TileWindow],
     *,
     nodata: object,
-) -> list[TileWindow]:
+) -> tuple[list[TileWindow], _SparseValidDiagnostics]:
     if not windows:
-        return []
+        return [], _SparseValidDiagnostics(total_cells=0, valid_cells=0)
 
-    x_positions, y_positions = _sparse_sample_positions(dataset, windows)
-    if not x_positions or not y_positions:
-        return []
+    sparse_positions = _sparse_sample_positions_by_row(dataset, windows)
+    if not sparse_positions:
+        return [], _SparseValidDiagnostics(total_cells=0, valid_cells=0)
 
-    sparse_valid = _read_sparse_valid_grid(dataset, x_positions, y_positions, nodata=nodata)
-    x_index = {value: index for index, value in enumerate(x_positions)}
-    y_index = {value: index for index, value in enumerate(y_positions)}
-    return [
+    sparse_valid, diagnostics = _read_sparse_valid_rows(
+        dataset,
+        sparse_positions,
+        nodata=nodata,
+    )
+    valid_windows = [
         window
         for window in windows
-        if _window_has_sparse_valid_sample(window, sparse_valid, x_index, y_index)
+        if _window_has_sparse_valid_sample(window, sparse_valid)
     ]
+    return valid_windows, diagnostics
 
 
-def _sparse_sample_positions(
+def _sparse_sample_positions_by_row(
     dataset: DatasetReader,
     windows: list[TileWindow],
-) -> tuple[list[int], list[int]]:
-    x_positions: set[int] = set()
-    y_positions: set[int] = set()
+) -> dict[int, set[int]]:
+    positions: dict[int, set[int]] = {}
     for window in windows:
-        for x_offset in _sparse_offsets(window.width):
-            x = window.x + x_offset
-            if 0 <= x < dataset.width:
-                x_positions.add(x)
         for y_offset in _sparse_offsets(window.height):
             y = window.y + y_offset
-            if 0 <= y < dataset.height:
-                y_positions.add(y)
-    return sorted(x_positions), sorted(y_positions)
+            if not 0 <= y < dataset.height:
+                continue
+            row_positions = positions.setdefault(y, set())
+            for x_offset in _sparse_offsets(window.width):
+                x = window.x + x_offset
+                if 0 <= x < dataset.width:
+                    row_positions.add(x)
+    return positions
 
 
 def _sparse_offsets(size: int) -> list[int]:
@@ -133,53 +169,86 @@ def _sparse_offsets(size: int) -> list[int]:
     return sorted(offsets)
 
 
-def _read_sparse_valid_grid(
+def _read_sparse_valid_rows(
     dataset: DatasetReader,
+    sparse_positions: dict[int, set[int]],
+    *,
+    nodata: object,
+) -> tuple[dict[int, set[int]], _SparseValidDiagnostics]:
+    valid: dict[int, set[int]] = {}
+    total_cells = 0
+    valid_cells = 0
+    for y, row_positions in sorted(sparse_positions.items()):
+        x_positions = sorted(row_positions)
+        total_cells += len(x_positions)
+        for run in _position_runs(x_positions):
+            run_valid = _read_sparse_valid_run(dataset, y, run, nodata=nodata)
+            if not np.any(run_valid):
+                continue
+            row_valid = valid.setdefault(y, set())
+            for x, is_valid in zip(run, run_valid, strict=True):
+                if bool(is_valid):
+                    row_valid.add(x)
+                    valid_cells += 1
+    return valid, _SparseValidDiagnostics(total_cells=total_cells, valid_cells=valid_cells)
+
+
+def _position_runs(x_positions: list[int]) -> list[list[int]]:
+    if not x_positions:
+        return []
+    runs: list[list[int]] = [[x_positions[0]]]
+    for x in x_positions[1:]:
+        if x - runs[-1][-1] <= _VALID_FOOTPRINT_STRIDE:
+            runs[-1].append(x)
+        else:
+            runs.append([x])
+    return runs
+
+
+def _read_sparse_valid_run(
+    dataset: DatasetReader,
+    y: int,
     x_positions: list[int],
-    y_positions: list[int],
     *,
     nodata: object,
 ) -> np.ndarray:
-    valid = np.zeros((len(y_positions), len(x_positions)), dtype=bool)
-    x_indices = np.asarray(x_positions, dtype=np.intp)
-    for row_index, y in enumerate(y_positions):
-        window = Window(0, y, dataset.width, 1)
-        masks = dataset.read_masks(window=window)
-        if masks.ndim == 2:
-            masks = masks[None, :, :]
-        mask_values = masks[:, 0, x_indices]
-        valid_by_mask = np.any(mask_values > 0, axis=0)
+    x_start = x_positions[0]
+    x_stop = x_positions[-1] + 1
+    window = Window(x_start, y, x_stop - x_start, 1)
+    local_x_indices = np.asarray([x - x_start for x in x_positions], dtype=np.intp)
 
-        data = dataset.read(
-            window=window,
-            masked=False,
-            fill_value=nodata,
-            boundless=False,
-        )
-        if data.ndim == 2:
-            data = data[None, :, :]
-        data_values = data[:, 0, x_indices].astype(np.float32, copy=False)
-        valid_by_value = np.any(np.abs(data_values) > _VALID_VALUE_EPS, axis=0)
-        valid[row_index, :] = np.logical_and(valid_by_mask, valid_by_value)
-    return valid
+    masks = dataset.read_masks(window=window)
+    if masks.ndim == 2:
+        masks = masks[None, :, :]
+    mask_values = masks[:, 0, local_x_indices]
+    valid_by_mask = np.any(mask_values > 0, axis=0)
+
+    data = dataset.read(
+        window=window,
+        masked=False,
+        fill_value=nodata,
+        boundless=False,
+    )
+    if data.ndim == 2:
+        data = data[None, :, :]
+    data_values = data[:, 0, local_x_indices].astype(np.float32, copy=False)
+    valid_by_value = np.any(np.abs(data_values) > _VALID_VALUE_EPS, axis=0)
+    return np.logical_and(valid_by_mask, valid_by_value)
 
 
 def _window_has_sparse_valid_sample(
     window: TileWindow,
-    sparse_valid: np.ndarray,
-    x_index: dict[int, int],
-    y_index: dict[int, int],
+    sparse_valid: dict[int, set[int]],
 ) -> bool:
     x_offsets = _sparse_offsets(window.width)
     y_offsets = _sparse_offsets(window.height)
     for y_offset in y_offsets:
         y = window.y + y_offset
-        y_grid_index = y_index.get(y)
-        if y_grid_index is None:
+        row_valid = sparse_valid.get(y)
+        if not row_valid:
             continue
         for x_offset in x_offsets:
             x = window.x + x_offset
-            x_grid_index = x_index.get(x)
-            if x_grid_index is not None and sparse_valid[y_grid_index, x_grid_index]:
+            if x in row_valid:
                 return True
     return False

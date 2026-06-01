@@ -401,6 +401,47 @@ def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
     loader.dataset.close()
 
 
+def test_large_vrt_valid_filter_skips_full_footprint_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "large_path.tif"
+    data = np.zeros((1, 64, 128), dtype=np.uint16)
+    data[:, :, 64:] = 1000
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=64, stride=64, batch_size=2, input_channels=1))
+
+    import mlsystem2.tile_preparation._valid_footprint as valid_footprint
+
+    monkeypatch.setattr(valid_footprint, "_MAX_FULL_FOOTPRINT_CELLS", 1)
+
+    def fail_full_footprint(*args, **kwargs):
+        raise AssertionError("full footprint read should be skipped")
+
+    monkeypatch.setattr(valid_footprint, "_read_valid_footprint", fail_full_footprint)
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+        )
+    )
+
+    assert len(loader.dataset) == 1
+    assert loader.dataset.candidate_window_count_before_valid_filter == 2
+    assert loader.dataset.candidate_window_count == 1
+    images, _masks, _batch_meta = next(iter(loader))
+    assert torch.all(images == 1000.0)
+
+    loader.dataset.close()
+
+
 def test_tile_dataset_does_not_read_windows_during_initialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
