@@ -187,6 +187,8 @@ dataset:
   scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
   annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
+  split_granularity: scene
+  negative_scene_limit: null
 
 train:
   task: binary

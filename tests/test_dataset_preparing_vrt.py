@@ -109,6 +109,91 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
     _assert_vrt_reads(result.dataset.val_vrt_xml)
 
 
+def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    for index, scene in enumerate(("scene_a", "scene_b", "scene_c", "scene_d")):
+        _write_raster(images / f"{scene}.tif", index + 1, index * 4)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\nscene_b\nscene_c\nscene_d\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif", "scene_c.tif"])
+
+    request = DatasetPreparationRequest(
+        images_dir=str(images),
+        scenes_file=str(scenes_file),
+        annotation_file=str(annotation_file),
+        val_fraction=0.5,
+        split_granularity="tile",
+        negative_scene_limit=1,
+    )
+    first = prepare_dataset(request)
+    second = prepare_dataset(request)
+
+    assert first.report.status == "ok"
+    assert first.dataset is not None
+    assert first.dataset.pool_vrt_xml is not None
+    assert first.dataset.train_vrt_xml == first.dataset.pool_vrt_xml
+    assert first.dataset.val_vrt_xml == first.dataset.pool_vrt_xml
+    assert first.report.split_granularity == "tile"
+    assert first.report.negative_scene_limit == 1
+    assert first.report.selected_positive_scenes_count == 2
+    assert first.report.selected_negative_scenes_count == 1
+    assert _scene_ids_with_split(first, "pool") == _scene_ids_with_split(second, "pool")
+    assert set(_scene_ids_with_split(first, "pool")) >= {"scene_a", "scene_c"}
+    assert len(_scene_ids_with_split(first, "excluded")) == 1
+
+
+def test_prepare_dataset_tile_mode_limits_multiclass_negative_scenes(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    for index, scene in enumerate(("scene_a", "scene_b", "scene_c")):
+        _write_raster(images / f"{scene}.tif", index + 1, index * 4)
+    class_a_scenes = tmp_path / "class_a.txt"
+    class_b_scenes = tmp_path / "class_b.txt"
+    class_a_scenes.write_text("scene_a\nscene_b\nscene_c\n", encoding="utf-8")
+    class_b_scenes.write_text("", encoding="utf-8")
+    class_a_annotation = tmp_path / "class_a.geojson"
+    class_b_annotation = tmp_path / "class_b.geojson"
+    _write_annotation(class_a_annotation, ["scene_a.tif"])
+    _write_annotation(class_b_annotation, [])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            classes=[
+                DatasetClassRequest(
+                    slug="class_a",
+                    name="Класс А",
+                    scenes_file=str(class_a_scenes),
+                    annotation_file=str(class_a_annotation),
+                ),
+                DatasetClassRequest(
+                    slug="class_b",
+                    name="Класс Б",
+                    scenes_file=str(class_b_scenes),
+                    annotation_file=str(class_b_annotation),
+                ),
+            ],
+            val_fraction=0.5,
+            split_granularity="tile",
+            negative_scene_limit=1,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert [item.slug for item in result.dataset.class_annotations] == ["class_a", "class_b"]
+    assert result.report.selected_positive_scenes_count == 1
+    assert result.report.selected_negative_scenes_count == 1
+    assert set(_scene_ids_with_split(result, "pool")) >= {"scene_a"}
+    assert len(_scene_ids_with_split(result, "pool")) == 2
+
+
 def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(
     tmp_path: Path,
 ) -> None:
@@ -317,3 +402,7 @@ def _assert_vrt_reads(vrt_xml: str) -> None:
         with memory_file.open() as dataset:
             data = dataset.read(1, window=((0, 1), (0, 1)))
     assert data.shape == (1, 1)
+
+
+def _scene_ids_with_split(result, split: str) -> list[str]:
+    return [scene.scene_id for scene in result.report.scenes if scene.split == split]

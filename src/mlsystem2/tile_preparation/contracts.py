@@ -22,6 +22,13 @@ class TileClassAnnotation(BaseModel):
     priority: int = 0
 
 
+class TileSplitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    val_fraction: float = Field(gt=0.0, lt=1.0)
+    seed: int = 42
+
+
 class TileDataloaderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -30,6 +37,7 @@ class TileDataloaderRequest(BaseModel):
     class_annotations: list[TileClassAnnotation] = Field(default_factory=list)
     batch_size: int = Field(gt=0)
     mode: Literal["train", "val"]
+    tile_split: TileSplitRequest | None = None
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
@@ -47,4 +55,5 @@ __all__ = [
     "TileClassAnnotation",
     "TileDataloaderRequest",
     "TilePreparationError",
+    "TileSplitRequest",
 ]

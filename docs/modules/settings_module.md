@@ -15,7 +15,7 @@
 - `SettingsError` - ошибка загрузки или валидации.
 - `RuntimeSettings` - поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
 - `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, `priority`.
-- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
+- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`, `split_granularity`, `negative_scene_limit`; свойство `is_multiclass`.
 - `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`, `class_balance`.
 - `TrainSettings` - поля `task`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
 - `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
@@ -37,7 +37,7 @@
 
 Проверяется: `stride <= tile_size`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.
 
-`dataset` поддерживает два взаимоисключающих режима.
+`dataset` поддерживает два взаимоисключающих режима разметки и два режима split. `split_granularity=scene` оставляет старое разбиение по снимкам. `split_granularity=tile` строит общий пул выбранных сцен и делит уже тайлы. `negative_scene_limit` ограничивает число zero-object сцен; все сцены с объектами сохраняются.
 
 Binary mode:
 
@@ -47,6 +47,8 @@ dataset:
   scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
   annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
+  split_granularity: scene
+  negative_scene_limit: null
 ```
 
 Multiclass mode:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,7 @@ from ._mask import rasterize_window_mask
 from ._valid_footprint import filter_valid_windows
 from ._vrt import open_vrt_reader, open_vrt_xml
 from ._windows import build_vrt_source_windows_with_diagnostics
-from .contracts import TileClassAnnotation, TilePreparationError
+from .contracts import TileClassAnnotation, TilePreparationError, TileSplitRequest
 
 
 class TileDataset:
@@ -32,6 +33,7 @@ class TileDataset:
         smart_tiling: bool,
         positive_factor: float = 0.5,
         class_balance: bool = False,
+        tile_split: TileSplitRequest | None = None,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file) if annotation_file is not None else None
@@ -46,6 +48,10 @@ class TileDataset:
         self._smart_tiling = smart_tiling
         self._positive_factor = positive_factor
         self._class_balance = class_balance
+        self._tile_split = tile_split
+        self._tile_split_warnings: list[str] = []
+        self._pool_window_count = 0
+        self._split_window_count = 0
         self._memory_file: MemoryFile | None = None
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
@@ -80,7 +86,10 @@ class TileDataset:
             self._valid_footprint_stride = valid_diagnostics.valid_footprint_stride
             self._valid_footprint_valid_cells = valid_diagnostics.valid_footprint_valid_cells
             self._valid_footprint_total_cells = valid_diagnostics.valid_footprint_total_cells
-            if self._smart_tiling and self._mode in {"train", "val"}:
+            should_build_hints = (
+                self._smart_tiling and self._mode in {"train", "val"}
+            ) or self._tile_split is not None
+            if should_build_hints:
                 if self._class_annotations:
                     self._class_hints_by_index = self._build_class_hints(dataset)
                     self._positive_hint_by_index = [
@@ -88,6 +97,10 @@ class TileDataset:
                     ]
                 else:
                     self._positive_hint_by_index = self._build_positive_hints(dataset)
+            self._pool_window_count = len(self._windows)
+            if self._tile_split is not None:
+                self._apply_tile_split(self._tile_split)
+            self._split_window_count = len(self._windows)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -152,6 +165,22 @@ class TileDataset:
     @property
     def uses_vrt_source_rects(self) -> bool:
         return self._uses_vrt_source_rects
+
+    @property
+    def pool_window_count(self) -> int:
+        return self._pool_window_count
+
+    @property
+    def split_window_count(self) -> int:
+        return self._split_window_count
+
+    @property
+    def tile_split_enabled(self) -> bool:
+        return self._tile_split is not None
+
+    @property
+    def tile_split_warnings(self) -> list[str]:
+        return list(self._tile_split_warnings)
 
     @property
     def smart_tiling_enabled(self) -> bool:
@@ -308,6 +337,30 @@ class TileDataset:
             mask[class_mask == 1] = annotation.class_id
         return mask
 
+    def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
+        if self._positive_hint_by_index is None:
+            return
+        train_indices, val_indices, warnings = _split_tile_indices(
+            self._positive_hint_by_index,
+            val_fraction=tile_split.val_fraction,
+            seed=tile_split.seed,
+        )
+        selected_indices = train_indices if self._mode == "train" else val_indices
+        if not any(self._positive_hint_by_index[index] for index in selected_indices):
+            warnings.append(f"tile_split: subset {self._mode} не содержит positive windows.")
+        if not selected_indices:
+            warnings.append(f"tile_split: subset {self._mode} пуст.")
+
+        self._windows = [self._windows[index] for index in selected_indices]
+        self._positive_hint_by_index = [
+            self._positive_hint_by_index[index] for index in selected_indices
+        ]
+        if self._class_hints_by_index is not None:
+            self._class_hints_by_index = [
+                self._class_hints_by_index[index] for index in selected_indices
+            ]
+        self._tile_split_warnings = warnings
+
     def _build_positive_hints(self, dataset: DatasetReader) -> list[bool]:
         hints: list[bool] = []
         for tile_window in self._windows:
@@ -385,6 +438,64 @@ class TileDataset:
                 for annotation in self._class_annotations
             }
         return meta
+
+
+def _split_tile_indices(
+    positive_hints: list[bool],
+    *,
+    val_fraction: float,
+    seed: int,
+) -> tuple[list[int], list[int], list[str]]:
+    positive_indices = [index for index, positive in enumerate(positive_hints) if positive]
+    negative_indices = [index for index, positive in enumerate(positive_hints) if not positive]
+    rng = random.Random(seed)
+    train_positive, val_positive, warnings = _split_index_group(
+        positive_indices,
+        val_fraction=val_fraction,
+        rng=rng,
+        group_name="positive",
+    )
+    train_negative, val_negative, negative_warnings = _split_index_group(
+        negative_indices,
+        val_fraction=val_fraction,
+        rng=rng,
+        group_name="negative",
+    )
+    train_indices = sorted([*train_positive, *train_negative])
+    val_indices = sorted([*val_positive, *val_negative])
+    return train_indices, val_indices, [*warnings, *negative_warnings]
+
+
+def _split_index_group(
+    indices: list[int],
+    *,
+    val_fraction: float,
+    rng: random.Random,
+    group_name: str,
+) -> tuple[list[int], list[int], list[str]]:
+    if not indices:
+        warning = (
+            ["tile_split: в общем пуле нет positive windows."]
+            if group_name == "positive"
+            else []
+        )
+        return [], [], warning
+    if len(indices) == 1:
+        warning = (
+            ["tile_split: positive windows меньше 2, val positive остается пустым."]
+            if group_name == "positive"
+            else []
+        )
+        return list(indices), [], warning
+
+    shuffled = list(indices)
+    rng.shuffle(shuffled)
+    val_count = int(round(len(indices) * val_fraction))
+    val_count = min(len(indices) - 1, max(1, val_count))
+    val_set = set(shuffled[:val_count])
+    train = [index for index in indices if index not in val_set]
+    val = [index for index in indices if index in val_set]
+    return train, val, []
 
 
 def _resolve_nodata(dataset: DatasetReader) -> object:

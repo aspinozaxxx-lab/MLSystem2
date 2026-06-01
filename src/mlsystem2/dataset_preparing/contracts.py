@@ -29,6 +29,8 @@ class DatasetPreparationRequest(BaseModel):
     annotation_file: str | None = None
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
+    split_granularity: Literal["scene", "tile"] = "scene"
+    negative_scene_limit: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
@@ -65,6 +67,7 @@ class PreparedDataset(BaseModel):
 
     train_vrt_xml: str
     val_vrt_xml: str
+    pool_vrt_xml: str | None = None
     annotation_file: str | None = None
     class_annotations: list[DatasetClassAnnotation] = Field(default_factory=list)
 
@@ -75,13 +78,17 @@ class DatasetSceneReport(BaseModel):
     scene_id: str
     image_path: str | None
     object_count: int = Field(ge=0)
-    split: Literal["train", "val", "missing"]
+    split: Literal["train", "val", "pool", "excluded", "missing"]
 
 
 class DatasetPreparationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["ok", "error"]
+    split_granularity: Literal["scene", "tile"] = "scene"
+    negative_scene_limit: int | None = None
+    selected_positive_scenes_count: int = Field(default=0, ge=0)
+    selected_negative_scenes_count: int = Field(default=0, ge=0)
     scenes_total: int = Field(ge=0)
     scenes_found: int = Field(ge=0)
     objects_total: int = Field(ge=0)

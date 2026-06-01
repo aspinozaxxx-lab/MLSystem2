@@ -38,6 +38,8 @@ class DatasetSettings(BaseModel):
     annotation_file: str | None = None
     classes: list[DatasetClassSettings] = Field(default_factory=list)
     val_fraction: float = Field(gt=0.0, lt=1.0)
+    split_granularity: Literal["scene", "tile"] = "scene"
+    negative_scene_limit: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:

@@ -2,13 +2,13 @@
 
 ## Назначение
 
-`tile_preparation` создает `torch.utils.data.DataLoader` по одному VRT XML и binary или multiclass GeoJSON-разметке. Модуль отвечает только за формирование train/val loader для уже подготовленных VRT, не выполняет split и не готовит все tiles заранее.
+`tile_preparation` создает `torch.utils.data.DataLoader` по одному VRT XML и binary или multiclass GeoJSON-разметке. Модуль отвечает только за формирование train/val loader для уже подготовленных VRT и не готовит все tiles заранее. По умолчанию split не выполняется; если в request передан `tile_split`, модуль делит список окон общего VRT на непересекающиеся train/val subsets.
 
 `create_tile_dataloader` должен возвращаться быстро. Чтение raster data, определение nodata pixels и rasterize mask выполняются лениво в `Dataset.__getitem__`, то есть в основном процессе или в PyTorch DataLoader workers.
 
 ## Публичный интерфейс
 
-- `create_tile_dataloader(request: TileDataloaderRequest) -> torch.utils.data.DataLoader` - загружает текущие настройки `settings.tile_preparation`, создает `Dataset` и возвращает DataLoader.
+- `create_tile_dataloader(request: TileDataloaderRequest) -> torch.utils.data.DataLoader` - загружает текущие настройки `settings.tile_preparation`, создает `Dataset`, опционально применяет `tile_split` и возвращает DataLoader.
 
 Batch DataLoader:
 - `images: torch.float32 [B, C, tile_size, tile_size]`;
@@ -20,7 +20,8 @@ Batch DataLoader:
 
 - `TilePreparationError` - ошибка подготовки tile DataLoader.
 - `TileClassAnnotation` - поля `class_id`, `slug`, `name`, `annotation_file`, `priority`.
-- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, `class_annotations`, `batch_size`, `mode`. Валидация: либо задан `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`.
+- `TileSplitRequest` - поля `val_fraction`, `seed`; задает deterministic split окон общего VRT.
+- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, `class_annotations`, `batch_size`, `mode`, `tile_split`. Валидация: либо задан `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -52,6 +53,6 @@ Binary mask rasterize выполняется в том же окне, возвр
 
 Аугментация сохраняет raw Geoalert tensor ABI подготовленных снимков: после photometric/cutout значения image зажимаются в диапазон `0..255`. Geometric flips/rotations применяются к image и mask, photometric только к image, cutout зануляет image patch и переводит тот же patch mask в background `0`. Sample возвращает `{"augmented": bool, "positive": bool}` и для multiclass дополнительно `class_positive` и `class_pixels`; collate собирает batch `(images, masks, batch_meta)` с aggregate-счетчиками и per-tile flags для диагностики.
 
-При `smart_tiling=true` Dataset строит cheap-index для `train` и `val`: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Для multiclass positive hint означает пересечение с геометрией любого класса. Поля `estimated_positive_tiles`, `estimated_negative_tiles` и `estimated_class_positive_tiles` являются geometry-intersection hint, а не точным rasterized mask count. Для `train`, если есть positive/negative hints, DataLoader использует `WeightedRandomSampler`: суммарный вес positive окон равен `positive_factor`, суммарный вес negative окон равен `1 - positive_factor`; иначе остается обычный sampler. Если `class_balance=true` и задан multiclass dataset, positive-доля делится между классами с positive windows, а окно с несколькими классами получает сумму class budgets. Классы без positive windows или с очень малым числом windows пишутся в warnings. Аугментация применяется только к positive tiles. Для `val` shuffle и augmentation выключены; если `val_positive_factor` задан, используется deterministic weighted sampler только для диагностической validation выборки, иначе val остается последовательным.
+При `smart_tiling=true` или при наличии `tile_split` Dataset строит cheap-index для `train` и `val`: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Для multiclass positive hint означает пересечение с геометрией любого класса. Если задан `tile_split`, positive и negative hints отдельно делятся на train/val по `val_fraction` и `seed`; пересечения между subsets запрещены, редкие positive windows не дублируются, а предупреждения доступны в tile report. Поля `estimated_positive_tiles`, `estimated_negative_tiles` и `estimated_class_positive_tiles` являются geometry-intersection hint, а не точным rasterized mask count. Для `train`, если есть positive/negative hints и включен `smart_tiling`, DataLoader использует `WeightedRandomSampler`. Для `val` shuffle и augmentation выключены; если `val_positive_factor` задан, используется deterministic weighted sampler только для диагностической validation выборки.
 
 Полностью black/nodata-only tiles фильтруются заранее через coarse valid-data footprint и не попадают в DataLoader. Диагностика Dataset доступна как внутренние attributes: `candidate_window_count_before_valid_filter`, `black_filtered_window_count`, `valid_footprint_stride`, `valid_footprint_valid_cells`, `valid_footprint_total_cells`.

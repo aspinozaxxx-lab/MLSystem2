@@ -185,6 +185,50 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
     assert train_request.config.class_slugs == ["class_a", "class_b"]
 
 
+def test_train_pipeline_builds_tile_split_requests() -> None:
+    settings = _settings(initial_checkpoint_uri=None)
+    settings = settings.model_copy(
+        update={
+            "dataset": settings.dataset.model_copy(
+                update={"split_granularity": "tile", "negative_scene_limit": 2}
+            )
+        }
+    )
+    prepared = PreparedDataset(
+        train_vrt_xml="TRAIN",
+        val_vrt_xml="VAL",
+        pool_vrt_xml="POOL",
+        annotation_file="./annotations.geojson",
+    )
+
+    dataset_request = _runner._dataset_request(settings)
+    tile_split = _runner._tile_split_request(settings)
+    train_request = _runner._tile_request(
+        _runner._train_vrt_xml(settings, prepared),
+        prepared,
+        2,
+        "train",
+        tile_split,
+    )
+    val_request = _runner._tile_request(
+        _runner._val_vrt_xml(settings, prepared),
+        prepared,
+        2,
+        "val",
+        tile_split,
+    )
+
+    assert dataset_request.split_granularity == "tile"
+    assert dataset_request.negative_scene_limit == 2
+    assert tile_split is not None
+    assert tile_split.val_fraction == settings.dataset.val_fraction
+    assert tile_split.seed == settings.tile_preparation.seed
+    assert train_request.vrt_xml == "POOL"
+    assert val_request.vrt_xml == "POOL"
+    assert train_request.tile_split == tile_split
+    assert val_request.tile_split == tile_split
+
+
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
         source_rect_count = 1
@@ -241,6 +285,9 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "valid_footprint_valid_cells": 10,
         "valid_footprint_total_cells": 12,
         "uses_vrt_source_rects": True,
+        "pool_window_count": None,
+        "split_window_count": None,
+        "tile_split_enabled": None,
         "estimated_positive_tiles": 2,
         "estimated_negative_tiles": 3,
         "estimated_class_positive_tiles": {"class_a": 1},
@@ -309,6 +356,9 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
     assert snapshot["observed_negative_ratio"] == 0.5
     assert snapshot["ratio_abs_error"] == 0.0
     assert snapshot["estimated_class_positive_tiles"] == {"class_a": 2}
+    assert snapshot["pool_window_count"] is None
+    assert snapshot["split_window_count"] is None
+    assert snapshot["tile_split_enabled"] is None
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:

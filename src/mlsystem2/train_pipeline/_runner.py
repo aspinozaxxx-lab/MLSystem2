@@ -30,7 +30,11 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec
 from mlsystem2.settings.api import get_settings, get_settings_path
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation.contracts import TileClassAnnotation, TileDataloaderRequest
+from mlsystem2.tile_preparation.contracts import (
+    TileClassAnnotation,
+    TileDataloaderRequest,
+    TileSplitRequest,
+)
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import TrainConfig, TrainProgressEvent, TrainRequest, TrainResult
 
@@ -150,18 +154,20 @@ def run_train_pipeline(
             lambda: (
                 deps.create_tile_dataloader(
                     _tile_request(
-                        dataset_result.dataset.train_vrt_xml,
+                        _train_vrt_xml(settings, dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "train",
+                        _tile_split_request(settings),
                     )
                 ),
                 deps.create_tile_dataloader(
                     _tile_request(
-                        dataset_result.dataset.val_vrt_xml,
+                        _val_vrt_xml(settings, dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "val",
+                        _tile_split_request(settings),
                     )
                 ),
             ),
@@ -287,12 +293,37 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in settings.dataset.classes
             ],
             val_fraction=settings.dataset.val_fraction,
+            split_granularity=settings.dataset.split_granularity,
+            negative_scene_limit=settings.dataset.negative_scene_limit,
         )
     return DatasetPreparationRequest(
         images_dir=settings.dataset.images_dir,
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
         val_fraction=settings.dataset.val_fraction,
+        split_granularity=settings.dataset.split_granularity,
+        negative_scene_limit=settings.dataset.negative_scene_limit,
+    )
+
+
+def _train_vrt_xml(settings: SystemSettings, dataset: PreparedDataset) -> str:
+    if settings.dataset.split_granularity == "tile" and dataset.pool_vrt_xml is not None:
+        return dataset.pool_vrt_xml
+    return dataset.train_vrt_xml
+
+
+def _val_vrt_xml(settings: SystemSettings, dataset: PreparedDataset) -> str:
+    if settings.dataset.split_granularity == "tile" and dataset.pool_vrt_xml is not None:
+        return dataset.pool_vrt_xml
+    return dataset.val_vrt_xml
+
+
+def _tile_split_request(settings: SystemSettings) -> TileSplitRequest | None:
+    if settings.dataset.split_granularity != "tile":
+        return None
+    return TileSplitRequest(
+        val_fraction=settings.dataset.val_fraction,
+        seed=settings.tile_preparation.seed,
     )
 
 
@@ -301,6 +332,7 @@ def _tile_request(
     dataset: PreparedDataset,
     batch_size: int,
     mode: str,
+    tile_split: TileSplitRequest | None = None,
 ) -> TileDataloaderRequest:
     if dataset.class_annotations:
         return TileDataloaderRequest(
@@ -317,6 +349,7 @@ def _tile_request(
             ],
             batch_size=batch_size,
             mode=mode,
+            tile_split=tile_split,
         )
     if dataset.annotation_file is None:
         raise TrainPipelineError("PreparedDataset не содержит annotation_file для binary режима")
@@ -325,6 +358,7 @@ def _tile_request(
         annotation_file=dataset.annotation_file,
         batch_size=batch_size,
         mode=mode,
+        tile_split=tile_split,
     )
 
 
@@ -407,6 +441,9 @@ class _CountingLoader:
         class_balance_warnings = _dataset_attr(self.dataset, "class_balance_warnings")
         if isinstance(class_balance_warnings, list):
             warnings.extend(str(item) for item in class_balance_warnings)
+        tile_split_warnings = _dataset_attr(self.dataset, "tile_split_warnings")
+        if isinstance(tile_split_warnings, list):
+            warnings.extend(str(item) for item in tile_split_warnings)
         observed_positive_ratio = _safe_ratio(self.observed_positive_tiles, self.observed_tiles)
         observed_negative_ratio = (
             None if observed_positive_ratio is None else 1.0 - observed_positive_ratio
@@ -443,6 +480,9 @@ class _CountingLoader:
                 "valid_footprint_total_cells",
             ),
             "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
+            "pool_window_count": _dataset_attr(self.dataset, "pool_window_count"),
+            "split_window_count": _dataset_attr(self.dataset, "split_window_count"),
+            "tile_split_enabled": _dataset_attr(self.dataset, "tile_split_enabled"),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
             "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
             "estimated_class_positive_tiles": _dataset_attr(
@@ -474,6 +514,8 @@ def _tile_preparation_report(
     val_loader: _CountingLoader,
 ) -> dict[str, object]:
     return {
+        "split_granularity": settings.dataset.split_granularity,
+        "negative_scene_limit": settings.dataset.negative_scene_limit,
         "tile_size": settings.tile_preparation.tile_size,
         "stride": settings.tile_preparation.stride,
         "batch_size": settings.train.batch_size,

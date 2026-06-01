@@ -21,6 +21,7 @@ from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
     TileDataloaderRequest,
     TilePreparationError,
+    TileSplitRequest,
 )
 
 
@@ -631,6 +632,109 @@ def test_smart_tiling_can_use_weighted_sampler_for_diagnostic_val(tmp_path: Path
     val_loader.dataset.close()
 
 
+def test_tile_split_divides_common_pool_without_overlap(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "tile_split.tif"
+    data = np.full((1, 4, 16), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [5.5, 2.5], [5.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+    tile_split = TileSplitRequest(val_fraction=0.5, seed=7)
+
+    train_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="train",
+            tile_split=tile_split,
+        )
+    )
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="val",
+            tile_split=tile_split,
+        )
+    )
+
+    train_keys = _window_keys(train_loader.dataset)
+    val_keys = _window_keys(val_loader.dataset)
+    assert len(train_keys) == 2
+    assert len(val_keys) == 2
+    assert set(train_keys).isdisjoint(val_keys)
+    assert len(set(train_keys) | set(val_keys)) == 4
+    assert train_loader.dataset.pool_window_count == 4
+    assert val_loader.dataset.pool_window_count == 4
+    assert train_loader.dataset.split_window_count == 2
+    assert val_loader.dataset.split_window_count == 2
+    assert train_loader.dataset.estimated_positive_tiles == 1
+    assert val_loader.dataset.estimated_positive_tiles == 1
+    train_loader.dataset.close()
+    val_loader.dataset.close()
+
+
+def test_tile_split_is_stable_with_same_seed(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "tile_split_stable.tif"
+    data = np.full((1, 4, 16), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [5.5, 2.5], [5.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+    request = TileDataloaderRequest(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        batch_size=1,
+        mode="val",
+        tile_split=TileSplitRequest(val_fraction=0.5, seed=11),
+    )
+
+    first_loader = create_tile_dataloader(request)
+    second_loader = create_tile_dataloader(request)
+
+    assert _window_keys(first_loader.dataset) == _window_keys(second_loader.dataset)
+    first_loader.dataset.close()
+    second_loader.dataset.close()
+
+
+def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "tile_split_tiny.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=1,
+            mode="val",
+            tile_split=TileSplitRequest(val_fraction=0.5, seed=42),
+        )
+    )
+
+    assert len(val_loader.dataset) == 0
+    assert any("positive windows меньше 2" in item for item in val_loader.dataset.tile_split_warnings)
+    assert any("subset val пуст" in item for item in val_loader.dataset.tile_split_warnings)
+    val_loader.dataset.close()
+
+
 def test_smart_tiling_sampling_weights_follow_positive_factor() -> None:
     dataset = TileDataset.__new__(TileDataset)
     dataset._positive_hint_by_index = [True, True, *([False] * 8)]
@@ -672,6 +776,10 @@ def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
     assert sum(weights[:3]) == pytest.approx(0.8)
     assert sum(weights[3:]) == pytest.approx(0.2)
     assert dataset.estimated_class_positive_tiles == {"common": 2, "rare": 1}
+
+
+def _window_keys(dataset) -> list[tuple[int, int]]:
+    return [(window.x, window.y) for window in dataset._windows]
 
 
 def _write_raster(path: Path) -> None:

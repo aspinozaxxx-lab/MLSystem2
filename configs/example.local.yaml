@@ -9,6 +9,8 @@ dataset:
   scenes_file: ./data/MLMarkup/scenes.json
   annotation_file: ./data/MLMarkup/annotations.json
   val_fraction: 0.2
+  split_granularity: scene
+  negative_scene_limit: null
 
 tile_preparation:
   tile_size: 512
