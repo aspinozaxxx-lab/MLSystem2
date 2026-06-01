@@ -23,4 +23,4 @@
 
 ## Алгоритм работы и его особенности
 
-Получает settings через `get_settings`; YAML загружает CLI до запуска pipeline. Открывает запуск MLflow, формирует `InferenceRequest` по `settings.inference`, вызывает `inference`, пишет timing и итоговый отчет через `mlflow_adapter`, завершает MLflow run.
+Получает settings через `get_settings`; YAML загружает CLI до запуска pipeline. Открывает запуск MLflow и передает в `MLflowStartRunRequest.dataset` имя датасета без расширения `.geojson`: для двоичного режима это stem `settings.dataset.annotation_file`, для многоклассового режима - stem файлов разметки из `settings.dataset.classes` в порядке конфига, соединенные через `+`. Затем формирует `InferenceRequest` по `settings.inference`, вызывает `inference`, пишет timing и итоговый отчет через `mlflow_adapter`, завершает MLflow run.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mlsystem2.inference.api import run_inference
 from mlsystem2.inference.contracts import InferenceConfig, InferenceRequest, InferenceResult
 from mlsystem2.mlflow_adapter.api import end_run, log_pipeline_report, log_timing_report, start_run
@@ -81,6 +83,7 @@ def _mlflow_start_request(
         enabled=settings.mlflow.enabled,
         tracking_uri=settings.mlflow.tracking_uri,
         experiment_name=settings.mlflow.experiment_name,
+        dataset=_mlflow_dataset_name(settings),
         run_name=request.run_name,
         tags={"pipeline": "inference"},
     )
@@ -121,3 +124,12 @@ def _expect_inference_result(value: object) -> InferenceResult:
     if not isinstance(value, InferenceResult):
         raise InferencePipelineError("inference.run_inference вернул неожиданное значение")
     return value
+
+
+def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
+    if settings.dataset.classes:
+        names = [Path(item.annotation_file).stem for item in settings.dataset.classes]
+        return "+".join(names)
+    if settings.dataset.annotation_file is None:
+        return None
+    return Path(settings.dataset.annotation_file).stem

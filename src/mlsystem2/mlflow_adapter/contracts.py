@@ -23,6 +23,7 @@ class MLflowStartRunRequest(BaseModel):
     enabled: bool
     tracking_uri: str
     experiment_name: str
+    dataset: str | None = None
     run_name: str | None = None
     tags: dict[str, str] = Field(default_factory=dict)
 

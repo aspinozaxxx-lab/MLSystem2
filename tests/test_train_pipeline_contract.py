@@ -45,6 +45,24 @@ def test_train_pipeline_request_has_only_run_name() -> None:
     assert set(TrainPipelineRequest.model_fields) == {"run_name"}
 
 
+def test_train_pipeline_sets_mlflow_dataset_from_binary_annotation_stem() -> None:
+    request = _runner._mlflow_start_request(
+        _settings(initial_checkpoint_uri=None),
+        TrainPipelineRequest(),
+    )
+
+    assert request.dataset == "annotations"
+
+
+def test_train_pipeline_sets_mlflow_dataset_from_multiclass_annotation_stems() -> None:
+    request = _runner._mlflow_start_request(
+        _multiclass_settings(),
+        TrainPipelineRequest(),
+    )
+
+    assert request.dataset == "class_a+class_b"
+
+
 def test_train_pipeline_uses_load_checkpoint_branch() -> None:
     calls: list[str] = []
     model = ModelHandle(

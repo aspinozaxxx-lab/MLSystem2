@@ -21,7 +21,7 @@
 
 - `MLflowAdapterError` - ошибка адаптера MLflow.
 - `MLflowRunStatus` - статусы `FINISHED`, `FAILED`, `KILLED`.
-- `MLflowStartRunRequest` - поля `enabled`, `tracking_uri`, `experiment_name`, `run_name`, `tags`.
+- `MLflowStartRunRequest` - поля `enabled`, `tracking_uri`, `experiment_name`, `dataset`, `run_name`, `tags`.
 - `MLflowRunRef` - поля `run_id`, `experiment_name`, `tracking_uri`, `active`.
 - `MLflowArtifactRef` - ссылка на артефакт MLflow.
 
@@ -34,7 +34,7 @@
 
 ## Алгоритм работы и его особенности
 
-`start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
+`start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.dataset` задан, адаптер добавляет MLflow tag `dataset` с этим значением. Адаптер не вычисляет имя датасета и не ходит в папки датасета; вызывающий модуль должен передать готовое имя без расширения `.geojson`. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
 
 `log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
 

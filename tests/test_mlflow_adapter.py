@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mlsystem2.mlflow_adapter.api import log_run_config, log_tile_preparation
-from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
+from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowStartRunRequest
 from mlsystem2.mlflow_adapter import _client
 from mlsystem2.train.contracts import EpochMetrics
 
@@ -32,6 +32,57 @@ def test_config_and_tile_artifacts_are_noop_when_run_disabled(tmp_path: Path) ->
 
     log_run_config(run, tmp_path / "missing.yaml")
     log_tile_preparation(run, {"splits": {}})
+
+
+def test_start_run_writes_dataset_tag(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class RunInfo:
+        run_id = "run-1"
+
+    class Run:
+        info = RunInfo()
+
+    class MLflow:
+        class tracking:
+            class MlflowClient:
+                def search_runs(self, experiment_ids, max_results=1000):
+                    return []
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls["tracking_uri"] = uri
+
+        @staticmethod
+        def set_experiment(name: str) -> None:
+            calls["experiment_name"] = name
+
+        @staticmethod
+        def get_experiment_by_name(name: str):
+            calls["search_experiment_name"] = name
+            return None
+
+        @staticmethod
+        def start_run(run_name: str | None = None, tags: dict[str, str] | None = None):
+            calls["run_name"] = run_name
+            calls["tags"] = tags
+            return Run()
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    run = _client.start_run(
+        MLflowStartRunRequest(
+            enabled=True,
+            tracking_uri="file://mlruns",
+            experiment_name="exp",
+            dataset="deforestation",
+            run_name="manual",
+            tags={"pipeline": "train"},
+        )
+    )
+
+    assert run.run_id == "run-1"
+    assert calls["tags"] == {"pipeline": "train", "dataset": "deforestation"}
 
 
 def test_log_run_config_uses_fixed_artifact_path(

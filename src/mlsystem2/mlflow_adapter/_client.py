@@ -24,8 +24,9 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
     try:
         mlflow.set_tracking_uri(request.tracking_uri)
         mlflow.set_experiment(request.experiment_name)
-        run_name = request.run_name or _auto_run_name(mlflow, request.experiment_name, request.tags)
-        run = mlflow.start_run(run_name=run_name, tags=request.tags)
+        tags = _run_tags(request)
+        run_name = request.run_name or _auto_run_name(mlflow, request.experiment_name, tags)
+        run = mlflow.start_run(run_name=run_name, tags=tags)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось начать запуск MLflow") from exc
     return MLflowRunRef(
@@ -34,6 +35,13 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
         tracking_uri=request.tracking_uri,
         active=True,
     )
+
+
+def _run_tags(request: MLflowStartRunRequest) -> dict[str, str]:
+    tags = dict(request.tags)
+    if request.dataset:
+        tags["dataset"] = request.dataset
+    return tags
 
 
 def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None:
