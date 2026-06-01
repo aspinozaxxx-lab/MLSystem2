@@ -44,7 +44,7 @@ def train_model(
 
     total_started = perf_counter()
     history: list[EpochMetrics] = []
-    best_f1 = -1.0
+    best_score = -1.0
     patience = 0
     checkpoint_dir = _checkpoint_dir(request.checkpoint_dir)
     best_checkpoint_path = checkpoint_dir / "best.pt"
@@ -115,8 +115,9 @@ def train_model(
             )
             history.append(metrics)
 
-            if metrics.val_pixel_f1 > best_f1:
-                best_f1 = metrics.val_pixel_f1
+            score = _checkpoint_score(metrics)
+            if score > best_score:
+                best_score = score
                 patience = 0
                 _save_training_checkpoint(request, str(best_checkpoint_path), metrics, "best")
             else:
@@ -793,6 +794,10 @@ def _save_training_checkpoint(
                 "label": label,
                 "epoch": metrics.epoch,
                 "val_pixel_f1": metrics.val_pixel_f1,
+                "val_best_threshold": metrics.val_best_threshold,
+                "val_best_threshold_pixel_f1": metrics.val_best_threshold_pixel_f1,
+                "val_best_threshold_precision": metrics.val_best_threshold_precision,
+                "val_best_threshold_recall": metrics.val_best_threshold_recall,
                 "val_macro_f1": metrics.val_macro_f1,
                 "val_mean_iou": metrics.val_mean_iou,
                 "val_pixel_accuracy": metrics.val_pixel_accuracy,
@@ -804,6 +809,10 @@ def _save_training_checkpoint(
             },
         )
     )
+
+
+def _checkpoint_score(metrics: EpochMetrics) -> float:
+    return metrics.val_best_threshold_pixel_f1
 
 
 def _checkpoint_dir(path: str):

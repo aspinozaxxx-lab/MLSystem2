@@ -6,7 +6,7 @@ import pytest
 
 from mlsystem2.models.contracts import ModelHandle, ModelSpec
 from mlsystem2.train.api import train_model
-from mlsystem2.train.contracts import TrainConfig, TrainError, TrainRequest
+from mlsystem2.train.contracts import EpochMetrics, TrainConfig, TrainError, TrainRequest
 
 
 def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
@@ -332,6 +332,33 @@ def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
     assert result["false_negative"] == 0
     assert result["f1"] == 0.0
     assert result["best_threshold_pixel_f1"] == 0.0
+
+
+def test_checkpoint_score_uses_best_threshold_pixel_f1() -> None:
+    from mlsystem2.train import _trainer
+
+    metrics = EpochMetrics(
+        epoch=1,
+        train_loss=1.0,
+        train_optimizer_steps=1,
+        train_skipped_optimizer_steps=0,
+        val_loss=1.0,
+        val_pixel_precision=0.2,
+        val_pixel_recall=0.2,
+        val_pixel_f1=0.2,
+        val_positive_pixels=10,
+        val_pred_positive_pixels=10,
+        val_true_positive=2,
+        val_false_positive=8,
+        val_false_negative=8,
+        val_best_threshold=0.8,
+        val_best_threshold_pixel_f1=0.7,
+        val_best_threshold_precision=0.8,
+        val_best_threshold_recall=0.62,
+        epoch_time_sec=1.0,
+    )
+
+    assert _trainer._checkpoint_score(metrics) == 0.7
 
 
 def test_focal_tversky_loss_is_focal_plus_tversky() -> None:

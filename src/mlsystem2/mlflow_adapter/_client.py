@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from hashlib import sha1
 from pathlib import Path
 
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationReport
@@ -25,9 +26,16 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
         mlflow.set_tracking_uri(request.tracking_uri)
         mlflow.set_experiment(request.experiment_name)
         tags = _run_tags(request)
+        _ensure_experiment_dataset(mlflow, request.experiment_name, request.dataset)
         run_name = request.run_name or _auto_run_name(mlflow, request.experiment_name, tags)
         run = mlflow.start_run(run_name=run_name, tags=tags)
+        _log_input_dataset(mlflow, request.dataset, context=tags.get("pipeline"))
     except Exception as exc:
+        try:
+            if mlflow.active_run() is not None:
+                mlflow.end_run(status=MLflowRunStatus.FAILED.value)
+        except Exception:
+            pass
         raise MLflowAdapterError("Не удалось начать запуск MLflow") from exc
     return MLflowRunRef(
         run_id=run.info.run_id,
@@ -42,6 +50,53 @@ def _run_tags(request: MLflowStartRunRequest) -> dict[str, str]:
     if request.dataset:
         tags["dataset"] = request.dataset
     return tags
+
+
+def _ensure_experiment_dataset(
+    mlflow,
+    experiment_name: str,
+    dataset_name: str | None,
+) -> None:
+    if not dataset_name:
+        return
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        return
+    client = mlflow.tracking.MlflowClient()
+    search_datasets = getattr(client, "search_datasets", None)
+    create_dataset = getattr(client, "create_dataset", None)
+    if search_datasets is None or create_dataset is None:
+        return
+    datasets = search_datasets(experiment_ids=[experiment.experiment_id], max_results=1000)
+    if any(dataset.name == dataset_name for dataset in datasets):
+        return
+    create_dataset(
+        name=dataset_name,
+        experiment_id=experiment.experiment_id,
+        tags={"dataset": dataset_name, "source": "MLMarkup geojson stem"},
+    )
+
+
+def _log_input_dataset(mlflow, dataset_name: str | None, *, context: str | None) -> None:
+    if not dataset_name:
+        return
+    try:
+        import numpy as np
+
+        digest = sha1(dataset_name.encode("utf-8")).hexdigest()[:8]
+        dataset = mlflow.data.from_numpy(
+            np.empty((0, 0), dtype=np.float32),
+            source=dataset_name,
+            name=dataset_name,
+            digest=digest,
+        )
+        mlflow.log_input(
+            dataset,
+            context=context or "run",
+            tags={"dataset": dataset_name},
+        )
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось записать dataset input в MLflow") from exc
 
 
 def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None:

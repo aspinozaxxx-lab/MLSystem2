@@ -43,11 +43,35 @@ def test_start_run_writes_dataset_tag(monkeypatch) -> None:
     class Run:
         info = RunInfo()
 
+    class Experiment:
+        experiment_id = "exp-1"
+
+    class Dataset:
+        def __init__(self, name: str):
+            self.name = name
+
     class MLflow:
+        class data:
+            @staticmethod
+            def from_numpy(features, source: str, name: str, digest: str):
+                calls["dataset_source"] = source
+                calls["dataset_name"] = name
+                calls["dataset_digest"] = digest
+                calls["dataset_shape"] = tuple(features.shape)
+                return {"name": name, "digest": digest}
+
         class tracking:
             class MlflowClient:
                 def search_runs(self, experiment_ids, max_results=1000):
                     return []
+
+                def search_datasets(self, experiment_ids, max_results=1000):
+                    calls["search_datasets"] = (experiment_ids, max_results)
+                    return []
+
+                def create_dataset(self, name: str, experiment_id: str, tags: dict[str, str]):
+                    calls["created_dataset"] = (name, experiment_id, tags)
+                    return Dataset(name)
 
         @staticmethod
         def set_tracking_uri(uri: str) -> None:
@@ -60,13 +84,23 @@ def test_start_run_writes_dataset_tag(monkeypatch) -> None:
         @staticmethod
         def get_experiment_by_name(name: str):
             calls["search_experiment_name"] = name
-            return None
+            return Experiment()
 
         @staticmethod
         def start_run(run_name: str | None = None, tags: dict[str, str] | None = None):
             calls["run_name"] = run_name
             calls["tags"] = tags
             return Run()
+
+        @staticmethod
+        def log_input(dataset, context: str | None = None, tags: dict[str, str] | None = None):
+            calls["input_dataset"] = dataset
+            calls["input_context"] = context
+            calls["input_tags"] = tags
+
+        @staticmethod
+        def active_run():
+            return None
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
 
@@ -83,6 +117,16 @@ def test_start_run_writes_dataset_tag(monkeypatch) -> None:
 
     assert run.run_id == "run-1"
     assert calls["tags"] == {"pipeline": "train", "dataset": "deforestation"}
+    assert calls["dataset_name"] == "deforestation"
+    assert calls["dataset_source"] == "deforestation"
+    assert calls["dataset_shape"] == (0, 0)
+    assert calls["created_dataset"] == (
+        "deforestation",
+        "exp-1",
+        {"dataset": "deforestation", "source": "MLMarkup geojson stem"},
+    )
+    assert calls["input_context"] == "train"
+    assert calls["input_tags"] == {"dataset": "deforestation"}
 
 
 def test_log_run_config_uses_fixed_artifact_path(
