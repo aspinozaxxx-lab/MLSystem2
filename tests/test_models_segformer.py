@@ -14,6 +14,7 @@ def test_list_supported_models_returns_supported_architectures() -> None:
         "segformer_b2",
         "smp_segformer_b0",
         "smp_segformer_b2",
+        "smp_segformer_b3",
         "smp_deeplabv3plus_resnet50",
     ]
 
@@ -113,6 +114,23 @@ def test_create_smp_segformer_b2_multiclass_forward() -> None:
 
     outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 14, 128, 128)
+
+
+def test_create_smp_segformer_b3_forward() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("segmentation_models_pytorch")
+
+    handle = create_model(
+        ModelSpec(
+            name="smp_segformer_b3",
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+        )
+    )
+
+    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    assert outputs.shape == (1, 1, 128, 128)
 
 
 def test_raw_input_wrapper_scales_uint8_range_to_unit_range() -> None:

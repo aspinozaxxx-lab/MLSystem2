@@ -14,17 +14,20 @@ _SEGFORMER_B0 = "segformer_b0"
 _SEGFORMER_B2 = "segformer_b2"
 _SMP_SEGFORMER_B0 = "smp_segformer_b0"
 _SMP_SEGFORMER_B2 = "smp_segformer_b2"
+_SMP_SEGFORMER_B3 = "smp_segformer_b3"
 _SMP_DEEPLABV3PLUS_RESNET50 = "smp_deeplabv3plus_resnet50"
 _SUPPORTED_NAMES = {
     _SEGFORMER_B0,
     _SEGFORMER_B2,
     _SMP_SEGFORMER_B0,
     _SMP_SEGFORMER_B2,
+    _SMP_SEGFORMER_B3,
     _SMP_DEEPLABV3PLUS_RESNET50,
 }
 _SMP_ENCODERS = {
     _SMP_SEGFORMER_B0: "mit_b0",
     _SMP_SEGFORMER_B2: "mit_b2",
+    _SMP_SEGFORMER_B3: "mit_b3",
 }
 _PRETRAINED_B0 = "nvidia/segformer-b0-finetuned-ade-512-512"
 _PRETRAINED_B2 = "nvidia/segformer-b2-finetuned-ade-512-512"
@@ -69,6 +72,13 @@ def list_supported_models() -> list[ModelSpec]:
         ),
         ModelSpec(
             name=_SMP_SEGFORMER_B2,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_SEGFORMER_B3,
             input_channels=4,
             output_channels=1,
             pretrained=False,
