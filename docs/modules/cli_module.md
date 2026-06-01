@@ -7,6 +7,7 @@
 ## Публичный интерфейс
 
 - `python -m mlsystem2.cli.prepare_images_for_vrt` — одноразовая подготовка исходных GeoTIFF к построению VRT-мозаик.
+- `python -m mlsystem2.cli.tiling_test_for_black --config <path>` — диагностическая проверка, что `dataset_preparing` и `tile_preparation` не возвращают полностью черные tiles.
 - `mlsystem2-train` — запуск обучающего конвейера.
 - `mlsystem2-infer` — запуск инференса.
 
@@ -17,11 +18,14 @@
 ## Список используемых данным модулем модулей и с какой целью
 
 - `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — локальная диагностика модулей из `modules_test`.
+- `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — проверка всех train/val tiles на полностью черные данные из `tiling_test_for_black`.
 - `settings.api`, `train_pipeline.api`, `inference_pipeline.api` — существующие точки входа train и infer.
 
 ## Алгоритм работы и его особенности
 
 CLI разбирает аргументы, вызывает публичный API нужного модуля и завершает процесс с кодом, соответствующим результату. `modules_test` — служебный локальный диагностический скрипт, не публичный API и не основной CLI приложения; он пишет `preparation_report.json`, `modules_test_timing_report.json`, `train.vrt`, `val.vrt` и до 100 batch в `tile_batches` при успешной подготовке датасета и DataLoader.
+
+`tiling_test_for_black` загружает YAML-настройки через `settings.api`, вызывает `dataset_preparing.api.prepare_dataset`, затем создает train и val DataLoader через `tile_preparation.api.create_tile_dataloader`. Чтобы проверить все окна, а не sampled-подмножество, скрипт пишет временный scan-конфиг рядом с отчетом: в нем выключены `smart_tiling`, `augmentation_level` и диагностический weighted sampler валидации, но сохранены dataset, tile size, stride и seed. В tile-режиме используется общий VRT и публичный `TileSplitRequest`, поэтому train/val subsets остаются теми же непересекающимися subsets. Проверка считает tile пустым, если во всем image tensor нет ни одного finite pixel со значением больше `eps` по модулю; non-finite pixels считаются отдельной ошибкой. Итог пишется в JSON-отчет и код завершения равен `1`, если найден хотя бы один пустой или non-finite tile.
 
 Подготовка снимков для VRT
 
