@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`tile_preparation` создает `torch.utils.data.DataLoader` по одному VRT XML и binary или multiclass GeoJSON-разметке. Модуль отвечает только за формирование train/val loader для уже подготовленных VRT и не готовит все tiles заранее. По умолчанию split не выполняется; если в request передан `tile_split`, модуль делит список окон общего VRT на непересекающиеся train/val subsets.
+`tile_preparation` создает `torch.utils.data.DataLoader` по одному VRT XML и binary или multiclass GeoJSON-разметке. Модуль отвечает только за формирование train/val loader для уже подготовленных VRT и не сохраняет все tiles на диск. По умолчанию split не выполняется; если в request передан `tile_split`, модуль делит список окон общего VRT на непересекающиеся train/val subsets.
 
 `create_tile_dataloader` должен возвращаться быстро. Чтение raster data, определение nodata pixels и rasterize mask выполняются лениво в `Dataset.__getitem__`, то есть в основном процессе или в PyTorch DataLoader workers.
 
@@ -25,10 +25,12 @@ Batch DataLoader:
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`, `class_balance`.
+- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`, `class_balance`.
 - `rasterio` - открыть VRT и лениво читать image windows с `boundless=True`.
 - `shapely` и `rasterio.features` - загрузить GeoJSON и rasterize mask в окно tile.
-- `torch.utils.data` - создать Dataset/DataLoader и обеспечить prefetch через `num_workers` и `prefetch_factor`.
+- `torch.utils.data` - создать Dataset/DataLoader и обеспечить prefetch через `num_workers`, `prefetch_factor` и optional `prefetch_epochs`.
+
+Если `prefetch_epochs` задан, DataLoader получает effective `prefetch_factor`, рассчитанный от размера split, `batch_size` и числа workers. Например, для 163 batches/epoch, `num_workers=16` и `prefetch_epochs=2` effective factor будет `21`, то есть PyTorch будет стремиться держать около двух эпох batch-ей в prefetch queues. Raster read и rasterize остаются ленивыми в `__getitem__`; заранее готовятся только элементы, запрошенные DataLoader workers.
 
 ## Алгоритм работы и его особенности
 

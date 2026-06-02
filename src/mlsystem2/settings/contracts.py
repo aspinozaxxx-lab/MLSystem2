@@ -71,6 +71,7 @@ class TilePreparationSettings(BaseModel):
     stride: int = Field(gt=0)
     num_workers: int = Field(default=16, ge=0)
     prefetch_factor: int = Field(default=2, gt=0)
+    prefetch_epochs: float | None = Field(default=None, gt=0.0)
     seed: int = 42
     augmentation_level: int = Field(default=0, ge=0, le=2)
     smart_tiling: bool = False

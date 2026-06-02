@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import TYPE_CHECKING
 
@@ -85,10 +86,32 @@ def create_tile_dataloader(
     if sampler is not None:
         dataloader_kwargs["sampler"] = sampler
     if tile_settings.num_workers > 0:
-        dataloader_kwargs["prefetch_factor"] = tile_settings.prefetch_factor
+        dataloader_kwargs["prefetch_factor"] = _effective_prefetch_factor(
+            base_prefetch_factor=tile_settings.prefetch_factor,
+            prefetch_epochs=tile_settings.prefetch_epochs,
+            dataset_size=len(dataset),
+            batch_size=request.batch_size,
+            num_workers=tile_settings.num_workers,
+        )
         dataloader_kwargs["persistent_workers"] = True
 
     return DataLoader(**dataloader_kwargs)
+
+
+def _effective_prefetch_factor(
+    *,
+    base_prefetch_factor: int,
+    prefetch_epochs: float | None,
+    dataset_size: int,
+    batch_size: int,
+    num_workers: int,
+) -> int:
+    if prefetch_epochs is None or num_workers <= 0 or dataset_size <= 0:
+        return base_prefetch_factor
+    batches_per_epoch = math.ceil(dataset_size / batch_size)
+    target_prefetch_batches = math.ceil(batches_per_epoch * prefetch_epochs)
+    target_prefetch_factor = max(1, math.ceil(target_prefetch_batches / num_workers))
+    return max(base_prefetch_factor, target_prefetch_factor)
 
 
 def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, object]]]):

@@ -141,6 +141,22 @@ def test_load_settings_rejects_unsupported_augmentation_level_three(tmp_path: Pa
         api.load_settings(settings_path)
 
 
+def test_load_settings_accepts_prefetch_epochs(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  prefetch_factor: 2",
+            "  prefetch_factor: 2\n  prefetch_epochs: 2.0",
+        ),
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.tile_preparation.prefetch_epochs == 2.0
+
+
 def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
@@ -167,6 +183,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.tile_preparation.positive_factor == 0.5
     assert settings.tile_preparation.val_positive_factor is None
     assert settings.tile_preparation.class_balance is False
+    assert settings.tile_preparation.prefetch_epochs is None
     assert settings.dataset.split_granularity == "scene"
     assert settings.dataset.negative_scene_limit is None
 

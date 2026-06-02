@@ -16,6 +16,7 @@ from rasterio.transform import from_origin
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation._augmentations import _geometric
+from mlsystem2.tile_preparation._dataloader import _effective_prefetch_factor
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
@@ -184,6 +185,32 @@ def test_multiclass_geometric_augmentation_keeps_labels() -> None:
     assert augmented is True
     assert augmented_mask.shape == (4, 4)
     assert set(np.unique(augmented_mask).tolist()) == {0, 1, 2}
+
+
+def test_effective_prefetch_factor_targets_requested_epochs() -> None:
+    assert (
+        _effective_prefetch_factor(
+            base_prefetch_factor=2,
+            prefetch_epochs=2.0,
+            dataset_size=1301,
+            batch_size=8,
+            num_workers=16,
+        )
+        == 21
+    )
+
+
+def test_effective_prefetch_factor_keeps_base_when_target_is_smaller() -> None:
+    assert (
+        _effective_prefetch_factor(
+            base_prefetch_factor=4,
+            prefetch_epochs=0.25,
+            dataset_size=32,
+            batch_size=8,
+            num_workers=16,
+        )
+        == 4
+    )
 
 
 def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> None:
