@@ -15,7 +15,7 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation._augmentations import _cutout, _geometric
+from mlsystem2.tile_preparation._augmentations import _geometric
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
@@ -171,30 +171,6 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     }
 
     loader.dataset.close()
-
-
-def test_cutout_zeros_matching_image_and_mask_region() -> None:
-    image = np.ones((2, 32, 32), dtype=np.float32)
-    mask = np.ones((1, 32, 32), dtype=np.float32)
-
-    augmented_image, augmented_mask = _cutout(image, mask, np.random.default_rng(20260525))
-
-    cutout_pixels = np.all(augmented_image == 0.0, axis=0)
-    assert np.count_nonzero(cutout_pixels) > 0
-    assert np.all(augmented_mask[:, cutout_pixels] == 0.0)
-    assert np.all(augmented_image[:, augmented_mask[0] == 0.0] == 0.0)
-
-
-def test_multiclass_cutout_zeros_matching_image_and_mask_region() -> None:
-    image = np.ones((2, 32, 32), dtype=np.float32)
-    mask = np.ones((32, 32), dtype=np.int64)
-
-    augmented_image, augmented_mask = _cutout(image, mask, np.random.default_rng(20260525))
-
-    cutout_pixels = np.all(augmented_image == 0.0, axis=0)
-    assert np.count_nonzero(cutout_pixels) > 0
-    assert np.all(augmented_mask[cutout_pixels] == 0)
-    assert np.all(augmented_image[:, augmented_mask == 0] == 0.0)
 
 
 def test_multiclass_geometric_augmentation_keeps_labels() -> None:

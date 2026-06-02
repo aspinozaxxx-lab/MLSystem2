@@ -22,9 +22,6 @@ def apply_augmentations(
     if level >= 2:
         image = _photometric(image, rng)
         augmented = True
-    if level >= 3:
-        image, mask = _cutout(image, mask, rng)
-        augmented = True
 
     image = np.clip(image, 0.0, 255.0)
     return np.ascontiguousarray(image), np.ascontiguousarray(mask), augmented
@@ -87,28 +84,6 @@ def _mean_blur(image: np.ndarray) -> np.ndarray:
         for x_shift in range(3):
             blurred += padded[:, y_shift : y_shift + height, x_shift : x_shift + width]
     return blurred / 9.0
-
-
-def _cutout(
-    image: np.ndarray,
-    mask: np.ndarray,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
-    _, height, width = image.shape
-    max_h = max(1, height // 4)
-    max_w = max(1, width // 4)
-    cut_h = int(rng.integers(1, max_h + 1))
-    cut_w = int(rng.integers(1, max_w + 1))
-    y = int(rng.integers(0, height - cut_h + 1))
-    x = int(rng.integers(0, width - cut_w + 1))
-    image = image.copy()
-    mask = mask.copy()
-    image[:, y : y + cut_h, x : x + cut_w] = 0.0
-    if mask.ndim == 2:
-        mask[y : y + cut_h, x : x + cut_w] = 0
-    else:
-        mask[:, y : y + cut_h, x : x + cut_w] = 0.0
-    return image, mask
 
 
 def _mask_horizontal_axis(mask: np.ndarray) -> int:

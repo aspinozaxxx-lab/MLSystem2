@@ -129,6 +129,18 @@ def test_load_settings_rejects_stride_larger_than_tile_size(tmp_path: Path) -> N
         api.load_settings(settings_path)
 
 
+def test_load_settings_rejects_unsupported_augmentation_level_three(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace("  augmentation_level: 0", "  augmentation_level: 3"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError):
+        api.load_settings(settings_path)
+
+
 def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
