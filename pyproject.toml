@@ -35,6 +35,7 @@ torch = [
 dev = [
   "pytest",
   "ruff",
+  "httpx",
 ]
 
 [project.scripts]
