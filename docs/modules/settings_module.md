@@ -37,7 +37,7 @@
 
 `max_train_batches_per_epoch` и `max_val_batches_per_epoch` добавлены только для диагностических коротких запусков. В полном обучении они могут оставаться `null`. `max_training_time_sec` - optional wall-clock лимит train loop; он проверяется после завершения эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
 
-Проверяется: `stride <= tile_size`, `augmentation_level` в диапазоне `0..2`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.
+Проверяется: `stride <= tile_size`, `augmentation_level` в диапазоне `0..3`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.
 
 `dataset` поддерживает два взаимоисключающих режима разметки и два режима split. `split_granularity=scene` оставляет старое разбиение по снимкам. `split_granularity=tile` строит общий пул выбранных сцен и делит уже тайлы. `negative_scene_limit` ограничивает число zero-object сцен; все сцены с объектами сохраняются.
 

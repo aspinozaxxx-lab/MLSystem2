@@ -16,6 +16,10 @@ _SMP_SEGFORMER_B0 = "smp_segformer_b0"
 _SMP_SEGFORMER_B2 = "smp_segformer_b2"
 _SMP_SEGFORMER_B3 = "smp_segformer_b3"
 _SMP_DEEPLABV3PLUS_RESNET50 = "smp_deeplabv3plus_resnet50"
+_SMP_UNET_RESNET34 = "smp_unet_resnet34"
+_SMP_UNET_RESNET50 = "smp_unet_resnet50"
+_SMP_UNET_RESNET101 = "smp_unet_resnet101"
+_SMP_UNET_RESNET152 = "smp_unet_resnet152"
 _SUPPORTED_NAMES = {
     _SEGFORMER_B0,
     _SEGFORMER_B2,
@@ -23,11 +27,21 @@ _SUPPORTED_NAMES = {
     _SMP_SEGFORMER_B2,
     _SMP_SEGFORMER_B3,
     _SMP_DEEPLABV3PLUS_RESNET50,
+    _SMP_UNET_RESNET34,
+    _SMP_UNET_RESNET50,
+    _SMP_UNET_RESNET101,
+    _SMP_UNET_RESNET152,
 }
 _SMP_ENCODERS = {
     _SMP_SEGFORMER_B0: "mit_b0",
     _SMP_SEGFORMER_B2: "mit_b2",
     _SMP_SEGFORMER_B3: "mit_b3",
+}
+_SMP_UNET_ENCODERS = {
+    _SMP_UNET_RESNET34: "resnet34",
+    _SMP_UNET_RESNET50: "resnet50",
+    _SMP_UNET_RESNET101: "resnet101",
+    _SMP_UNET_RESNET152: "resnet152",
 }
 _PRETRAINED_B0 = "nvidia/segformer-b0-finetuned-ade-512-512"
 _PRETRAINED_B2 = "nvidia/segformer-b2-finetuned-ade-512-512"
@@ -91,6 +105,34 @@ def list_supported_models() -> list[ModelSpec]:
             pretrained=False,
             parameters={},
         ),
+        ModelSpec(
+            name=_SMP_UNET_RESNET34,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_UNET_RESNET50,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_UNET_RESNET101,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_UNET_RESNET152,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
     ]
 
 
@@ -101,6 +143,8 @@ def create_model(spec: ModelSpec) -> ModelHandle:
         return ModelHandle(spec=spec, model=_create_smp_segformer(spec))
     if spec.name == _SMP_DEEPLABV3PLUS_RESNET50:
         return ModelHandle(spec=spec, model=_create_smp_deeplabv3plus(spec))
+    if spec.name in _SMP_UNET_ENCODERS:
+        return ModelHandle(spec=spec, model=_create_smp_unet(spec))
     return ModelHandle(spec=spec, model=_create_segformer(spec))
 
 
@@ -144,6 +188,20 @@ def _create_smp_deeplabv3plus(spec: ModelSpec):
         raise ModelsError("SMP DeepLabV3Plus в MLSystem2 поддерживает только encoder_weights=None.")
     return smp.DeepLabV3Plus(
         encoder_name="resnet50",
+        encoder_weights=None,
+        in_channels=spec.input_channels,
+        classes=spec.output_channels,
+        activation=None,
+    )
+
+
+def _create_smp_unet(spec: ModelSpec):
+    smp = _import_smp()
+    _ensure_torch_for_smp()
+    if spec.pretrained:
+        raise ModelsError("SMP UNet в MLSystem2 поддерживает только encoder_weights=None.")
+    return smp.Unet(
+        encoder_name=_SMP_UNET_ENCODERS[spec.name],
         encoder_weights=None,
         in_channels=spec.input_channels,
         classes=spec.output_channels,

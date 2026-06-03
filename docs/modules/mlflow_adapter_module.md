@@ -6,6 +6,8 @@
 
 ## Публичный интерфейс
 
+- `list_experiments(tracking_uri: str) -> list[MLflowExperiment]` - возвращает доступные experiments из указанного MLflow tracking URI.
+- `create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment` - создает experiment или возвращает существующий с тем же именем.
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
 - `log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None` - пишет отчет подготовки тайлов.
@@ -20,6 +22,8 @@
 ## Публичные контракты
 
 - `MLflowAdapterError` - ошибка адаптера MLflow.
+- `MLflowExperiment` - поля `experiment_id`, `name`, `lifecycle_stage`.
+- `MLflowExperimentRequest` - поля `tracking_uri`, `name`.
 - `MLflowRunStatus` - статусы `FINISHED`, `FAILED`, `KILLED`.
 - `MLflowStartRunRequest` - поля `enabled`, `tracking_uri`, `experiment_name`, `dataset`, `run_name`, `tags`.
 - `MLflowRunRef` - поля `run_id`, `experiment_name`, `tracking_uri`, `active`.
@@ -27,7 +31,7 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `mlflow` - создать run, записать metrics/artifacts и завершить run.
+- `mlflow` - прочитать/создать experiments, создать run, записать metrics/artifacts и завершить run.
 - `dataset_preparing.contracts` - тип отчета подготовки датасета.
 - `train.contracts` - типы `EpochMetrics` и `TrainResult`.
 - `train_pipeline.contracts` - типы итоговых отчетов и timing report.

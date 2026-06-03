@@ -129,7 +129,7 @@ def test_load_settings_rejects_stride_larger_than_tile_size(tmp_path: Path) -> N
         api.load_settings(settings_path)
 
 
-def test_load_settings_rejects_unsupported_augmentation_level_three(tmp_path: Path) -> None:
+def test_load_settings_accepts_augmentation_level_three(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -137,8 +137,9 @@ def test_load_settings_rejects_unsupported_augmentation_level_three(tmp_path: Pa
         encoding="utf-8",
     )
 
-    with pytest.raises(SettingsError):
-        api.load_settings(settings_path)
+    settings = api.load_settings(settings_path)
+
+    assert settings.tile_preparation.augmentation_level == 3
 
 
 def test_load_settings_accepts_prefetch_epochs(tmp_path: Path) -> None:

@@ -15,6 +15,9 @@ FORBIDDEN_IMPORTS = {
     "tritonclient",
     "prometheus_client",
 }
+ALLOWED_MODULE_IMPORTS = {
+    "training_ui_api": {"fastapi", "uvicorn"},
+}
 
 
 def test_forbidden_imports_are_absent() -> None:
@@ -24,13 +27,13 @@ def test_forbidden_imports_are_absent() -> None:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     root = alias.name.split(".", 1)[0]
-                    assert root not in FORBIDDEN_IMPORTS, f"{path}: запрещенный импорт {alias.name}"
+                    _assert_allowed_import(path, root, alias.name)
                     _assert_no_cross_module_internal_import(path, alias.name)
             elif isinstance(node, ast.ImportFrom):
                 assert not any(alias.name == "*" for alias in node.names), f"{path}: звездочный импорт"
                 if node.module is not None:
                     root = node.module.split(".", 1)[0]
-                    assert root not in FORBIDDEN_IMPORTS, f"{path}: запрещенный импорт {node.module}"
+                    _assert_allowed_import(path, root, node.module)
                     _assert_no_cross_module_internal_import(path, node.module)
                 _assert_no_cross_module_relative_internal_import(path, node)
 
@@ -64,6 +67,15 @@ def _assert_no_cross_module_internal_import(path: Path, module: str) -> None:
     imported_top = parts[1]
     if imported_top != current_top and any(part.startswith("_") for part in parts[2:]):
         raise AssertionError(f"{path}: импортирует приватный модуль из {imported_top}: {module}")
+
+
+def _assert_allowed_import(path: Path, root: str, imported: str) -> None:
+    if root not in FORBIDDEN_IMPORTS:
+        return
+    current_top = path.relative_to(SRC).parts[0]
+    if root in ALLOWED_MODULE_IMPORTS.get(current_top, set()):
+        return
+    raise AssertionError(f"{path}: запрещенный импорт {imported}")
 
 
 def _assert_no_cross_module_relative_internal_import(path: Path, node: ast.ImportFrom) -> None:

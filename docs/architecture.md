@@ -31,6 +31,18 @@ mlsystem2-train --config configs/example.server.yaml
 mlsystem2-infer --config configs/example.server.yaml
 ```
 
+Веб-интерфейс обучения:
+
+```bash
+mlsystem2-training-ui-api
+python frontend/build.py
+```
+
+`training_ui_api` — отдельный модуль MLSystem2 и единственная серверная точка доступа frontend к
+данным UI обучения. Frontend не обращается к Postgres напрямую. UI-данные обучения, шаблоны,
+очереди, custom datasets и результаты хранятся в отдельной Postgres БД/схеме. Инфраструктура
+Postgres разворачивается вручную по runbook и не входит в CI/CD.
+
 Каноническое место хранения результатов работы — MLflow. Локальные директории используются только
 как временная рабочая область: в них могут лежать временные файлы, кэши, журналы и промежуточные
 отчеты до записи в артефакты MLflow.

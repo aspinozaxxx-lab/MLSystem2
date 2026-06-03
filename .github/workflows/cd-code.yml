@@ -6,9 +6,12 @@ on:
       - main
     paths:
       - "src/**"
+      - "frontend/**"
+      - "migrations/**"
       - "docs/**"
       - "configs/**"
       - "tests/**"
+      - "alembic.ini"
       - "pyproject.toml"
       - "README.md"
       - ".github/workflows/cd-code.yml"
@@ -36,6 +39,8 @@ jobs:
       - name: Запустить тесты
         run: |
           python -m pytest
+          python frontend/build.py
+          python -m alembic upgrade head --sql > /tmp/mlsystem2_training_ui_migration.sql
           python -m compileall -q src tests
 
       - name: Настроить SSH-ключ
@@ -52,6 +57,10 @@ jobs:
           SERVER_USER: ${{ secrets.MLSYSTEM2_SERVER_USER }}
           SERVER_PORT: ${{ vars.MLSYSTEM2_SERVER_PORT || '22' }}
           TARGET_PATH: ${{ vars.MLSYSTEM2_DEPLOY_PATH || '/opt/mlsystem2/repo' }}
+          FRONTEND_DIST_PATH: ${{ vars.MLSYSTEM2_FRONTEND_DIST_PATH || '/opt/mlsystem2/frontend' }}
+          TRAINING_UI_API_SERVICE: ${{ vars.MLSYSTEM2_TRAINING_UI_API_SERVICE || 'mlsystem2-training-ui-api' }}
+          TRAINING_UI_HEALTH_URL: ${{ vars.MLSYSTEM2_TRAINING_UI_HEALTH_URL || 'http://127.0.0.1:8091/api/v1/health' }}
+          OLD_FRONTEND_SERVICE: ${{ vars.MLSYSTEM_OLD_FRONTEND_SERVICE || '' }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/mlsystem2_key -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new"
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "mkdir -p '${TARGET_PATH}'"
@@ -66,4 +75,14 @@ jobs:
             --exclude "runs" \
             --exclude "artifacts" \
             ./ "${SERVER_USER}@${SERVER_HOST}:${TARGET_PATH}/"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "mkdir -p '${FRONTEND_DIST_PATH}'"
+          rsync -az --delete \
+            -e "${SSH_CMD}" \
+            frontend/dist/ "${SERVER_USER}@${SERVER_HOST}:${FRONTEND_DIST_PATH}/"
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "printf '%s\n' '${GITHUB_SHA}' > '${TARGET_PATH}/DEPLOYED_COMMIT'"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "cd '${TARGET_PATH}' && python -m alembic upgrade head"
+          if [ -n "${OLD_FRONTEND_SERVICE}" ]; then
+            ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl disable --now '${OLD_FRONTEND_SERVICE}' || true"
+          fi
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl restart '${TRAINING_UI_API_SERVICE}'"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}'"

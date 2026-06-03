@@ -17,11 +17,12 @@ MODULES = {
     "inference",
     "inference_pipeline",
     "mlflow_adapter",
+    "training_ui_api",
 }
 
 
 def test_forbidden_directories_absent() -> None:
-    for name in ("ansible", "deploy", "frontend", "monitoring"):
+    for name in ("ansible", "deploy", "monitoring"):
         assert not (ROOT / name).exists()
     assert not (PACKAGE_ROOT / "storage").exists()
 

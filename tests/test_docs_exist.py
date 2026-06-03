@@ -15,6 +15,7 @@ MODULES = [
     "inference",
     "inference_pipeline",
     "mlflow_adapter",
+    "training_ui_api",
     "cli",
 ]
 REQUIRED_SECTIONS = [

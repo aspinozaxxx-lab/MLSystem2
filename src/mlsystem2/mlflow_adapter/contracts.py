@@ -37,6 +37,21 @@ class MLflowRunRef(BaseModel):
     active: bool
 
 
+class MLflowExperiment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_id: str
+    name: str
+    lifecycle_stage: str | None = None
+
+
+class MLflowExperimentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tracking_uri: str
+    name: str
+
+
 class MLflowArtifactRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,6 +62,8 @@ class MLflowArtifactRef(BaseModel):
 __all__ = [
     "MLflowAdapterError",
     "MLflowArtifactRef",
+    "MLflowExperiment",
+    "MLflowExperimentRequest",
     "MLflowRunRef",
     "MLflowRunStatus",
     "MLflowStartRunRequest",

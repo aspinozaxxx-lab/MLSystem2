@@ -73,7 +73,7 @@ class TilePreparationSettings(BaseModel):
     prefetch_factor: int = Field(default=2, gt=0)
     prefetch_epochs: float | None = Field(default=None, gt=0.0)
     seed: int = 42
-    augmentation_level: int = Field(default=0, ge=0, le=2)
+    augmentation_level: int = Field(default=0, ge=0, le=3)
     smart_tiling: bool = False
     positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
     val_positive_factor: float | None = Field(default=None, gt=0.0, lt=1.0)

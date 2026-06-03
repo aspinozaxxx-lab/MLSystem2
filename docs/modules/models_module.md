@@ -6,7 +6,7 @@
 
 ## Публичный интерфейс
 
-- `list_supported_models() -> list[ModelSpec]` - возвращает `segformer_b0`, `segformer_b2`, `smp_segformer_b0`, `smp_segformer_b2`, `smp_segformer_b3`, `smp_deeplabv3plus_resnet50`.
+- `list_supported_models() -> list[ModelSpec]` - возвращает `segformer_b0`, `segformer_b2`, `smp_segformer_b0`, `smp_segformer_b2`, `smp_segformer_b3`, `smp_deeplabv3plus_resnet50`, `smp_unet_resnet34`, `smp_unet_resnet50`, `smp_unet_resnet101`, `smp_unet_resnet152`.
 - `create_model(spec: ModelSpec) -> ModelHandle` - создает модель по спецификации.
 - `load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint` - загружает локальный `.pt` checkpoint.
 - `save_checkpoint(request: SaveCheckpointRequest) -> CheckpointArtifact` - сохраняет локальный `.pt` checkpoint.
@@ -34,6 +34,8 @@
 `smp_segformer_b0`, `smp_segformer_b2` и `smp_segformer_b3` добавлены как диагностическая совместимость со старым MLSystem train path. Они строятся через `segmentation_models_pytorch.Segformer` с `encoder_name="mit_b0"`, `"mit_b2"` или `"mit_b3"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Для SMP-вариантов wrapper `x / 255.0` не применяется, чтобы проверить старое поведение без смешивания с текущей Hugging Face реализацией.
 
 `smp_deeplabv3plus_resnet50` добавлен как один необходимый вариант DeepLabV3Plus для проверки старого MLSystem-compatible train path. Модель строится через `segmentation_models_pytorch.DeepLabV3Plus` с `encoder_name="resnet50"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Input tensor остается `[B,4,H,W]` в raw Geoalert-compatible диапазоне. Output - logits `[B,output_channels,H,W]`; activation внутри модели не применяется, а `train` сам выполняет sigmoid/cross entropy, loss и расчет метрик.
+
+`smp_unet_resnet34`, `smp_unet_resnet50`, `smp_unet_resnet101` и `smp_unet_resnet152` добавлены как необходимые архитектуры для UI запуска обучения. Они строятся через `segmentation_models_pytorch.Unet` с соответствующим `encoder_name`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Эти варианты не добавляют отдельной preprocessing-логики и используют тот же raw Geoalert-compatible tensor ABI, что и другие SMP-модели.
 
 Конфигурация `segformer_b0`: `depths=[2, 2, 2, 2]`, `hidden_sizes=[32, 64, 160, 256]`, `decoder_hidden_size=256`, pretrained источник `nvidia/segformer-b0-finetuned-ade-512-512`.
 

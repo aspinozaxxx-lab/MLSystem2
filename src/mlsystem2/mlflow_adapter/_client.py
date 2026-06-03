@@ -10,7 +10,49 @@ from mlsystem2.dataset_preparing.contracts import DatasetPreparationReport
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.contracts import PipelineReport, TimingReport
 
-from .contracts import MLflowAdapterError, MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
+from .contracts import (
+    MLflowAdapterError,
+    MLflowExperiment,
+    MLflowExperimentRequest,
+    MLflowRunRef,
+    MLflowRunStatus,
+    MLflowStartRunRequest,
+)
+
+
+def list_experiments(tracking_uri: str) -> list[MLflowExperiment]:
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        experiments = client.search_experiments()
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось получить список экспериментов MLflow") from exc
+    return [
+        MLflowExperiment(
+            experiment_id=experiment.experiment_id,
+            name=experiment.name,
+            lifecycle_stage=getattr(experiment, "lifecycle_stage", None),
+        )
+        for experiment in experiments
+    ]
+
+
+def create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment:
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(request.tracking_uri)
+        existing = mlflow.get_experiment_by_name(request.name)
+        if existing is not None:
+            return MLflowExperiment(
+                experiment_id=existing.experiment_id,
+                name=existing.name,
+                lifecycle_stage=getattr(existing, "lifecycle_stage", None),
+            )
+        experiment_id = mlflow.create_experiment(request.name)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось создать эксперимент MLflow") from exc
+    return MLflowExperiment(experiment_id=experiment_id, name=request.name, lifecycle_stage="active")
 
 
 def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:

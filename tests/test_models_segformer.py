@@ -16,6 +16,10 @@ def test_list_supported_models_returns_supported_architectures() -> None:
         "smp_segformer_b2",
         "smp_segformer_b3",
         "smp_deeplabv3plus_resnet50",
+        "smp_unet_resnet34",
+        "smp_unet_resnet50",
+        "smp_unet_resnet101",
+        "smp_unet_resnet152",
     ]
 
 
@@ -131,6 +135,35 @@ def test_create_smp_segformer_b3_forward() -> None:
 
     outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 1, 128, 128)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "spatial_size"),
+    [
+        ("smp_unet_resnet34", 64),
+        ("smp_unet_resnet50", 64),
+        ("smp_unet_resnet101", 64),
+        ("smp_unet_resnet152", 64),
+    ],
+)
+def test_create_smp_unet_forward(model_name: str, spatial_size: int) -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("segmentation_models_pytorch")
+
+    handle = create_model(
+        ModelSpec(
+            name=model_name,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+        )
+    )
+
+    handle.model.eval()
+    with torch.no_grad():
+        outputs = handle.model(torch.zeros((1, 4, spatial_size, spatial_size), dtype=torch.float32))
+
+    assert outputs.shape == (1, 1, spatial_size, spatial_size)
 
 
 def test_raw_input_wrapper_scales_uint8_range_to_unit_range() -> None:

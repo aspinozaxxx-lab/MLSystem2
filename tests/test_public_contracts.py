@@ -11,6 +11,8 @@ EXPECTED_API = {
     "metrics.api": ["compute_pixel_f1", "summarize_epoch_metrics"],
     "train.api": ["train_model"],
     "mlflow_adapter.api": [
+        "list_experiments",
+        "create_experiment",
         "start_run",
         "log_dataset_preparation",
         "log_tile_preparation",
@@ -25,6 +27,7 @@ EXPECTED_API = {
     "train_pipeline.api": ["run_train_pipeline"],
     "inference.api": ["run_inference"],
     "inference_pipeline.api": ["run_inference_pipeline"],
+    "training_ui_api.api": ["create_app", "get_openapi_schema", "main"],
 }
 
 

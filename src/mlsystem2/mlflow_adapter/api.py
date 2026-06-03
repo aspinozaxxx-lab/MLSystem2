@@ -9,6 +9,8 @@ from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.contracts import PipelineReport, TimingReport
 
 from ._client import end_run as _end_run
+from ._client import create_experiment as _create_experiment
+from ._client import list_experiments as _list_experiments
 from ._client import log_dataset_preparation as _log_dataset_preparation
 from ._client import log_pipeline_report as _log_pipeline_report
 from ._client import log_run_config as _log_run_config
@@ -18,7 +20,21 @@ from ._client import log_training_epoch as _log_training_epoch
 from ._client import log_training_artifacts as _log_training_artifacts
 from ._client import log_training_metrics as _log_training_metrics
 from ._client import start_run as _start_run
-from .contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
+from .contracts import (
+    MLflowExperiment,
+    MLflowExperimentRequest,
+    MLflowRunRef,
+    MLflowRunStatus,
+    MLflowStartRunRequest,
+)
+
+
+def list_experiments(tracking_uri: str) -> list[MLflowExperiment]:
+    return _list_experiments(tracking_uri)
+
+
+def create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment:
+    return _create_experiment(request)
 
 
 def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
@@ -62,6 +78,8 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
 
 
 __all__ = [
+    "list_experiments",
+    "create_experiment",
     "start_run",
     "log_dataset_preparation",
     "log_tile_preparation",

@@ -17,6 +17,12 @@ dependencies = [
   "rasterio",
   "shapely",
   "pyproj",
+  "fastapi",
+  "uvicorn",
+  "python-multipart",
+  "sqlalchemy>=2",
+  "alembic",
+  "psycopg[binary]",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +40,7 @@ dev = [
 [project.scripts]
 mlsystem2-train = "mlsystem2.cli.train:main"
 mlsystem2-infer = "mlsystem2.cli.infer:main"
+mlsystem2-training-ui-api = "mlsystem2.training_ui_api.api:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
