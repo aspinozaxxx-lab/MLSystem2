@@ -80,7 +80,9 @@ jobs:
             -e "${SSH_CMD}" \
             frontend/dist/ "${SERVER_USER}@${SERVER_HOST}:${FRONTEND_DIST_PATH}/"
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "printf '%s\n' '${GITHUB_SHA}' > '${TARGET_PATH}/DEPLOYED_COMMIT'"
-          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "cd '${TARGET_PATH}' && python -m alembic upgrade head"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "if [ ! -x '${TARGET_PATH}/.venv/bin/python' ]; then python3 -m venv '${TARGET_PATH}/.venv'; fi"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "cd '${TARGET_PATH}' && '${TARGET_PATH}/.venv/bin/python' -m pip install -e ."
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "cd '${TARGET_PATH}' && set -a && [ -f /etc/mlsystem2/training-ui-api.env ] && . /etc/mlsystem2/training-ui-api.env; set +a; '${TARGET_PATH}/.venv/bin/python' -m alembic upgrade head"
           if [ -n "${OLD_FRONTEND_SERVICE}" ]; then
             ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl disable --now '${OLD_FRONTEND_SERVICE}' || true"
           fi

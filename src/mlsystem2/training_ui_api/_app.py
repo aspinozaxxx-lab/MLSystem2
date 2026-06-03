@@ -324,6 +324,16 @@ def create_app() -> FastAPI:
     index_path = config.frontend_dist / "index.html"
     assets_path = config.frontend_dist / "assets"
     if index_path.is_file():
+        frontend_root = config.frontend_dist.resolve()
+
+        def frontend_file(frontend_path: str) -> Path | None:
+            candidate = (frontend_root / frontend_path).resolve()
+            try:
+                candidate.relative_to(frontend_root)
+            except ValueError:
+                return None
+            return candidate if candidate.is_file() else None
+
         if assets_path.is_dir():
             app.mount("/assets", StaticFiles(directory=assets_path), name="frontend-assets")
 
@@ -335,6 +345,8 @@ def create_app() -> FastAPI:
         def frontend_fallback(frontend_path: str) -> FileResponse:
             if frontend_path.startswith(("api/", "docs", "redoc", "openapi.json")):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+            if path := frontend_file(frontend_path):
+                return FileResponse(path)
             return FileResponse(index_path)
 
     return app

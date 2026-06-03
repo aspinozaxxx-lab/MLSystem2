@@ -16,6 +16,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     frontend_dist = tmp_path / "frontend" / "dist"
     (frontend_dist / "assets").mkdir(parents=True)
     (frontend_dist / "index.html").write_text("<!doctype html><title>MLSystem2</title>", encoding="utf-8")
+    (frontend_dist / "app.js").write_text("console.log('MLSystem2')", encoding="utf-8")
     (frontend_dist / "assets" / "app.css").write_text("body{margin:0}", encoding="utf-8")
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
@@ -30,6 +31,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     with TestClient(create_app()) as client:
         assert client.get("/api/v1/health").json()["status"] == "ok"
         assert client.get("/").text.startswith("<!doctype html>")
+        app_js = client.get("/app.js")
+        assert app_js.text == "console.log('MLSystem2')"
+        assert app_js.headers["content-type"].startswith("text/javascript")
         assert client.get("/assets/app.css").text == "body{margin:0}"
         unauthorized = client.get("/api/v1/datasets")
         assert unauthorized.status_code == 401

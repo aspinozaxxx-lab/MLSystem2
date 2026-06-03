@@ -24,6 +24,8 @@ def test_cd_workflow_updates_frontend_api_and_migrations() -> None:
     assert '"frontend/**"' in text
     assert "python frontend/build.py" in text
     assert "python -m alembic upgrade head" in text
+    assert ".venv/bin/python" in text
+    assert "-m pip install -e ." in text
     assert "systemctl restart '${TRAINING_UI_API_SERVICE}'" in text
     assert "curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}'" in text
 
