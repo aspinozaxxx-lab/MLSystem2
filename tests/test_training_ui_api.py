@@ -19,7 +19,7 @@ from mlsystem2.training_ui_api.contracts import JobStatus, ResultStatus, Trainin
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
-    class_dir = mlmarkup_root / "Вырубки"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
     (class_dir / "deforestation.txt").write_text("scene-1\n", encoding="utf-8")
     (class_dir / "deforestation.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
@@ -60,14 +60,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert proxy_check.headers["x-remote-user"] == "mluser"
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
-        assert [item["name"] for item in datasets] == ["Вырубки", "Custom"]
+        assert [item["name"] for item in datasets] == ["Вырубки\\main", "Custom"]
 
-        new_dir = mlmarkup_root / "Пожары"
-        new_dir.mkdir()
+        new_dir = mlmarkup_root / "Пожары" / "main"
+        new_dir.mkdir(parents=True)
         (new_dir / "fires.txt").write_text("scene-2\n", encoding="utf-8")
         (new_dir / "fires.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
         refreshed = client.get("/api/v1/datasets").json()["datasets"]
-        assert [item["name"] for item in refreshed] == ["Вырубки", "Пожары", "Custom"]
+        assert [item["name"] for item in refreshed] == ["Вырубки\\main", "Пожары\\main", "Custom"]
 
         models = client.get("/api/v1/models").json()["models"]
         assert [item["display_name"] for item in models] == [
@@ -141,14 +141,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         training_result_id = custom_results["results"][0]["id"]
         pseudo = client.post(
             "/api/v1/results/classes/custom/pseudo-markup",
-            data={"dataset_key": "Вырубки", "training_result_id": training_result_id},
+            data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
         ).json()
         assert pseudo["type"] == "inference"
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
         assert len(inference_queue) == 1
         pseudo_with_empty_upload = client.post(
             "/api/v1/results/classes/custom/pseudo-markup",
-            data={"dataset_key": "Вырубки", "training_result_id": training_result_id},
+            data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
             files={"scenes_txt": ("", b"", "application/octet-stream")},
         ).json()
         assert pseudo_with_empty_upload["type"] == "inference"
@@ -163,7 +163,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
 
 def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
-    class_dir = mlmarkup_root / "Вырубки"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
     (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
     (class_dir / "annotation.geojson").write_text(
@@ -200,7 +200,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                 mlflow_experiment_id="1",
                 mlflow_experiment_name="ui-test",
                 mlflow_run_name="worker-test",
-                dataset_key="Вырубки",
+                dataset_key="Вырубки\\main",
                 architecture="smp_segformer_b2",
                 config={
                     "dataset.val_fraction": 0.2,
@@ -254,7 +254,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
 
 def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
-    class_dir = mlmarkup_root / "Вырубки"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
     (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
     (class_dir / "annotation.geojson").write_text(
@@ -303,7 +303,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
                 mlflow_experiment_id="1",
                 mlflow_experiment_name="ui-test",
                 mlflow_run_name="worker-test",
-                dataset_key="Вырубки",
+                dataset_key="Вырубки\\main",
                 architecture="smp_segformer_b2",
                 config={
                     "dataset.val_fraction": 0.2,
@@ -363,8 +363,8 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         monkeypatch.setattr(_service, "get_best_training_checkpoint", fake_best_checkpoint)
         pseudo_job = _service.create_pseudo_markup_job(
             session,
-            class_key="Вырубки",
-            dataset_key="Вырубки",
+            class_key="Вырубки\\main",
+            dataset_key="Вырубки\\main",
             training_result_id=result.id,
             scenes_name=None,
             scenes_content_type=None,
@@ -408,7 +408,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         completed_pseudo = session.get(JobRow, pseudo_job.id)
         assert completed_pseudo is not None
         assert completed_pseudo.status == JobStatus.COMPLETED.value
-        refreshed_results = _service.class_results(session, "Вырубки", config)
+        refreshed_results = _service.class_results(session, "Вырубки\\main", config)
         pseudo_results = refreshed_results.results[0].pseudo_markup_results
         assert pseudo_results[0].status == ResultStatus.OK
         assert pseudo_results[0].geojson_file is not None

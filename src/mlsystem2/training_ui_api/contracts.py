@@ -77,6 +77,10 @@ class DatasetInfo(BaseModel):
 
     key: str
     name: str
+    class_key: str | None = None
+    class_name: str | None = None
+    variant_key: str | None = None
+    variant_name: str | None = None
     path: str | None = None
     is_custom: bool = False
     scenes_file: str | None = None
@@ -96,6 +100,7 @@ class ClassInfo(BaseModel):
     key: str
     name: str
     updated_at: datetime | None = None
+    variants: list[DatasetInfo] = Field(default_factory=list)
     is_custom: bool = False
 
 
@@ -334,4 +339,3 @@ __all__ = [
     "TrainingTemplateUpdate",
     "TrainingUIAPIError",
 ]
-

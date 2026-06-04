@@ -53,9 +53,12 @@
 
 OpenAPI доступен стандартно по `/openapi.json`.
 
-`GET /api/v1/datasets`, `GET /api/v1/classes` и `GET /api/v1/results/classes` заполняют `updated_at`
-по последнему git-коммиту, затронувшему папку конкретного датасета в `MLSYSTEM2_MLMARKUP_ROOT`. Если
-`MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem mtime как fallback.
+`GET /api/v1/datasets` возвращает плоский список вариантов датасетов MLMarkup с ключами и именами вида
+`Класс\вариант`, например `Вырубки\main`. `GET /api/v1/classes` и `GET /api/v1/results/classes`
+возвращают классы с вложенным списком `variants`; frontend не выбирает класс целиком, а открывает конкретный
+вариант. `updated_at` у варианта заполняется по последнему git-коммиту, затронувшему папку варианта в
+`MLSYSTEM2_MLMARKUP_ROOT`. Если `MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem
+mtime как fallback.
 
 Для reverse proxy дополнительно есть совместимый endpoint `GET /auth/proxy-check`: он не входит в OpenAPI,
 возвращает `204` и `X-Remote-User` для авторизованной cookie-сессии, иначе `401`.

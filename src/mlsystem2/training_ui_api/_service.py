@@ -24,7 +24,7 @@ from mlsystem2.mlflow_adapter.contracts import (
 from mlsystem2.models.api import list_supported_models
 
 from ._config import TrainingUIAPIConfig
-from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_class, list_classes, list_datasets
+from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_dataset, list_classes, list_datasets
 from ._models import (
     CustomDatasetRow,
     JobRow,
@@ -39,7 +39,6 @@ from ._worker import terminate_job_process
 from .contracts import (
     AppLink,
     AppLinksResponse,
-    ClassInfo,
     ClassListResponse,
     ClassResultsResponse,
     ConfigSchema,
@@ -363,18 +362,18 @@ def class_results(
     class_key: str,
     config: TrainingUIAPIConfig,
 ) -> ClassResultsResponse:
-    class_info = find_class(config.mlmarkup_root, class_key)
-    if class_info is None:
-        class_info = ClassInfo(key=class_key, name=class_key)
+    dataset_info = find_dataset(config.mlmarkup_root, class_key)
+    if dataset_info is None:
+        dataset_info = DatasetInfo(key=class_key, name=class_key)
     rows = session.scalars(
         select(TrainingResultRow)
         .where(TrainingResultRow.class_key == class_key)
         .order_by(TrainingResultRow.created_at.desc())
     ).all()
     return ClassResultsResponse(
-        class_key=class_info.key,
-        class_name=class_info.name,
-        dataset_updated_at=class_info.updated_at,
+        class_key=dataset_info.key,
+        class_name=dataset_info.name,
+        dataset_updated_at=dataset_info.updated_at,
         results=[_training_result_info(session, row) for row in rows],
     )
 
@@ -391,8 +390,8 @@ def create_pseudo_markup_job(
     config: TrainingUIAPIConfig,
 ) -> JobDetail:
     dataset_key = (dataset_key or "").strip() or None
-    class_info = find_class(config.mlmarkup_root, class_key)
-    class_name = class_info.name if class_info else class_key
+    class_dataset = find_dataset(config.mlmarkup_root, class_key)
+    class_name = class_dataset.name if class_dataset else class_key
     training_result = _resolve_training_result(session, training_result_id)
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME

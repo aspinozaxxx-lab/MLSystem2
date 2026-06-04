@@ -109,6 +109,44 @@ a { color: var(--blue); }
 .card.active:hover { border-color: var(--blue); }
 .card.group { border-left: 4px solid var(--violet); }
 
+.result-card {
+  gap: 16px;
+}
+
+.variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variant-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fbff;
+  text-decoration: none;
+}
+
+.variant-link span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.variant-link small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.variant-link:hover {
+  border-color: var(--blue);
+  background: var(--blue-2);
+}
+
 .panel { margin-bottom: 20px; }
 
 .panel-header {
@@ -438,4 +476,3 @@ th {
   .hero h1 { font-size: 32px; }
   th, td { padding: 8px; }
 }
-

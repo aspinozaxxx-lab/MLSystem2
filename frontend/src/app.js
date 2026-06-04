@@ -499,20 +499,32 @@ function renderResultsPage() {
   renderShell(`
     <section class="hero compact-hero">
       <h1>Результаты</h1>
-      <p>Классы из MLMarkup и Custom</p>
+      <p>Классы и варианты датасетов из MLMarkup</p>
     </section>
     <section class="grid">
-      ${state.classes.map((item) => `
-        <a class="card active" href="#/results/${encodeURIComponent(item.key)}">
-          <div>
-            <h2>${escapeHtml(item.name)}</h2>
-            <p>Последнее обновление: ${formatDate(item.updated_at) || "нет данных"}</p>
-          </div>
-          <span class="secondary">Открыть</span>
-        </a>
-      `).join("")}
+      ${state.classes.map(renderResultClassCard).join("")}
     </section>
   `);
+}
+
+function renderResultClassCard(item) {
+  const variants = item.variants && item.variants.length ? item.variants : [item];
+  return `
+    <article class="card result-card">
+      <div>
+        <h2>${escapeHtml(item.name)}</h2>
+        <p>Варианты датасета</p>
+      </div>
+      <div class="variant-list">
+        ${variants.map((variant) => `
+          <a class="variant-link" href="#/results/${encodeURIComponent(variant.key)}">
+            <span>${escapeHtml(variant.variant_name || variant.name)}</span>
+            <small>${formatDate(variant.updated_at) || "нет данных"}</small>
+          </a>
+        `).join("")}
+      </div>
+    </article>
+  `;
 }
 
 async function renderClassResultPage(classKey) {
