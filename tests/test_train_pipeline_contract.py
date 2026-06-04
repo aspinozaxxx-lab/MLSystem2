@@ -190,7 +190,7 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     settings = settings.model_copy(
         update={
             "dataset": settings.dataset.model_copy(
-                update={"split_granularity": "tile", "negative_scene_limit": 2}
+                update={"negative_scene_limit": 2}
             )
         }
     )
@@ -204,22 +204,22 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     dataset_request = _runner._dataset_request(settings)
     tile_split = _runner._tile_split_request(settings)
     train_request = _runner._tile_request(
-        _runner._train_vrt_xml(settings, prepared),
+        _runner._dataset_vrt_xml(prepared),
         prepared,
         2,
         "train",
         tile_split,
     )
     val_request = _runner._tile_request(
-        _runner._val_vrt_xml(settings, prepared),
+        _runner._dataset_vrt_xml(prepared),
         prepared,
         2,
         "val",
         tile_split,
     )
 
-    assert dataset_request.split_granularity == "tile"
     assert dataset_request.negative_scene_limit == 2
+    assert not hasattr(dataset_request, "split_granularity")
     assert tile_split is not None
     assert tile_split.val_fraction == settings.dataset.val_fraction
     assert tile_split.seed == settings.tile_preparation.seed

@@ -19,7 +19,6 @@ from ._scene_matching import (
     index_image_files,
     read_scene_list,
 )
-from ._split import split_train_val_by_object_counts
 from ._vrt import build_vrt_xml
 from .contracts import (
     DatasetClassAnnotation,
@@ -119,30 +118,15 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         negative_scene_limit=request.negative_scene_limit,
         seed=SPLIT_SEED,
     )
-    split = (
-        split_train_val_by_object_counts(
-            selection.rows,
-            target_val_fraction=request.val_fraction,
-            seed=SPLIT_SEED,
-        )
-        if request.split_granularity == "scene"
-        else None
-    )
-    train_scene_ids = [row.scene_name for row in split.train] if split is not None else []
-    val_scene_ids = [row.scene_name for row in split.val] if split is not None else []
-    train_names = set(train_scene_ids)
-    val_names = set(val_scene_ids)
     pool_scene_ids = [row.scene_name for row in selection.rows]
-    pool_names = set(pool_scene_ids) if request.split_granularity == "tile" else set()
+    train_names: set[str] = set()
+    val_names: set[str] = set()
+    pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
     elif not selection.rows:
         errors.append("После отбора сцен датасет пуст.")
-    elif request.split_granularity == "scene" and split is not None and (
-        not split.train or not split.val
-    ):
-        errors.append("Недостаточно найденных сцен для построения train и val VRT.")
 
     selected_scene_to_image = {
         scene: scene_to_image[scene]
@@ -157,14 +141,9 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
     if not errors and validation is not None:
         raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
         try:
-            if request.split_granularity == "tile":
-                pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
-                train_vrt_xml = pool_vrt_xml
-                val_vrt_xml = pool_vrt_xml
-            else:
-                pool_vrt_xml = None
-                train_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in train_scene_ids])
-                val_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in val_scene_ids])
+            pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
+            train_vrt_xml = pool_vrt_xml
+            val_vrt_xml = pool_vrt_xml
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Не удалось построить VRT: {exc}")
         else:
@@ -184,7 +163,6 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
-        split_granularity=request.split_granularity,
         negative_scene_limit=request.negative_scene_limit,
         selected_positive_scenes_count=selection.positive_count,
         selected_negative_scenes_count=selection.negative_count,
@@ -297,30 +275,15 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         negative_scene_limit=request.negative_scene_limit,
         seed=SPLIT_SEED,
     )
-    split = (
-        split_train_val_by_object_counts(
-            selection.rows,
-            target_val_fraction=request.val_fraction,
-            seed=SPLIT_SEED,
-        )
-        if request.split_granularity == "scene"
-        else None
-    )
-    train_scene_ids = [row.scene_name for row in split.train] if split is not None else []
-    val_scene_ids = [row.scene_name for row in split.val] if split is not None else []
-    train_names = set(train_scene_ids)
-    val_names = set(val_scene_ids)
     pool_scene_ids = [row.scene_name for row in selection.rows]
-    pool_names = set(pool_scene_ids) if request.split_granularity == "tile" else set()
+    train_names: set[str] = set()
+    val_names: set[str] = set()
+    pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
     elif not selection.rows:
         errors.append("После отбора сцен датасет пуст.")
-    elif request.split_granularity == "scene" and split is not None and (
-        not split.train or not split.val
-    ):
-        errors.append("Недостаточно найденных сцен для построения train и val VRT.")
 
     selected_scene_to_image = {
         scene: scene_to_image[scene]
@@ -335,14 +298,9 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     if not errors and validation is not None:
         raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
         try:
-            if request.split_granularity == "tile":
-                pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
-                train_vrt_xml = pool_vrt_xml
-                val_vrt_xml = pool_vrt_xml
-            else:
-                pool_vrt_xml = None
-                train_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in train_scene_ids])
-                val_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in val_scene_ids])
+            pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
+            train_vrt_xml = pool_vrt_xml
+            val_vrt_xml = pool_vrt_xml
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Не удалось построить VRT: {exc}")
         else:
@@ -372,7 +330,6 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
-        split_granularity=request.split_granularity,
         negative_scene_limit=request.negative_scene_limit,
         selected_positive_scenes_count=selection.positive_count,
         selected_negative_scenes_count=selection.negative_count,
@@ -566,7 +523,6 @@ def _build_report(
     missing_files: list[str],
     errors: list[str],
     pool_names: set[str] | None = None,
-    split_granularity: str = "scene",
     negative_scene_limit: int | None = None,
     selected_positive_scenes_count: int = 0,
     selected_negative_scenes_count: int = 0,
@@ -586,7 +542,6 @@ def _build_report(
     val_objects = sum(item.object_count for item in scene_reports if item.split == "val")
     return DatasetPreparationReport(
         status="error" if errors else "ok",
-        split_granularity=split_granularity,
         negative_scene_limit=negative_scene_limit,
         selected_positive_scenes_count=selected_positive_scenes_count,
         selected_negative_scenes_count=selected_negative_scenes_count,

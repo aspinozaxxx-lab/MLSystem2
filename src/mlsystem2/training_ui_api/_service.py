@@ -34,7 +34,7 @@ from ._models import (
     TrainingResultRow,
     TrainingTemplateRow,
 )
-from ._templates import initial_templates
+from ._templates import initial_templates, sanitize_template_config
 from ._worker import terminate_job_process
 from .contracts import (
     AppLink,
@@ -138,11 +138,24 @@ def models() -> ModelListResponse:
 
 
 def ensure_seed_templates(session: Session) -> None:
-    existing = set(session.scalars(select(TrainingTemplateRow.architecture)).all())
+    existing = {
+        row.architecture: row
+        for row in session.scalars(select(TrainingTemplateRow)).all()
+    }
     for payload in initial_templates():
-        if payload["architecture"] in existing:
+        row = existing.get(payload["architecture"])
+        if row is None:
+            session.add(TrainingTemplateRow(**payload))
             continue
-        session.add(TrainingTemplateRow(**payload))
+        row.config_schema = payload["config_schema"]
+        row.default_config = sanitize_template_config(
+            row.default_config,
+            fallback=payload["default_config"],
+        )
+        row.baseline_default_config = sanitize_template_config(
+            row.baseline_default_config,
+            fallback=payload["baseline_default_config"],
+        )
     _ensure_queue_control(session, JobType.TRAINING)
     _ensure_queue_control(session, JobType.INFERENCE)
 
@@ -177,7 +190,10 @@ def update_training_template(
         row.version += 1
     else:
         if request.default_config is not None:
-            row.default_config = request.default_config
+            row.default_config = sanitize_template_config(
+                request.default_config,
+                fallback=row.default_config,
+            )
             row.source = TemplateSource.MANUAL.value
             row.source_mlflow_run_id = None
             row.version += 1
@@ -236,7 +252,14 @@ def create_training_job(
     ensure_seed_templates(session)
     dataset = _resolve_dataset_name(session, request.dataset_key, request.custom_dataset_id, config)
     model_name = MODEL_DISPLAY_NAMES.get(request.architecture, request.architecture)
-    tile_size = _int_or_none(request.config.get("tile_preparation.tile_size"))
+    template_row = session.scalar(
+        select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == request.architecture)
+    )
+    job_config = sanitize_template_config(
+        request.config,
+        fallback=template_row.default_config if template_row is not None else None,
+    )
+    tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
         type=JobType.TRAINING.value,
         status=JobStatus.QUEUED.value,
@@ -249,7 +272,7 @@ def create_training_job(
         mlflow_experiment_id=request.mlflow_experiment_id,
         mlflow_experiment_name=request.mlflow_experiment_name,
         mlflow_run_name=request.mlflow_run_name,
-        config=request.config,
+        config=job_config,
         custom_dataset_id=request.custom_dataset_id,
     )
     session.add(row)

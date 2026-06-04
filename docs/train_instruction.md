@@ -13,7 +13,7 @@
 - Датасет: двоичный или многоклассовый.
 - Пути к снимкам и разметке.
 - `model_name`.
-- Основные параметры обучения: размер тайла, шаг тайла, размер батча, эпохи, learning rate, loss, threshold, seed, лимиты batch/time.
+- Основные параметры обучения: размер тайла, шаг тайла, размер батча, эпохи, learning rate, loss и threshold.
 - Нужно ли стартовать с существующего чекпойнта.
 - Имя эксперимента MLflow.
 - Рабочая runtime-папка для scratch и logs.
@@ -39,7 +39,6 @@
 
 ```text
 configs/example.server.yaml
-configs/multiclass.example.server.yaml
 ```
 
 Основной CLI по архитектуре:
@@ -76,7 +75,7 @@ SegFormer B2, вырубки, tiles 512/768:
   лучший trial: 0050
   run id: 6b1d18d8ac1249088b8577d75777a5a2
   чекпойнт: /opt/mlsystem2/runtime/hpo/segformer_b2_tiles_512_768_2805/scratch/trial_0050/checkpoints/best.pt
-  параметры: smp_segformer_b2, tile 512, stride 256, batch 8, lr 1.5e-7, focal_tversky, tversky 0.4/0.6, focal_alpha 0.6, augmentation_level 2, positive_factor 0.9, val_positive_factor 0.5, weight_decay 1e-4.
+  параметры: smp_segformer_b2, tile 512, stride 256, batch 8, lr 1.5e-7, focal_tversky, tversky 0.4/0.6, focal_alpha 0.6, augmentation_level 2, positive_factor 0.9, weight_decay 1e-4.
 
 DeepLabV3+ ResNet50, вырубки:
   отчет: /opt/hpo/report/deeplab_v3_2705/best_trials.md
@@ -187,14 +186,9 @@ dataset:
   scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
   annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
   val_fraction: 0.2
-  split_granularity: scene
-  negative_scene_limit: null
 
 train:
-  task: binary
   model_name: smp_segformer_b2
-  input_channels: 4
-  output_channels: 1
 ```
 
 Для дообучения укажи:
@@ -216,7 +210,7 @@ train:
 - `background = 0`, классы получают id по порядку в YAML.
 - `priority` влияет на перекрытия: больший приоритет перекрывает меньший.
 
-Стартовый пример смотри в `configs/multiclass.example.server.yaml`.
+Многоклассовый режим остается внутренним режимом модулей и не используется сайтом запуска обучения.
 
 ## 7. Параметры, которые обычно задаются оператором
 
@@ -226,19 +220,12 @@ train:
 tile_preparation:
   tile_size: 512
   stride: 256
-  num_workers: 16
-  prefetch_factor: 2
-  seed: 42
   augmentation_level: 2
-  smart_tiling: true
   positive_factor: 0.8
-  val_positive_factor: null
-  class_balance: false
 
 train:
   epochs: 80
   batch_size: 8
-  device: cuda
   learning_rate: 0.00000015
   weight_decay: 0.0001
   loss: focal_tversky
@@ -248,12 +235,9 @@ train:
   tversky_beta: 0.6
   threshold: 0.8
   early_stopping_patience: 10
-  max_train_batches_per_epoch: 256
-  max_val_batches_per_epoch: 1000
-  max_training_time_sec: null
 ```
 
-`val_positive_factor` полезен для диагностической взвешенной валидации, но для честной финальной оценки лучше `null`, полный или последовательный val loader и без искусственного баланса.
+Воркеры, prefetch, seed, smart tiling, device, binary task и каналы модели задаются defaults модулей. Диагностические лимиты batch/time не используются в обычном запуске.
 
 ## 8. Создание runtime-конфига
 

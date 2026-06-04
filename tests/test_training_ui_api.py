@@ -84,6 +84,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert len(templates) == 7
         segformer_template = client.get("/api/v1/training-templates/smp_segformer_b2").json()
         assert segformer_template["source"] == "hpo_best"
+        template_keys = {item["key"] for item in segformer_template["config_schema"]["fields"]}
+        assert "dataset.split_granularity" not in template_keys
+        assert "tile_preparation.num_workers" not in template_keys
+        assert "train.device" not in template_keys
+        loss_field = next(
+            item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
+        )
+        assert loss_field["options"] == ["bce_dice", "focal_dice", "focal_tversky"]
         changed_config = dict(segformer_template["default_config"])
         changed_config["train.batch_size"] = 3
         updated = client.put(
@@ -129,6 +137,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()
         assert job["status"] == "queued"
         assert job["dataset_name"] == "Custom"
+        assert "train.device" not in job["config"]
+        assert "dataset.split_granularity" not in job["config"]
 
         queues = client.get("/api/v1/queues").json()
         assert queues["training_enabled"] is True
@@ -204,23 +214,12 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                 architecture="smp_segformer_b2",
                 config={
                     "dataset.val_fraction": 0.2,
-                    "dataset.split_granularity": "scene",
                     "tile_preparation.tile_size": 32,
                     "tile_preparation.stride": 32,
-                    "tile_preparation.num_workers": 0,
-                    "tile_preparation.prefetch_factor": 2,
-                    "tile_preparation.seed": 42,
                     "tile_preparation.augmentation_level": 0,
-                    "tile_preparation.smart_tiling": False,
                     "tile_preparation.positive_factor": 0.5,
-                    "tile_preparation.class_balance": False,
-                    "train.task": "binary",
-                    "train.input_channels": 4,
-                    "train.output_channels": 1,
-                    "train.pretrained": False,
                     "train.epochs": 1,
                     "train.batch_size": 1,
-                    "train.device": "cpu",
                     "train.learning_rate": 0.0001,
                     "train.weight_decay": 0.0,
                     "train.loss": "bce_dice",
@@ -245,6 +244,10 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         run_dir = Path(row.tmp_path)
         assert (run_dir / "config.yaml").is_file()
         assert (run_dir / "run_training.sh").is_file()
+        config_yaml = (run_dir / "config.yaml").read_text(encoding="utf-8")
+        assert "split_granularity" not in config_yaml
+        assert "num_workers" not in config_yaml
+        assert "input_channels" not in config_yaml
 
     assert started
     assert started[0][0][0] == "bash"
@@ -307,23 +310,12 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
                 architecture="smp_segformer_b2",
                 config={
                     "dataset.val_fraction": 0.2,
-                    "dataset.split_granularity": "scene",
                     "tile_preparation.tile_size": 32,
                     "tile_preparation.stride": 32,
-                    "tile_preparation.num_workers": 0,
-                    "tile_preparation.prefetch_factor": 2,
-                    "tile_preparation.seed": 42,
                     "tile_preparation.augmentation_level": 0,
-                    "tile_preparation.smart_tiling": False,
                     "tile_preparation.positive_factor": 0.5,
-                    "tile_preparation.class_balance": False,
-                    "train.task": "binary",
-                    "train.input_channels": 4,
-                    "train.output_channels": 1,
-                    "train.pretrained": False,
                     "train.epochs": 1,
                     "train.batch_size": 1,
-                    "train.device": "cpu",
                     "train.learning_rate": 0.0001,
                     "train.weight_decay": 0.0,
                     "train.loss": "bce_dice",

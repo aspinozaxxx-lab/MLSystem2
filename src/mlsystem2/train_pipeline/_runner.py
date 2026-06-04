@@ -154,7 +154,7 @@ def run_train_pipeline(
             lambda: (
                 deps.create_tile_dataloader(
                     _tile_request(
-                        _train_vrt_xml(settings, dataset_result.dataset),
+                        _dataset_vrt_xml(dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "train",
@@ -163,7 +163,7 @@ def run_train_pipeline(
                 ),
                 deps.create_tile_dataloader(
                     _tile_request(
-                        _val_vrt_xml(settings, dataset_result.dataset),
+                        _dataset_vrt_xml(dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "val",
@@ -293,7 +293,6 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in settings.dataset.classes
             ],
             val_fraction=settings.dataset.val_fraction,
-            split_granularity=settings.dataset.split_granularity,
             negative_scene_limit=settings.dataset.negative_scene_limit,
         )
     return DatasetPreparationRequest(
@@ -301,26 +300,15 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
         val_fraction=settings.dataset.val_fraction,
-        split_granularity=settings.dataset.split_granularity,
         negative_scene_limit=settings.dataset.negative_scene_limit,
     )
 
 
-def _train_vrt_xml(settings: SystemSettings, dataset: PreparedDataset) -> str:
-    if settings.dataset.split_granularity == "tile" and dataset.pool_vrt_xml is not None:
-        return dataset.pool_vrt_xml
-    return dataset.train_vrt_xml
+def _dataset_vrt_xml(dataset: PreparedDataset) -> str:
+    return dataset.pool_vrt_xml or dataset.train_vrt_xml
 
 
-def _val_vrt_xml(settings: SystemSettings, dataset: PreparedDataset) -> str:
-    if settings.dataset.split_granularity == "tile" and dataset.pool_vrt_xml is not None:
-        return dataset.pool_vrt_xml
-    return dataset.val_vrt_xml
-
-
-def _tile_split_request(settings: SystemSettings) -> TileSplitRequest | None:
-    if settings.dataset.split_granularity != "tile":
-        return None
+def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
         seed=settings.tile_preparation.seed,
@@ -514,7 +502,6 @@ def _tile_preparation_report(
     val_loader: _CountingLoader,
 ) -> dict[str, object]:
     return {
-        "split_granularity": settings.dataset.split_granularity,
         "negative_scene_limit": settings.dataset.negative_scene_limit,
         "tile_size": settings.tile_preparation.tile_size,
         "stride": settings.tile_preparation.stride,

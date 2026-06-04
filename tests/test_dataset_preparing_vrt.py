@@ -34,6 +34,9 @@ def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
 
     assert result.report.status == "ok"
     assert result.dataset is not None
+    assert result.dataset.pool_vrt_xml is not None
+    assert result.dataset.train_vrt_xml == result.dataset.pool_vrt_xml
+    assert result.dataset.val_vrt_xml == result.dataset.pool_vrt_xml
     assert result.dataset.train_vrt_xml.startswith("<VRTDataset")
     assert "<VRTDataset" in result.dataset.val_vrt_xml
     assert max(
@@ -126,7 +129,6 @@ def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
         scenes_file=str(scenes_file),
         annotation_file=str(annotation_file),
         val_fraction=0.5,
-        split_granularity="tile",
         negative_scene_limit=1,
     )
     first = prepare_dataset(request)
@@ -137,7 +139,6 @@ def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
     assert first.dataset.pool_vrt_xml is not None
     assert first.dataset.train_vrt_xml == first.dataset.pool_vrt_xml
     assert first.dataset.val_vrt_xml == first.dataset.pool_vrt_xml
-    assert first.report.split_granularity == "tile"
     assert first.report.negative_scene_limit == 1
     assert first.report.selected_positive_scenes_count == 2
     assert first.report.selected_negative_scenes_count == 1
@@ -180,7 +181,6 @@ def test_prepare_dataset_tile_mode_limits_multiclass_negative_scenes(
                 ),
             ],
             val_fraction=0.5,
-            split_granularity="tile",
             negative_scene_limit=1,
         )
     )
@@ -276,7 +276,6 @@ def test_prepare_dataset_expands_folder_scene_entry(tmp_path: Path) -> None:
             scenes_file=str(scenes_file),
             annotation_file=str(annotation_file),
             val_fraction=0.5,
-            split_granularity="tile",
         )
     )
 
@@ -309,7 +308,6 @@ def test_prepare_dataset_resolves_ambiguous_scene_by_annotation_geometry(tmp_pat
             scenes_file=str(scenes_file),
             annotation_file=str(annotation_file),
             val_fraction=0.5,
-            split_granularity="tile",
         )
     )
 

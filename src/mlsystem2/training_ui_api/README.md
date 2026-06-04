@@ -76,15 +76,17 @@ mtime как fallback.
 - `pseudo_markup_results`
 
 Шаблон хранит `config_schema` и `default_config` в JSONB. `default_config` использует ключи вида
-`train.learning_rate`, `tile_preparation.tile_size`; это имена параметров YAML config-файла.
+`train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
+Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
+`settings` и не сохраняются в UI-шаблонах.
 
 ## Границы
 
 Frontend не обращается к Postgres. Сервис не импортирует приватные модули MLSystem2 и берет список
 моделей только из `models.api`, а данные MLflow только из `mlflow_adapter.api`.
 
-Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует YAML config
-из сохраненных параметров, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
+Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует короткий
+YAML config из сохраненных параметров и модульных defaults, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
 процессом и обновляет статусы jobs/results по exit code. Pause/delete отправляют SIGTERM группе процесса и
 очищают временную папку job.
 

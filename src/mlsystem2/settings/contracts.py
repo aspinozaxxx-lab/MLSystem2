@@ -38,7 +38,6 @@ class DatasetSettings(BaseModel):
     annotation_file: str | None = None
     classes: list[DatasetClassSettings] = Field(default_factory=list)
     val_fraction: float = Field(gt=0.0, lt=1.0)
-    split_granularity: Literal["scene", "tile"] = "scene"
     negative_scene_limit: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
@@ -74,7 +73,7 @@ class TilePreparationSettings(BaseModel):
     prefetch_epochs: float | None = Field(default=None, gt=0.0)
     seed: int = 42
     augmentation_level: int = Field(default=0, ge=0, le=3)
-    smart_tiling: bool = False
+    smart_tiling: bool = True
     positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
     val_positive_factor: float | None = Field(default=None, gt=0.0, lt=1.0)
     class_balance: bool = False
@@ -91,13 +90,13 @@ class TrainSettings(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     model_name: str
-    input_channels: int = Field(gt=0)
-    output_channels: int = Field(gt=0)
+    input_channels: int = Field(default=4, gt=0)
+    output_channels: int = Field(default=1, gt=0)
     pretrained: bool = False
     initial_checkpoint_uri: str | None = None
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
-    device: str
+    device: str = "cuda"
     learning_rate: float = Field(gt=0.0)
     weight_decay: float = Field(ge=0.0)
     loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]

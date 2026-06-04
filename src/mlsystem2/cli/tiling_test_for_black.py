@@ -209,7 +209,6 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in dataset.classes
             ],
             val_fraction=dataset.val_fraction,
-            split_granularity=dataset.split_granularity,
             negative_scene_limit=dataset.negative_scene_limit,
         )
     return DatasetPreparationRequest(
@@ -217,7 +216,6 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         scenes_file=dataset.scenes_file,
         annotation_file=dataset.annotation_file,
         val_fraction=dataset.val_fraction,
-        split_granularity=dataset.split_granularity,
         negative_scene_limit=dataset.negative_scene_limit,
     )
 
@@ -230,7 +228,7 @@ def _tile_request(
     split: Literal["train", "val"],
 ) -> TileDataloaderRequest:
     kwargs: dict[str, Any] = {
-        "vrt_xml": _vrt_xml(settings, dataset, split),
+        "vrt_xml": _vrt_xml(dataset, split),
         "batch_size": batch_size,
         "mode": split,
         "tile_split": _tile_split(settings),
@@ -252,18 +250,13 @@ def _tile_request(
 
 
 def _vrt_xml(
-    settings: SystemSettings,
     dataset: PreparedDataset,
     split: Literal["train", "val"],
 ) -> str:
-    if settings.dataset.split_granularity == "tile" and dataset.pool_vrt_xml is not None:
-        return dataset.pool_vrt_xml
-    return dataset.train_vrt_xml if split == "train" else dataset.val_vrt_xml
+    return dataset.pool_vrt_xml or (dataset.train_vrt_xml if split == "train" else dataset.val_vrt_xml)
 
 
-def _tile_split(settings: SystemSettings) -> TileSplitRequest | None:
-    if settings.dataset.split_granularity != "tile":
-        return None
+def _tile_split(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
         seed=settings.tile_preparation.seed,

@@ -274,7 +274,6 @@ def _build_training_config(
     run_dir: Path,
 ) -> dict[str, Any]:
     flat = dict(row.config or {})
-    train_device = str(_flat_value(flat, "train.device", "cuda"))
     train_batch_size = _int_value(flat, "train.batch_size", 1)
     train_threshold = _float_value(flat, "train.threshold", 0.5)
     return {
@@ -287,34 +286,20 @@ def _build_training_config(
         "dataset": {
             **_dataset_config(session, row, config),
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
-            "split_granularity": str(_flat_value(flat, "dataset.split_granularity", "scene")),
-            "negative_scene_limit": _optional_int(flat, "dataset.negative_scene_limit"),
         },
         "tile_preparation": {
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
-            "num_workers": _int_value(flat, "tile_preparation.num_workers", 16),
-            "prefetch_factor": _int_value(flat, "tile_preparation.prefetch_factor", 2),
-            "prefetch_epochs": _optional_float(flat, "tile_preparation.prefetch_epochs"),
-            "seed": _int_value(flat, "tile_preparation.seed", 42),
             "augmentation_level": _int_value(flat, "tile_preparation.augmentation_level", 0),
-            "smart_tiling": _bool_value(flat, "tile_preparation.smart_tiling", False),
             "positive_factor": _float_value(flat, "tile_preparation.positive_factor", 0.5),
-            "val_positive_factor": _optional_float(flat, "tile_preparation.val_positive_factor"),
-            "class_balance": _bool_value(flat, "tile_preparation.class_balance", False),
         },
         "train": {
-            "task": str(_flat_value(flat, "train.task", "binary")),
             "model_name": row.architecture,
-            "input_channels": _int_value(flat, "train.input_channels", 4),
-            "output_channels": _int_value(flat, "train.output_channels", 1),
-            "pretrained": _bool_value(flat, "train.pretrained", False),
             "initial_checkpoint_uri": _blank_to_none(
                 _flat_value(flat, "train.initial_checkpoint_uri", None)
             ),
             "epochs": _int_value(flat, "train.epochs", 1),
             "batch_size": train_batch_size,
-            "device": train_device,
             "learning_rate": _float_value(flat, "train.learning_rate", 0.0001),
             "weight_decay": _float_value(flat, "train.weight_decay", 0.0),
             "loss": str(_flat_value(flat, "train.loss", "bce_dice")),
@@ -324,17 +309,12 @@ def _build_training_config(
             "tversky_beta": _float_value(flat, "train.tversky_beta", 0.6),
             "threshold": train_threshold,
             "early_stopping_patience": _int_value(flat, "train.early_stopping_patience", 10),
-            "max_train_batches_per_epoch": _optional_int(
-                flat, "train.max_train_batches_per_epoch"
-            ),
-            "max_val_batches_per_epoch": _optional_int(flat, "train.max_val_batches_per_epoch"),
-            "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
         },
         "inference": {
             "checkpoint_uri": str(run_dir / "scratch" / "checkpoints" / "best.pt"),
             "threshold": train_threshold,
             "batch_size": train_batch_size,
-            "device": train_device,
+            "device": "cuda",
         },
         "mlflow": {
             "enabled": True,
@@ -387,7 +367,7 @@ def _build_pseudo_markup_config(
         "tile_size": tile_size,
         "stride": _int_value(flat, "tile_preparation.stride", tile_size),
         "batch_size": _int_value(flat, "train.batch_size", 1),
-        "device": str(_flat_value(flat, "train.device", "cuda")),
+        "device": "cuda",
     }
 
 
@@ -719,15 +699,6 @@ def _float_value(flat: dict[str, Any], key: str, default: float) -> float:
 def _optional_float(flat: dict[str, Any], key: str) -> float | None:
     value = _flat_value(flat, key, None)
     return None if value is None else float(value)
-
-
-def _bool_value(flat: dict[str, Any], key: str, default: bool) -> bool:
-    value = _flat_value(flat, key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
 
 
 def _blank_to_none(value: Any) -> str | None:

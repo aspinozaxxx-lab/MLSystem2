@@ -51,7 +51,7 @@ def test_load_settings_accepts_multiclass_class_balance_and_ce_dice(tmp_path: Pa
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
         _multiclass_config()
-        .replace("  smart_tiling: false", "  smart_tiling: true\n  class_balance: true")
+        .replace("  augmentation_level: 0", "  augmentation_level: 0\n  class_balance: true")
         .replace("  loss: cross_entropy", "  loss: cross_entropy_dice"),
         encoding="utf-8",
     )
@@ -147,8 +147,8 @@ def test_load_settings_accepts_prefetch_epochs(tmp_path: Path) -> None:
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
         _minimal_config().replace(
-            "  prefetch_factor: 2",
-            "  prefetch_factor: 2\n  prefetch_epochs: 2.0",
+            "  stride: 256",
+            "  stride: 256\n  prefetch_epochs: 2.0",
         ),
         encoding="utf-8",
     )
@@ -180,32 +180,43 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.max_train_batches_per_epoch is None
     assert settings.train.max_val_batches_per_epoch is None
     assert settings.train.max_training_time_sec is None
-    assert settings.tile_preparation.smart_tiling is False
+    assert settings.tile_preparation.smart_tiling is True
     assert settings.tile_preparation.positive_factor == 0.5
     assert settings.tile_preparation.val_positive_factor is None
     assert settings.tile_preparation.class_balance is False
     assert settings.tile_preparation.prefetch_epochs is None
-    assert settings.dataset.split_granularity == "scene"
     assert settings.dataset.negative_scene_limit is None
 
 
-def test_load_settings_accepts_tile_split_and_negative_limit(tmp_path: Path) -> None:
+def test_load_settings_accepts_negative_limit_default_module_parameter(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
         _minimal_config().replace(
             "  val_fraction: 0.2",
-            "  val_fraction: 0.2\n"
-            "  split_granularity: tile\n"
-            "  negative_scene_limit: 3",
+            "  val_fraction: 0.2\n  negative_scene_limit: 3",
         ),
         encoding="utf-8",
     )
 
     settings = api.load_settings(settings_path)
 
-    assert settings.dataset.split_granularity == "tile"
     assert settings.dataset.negative_scene_limit == 3
+
+
+def test_load_settings_rejects_old_split_granularity_field(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  val_fraction: 0.2",
+            "  val_fraction: 0.2\n  split_granularity: scene",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError):
+        api.load_settings(settings_path)
 
 
 def test_load_settings_rejects_invalid_train_loss(tmp_path: Path) -> None:
@@ -242,21 +253,14 @@ dataset:
 tile_preparation:
   tile_size: {tile_size}
   stride: {stride}
-  num_workers: 16
-  prefetch_factor: 2
-  seed: 42
   augmentation_level: 0
-  smart_tiling: false
+  positive_factor: 0.5
 
 train:
   model_name: segformer_b2
-  input_channels: 4
-  output_channels: 1
-  pretrained: false
   initial_checkpoint_uri: null
   epochs: 50
   batch_size: 8
-  device: cuda
   learning_rate: 0.00001
   weight_decay: 0.0001
   loss: bce_dice
@@ -304,22 +308,15 @@ dataset:
 tile_preparation:
   tile_size: 512
   stride: 256
-  num_workers: 16
-  prefetch_factor: 2
-  seed: 42
   augmentation_level: 0
-  smart_tiling: false
 
 train:
   task: multiclass
   model_name: segformer_b2
-  input_channels: 4
   output_channels: 3
-  pretrained: false
   initial_checkpoint_uri: null
   epochs: 50
   batch_size: 8
-  device: cuda
   learning_rate: 0.00001
   weight_decay: 0.0001
   loss: cross_entropy
