@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from hashlib import sha1
+import os
 from pathlib import Path
 
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationReport
@@ -143,6 +144,7 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
         _ensure_experiment_dataset(mlflow, request.experiment_name, request.dataset)
         run_name = request.run_name or _auto_run_name(mlflow, request.experiment_name, tags)
         run = mlflow.start_run(run_name=run_name, tags=tags)
+        _write_run_id_file(run.info.run_id)
         _log_input_dataset(mlflow, request.dataset, context=tags.get("pipeline"))
     except Exception as exc:
         try:
@@ -157,6 +159,18 @@ def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
         tracking_uri=request.tracking_uri,
         active=True,
     )
+
+
+def _write_run_id_file(run_id: str) -> None:
+    path = os.environ.get("MLSYSTEM2_MLFLOW_RUN_ID_FILE")
+    if not path:
+        return
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{run_id}\n", encoding="utf-8")
+    except OSError as exc:
+        raise MLflowAdapterError(f"Не удалось записать id запуска MLflow в файл: {target}") from exc
 
 
 def _run_tags(request: MLflowStartRunRequest) -> dict[str, str]:

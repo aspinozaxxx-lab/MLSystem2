@@ -278,10 +278,12 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert (run_dir / "config.yaml").is_file()
         assert (run_dir / "run_training.sh").is_file()
         config_yaml = (run_dir / "config.yaml").read_text(encoding="utf-8")
+        run_script = (run_dir / "run_training.sh").read_text(encoding="utf-8")
         assert "split_granularity" not in config_yaml
         assert "num_workers" not in config_yaml
         assert "input_channels" not in config_yaml
         assert "max_training_time_sec: null" in config_yaml
+        assert "MLSYSTEM2_MLFLOW_RUN_ID_FILE" in run_script
 
     assert started
     assert started[0][0][0] == "bash"
@@ -576,6 +578,13 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert row is not None
         assert row.tmp_path is not None
         run_dir = Path(row.tmp_path)
+        (run_dir / "mlflow_run_id").write_text("run-123\n", encoding="utf-8")
+        _worker._sync_training_run_id(session, row, config)
+        running_result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == job.id))
+        assert running_result is not None
+        assert running_result.mlflow_run_id == "run-123"
+        assert running_result.mlflow_run_url is not None
+
         (run_dir / "train.log").write_text("status=succeeded\nmlflow_run=run-123\n", encoding="utf-8")
         (run_dir / "exit_code").write_text("0\n", encoding="utf-8")
 

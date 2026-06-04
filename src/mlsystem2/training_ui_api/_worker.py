@@ -41,6 +41,7 @@ from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKi
 
 
 LOGGER = logging.getLogger(__name__)
+MLFLOW_RUN_ID_FILE = "mlflow_run_id"
 
 
 class _StartedProcess(Protocol):
@@ -143,6 +144,7 @@ def _reconcile_running_training_jobs(session: Session, config: TrainingUIAPIConf
     ).all()
     for row in rows:
         run_dir = Path(row.tmp_path) if row.tmp_path else None
+        _sync_training_run_id(session, row, config)
         exit_code = _read_exit_code(run_dir) if run_dir is not None else None
         if exit_code is not None:
             _finish_training_job(session, row, config, succeeded=exit_code == 0)
@@ -423,6 +425,7 @@ def _write_run_script(
     script_path = run_dir / "run_training.sh"
     log_path = run_dir / "train.log"
     exit_code_path = run_dir / "exit_code"
+    mlflow_run_id_path = run_dir / MLFLOW_RUN_ID_FILE
     command = [
         sys.executable,
         "-m",
@@ -439,6 +442,7 @@ def _write_run_script(
                 "#!/usr/bin/env bash",
                 "set -o pipefail",
                 f"cd {shlex.quote(str(config.project_root))}",
+                f"export MLSYSTEM2_MLFLOW_RUN_ID_FILE={shlex.quote(str(mlflow_run_id_path))}",
                 f"{quoted_command} > {shlex.quote(str(log_path))} 2>&1",
                 "code=$?",
                 f"printf '%s\\n' \"$code\" > {shlex.quote(str(exit_code_path))}",
@@ -518,6 +522,25 @@ def _finish_training_job(
         result.updated_at = _now()
     session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
+
+
+def _sync_training_run_id(session: Session, row: JobRow, config: TrainingUIAPIConfig) -> None:
+    mlflow_run_id = _extract_mlflow_run_id(row)
+    if not mlflow_run_id:
+        return
+    changed = False
+    for result in _training_results(session, row):
+        if result.mlflow_run_id != mlflow_run_id:
+            result.mlflow_run_id = mlflow_run_id
+            changed = True
+        run_url = _mlflow_run_url(config, row.mlflow_experiment_id, mlflow_run_id)
+        if result.mlflow_run_url != run_url:
+            result.mlflow_run_url = run_url
+            changed = True
+        if changed:
+            result.updated_at = _now()
+    if changed:
+        session.flush()
 
 
 def _finish_inference_job(
@@ -638,7 +661,15 @@ def _first_pseudo_markup_result(session: Session, row: JobRow) -> PseudoMarkupRe
 def _extract_mlflow_run_id(row: JobRow) -> str | None:
     if not row.tmp_path:
         return None
-    log_path = Path(row.tmp_path) / "train.log"
+    run_dir = Path(row.tmp_path)
+    run_id_path = run_dir / MLFLOW_RUN_ID_FILE
+    try:
+        run_id = run_id_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        run_id = ""
+    if run_id:
+        return run_id
+    log_path = run_dir / "train.log"
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace")
     except OSError:

@@ -106,8 +106,10 @@ Frontend не обращается к Postgres. Сервис не импорти
 
 Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует короткий
 YAML config из сохраненных параметров и модульных defaults, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
-процессом и обновляет статусы jobs/results по exit code. Pause/delete отправляют SIGTERM группе процесса и
-очищают временную папку job.
+процессом и обновляет статусы jobs/results по exit code. Training-процесс сразу после создания MLflow run пишет
+его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
+еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
+MLflow run со статусом `KILLED`.
 
 Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.

@@ -4,6 +4,8 @@ import inspect
 from pathlib import Path
 from typing import get_type_hints
 
+import pytest
+
 from mlsystem2.dataset_preparing.contracts import (
     DatasetClassAnnotation,
     DatasetPreparationReport,
@@ -25,7 +27,7 @@ from mlsystem2.settings.contracts import (
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.api import run_train_pipeline
 from mlsystem2.train_pipeline import _runner
-from mlsystem2.train_pipeline.contracts import TrainPipelineRequest, TrainPipelineResult
+from mlsystem2.train_pipeline.contracts import TrainPipelineError, TrainPipelineRequest, TrainPipelineResult
 
 
 def test_run_train_pipeline_signature_uses_request_contract() -> None:
@@ -148,6 +150,44 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
 
     assert result.status.value == "succeeded"
     assert logged_epochs == [1]
+
+
+def test_train_pipeline_marks_mlflow_run_killed_on_interrupt() -> None:
+    ended_statuses: list[str] = []
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=object(),
+    )
+
+    deps = _runner._PipelineDependencies(
+        get_settings=lambda: _settings(initial_checkpoint_uri=None),
+        get_settings_path=lambda: Path("config.yaml"),
+        start_run=lambda request: MLflowRunRef(
+            run_id="run",
+            experiment_name=request.experiment_name,
+            tracking_uri=request.tracking_uri,
+            active=True,
+        ),
+        prepare_dataset=lambda request: _dataset_result(),
+        create_tile_dataloader=lambda request: object(),
+        create_model=lambda spec: model,
+        load_checkpoint=lambda request: None,
+        train_model=lambda request, progress_sink=None: (_ for _ in ()).throw(InterruptedError("stop")),
+        log_dataset_preparation=lambda run, report: None,
+        log_tile_preparation=lambda run, report: None,
+        log_run_config=lambda run, config_path: None,
+        log_training_epoch=lambda run, metrics: None,
+        log_training_metrics=lambda run, result: None,
+        log_training_artifacts=lambda run, result: None,
+        log_timing_report=lambda run, report: None,
+        log_pipeline_report=lambda run, report: None,
+        end_run=lambda run, status: ended_statuses.append(status.value),
+    )
+
+    with pytest.raises(TrainPipelineError):
+        _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
+
+    assert ended_statuses == ["KILLED"]
 
 
 def test_train_pipeline_builds_multiclass_requests() -> None:

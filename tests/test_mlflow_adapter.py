@@ -39,8 +39,10 @@ def test_config_and_tile_artifacts_are_noop_when_run_disabled(tmp_path: Path) ->
     log_tile_preparation(run, {"splits": {}})
 
 
-def test_start_run_writes_dataset_tag(monkeypatch) -> None:
+def test_start_run_writes_dataset_tag(monkeypatch, tmp_path: Path) -> None:
     calls: dict[str, object] = {}
+    run_id_path = tmp_path / "run_id.txt"
+    monkeypatch.setenv("MLSYSTEM2_MLFLOW_RUN_ID_FILE", str(run_id_path))
 
     class RunInfo:
         run_id = "run-1"
@@ -121,6 +123,7 @@ def test_start_run_writes_dataset_tag(monkeypatch) -> None:
     )
 
     assert run.run_id == "run-1"
+    assert run_id_path.read_text(encoding="utf-8") == "run-1\n"
     assert calls["tags"] == {"pipeline": "train", "dataset": "deforestation"}
     assert calls["dataset_name"] == "deforestation"
     assert calls["dataset_source"] == "deforestation"

@@ -243,6 +243,21 @@ def run_train_pipeline(
             timings=_timing_report(total_started, timings, mlflow_elapsed),
             report=report,
         )
+    except (KeyboardInterrupt, InterruptedError) as exc:
+        if run is not None:
+            report = PipelineReport(
+                status=PipelineStatus.FAILED,
+                message="Конвейер обучения был прерван.",
+                errors=[str(exc)],
+            )
+            try:
+                timing_report = _timing_report(total_started, timings, mlflow_elapsed)
+                measure_mlflow(lambda: deps.log_timing_report(run, timing_report))
+                measure_mlflow(lambda: deps.log_pipeline_report(run, report))
+                measure_mlflow(lambda: deps.end_run(run, MLflowRunStatus.KILLED))
+            except Exception:
+                pass
+        raise TrainPipelineError("Конвейер обучения был прерван") from exc
     except Exception as exc:
         if run is not None:
             report = PipelineReport(
