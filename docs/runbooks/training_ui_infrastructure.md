@@ -44,6 +44,7 @@ MLSYSTEM2_IMAGES_ROOT=/data/mlsystem2/prepared_images
 MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT=/data/mlsystem2/training-ui/files
 MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT=/data/mlsystem2/training-ui/tmp
 MLSYSTEM2_TRAINING_UI_FRONTEND_DIST=/opt/mlsystem2/frontend
+MLSYSTEM2_TRAINING_SETTINGS_PATH=/opt/mlsystem2/repo/configs/settings.server.yaml
 MLSYSTEM2_MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 MLSYSTEM2_MLFLOW_UI_URL=/mlflow/
 MLSYSTEM2_GRAFANA_URL=/grafana/

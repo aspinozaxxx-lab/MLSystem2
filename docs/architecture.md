@@ -22,7 +22,7 @@ MLSystem 2.0 — простая система командной строки �
 Основное приложение обучения:
 
 ```bash
-mlsystem2-train --config configs/example.server.yaml
+mlsystem2-train --settings configs/settings.server.yaml --run configs/run.example.server.yaml
 ```
 
 Основное приложение инференса:
@@ -61,8 +61,8 @@ process и помечает известный MLflow run как `KILLED`; по�
 
 ## Конвейер Обучения
 
-1. CLI получает путь `--config`, вызывает `settings.api.load_settings` и инициализирует текущие настройки процесса.
-2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML-конфиг запуска в артефакты.
+1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
+2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
 3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, готовит датасет и возвращает общий VRT XML выбранного пула сцен. Поддерживаются два режима датасета: binary через `dataset.scenes_file` + `dataset.annotation_file` и multiclass через `dataset.classes`. Train/val split всегда выполняется по тайлам; `dataset.negative_scene_limit` может ограничить число zero-object сцен, сохранив все сцены с объектами.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.

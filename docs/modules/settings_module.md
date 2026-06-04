@@ -6,7 +6,7 @@
 
 ## Публичный интерфейс
 
-- `load_settings(path: str | Path) -> SystemSettings` - читает YAML, валидирует `SystemSettings`, сохраняет его как текущие настройки процесса и возвращает.
+- `load_settings(path: str | Path, run_path: str | Path | None = None) -> SystemSettings` - читает YAML, валидирует `SystemSettings`, сохраняет его как текущие настройки процесса и возвращает. Если передан `run_path`, сначала читается стабильный `settings.yml`, затем поверх него накладывается `run.yml` задания запуска.
 - `get_settings() -> SystemSettings` - возвращает текущие настройки процесса. Если `load_settings` еще не вызывался, бросает `SettingsError`.
 - `get_settings_path() -> Path` - возвращает путь к текущему YAML-конфигу. Если `load_settings` еще не вызывался, бросает `SettingsError`.
 
@@ -27,7 +27,11 @@
 
 ## Алгоритм работы и его особенности
 
-`load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. Результат и абсолютный путь YAML сохраняются в module-level current object; `get_settings` и `get_settings_path` отдают их остальным модулям. Лишние секции и поля отклоняются.
+`load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. В режиме `settings.yml + run.yml` словари объединяются рекурсивно: `run.yml` переопределяет только поля конкретного запуска, а стабильные параметры приложения остаются в `settings.yml`. Результат и абсолютный путь YAML сохраняются в module-level current object; если передан `run_path`, `get_settings_path` возвращает именно путь к `run.yml`. Лишние секции и поля отклоняются после объединения.
+
+`settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `dataset.negative_scene_limit`, `tile_preparation.num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `smart_tiling`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
+
+`run.yml` хранит задание конкретного обучения: пути разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, positive sampling, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`, checkpoint для inference и имя MLflow experiment.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 

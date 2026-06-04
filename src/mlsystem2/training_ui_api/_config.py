@@ -32,6 +32,7 @@ class TrainingUIAPIConfig:
     images_root: Path
     stored_files_root: Path
     scratch_root: Path
+    training_settings_path: Path
     frontend_dist: Path
     mlflow_tracking_uri: str
     frontend_username: str
@@ -74,6 +75,7 @@ def get_config() -> TrainingUIAPIConfig:
         scratch_root=Path(
             os.getenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", "/data/mlsystem2/training-ui/tmp")
         ),
+        training_settings_path=Path(os.getenv("MLSYSTEM2_TRAINING_SETTINGS_PATH", "configs/settings.server.yaml")),
         frontend_dist=Path(os.getenv("MLSYSTEM2_TRAINING_UI_FRONTEND_DIST", "/opt/mlsystem2/frontend")),
         mlflow_tracking_uri=os.getenv(
             "MLSYSTEM2_MLFLOW_TRACKING_URI",

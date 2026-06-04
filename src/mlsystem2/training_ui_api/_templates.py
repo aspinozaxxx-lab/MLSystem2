@@ -130,6 +130,20 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "min_value": 1,
         },
         {
+            "key": "train.max_train_batches_per_epoch",
+            "label": "Train batch-ей на эпоху",
+            "value_type": "integer-null",
+            "tooltip": "Ограничивает размер train epoch. Пустое значение означает весь train split.",
+            "min_value": 1,
+        },
+        {
+            "key": "train.max_val_batches_per_epoch",
+            "label": "Validation batch-ей на эпоху",
+            "value_type": "integer-null",
+            "tooltip": "Ограничивает размер validation epoch. Пустое значение означает весь validation split.",
+            "min_value": 1,
+        },
+        {
             "key": "train.max_training_time_sec",
             "label": "Максимальное время обучения, сек",
             "value_type": "integer-null",
@@ -156,6 +170,8 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.tversky_beta": 0.6,
     "train.threshold": 0.7,
     "train.early_stopping_patience": 12,
+    "train.max_train_batches_per_epoch": 72,
+    "train.max_val_batches_per_epoch": 1000,
     "train.max_training_time_sec": None,
 }
 
@@ -196,6 +212,12 @@ def initial_templates() -> list[dict[str, Any]]:
             "segformer b2",
             source="hpo_best",
             source_mlflow_run_id="59b45400260c4e4da5d6f753244339b1",
+            overrides={
+                "train.epochs": 30,
+                "train.max_train_batches_per_epoch": 72,
+                "train.max_val_batches_per_epoch": 1000,
+                "train.max_training_time_sec": 1800,
+            },
         ),
         _template(
             "smp_segformer_b3",

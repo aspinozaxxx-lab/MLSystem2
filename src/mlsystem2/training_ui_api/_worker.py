@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mlsystem2.mlflow_adapter.api import get_best_training_checkpoint
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
-from mlsystem2.settings.contracts import SystemSettings
+from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
@@ -210,10 +210,10 @@ def _start_training_job(
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
 
     try:
-        config_path = run_dir / "config.yaml"
+        config_path = run_dir / "run.yml"
         payload = _build_training_config(session, row, config, run_dir)
-        SystemSettings.model_validate(payload)
         _write_yaml(config_path, payload)
+        load_settings(config.training_settings_path, config_path)
         script_path = _write_run_script(row, config, run_dir, config_path)
         process = popen_factory(
             ["bash", str(script_path)],
@@ -319,17 +319,16 @@ def _build_training_config(
             "tversky_beta": _float_value(flat, "train.tversky_beta", 0.6),
             "threshold": train_threshold,
             "early_stopping_patience": _int_value(flat, "train.early_stopping_patience", 10),
+            "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
+            "max_val_batches_per_epoch": _optional_int(flat, "train.max_val_batches_per_epoch"),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
         },
         "inference": {
             "checkpoint_uri": str(run_dir / "scratch" / "checkpoints" / "best.pt"),
             "threshold": train_threshold,
             "batch_size": train_batch_size,
-            "device": "cuda",
         },
         "mlflow": {
-            "enabled": True,
-            "tracking_uri": config.mlflow_tracking_uri,
             "experiment_name": row.mlflow_experiment_name or "MLSystem2",
         },
     }
@@ -394,7 +393,6 @@ def _dataset_config(
         if custom is None:
             raise RuntimeError(f"Custom dataset не найден: {row.custom_dataset_id}")
         return {
-            "images_dir": str(config.images_root),
             "scenes_file": custom.scenes_file.path,
             "annotation_file": custom.annotation_file.path,
         }
@@ -405,7 +403,6 @@ def _dataset_config(
     if dataset is None or not dataset.scenes_file or not dataset.annotation_file:
         raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
     return {
-        "images_dir": str(config.images_root),
         "scenes_file": dataset.scenes_file,
         "annotation_file": dataset.annotation_file,
     }
@@ -430,7 +427,9 @@ def _write_run_script(
         sys.executable,
         "-m",
         "mlsystem2.cli.train",
-        "--config",
+        "--settings",
+        str(config.training_settings_path),
+        "--run",
         str(config_path),
     ]
     if row.mlflow_run_name:

@@ -38,20 +38,24 @@
 Локальные примеры конфигов в репозитории:
 
 ```text
-configs/example.server.yaml
+configs/settings.server.yaml
+configs/run.example.server.yaml
 ```
 
 Основной CLI по архитектуре:
 
 ```bash
-mlsystem2-train --config <config>
+mlsystem2-train --settings <settings.yml> --run <run.yml>
 ```
 
 Допустимый эквивалент при работе из venv:
 
 ```bash
-python -m mlsystem2.cli.train --config <config>
+python -m mlsystem2.cli.train --settings <settings.yml> --run <run.yml>
 ```
+
+Legacy-режим `--config <config>` оставлен для старых полных YAML, но новый штатный запуск использует два файла:
+`settings.yml` с параметрами приложения и `run.yml` с заданием конкретного обучения.
 
 ## 3. Где искать гиперпараметры лучших чекпойнтов
 
@@ -224,9 +228,9 @@ tile_preparation:
   positive_factor: 0.8
 
 train:
-  epochs: 80
-  batch_size: 8
-  learning_rate: 0.00000015
+  epochs: 30
+  batch_size: 4
+  learning_rate: 0.00001
   weight_decay: 0.0001
   loss: focal_tversky
   focal_alpha: 0.6
@@ -235,21 +239,27 @@ train:
   tversky_beta: 0.6
   threshold: 0.8
   early_stopping_patience: 10
+  max_train_batches_per_epoch: 72
+  max_val_batches_per_epoch: 1000
+  max_training_time_sec: 1800
 ```
 
-Воркеры, prefetch, seed, smart tiling, device, binary task и каналы модели задаются defaults модулей. Диагностические лимиты batch/time не используются в обычном запуске.
+Воркеры, prefetch, seed, smart tiling, device, binary task и каналы модели задаются defaults модулей.
+`max_train_batches_per_epoch`, `max_val_batches_per_epoch` и `max_training_time_sec` остаются параметрами запуска,
+потому что они управляют длительностью конкретного обучения.
 
 ## 8. Создание runtime-конфига
 
-Не меняй `configs/example.server.yaml` ради одного запуска. Создай отдельный config в runtime-папке:
+Не меняй `configs/settings.server.yaml` ради одного запуска. Это параметры приложения: их меняет администратор
+при настройке сервера. Для конкретного обучения создай отдельный `run.yml` в runtime-папке:
 
 ```bash
 RUN_ROOT=/opt/mlsystem2/runtime/train/<name>_<DDMM>
 mkdir -p "$RUN_ROOT"/{scratch,logs,configs}
-cp configs/example.server.yaml "$RUN_ROOT/configs/train.yaml"
+cp configs/run.example.server.yaml "$RUN_ROOT/configs/run.yml"
 ```
 
-В `runtime` секции укажи:
+В `run.yml` укажи runtime текущего запуска:
 
 ```yaml
 runtime:
@@ -261,14 +271,25 @@ runtime:
 
 Для длительных и важных запусков лучше `cleanup_scratch_after_mlflow_log: false`, чтобы локальный `best.pt` остался доступен даже при проблемах с MLflow artifacts.
 
+Размер эпохи задается в `run.yml`, потому что это параметр конкретного запуска:
+
+```yaml
+train:
+  max_train_batches_per_epoch: 72
+  max_val_batches_per_epoch: 1000
+```
+
+Пустое значение (`null`) означает полный train/validation split и может резко увеличить длительность эпохи.
+
 Проверка загрузки конфига:
 
 ```bash
 python - <<'PY'
 from mlsystem2.settings.api import load_settings
-settings = load_settings("<config>")
+settings = load_settings("configs/settings.server.yaml", "<run.yml>")
 print(settings.train.model_name)
 print(settings.dataset.images_dir)
+print(settings.train.max_train_batches_per_epoch)
 PY
 ```
 
@@ -279,10 +300,11 @@ PY
 ```bash
 cd /opt/mlsystem2/repo
 source .venv/bin/activate
-CONFIG=/opt/mlsystem2/runtime/train/<name>_<DDMM>/configs/train.yaml
+SETTINGS=/opt/mlsystem2/repo/configs/settings.server.yaml
+RUN=/opt/mlsystem2/runtime/train/<name>_<DDMM>/configs/run.yml
 LOG=/opt/mlsystem2/runtime/train/<name>_<DDMM>/logs/train.log
 
-nohup mlsystem2-train --config "$CONFIG" > "$LOG" 2>&1 &
+nohup mlsystem2-train --settings "$SETTINGS" --run "$RUN" > "$LOG" 2>&1 &
 echo $! > /opt/mlsystem2/runtime/train/<name>_<DDMM>/train.pid
 ```
 

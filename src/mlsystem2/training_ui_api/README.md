@@ -14,6 +14,8 @@
 - `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT` — корень загруженных txt/geojson.
 - `MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT` — временные файлы jobs.
 - `MLSYSTEM2_TRAINING_UI_FRONTEND_DIST` — каталог собранного frontend, default `/opt/mlsystem2/frontend`.
+- `MLSYSTEM2_TRAINING_SETTINGS_PATH` — путь к стабильному `settings.yml`, default `configs/settings.server.yaml`
+  относительно `MLSYSTEM2_PROJECT_ROOT`.
 - `MLSYSTEM2_MLFLOW_TRACKING_URI` или `MLFLOW_TRACKING_URI` — internal MLflow tracking URI.
 - `MLSYSTEM2_TRAINING_UI_USER` или `MLSYSTEM_FRONTEND_USER` — пользователь входа.
 - `MLSYSTEM2_TRAINING_UI_PASSWORD` или `MLSYSTEM_FRONTEND_PASSWORD` — пароль входа.
@@ -106,9 +108,11 @@ Frontend не обращается к Postgres. Сервис не импорти
 `training_ui_api` не открывает training runs и не пишет MLflow-метрики: запись метрик, отчетов и артефактов
 запуска выполняет только `train_pipeline`.
 
-Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует короткий
-YAML config из сохраненных параметров и модульных defaults, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
-процессом и обновляет статусы jobs/results по exit code. Training-процесс сразу после создания MLflow run пишет
+Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует `run.yml`
+из сохраненных параметров задания и запускает публичный CLI
+`python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...` отдельным процессом.
+Стабильные параметры приложения, такие как workers/prefetch/seed/smart_tiling/device, берутся из `settings.yml`
+и не записываются в `run.yml`. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
 еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
 MLflow run со статусом `KILLED`.

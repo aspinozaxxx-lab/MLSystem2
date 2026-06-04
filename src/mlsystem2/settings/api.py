@@ -12,11 +12,11 @@ _CURRENT_SETTINGS: SystemSettings | None = None
 _CURRENT_SETTINGS_PATH: Path | None = None
 
 
-def load_settings(path: str | Path) -> SystemSettings:
+def load_settings(path: str | Path, run_path: str | Path | None = None) -> SystemSettings:
     global _CURRENT_SETTINGS, _CURRENT_SETTINGS_PATH
-    settings = _load_settings(path)
+    settings = _load_settings(path, run_path)
     _CURRENT_SETTINGS = settings
-    _CURRENT_SETTINGS_PATH = Path(path).resolve()
+    _CURRENT_SETTINGS_PATH = Path(run_path or path).resolve()
     return settings
 
 

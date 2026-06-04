@@ -107,6 +107,107 @@ def test_repeated_load_settings_replaces_current_settings(tmp_path: Path) -> Non
     assert api.get_settings_path() == second_config.resolve()
 
 
+def test_load_settings_merges_application_settings_and_run_config(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    app_settings = tmp_path / "settings.yml"
+    run_config = tmp_path / "run.yml"
+    app_settings.write_text(
+        """
+runtime:
+  project_root: /opt/mlsystem2/repo
+  scratch_root: /opt/mlsystem2/runtime/scratch
+  logs_root: /opt/mlsystem2/runtime/logs
+  cleanup_scratch_after_mlflow_log: true
+
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/
+  negative_scene_limit: null
+
+tile_preparation:
+  num_workers: 8
+  prefetch_factor: 2
+  prefetch_epochs: null
+  seed: 42
+  smart_tiling: true
+  val_positive_factor: null
+  class_balance: false
+
+train:
+  task: binary
+  input_channels: 4
+  output_channels: 1
+  pretrained: false
+  device: cuda
+
+inference:
+  device: cuda
+
+mlflow:
+  enabled: true
+  tracking_uri: http://mlflow:5000
+""",
+        encoding="utf-8",
+    )
+    run_config.write_text(
+        """
+runtime:
+  scratch_root: /tmp/run/scratch
+  logs_root: /tmp/run/logs
+
+dataset:
+  scenes_file: /data/MLMarkup/Вырубки/main/scenes.txt
+  annotation_file: /data/MLMarkup/Вырубки/main/annotation.geojson
+  val_fraction: 0.2
+
+tile_preparation:
+  tile_size: 512
+  stride: 256
+  augmentation_level: 3
+  positive_factor: 0.8
+
+train:
+  model_name: smp_segformer_b2
+  initial_checkpoint_uri: null
+  epochs: 80
+  batch_size: 4
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: focal_tversky
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.7
+  early_stopping_patience: 12
+  max_train_batches_per_epoch: 72
+  max_val_batches_per_epoch: 1000
+  max_training_time_sec: null
+
+inference:
+  checkpoint_uri: /tmp/run/scratch/checkpoints/best.pt
+  threshold: 0.7
+  batch_size: 4
+
+mlflow:
+  experiment_name: MLSystem2
+""",
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(app_settings, run_config)
+
+    assert settings.dataset.images_dir == "/data/mlsystem2/prepared_images/"
+    assert settings.dataset.scenes_file == "/data/MLMarkup/Вырубки/main/scenes.txt"
+    assert settings.tile_preparation.num_workers == 8
+    assert settings.tile_preparation.tile_size == 512
+    assert settings.train.device == "cuda"
+    assert settings.train.max_train_batches_per_epoch == 72
+    assert settings.train.max_val_batches_per_epoch == 1000
+    assert settings.mlflow.tracking_uri == "http://mlflow:5000"
+    assert settings.mlflow.experiment_name == "MLSystem2"
+    assert api.get_settings_path() == run_config.resolve()
+
+
 def test_load_settings_rejects_storage_section(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"

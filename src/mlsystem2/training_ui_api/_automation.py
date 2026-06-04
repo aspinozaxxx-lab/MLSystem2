@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
+import signal
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -464,7 +467,11 @@ def _cancel_all_automation_jobs(session: Session, config: TrainingUIAPIConfig) -
 def _cancel_job(session: Session, row: JobRow, config: TrainingUIAPIConfig) -> None:
     mlflow_run_id = _training_job_mlflow_run_id(session, row)
     if row.status == JobStatus.RUNNING.value:
+        process_pid = row.process_pid
         terminate_job_process(row)
+        if process_pid is not None and not _wait_process_group_exit(process_pid):
+            _kill_process_group(process_pid)
+            _wait_process_group_exit(process_pid, timeout_sec=5.0)
         if mlflow_run_id:
             _mark_mlflow_run_killed(config, mlflow_run_id)
         if row.tmp_path:
@@ -512,6 +519,53 @@ def _mark_mlflow_run_killed(config: TrainingUIAPIConfig, run_id: str) -> None:
         mark_run_killed(config.mlflow_tracking_uri, run_id)
     except MLflowAdapterError:
         LOGGER.warning("Не удалось пометить MLflow run %s как killed", run_id, exc_info=True)
+
+
+def _wait_process_group_exit(process_pid: int, *, timeout_sec: float = 20.0) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if not _process_group_alive(process_pid):
+            return True
+        time.sleep(0.2)
+    return not _process_group_alive(process_pid)
+
+
+def _process_group_alive(process_pid: int) -> bool:
+    try:
+        os.killpg(process_pid, 0)
+    except AttributeError:
+        return _pid_alive(process_pid)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _pid_alive(process_pid: int) -> bool:
+    try:
+        os.kill(process_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _kill_process_group(process_pid: int) -> None:
+    try:
+        os.killpg(process_pid, signal.SIGKILL)
+    except AttributeError:
+        try:
+            os.kill(process_pid, signal.SIGKILL)
+        except OSError:
+            return
+    except OSError:
+        return
 
 
 def _reset_failed_training_attempts(

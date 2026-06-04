@@ -118,8 +118,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "dataset.split_granularity" not in template_keys
         assert "tile_preparation.num_workers" not in template_keys
         assert "train.device" not in template_keys
+        assert "train.max_train_batches_per_epoch" in template_keys
+        assert "train.max_val_batches_per_epoch" in template_keys
         assert "train.max_training_time_sec" in template_keys
-        assert segformer_template["default_config"]["train.max_training_time_sec"] is None
+        assert segformer_template["default_config"]["train.max_train_batches_per_epoch"] == 72
+        assert segformer_template["default_config"]["train.max_val_batches_per_epoch"] == 1000
+        assert segformer_template["default_config"]["train.max_training_time_sec"] == 1800
         loss_field = next(
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
         )
@@ -261,6 +265,8 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "train.tversky_beta": 0.6,
                     "train.threshold": 0.5,
                     "train.early_stopping_patience": 1,
+                    "train.max_train_batches_per_epoch": 72,
+                    "train.max_val_batches_per_epoch": 1000,
                     "train.max_training_time_sec": None,
                 },
             ),
@@ -275,14 +281,20 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert row.process_pid == 4321
         assert row.tmp_path is not None
         run_dir = Path(row.tmp_path)
-        assert (run_dir / "config.yaml").is_file()
+        assert (run_dir / "run.yml").is_file()
         assert (run_dir / "run_training.sh").is_file()
-        config_yaml = (run_dir / "config.yaml").read_text(encoding="utf-8")
+        config_yaml = (run_dir / "run.yml").read_text(encoding="utf-8")
         run_script = (run_dir / "run_training.sh").read_text(encoding="utf-8")
         assert "split_granularity" not in config_yaml
         assert "num_workers" not in config_yaml
         assert "input_channels" not in config_yaml
+        assert "images_dir" not in config_yaml
+        assert "max_train_batches_per_epoch: 72" in config_yaml
+        assert "max_val_batches_per_epoch: 1000" in config_yaml
         assert "max_training_time_sec: null" in config_yaml
+        assert "--settings" in run_script
+        assert "--run" in run_script
+        assert "run.yml" in run_script
         assert "MLSYSTEM2_MLFLOW_RUN_ID_FILE" in run_script
 
     assert started
@@ -763,5 +775,7 @@ def _short_training_config() -> dict[str, object]:
         "train.tversky_beta": 0.6,
         "train.threshold": 0.5,
         "train.early_stopping_patience": 1,
+        "train.max_train_batches_per_epoch": 72,
+        "train.max_val_batches_per_epoch": 1000,
         "train.max_training_time_sec": None,
     }

@@ -1,0 +1,42 @@
+runtime:
+  project_root: /opt/mlsystem2/repo
+  scratch_root: /data/mlsystem2/runtime/train/example/scratch
+  logs_root: /data/mlsystem2/runtime/train/example/logs
+  cleanup_scratch_after_mlflow_log: true
+
+dataset:
+  scenes_file: /data/MLMarkup/Вырубки/main/scenes.txt
+  annotation_file: /data/MLMarkup/Вырубки/main/annotation.geojson
+  val_fraction: 0.2
+
+tile_preparation:
+  tile_size: 512
+  stride: 256
+  augmentation_level: 3
+  positive_factor: 0.8
+
+train:
+  model_name: smp_segformer_b2
+  initial_checkpoint_uri: null
+  epochs: 30
+  batch_size: 4
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+  loss: focal_tversky
+  focal_alpha: 0.6
+  pos_weight: 1.0
+  tversky_alpha: 0.4
+  tversky_beta: 0.6
+  threshold: 0.7
+  early_stopping_patience: 12
+  max_train_batches_per_epoch: 72
+  max_val_batches_per_epoch: 1000
+  max_training_time_sec: 1800
+
+inference:
+  checkpoint_uri: /data/mlsystem2/runtime/train/example/scratch/checkpoints/best.pt
+  threshold: 0.7
+  batch_size: 4
+
+mlflow:
+  experiment_name: MLSystem2
