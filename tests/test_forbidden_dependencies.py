@@ -52,6 +52,29 @@ def test_mlflow_imports_are_adapter_only() -> None:
                     assert "mlflow_adapter" in path.relative_to(SRC).parts, f"{path}: импорт MLflow"
 
 
+def test_training_ui_does_not_write_mlflow_metrics() -> None:
+    forbidden_names = {
+        "start_run",
+        "log_dataset_preparation",
+        "log_tile_preparation",
+        "log_run_config",
+        "log_training_epoch",
+        "log_training_metrics",
+        "log_training_artifacts",
+        "log_timing_report",
+        "log_pipeline_report",
+        "end_run",
+    }
+    for path in (SRC / "training_ui_api").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module != "mlsystem2.mlflow_adapter.api":
+                continue
+            imported = {alias.name for alias in node.names}
+            used_forbidden = sorted(imported & forbidden_names)
+            assert not used_forbidden, f"{path}: training_ui_api не должен писать MLflow: {used_forbidden}"
+
+
 def test_removed_storage_settings_class_is_absent() -> None:
     removed_class_name = "Storage" + "Settings"
     for path in SRC.rglob("*.py"):

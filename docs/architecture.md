@@ -41,7 +41,9 @@ python frontend/build.py
 `training_ui_api` — отдельный модуль MLSystem2 и единственная серверная точка доступа frontend к
 данным UI обучения. Frontend не обращается к Postgres напрямую. UI-данные обучения, шаблоны,
 очереди, custom datasets и результаты хранятся в отдельной Postgres БД/схеме. Инфраструктура
-Postgres разворачивается вручную по runbook и не входит в CI/CD.
+Postgres разворачивается вручную по runbook и не входит в CI/CD. UI-сервис может читать публичные
+данные MLflow для списка experiments, best checkpoint и скачивания checkpoint, но не открывает
+training runs и не пишет MLflow-метрики; запись метрик выполняет `train_pipeline`.
 
 Автоматизация обучения и псевдоразметки является частью `training_ui_api`. Она хранит правила
 `датасет × модель` в Postgres, отслеживает версию конкретного варианта MLMarkup по git-коммиту

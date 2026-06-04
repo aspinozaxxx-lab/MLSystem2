@@ -118,6 +118,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "dataset.split_granularity" not in template_keys
         assert "tile_preparation.num_workers" not in template_keys
         assert "train.device" not in template_keys
+        assert "train.max_training_time_sec" in template_keys
+        assert segformer_template["default_config"]["train.max_training_time_sec"] is None
         loss_field = next(
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
         )
@@ -259,6 +261,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "train.tversky_beta": 0.6,
                     "train.threshold": 0.5,
                     "train.early_stopping_patience": 1,
+                    "train.max_training_time_sec": None,
                 },
             ),
             config,
@@ -278,6 +281,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "split_granularity" not in config_yaml
         assert "num_workers" not in config_yaml
         assert "input_channels" not in config_yaml
+        assert "max_training_time_sec: null" in config_yaml
 
     assert started
     assert started[0][0][0] == "bash"
@@ -560,6 +564,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
                     "train.tversky_beta": 0.6,
                     "train.threshold": 0.5,
                     "train.early_stopping_patience": 1,
+                    "train.max_training_time_sec": None,
                 },
             ),
             config,
@@ -661,4 +666,5 @@ def _short_training_config() -> dict[str, object]:
         "train.tversky_beta": 0.6,
         "train.threshold": 0.5,
         "train.early_stopping_patience": 1,
+        "train.max_training_time_sec": None,
     }

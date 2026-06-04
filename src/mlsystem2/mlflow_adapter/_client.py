@@ -216,12 +216,14 @@ def _log_input_dataset(mlflow, dataset_name: str | None, *, context: str | None)
 def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None:
     if not run.active:
         return
+    _ensure_run_active(run)
     _log_dict(_model_dump(report), "reports/dataset_preparation.json")
 
 
 def log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None:
     if not run.active:
         return
+    _ensure_run_active(run)
     _log_dict(report, "reports/tile_preparation.json")
 
 
@@ -235,13 +237,14 @@ def log_run_config(run: MLflowRunRef, config_path: str | Path) -> None:
         content = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise MLflowAdapterError(f"Не удалось прочитать файл настроек для MLflow: {path}") from exc
+    _ensure_run_active(run)
     _log_text(content, "config/train_config.yaml")
 
 
 def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     if not run.active:
         return
-    mlflow = _mlflow()
+    mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
         _log_optional_metric(mlflow, "train/loss_focal", metrics.train_loss_focal, metrics.epoch)
@@ -345,7 +348,7 @@ def _log_optional_metric(mlflow, name: str, value: float | None, step: int) -> N
 def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
     if not run.active:
         return
-    mlflow = _mlflow()
+    mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
@@ -367,6 +370,7 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
 def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
     if not run.active:
         return
+    _ensure_run_active(run)
     _log_dict(
         {"history": [_model_dump(item) for item in result.history]},
         "reports/training_history_full.json",
@@ -379,12 +383,14 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
 def log_timing_report(run: MLflowRunRef, report: TimingReport) -> None:
     if not run.active:
         return
+    _ensure_run_active(run)
     _log_dict(_model_dump(report), "reports/pipeline_timings.json")
 
 
 def log_pipeline_report(run: MLflowRunRef, report: PipelineReport) -> None:
     if not run.active:
         return
+    _ensure_run_active(run)
     _log_dict(_model_dump(report), "reports/pipeline_summary.json")
 
 
@@ -393,9 +399,48 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
         return
     mlflow = _mlflow()
     try:
-        mlflow.end_run(status=status.value)
+        _set_tracking_uri(mlflow, run.tracking_uri)
+        active = _active_run(mlflow)
+        if _active_run_id(active) == run.run_id:
+            mlflow.end_run(status=status.value)
+            return
+        client = mlflow.tracking.MlflowClient()
+        client.set_terminated(run.run_id, status.value)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось завершить запуск MLflow") from exc
+
+
+def _ensure_run_active(run: MLflowRunRef):
+    mlflow = _mlflow()
+    _set_tracking_uri(mlflow, run.tracking_uri)
+    active = _active_run(mlflow)
+    if _active_run_id(active) == run.run_id:
+        return mlflow
+    if active is not None:
+        end_run_fn = getattr(mlflow, "end_run", None)
+        if end_run_fn is not None:
+            end_run_fn()
+    start_run_fn = getattr(mlflow, "start_run", None)
+    if start_run_fn is not None:
+        start_run_fn(run_id=run.run_id)
+    return mlflow
+
+
+def _set_tracking_uri(mlflow, tracking_uri: str) -> None:
+    set_tracking_uri = getattr(mlflow, "set_tracking_uri", None)
+    if set_tracking_uri is not None:
+        set_tracking_uri(tracking_uri)
+
+
+def _active_run(mlflow):
+    active_run_fn = getattr(mlflow, "active_run", None)
+    return active_run_fn() if active_run_fn is not None else None
+
+
+def _active_run_id(active_run) -> str | None:
+    info = getattr(active_run, "info", None)
+    run_id = getattr(info, "run_id", None)
+    return str(run_id) if run_id is not None else None
 
 
 def _mlflow():

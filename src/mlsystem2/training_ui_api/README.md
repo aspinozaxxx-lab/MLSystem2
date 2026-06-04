@@ -88,6 +88,7 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 
 Шаблон хранит `config_schema` и `default_config` в JSONB. `default_config` использует ключи вида
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
+В этот набор входит `train.max_training_time_sec`: пустое значение означает обучение без wall-clock лимита.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
 
@@ -100,6 +101,8 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 
 Frontend не обращается к Postgres. Сервис не импортирует приватные модули MLSystem2 и берет список
 моделей только из `models.api`, а данные MLflow только из `mlflow_adapter.api`.
+`training_ui_api` не открывает training runs и не пишет MLflow-метрики: запись метрик, отчетов и артефактов
+запуска выполняет только `train_pipeline`.
 
 Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует короткий
 YAML config из сохраненных параметров и модульных defaults, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным

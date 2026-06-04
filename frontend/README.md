@@ -16,7 +16,8 @@ python frontend/build.py
 датасетом.
 
 Форма запуска показывает только параметры обычного binary tile-training, которые оператор реально меняет:
-долю валидации, tile/stride, аугментации, positive sampling и основные train-гиперпараметры. DataLoader
+долю валидации, tile/stride, аугментации, positive sampling, основные train-гиперпараметры и максимальное
+wall-clock время обучения. DataLoader
 workers/prefetch, seed, smart tiling, device, task и каналы модели задаются defaults модулей MLSystem2.
 
 Страница `Автоматизация` строит матрицу `датасет × модель` из `GET /api/v1/automation`. В каждой ячейке есть две

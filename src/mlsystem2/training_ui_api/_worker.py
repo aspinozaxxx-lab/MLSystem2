@@ -317,6 +317,7 @@ def _build_training_config(
             "tversky_beta": _float_value(flat, "train.tversky_beta", 0.6),
             "threshold": train_threshold,
             "early_stopping_patience": _int_value(flat, "train.early_stopping_patience", 10),
+            "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
         },
         "inference": {
             "checkpoint_uri": str(run_dir / "scratch" / "checkpoints" / "best.pt"),

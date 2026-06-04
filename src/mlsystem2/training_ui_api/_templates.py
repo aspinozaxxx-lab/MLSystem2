@@ -129,6 +129,13 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "tooltip": "Сколько эпох без улучшения ждать до остановки.",
             "min_value": 1,
         },
+        {
+            "key": "train.max_training_time_sec",
+            "label": "Максимальное время обучения, сек",
+            "value_type": "integer-null",
+            "tooltip": "Wall-clock лимит train loop. Пустое значение означает обучение без лимита; проверяется после завершения эпохи.",
+            "min_value": 1,
+        },
     ]
 }
 
@@ -149,6 +156,7 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.tversky_beta": 0.6,
     "train.threshold": 0.7,
     "train.early_stopping_patience": 12,
+    "train.max_training_time_sec": None,
 }
 
 

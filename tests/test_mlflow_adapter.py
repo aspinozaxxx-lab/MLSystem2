@@ -255,6 +255,67 @@ def test_log_tile_preparation_uses_report_artifact_path(monkeypatch) -> None:
     assert logged == [({"tile_size": 1024}, "reports/tile_preparation.json")]
 
 
+def test_log_training_epoch_reactivates_run_by_id(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class RunInfo:
+        def __init__(self, run_id: str) -> None:
+            self.run_id = run_id
+
+    class ActiveRun:
+        def __init__(self, run_id: str) -> None:
+            self.info = RunInfo(run_id)
+
+    class MLflow:
+        current_run: ActiveRun | None = None
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls.append(("tracking_uri", uri))
+
+        @staticmethod
+        def active_run():
+            return MLflow.current_run
+
+        @staticmethod
+        def start_run(run_id: str):
+            calls.append(("start_run", run_id))
+            MLflow.current_run = ActiveRun(run_id)
+            return MLflow.current_run
+
+        @staticmethod
+        def log_metric(name: str, value: float, step: int = 0) -> None:
+            active_id = MLflow.current_run.info.run_id if MLflow.current_run is not None else None
+            calls.append(("metric", name, value, step, active_id))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    run = MLflowRunRef(run_id="run-42", experiment_name="test", tracking_uri="file://mlruns", active=True)
+
+    _client.log_training_epoch(
+        run,
+        EpochMetrics(
+            epoch=1,
+            train_loss=1.0,
+            train_optimizer_steps=2,
+            train_skipped_optimizer_steps=0,
+            val_loss=1.0,
+            val_pixel_precision=0.0,
+            val_pixel_recall=0.0,
+            val_pixel_f1=0.0,
+            val_positive_pixels=0,
+            val_pred_positive_pixels=0,
+            val_true_positive=0,
+            val_false_positive=0,
+            val_false_negative=0,
+            epoch_time_sec=1.0,
+        ),
+    )
+
+    assert ("tracking_uri", "file://mlruns") in calls
+    assert ("start_run", "run-42") in calls
+    assert ("metric", "train/loss", 1.0, 1, "run-42") in calls
+
+
 def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
     logged: list[tuple[str, float, int]] = []
 
