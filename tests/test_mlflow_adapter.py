@@ -7,6 +7,7 @@ from mlsystem2.mlflow_adapter.api import (
     get_best_training_checkpoint,
     log_run_config,
     log_tile_preparation,
+    mark_run_killed,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowStartRunRequest
 from mlsystem2.mlflow_adapter import _client
@@ -219,6 +220,35 @@ def test_download_run_artifact_uses_mlflow_client(monkeypatch, tmp_path: Path) -
     assert artifact.artifact_path == "checkpoints/best.pt"
     assert calls["tracking_uri"] == "http://mlflow:5000"
     assert calls["download"] == ("run-1", "checkpoints/best.pt", str(tmp_path))
+
+
+def test_mark_run_killed_uses_mlflow_client(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class Client:
+        def set_terminated(self, run_id: str, status: str) -> None:
+            calls["terminated"] = (run_id, status)
+
+    class MLflow:
+        class tracking:
+            @staticmethod
+            def MlflowClient():
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls["tracking_uri"] = uri
+
+        @staticmethod
+        def active_run():
+            return None
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    mark_run_killed("http://mlflow:5000", "run-1")
+
+    assert calls["tracking_uri"] == "http://mlflow:5000"
+    assert calls["terminated"] == ("run-1", "KILLED")
 
 
 def test_log_run_config_uses_fixed_artifact_path(

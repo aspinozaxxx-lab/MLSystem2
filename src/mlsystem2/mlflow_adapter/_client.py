@@ -424,6 +424,20 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
         raise MLflowAdapterError("Не удалось завершить запуск MLflow") from exc
 
 
+def mark_run_killed(tracking_uri: str, run_id: str) -> None:
+    mlflow = _mlflow()
+    try:
+        _set_tracking_uri(mlflow, tracking_uri)
+        active = _active_run(mlflow)
+        if _active_run_id(active) == run_id:
+            mlflow.end_run(status=MLflowRunStatus.KILLED.value)
+            return
+        client = mlflow.tracking.MlflowClient()
+        client.set_terminated(run_id, MLflowRunStatus.KILLED.value)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось пометить запуск MLflow как убитый") from exc
+
+
 def _ensure_run_active(run: MLflowRunRef):
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, run.tracking_uri)

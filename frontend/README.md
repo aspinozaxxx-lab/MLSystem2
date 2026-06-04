@@ -22,6 +22,7 @@ workers/prefetch, seed, smart tiling, device, task и каналы модели 
 
 Страница `Автоматизация` строит матрицу `датасет × модель` из `GET /api/v1/automation`. В каждой ячейке есть две
 галочки: синяя для auto training и красная для auto pseudo-markup. Изменения сохраняются сразу через
-`PUT /api/v1/automation/rules`, глобальный switch работает через `PUT /api/v1/automation/enabled`. Frontend не
-решает, какие jobs создавать: он только сохраняет правила, а синхронизацию по `dataset_version` выполняет
-FastAPI worker.
+`PUT /api/v1/automation/rules`. При отключении глобального switch frontend сначала показывает предупреждение:
+незавершенные результаты будут потеряны, очередь automatic jobs будет очищена, а текущий automatic process будет
+остановлен. После подтверждения отправляется `PUT /api/v1/automation/enabled` с `enabled=false`. Frontend не решает,
+какие jobs создавать: он только сохраняет правила, а синхронизацию по `dataset_version` выполняет FastAPI worker.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mlsystem2.mlflow_adapter.api import create_experiment, get_best_training_checkpoint
+from mlsystem2.mlflow_adapter.api import create_experiment, get_best_training_checkpoint, mark_run_killed
 from mlsystem2.mlflow_adapter.contracts import (
     MLflowAdapterError,
     MLflowBestCheckpoint,
@@ -50,6 +51,8 @@ from .contracts import (
 AUTOMATION_KEY = "automation"
 AUTOMATION_EXPERIMENT_NAME = "MLSystem2 Automation"
 ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+MLFLOW_RUN_ID_FILE = "mlflow_run_id"
+LOGGER = logging.getLogger(__name__)
 
 
 def ensure_automation_control(session: Session) -> AutomationControlRow:
@@ -103,8 +106,11 @@ def automation_snapshot(session: Session, config: TrainingUIAPIConfig) -> Automa
 def set_automation_enabled(
     session: Session,
     request: AutomationEnabledUpdate,
+    config: TrainingUIAPIConfig,
 ) -> None:
     control = ensure_automation_control(session)
+    if not request.enabled:
+        _cancel_all_automation_jobs(session, config)
     control.enabled = request.enabled
     control.updated_at = _now()
     session.flush()
@@ -141,9 +147,9 @@ def update_automation_rule(
     row.updated_at = _now()
 
     if not request.training_enabled:
-        _cancel_active_automation_jobs(session, row, job_type=JobType.TRAINING)
+        _cancel_active_automation_jobs(session, row, job_type=JobType.TRAINING, config=config)
     if not request.pseudo_markup_enabled:
-        _cancel_active_automation_jobs(session, row, job_type=JobType.INFERENCE)
+        _cancel_active_automation_jobs(session, row, job_type=JobType.INFERENCE, config=config)
     if not old_training_enabled and request.training_enabled:
         _reset_failed_training_attempts(session, row, dataset.version)
     if not old_pseudo_enabled and request.pseudo_markup_enabled:
@@ -189,7 +195,7 @@ def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
         dataset = datasets.get(rule.dataset_key)
         if dataset is None or not dataset.version:
             continue
-        _cancel_stale_automation_jobs(session, rule, dataset.version)
+        _cancel_stale_automation_jobs(session, rule, dataset.version, config)
         if rule.training_enabled:
             _ensure_training_for_rule(session, rule, dataset, config)
         if rule.pseudo_markup_enabled:
@@ -411,6 +417,7 @@ def _cancel_stale_automation_jobs(
     session: Session,
     rule: AutomationRuleRow,
     current_version: str,
+    config: TrainingUIAPIConfig,
 ) -> None:
     rows = session.scalars(
         select(JobRow).where(
@@ -421,7 +428,7 @@ def _cancel_stale_automation_jobs(
         )
     ).all()
     for row in rows:
-        _cancel_job(session, row)
+        _cancel_job(session, row, config)
 
 
 def _cancel_active_automation_jobs(
@@ -429,6 +436,7 @@ def _cancel_active_automation_jobs(
     rule: AutomationRuleRow,
     *,
     job_type: JobType,
+    config: TrainingUIAPIConfig,
 ) -> None:
     rows = session.scalars(
         select(JobRow).where(
@@ -439,12 +447,26 @@ def _cancel_active_automation_jobs(
         )
     ).all()
     for row in rows:
-        _cancel_job(session, row)
+        _cancel_job(session, row, config)
 
 
-def _cancel_job(session: Session, row: JobRow) -> None:
+def _cancel_all_automation_jobs(session: Session, config: TrainingUIAPIConfig) -> None:
+    rows = session.scalars(
+        select(JobRow).where(
+            JobRow.source == JobSource.AUTOMATION.value,
+            JobRow.status.in_(ACTIVE_JOB_STATUSES),
+        )
+    ).all()
+    for row in rows:
+        _cancel_job(session, row, config)
+
+
+def _cancel_job(session: Session, row: JobRow, config: TrainingUIAPIConfig) -> None:
+    mlflow_run_id = _training_job_mlflow_run_id(session, row)
     if row.status == JobStatus.RUNNING.value:
         terminate_job_process(row)
+        if mlflow_run_id:
+            _mark_mlflow_run_killed(config, mlflow_run_id)
         if row.tmp_path:
             shutil.rmtree(row.tmp_path, ignore_errors=True)
             row.tmp_path = None
@@ -456,6 +478,40 @@ def _cancel_job(session: Session, row: JobRow) -> None:
     for result in session.scalars(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)).all():
         result.status = ResultStatus.CANCELLED.value
         result.updated_at = _now()
+
+
+def _training_job_mlflow_run_id(session: Session, row: JobRow) -> str | None:
+    if row.type != JobType.TRAINING.value:
+        return None
+    result_run_id = session.scalar(
+        select(TrainingResultRow.mlflow_run_id)
+        .where(
+            TrainingResultRow.job_id == row.id,
+            TrainingResultRow.mlflow_run_id.is_not(None),
+        )
+        .order_by(TrainingResultRow.updated_at.desc())
+    )
+    if result_run_id:
+        return str(result_run_id)
+    if not row.tmp_path:
+        return None
+    run_id_file = Path(row.tmp_path) / MLFLOW_RUN_ID_FILE
+    if run_id_file.is_file():
+        run_id = run_id_file.read_text(encoding="utf-8").strip()
+        if run_id:
+            return run_id
+    log_path = Path(row.tmp_path) / "train.log"
+    if not log_path.is_file():
+        return None
+    match = re.search(r"MLflow run id:\s*([0-9a-fA-F]+)", log_path.read_text(encoding="utf-8", errors="ignore"))
+    return match.group(1) if match else None
+
+
+def _mark_mlflow_run_killed(config: TrainingUIAPIConfig, run_id: str) -> None:
+    try:
+        mark_run_killed(config.mlflow_tracking_uri, run_id)
+    except MLflowAdapterError:
+        LOGGER.warning("Не удалось пометить MLflow run %s как killed", run_id, exc_info=True)
 
 
 def _reset_failed_training_attempts(

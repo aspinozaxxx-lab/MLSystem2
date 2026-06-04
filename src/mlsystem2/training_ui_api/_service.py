@@ -26,6 +26,7 @@ from ._automation import (
     automation_snapshot,
     ensure_automation_control,
     set_automation_enabled,
+    sync_automation_once,
     update_automation_rule,
 )
 from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
@@ -132,7 +133,9 @@ def set_automation(
     request: AutomationEnabledUpdate,
     config: TrainingUIAPIConfig,
 ) -> AutomationSnapshot:
-    set_automation_enabled(session, request)
+    set_automation_enabled(session, request, config)
+    if request.enabled:
+        sync_automation_once(session, config)
     return automation_snapshot(session, config)
 
 

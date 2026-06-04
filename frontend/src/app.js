@@ -434,9 +434,15 @@ async function renderAutomationPage() {
     </section>
   `);
   document.getElementById("automation-toggle").addEventListener("change", async (event) => {
+    const enabled = event.currentTarget.checked;
+    if (!enabled) {
+      event.currentTarget.checked = true;
+      showAutomationDisableModal();
+      return;
+    }
     await apiJson("/automation/enabled", {
       method: "PUT",
-      body: { enabled: event.currentTarget.checked },
+      body: { enabled: true },
     });
     renderAutomationPage();
   });
@@ -752,6 +758,37 @@ function showPseudoModal(classKey, resultId) {
     await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request);
     closeModal();
     renderClassResultPage(classKey);
+  });
+}
+
+function showAutomationDisableModal() {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Отключить автоматизацию?</h2>
+        <p>Все незавершенные автоматические результаты будут потеряны, очередь автоматических заданий будет очищена, а текущий автоматический процесс будет остановлен.</p>
+        <div class="inline-row">
+          <button class="danger" type="button" id="automation-disable-confirm">Отключить</button>
+          <button class="secondary" type="button" id="automation-disable-cancel">Отмена</button>
+        </div>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("automation-disable-cancel").addEventListener("click", closeModal);
+  document.getElementById("automation-disable-confirm").addEventListener("click", async () => {
+    const button = document.getElementById("automation-disable-confirm");
+    button.disabled = true;
+    try {
+      await apiJson("/automation/enabled", {
+        method: "PUT",
+        body: { enabled: false },
+      });
+      closeModal();
+      renderAutomationPage();
+    } catch {
+      button.disabled = false;
+    }
   });
 }
 

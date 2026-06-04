@@ -65,8 +65,10 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 для дедупликации jobs по конкретной версии датасета.
 
 `GET /api/v1/automation` возвращает глобальный выключатель, непустые MLMarkup-датасеты без `Custom`, UI-модели и
-матрицу правил `(dataset_key, architecture)`. `PUT /api/v1/automation/enabled` включает или ставит на паузу создание
-и запуск auto jobs. `PUT /api/v1/automation/rules` сохраняет две галочки правила: `training_enabled` и
+матрицу правил `(dataset_key, architecture)`. `PUT /api/v1/automation/enabled` включает автоматику или полностью
+отключает ее: активные automatic jobs отменяются, queued automatic jobs очищаются из очередей, running training
+process получает SIGTERM, а известный MLflow run помечается как `KILLED`. При повторном включении jobs создаются
+заново по текущим правилам и `dataset_version`. `PUT /api/v1/automation/rules` сохраняет две галочки правила: `training_enabled` и
 `pseudo_markup_enabled`.
 
 Для reverse proxy дополнительно есть совместимый endpoint `GET /auth/proxy-check`: он не входит в OpenAPI,
@@ -95,7 +97,7 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 `jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
 `dataset_version`. Для auto rows дополнительно заполнен `automation_rule_id`. Auto jobs нельзя удалить или двигать
 через endpoints очереди; они отменяются снятием соответствующей галочки в автоматизации или заменяются при новой
-версии конкретного датасета.
+версии конкретного датасета. Глобальное отключение автоматизации отменяет все active auto jobs независимо от правила.
 
 ## Границы
 
@@ -115,8 +117,9 @@ MLflow run со статусом `KILLED`.
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
 После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job по txt того же датасета.
 Manual jobs всегда запускаются раньше automation jobs. При выключенной автоматизации новые auto jobs не создаются и
-queued auto jobs не стартуют; running auto jobs продолжают работу. Failed auto attempt не ретраится до новой версии
-датасета или снятия и повторной установки галочки.
+queued auto jobs не стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает
+все active auto jobs. Failed auto attempt не ретраится до новой версии датасета или снятия и повторной установки
+галочки.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший

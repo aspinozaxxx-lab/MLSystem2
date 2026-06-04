@@ -25,6 +25,7 @@ EXPECTED_API = {
         "log_timing_report",
         "log_pipeline_report",
         "end_run",
+        "mark_run_killed",
     ],
     "train_pipeline.api": ["run_train_pipeline"],
     "inference.api": ["run_inference"],

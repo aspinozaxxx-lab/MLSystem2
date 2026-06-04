@@ -360,11 +360,20 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
         )
         assert auto_job is not None
         assert auto_job.dataset_version != old_version
+        stale_auto_job_id = auto_job.id
         _service.set_automation(session, AutomationEnabledUpdate(enabled=False), config)
         dispatch_training_queue_once(session, config, popen_factory=fake_popen)
         assert started == []
-        assert session.get(JobRow, auto_job.id).status == JobStatus.QUEUED.value
+        assert session.get(JobRow, stale_auto_job_id).status == JobStatus.CANCELLED.value
         _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
+        auto_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.status == JobStatus.QUEUED.value,
+            )
+        )
+        assert auto_job is not None
+        assert auto_job.id != stale_auto_job_id
 
         manual_job = create_training_job(
             session,
@@ -390,6 +399,85 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
             _service.delete_job(session, auto_job.id)
         with pytest.raises(TrainingUIAPIError):
             _service.move_job(session, auto_job.id, direction=-1)
+
+
+def test_training_ui_disabling_automation_cancels_running_jobs_and_kills_mlflow(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    killed_runs: list[tuple[str, str]] = []
+    terminated_pids: list[int | None] = []
+
+    def fake_experiment(request) -> MLflowExperiment:
+        return MLflowExperiment(experiment_id="auto-exp", name=request.name)
+
+    def fake_terminate(row: JobRow) -> None:
+        terminated_pids.append(row.process_pid)
+        row.process_pid = None
+
+    def fake_mark_run_killed(tracking_uri: str, run_id: str) -> None:
+        killed_runs.append((tracking_uri, run_id))
+
+    monkeypatch.setattr(_automation, "create_experiment", fake_experiment)
+    monkeypatch.setattr(_automation, "terminate_job_process", fake_terminate)
+    monkeypatch.setattr(_automation, "mark_run_killed", fake_mark_run_killed)
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
+        _service.update_automation(
+            session,
+            AutomationRuleUpdate(
+                dataset_key="Вырубки\\main",
+                architecture="smp_segformer_b2",
+                training_enabled=True,
+                pseudo_markup_enabled=False,
+            ),
+            config,
+        )
+        _automation.sync_automation_once(session, config)
+        auto_job = session.scalar(select(JobRow).where(JobRow.source == JobSource.AUTOMATION.value))
+        assert auto_job is not None
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        (run_dir / "mlflow_run_id").write_text("run-auto-kill\n", encoding="utf-8")
+        auto_job.status = JobStatus.RUNNING.value
+        auto_job.process_pid = 9876
+        auto_job.tmp_path = str(run_dir)
+        result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == auto_job.id))
+        assert result is not None
+        result.mlflow_run_id = "run-auto-kill"
+
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=False), config)
+
+        assert auto_job.status == JobStatus.CANCELLED.value
+        assert result.status == ResultStatus.CANCELLED.value
+        assert auto_job.tmp_path is None
+        assert not run_dir.exists()
+        assert terminated_pids == [9876]
+        assert killed_runs == [(config.mlflow_tracking_uri, "run-auto-kill")]
 
 
 def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry_failed(

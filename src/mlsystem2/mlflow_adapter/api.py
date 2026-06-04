@@ -21,6 +21,7 @@ from ._client import log_timing_report as _log_timing_report
 from ._client import log_training_epoch as _log_training_epoch
 from ._client import log_training_artifacts as _log_training_artifacts
 from ._client import log_training_metrics as _log_training_metrics
+from ._client import mark_run_killed as _mark_run_killed
 from ._client import start_run as _start_run
 from .contracts import (
     MLflowExperiment,
@@ -103,6 +104,10 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
     _end_run(run, status)
 
 
+def mark_run_killed(tracking_uri: str, run_id: str) -> None:
+    _mark_run_killed(tracking_uri, run_id)
+
+
 __all__ = [
     "list_experiments",
     "create_experiment",
@@ -118,4 +123,5 @@ __all__ = [
     "log_timing_report",
     "log_pipeline_report",
     "end_run",
+    "mark_run_killed",
 ]
