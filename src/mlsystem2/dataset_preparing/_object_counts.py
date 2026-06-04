@@ -6,6 +6,7 @@ import json
 import re
 from collections import Counter
 from dataclasses import dataclass
+from math import inf
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,13 @@ class SceneObjectCount:
     object_count: int
 
 
+@dataclass(frozen=True)
+class ImageGeometryScore:
+    image_path: Path
+    object_count: int
+    distance_to_annotation: float
+
+
 def count_objects_per_scene(
     scene_names: list[str],
     scene_to_image: dict[str, Path],
@@ -65,6 +73,56 @@ def count_objects_per_scene(
         )
         for scene in scene_names
     ]
+
+
+def score_images_by_annotation_geometry(
+    image_paths: list[Path],
+    annotation_path: Path,
+) -> dict[Path, ImageGeometryScore]:
+    try:
+        import rasterio
+        from rasterio.warp import transform_bounds
+        from shapely.geometry import box
+    except Exception:  # noqa: BLE001
+        return {}
+
+    payload = _load_json(annotation_path)
+    features = _load_features(payload)
+    geometries = [feature.geometry for feature in features if feature.geometry is not None]
+    if not geometries:
+        return {}
+
+    annotation_crs = _load_geojson_crs(annotation_path)
+    if annotation_crs is None:
+        max_abs = max(max(map(abs, geometry.bounds)) for geometry in geometries)
+        annotation_crs = "EPSG:3857" if max_abs > 1000 else "EPSG:4326"
+
+    min_x = min(geometry.bounds[0] for geometry in geometries)
+    min_y = min(geometry.bounds[1] for geometry in geometries)
+    max_x = max(geometry.bounds[2] for geometry in geometries)
+    max_y = max(geometry.bounds[3] for geometry in geometries)
+    annotation_bounds = box(min_x, min_y, max_x, max_y)
+
+    scores: dict[Path, ImageGeometryScore] = {}
+    for image_path in image_paths:
+        try:
+            with rasterio.open(image_path) as dataset:
+                scene_crs = str(dataset.crs) if dataset.crs else annotation_crs
+                bounds = tuple(dataset.bounds)
+                if scene_crs != annotation_crs:
+                    bounds = transform_bounds(scene_crs, annotation_crs, *bounds, densify_pts=21)
+                scene_bounds = box(*bounds)
+        except Exception:  # noqa: BLE001
+            continue
+
+        object_count = sum(1 for geometry in geometries if geometry.intersects(scene_bounds))
+        distance = scene_bounds.distance(annotation_bounds) if annotation_bounds.is_valid else inf
+        scores[image_path] = ImageGeometryScore(
+            image_path=image_path,
+            object_count=object_count,
+            distance_to_annotation=float(distance),
+        )
+    return scores
 
 
 def _load_json(annotation_path: Path) -> Any:

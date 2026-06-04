@@ -10,6 +10,8 @@ from mlsystem2.train_pipeline.contracts import PipelineReport, TimingReport
 
 from ._client import end_run as _end_run
 from ._client import create_experiment as _create_experiment
+from ._client import download_run_artifact as _download_run_artifact
+from ._client import get_best_training_checkpoint as _get_best_training_checkpoint
 from ._client import list_experiments as _list_experiments
 from ._client import log_dataset_preparation as _log_dataset_preparation
 from ._client import log_pipeline_report as _log_pipeline_report
@@ -23,6 +25,8 @@ from ._client import start_run as _start_run
 from .contracts import (
     MLflowExperiment,
     MLflowExperimentRequest,
+    MLflowBestCheckpoint,
+    MLflowDownloadedArtifact,
     MLflowRunRef,
     MLflowRunStatus,
     MLflowStartRunRequest,
@@ -35,6 +39,28 @@ def list_experiments(tracking_uri: str) -> list[MLflowExperiment]:
 
 def create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment:
     return _create_experiment(request)
+
+
+def get_best_training_checkpoint(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowBestCheckpoint | None:
+    return _get_best_training_checkpoint(tracking_uri, run_id)
+
+
+def download_run_artifact(
+    *,
+    tracking_uri: str,
+    run_id: str,
+    artifact_path: str,
+    dst_dir: str | Path,
+) -> MLflowDownloadedArtifact:
+    return _download_run_artifact(
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+        artifact_path=artifact_path,
+        dst_dir=dst_dir,
+    )
 
 
 def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:
@@ -80,6 +106,8 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
 __all__ = [
     "list_experiments",
     "create_experiment",
+    "get_best_training_checkpoint",
+    "download_run_artifact",
     "start_run",
     "log_dataset_preparation",
     "log_tile_preparation",

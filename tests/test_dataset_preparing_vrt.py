@@ -259,6 +259,66 @@ def test_prepare_dataset_vrt_uses_source_masks_for_overlap(tmp_path: Path) -> No
     assert int(data[0, 0]) == 10
 
 
+def test_prepare_dataset_expands_folder_scene_entry(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    folder = images / "kanopus" / "irkutsk"
+    folder.mkdir(parents=True)
+    _write_raster(folder / "scene_a.tif", 1, 0)
+    _write_raster(folder / "scene_b.tif", 2, 4)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("irkutsk\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif", "scene_b.tif"])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.5,
+            split_granularity="tile",
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert result.report.scenes_total == 2
+    assert result.report.scenes_found == 2
+    assert set(_scene_ids_with_split(result, "pool")) == {
+        "kanopus/irkutsk/scene_a.tif",
+        "kanopus/irkutsk/scene_b.tif",
+    }
+
+
+def test_prepare_dataset_resolves_ambiguous_scene_by_annotation_geometry(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    far_folder = images / "far"
+    near_folder = images / "near"
+    far_folder.mkdir(parents=True)
+    near_folder.mkdir(parents=True)
+    _write_raster(far_folder / "scene_a.tif", 1, 1_000_000)
+    _write_raster(near_folder / "scene_a.tif", 2, 0)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif"])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.5,
+            split_granularity="tile",
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert result.report.scenes[0].image_path is not None
+    assert result.report.scenes[0].image_path.endswith("/near/scene_a.tif")
+
+
 def test_prepare_dataset_reports_error_when_scene_is_missing(tmp_path: Path) -> None:
     images = tmp_path / "images"
     images.mkdir()

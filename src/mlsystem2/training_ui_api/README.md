@@ -6,6 +6,7 @@
 
 - `MLSYSTEM2_TRAINING_UI_API_HOST` — host uvicorn, default `0.0.0.0`.
 - `MLSYSTEM2_TRAINING_UI_API_PORT` — port uvicorn, default `8091`.
+- `MLSYSTEM2_PROJECT_ROOT` — корень установленного репозитория MLSystem2 для запуска CLI, default равен `cwd` сервиса.
 - `MLSYSTEM2_TRAINING_UI_DATABASE_URL` — Postgres URL, секреты задаются только через env.
 - `MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA` — отдельная схема Postgres, default `training_ui`.
 - `MLSYSTEM2_MLMARKUP_ROOT` — путь к MLMarkup, default `/data/MLMarkup`.
@@ -18,6 +19,8 @@
 - `MLSYSTEM2_TRAINING_UI_PASSWORD` или `MLSYSTEM_FRONTEND_PASSWORD` — пароль входа.
 - `MLSYSTEM2_TRAINING_UI_SESSION_SECRET` или `MLSYSTEM_FRONTEND_SESSION_SECRET` — секрет подписи cookie.
 - `MLSYSTEM2_GRAFANA_URL`, `MLSYSTEM2_MLFLOW_UI_URL`, `MLSYSTEM2_MINIO_UI_URL` — ссылки на UI сервисов.
+- `MLSYSTEM2_TRAINING_UI_WORKER_ENABLED` — включает фоновый исполнитель очереди, default `true`.
+- `MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS` — период проверки очереди, default `5`.
 
 ## Endpoints
 
@@ -50,6 +53,10 @@
 
 OpenAPI доступен стандартно по `/openapi.json`.
 
+`GET /api/v1/datasets`, `GET /api/v1/classes` и `GET /api/v1/results/classes` заполняют `updated_at`
+по последнему git-коммиту, затронувшему папку конкретного датасета в `MLSYSTEM2_MLMARKUP_ROOT`. Если
+`MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem mtime как fallback.
+
 Для reverse proxy дополнительно есть совместимый endpoint `GET /auth/proxy-check`: он не входит в OpenAPI,
 возвращает `204` и `X-Remote-User` для авторизованной cookie-сессии, иначе `401`.
 
@@ -71,4 +78,21 @@ OpenAPI доступен стандартно по `/openapi.json`.
 ## Границы
 
 Frontend не обращается к Postgres. Сервис не импортирует приватные модули MLSystem2 и берет список
-моделей только из `models.api`, а MLflow experiments только из `mlflow_adapter.api`.
+моделей только из `models.api`, а данные MLflow только из `mlflow_adapter.api`.
+
+Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует YAML config
+из сохраненных параметров, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
+процессом и обновляет статусы jobs/results по exit code. Pause/delete отправляют SIGTERM группе процесса и
+очищают временную папку job.
+
+При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
+`val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший
+F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo-markup job, созданный от результата
+обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt` и, когда
+MLflow доступен, полный `checkpoint_uri`.
+
+Inference-очередь обрабатывается тем же worker независимо от training-очереди. Для job типа `pseudo-markup`
+worker берет txt список снимков из выбранного датасета или загруженного файла, скачивает `checkpoints/best.pt`
+через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
+строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
+`/api/v1/files/{file_id}/download`.

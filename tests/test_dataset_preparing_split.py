@@ -4,6 +4,7 @@ from pathlib import Path
 
 from mlsystem2.dataset_preparing._object_counts import SceneObjectCount
 from mlsystem2.dataset_preparing._scene_matching import (
+    expand_scene_entries,
     filter_existing_scenes,
     index_image_files,
     read_scene_list,
@@ -36,6 +37,28 @@ def test_filter_existing_scenes_matches_filename_stem_casefold_and_normalized(
     assert result.missing_scenes == ["missing"]
     assert result.scene_to_image["scene_b"].name == "scene_b.tiff"
     assert result.scene_to_image["scene"].name == "scene-cog.tif"
+
+
+def test_expand_scene_entries_expands_folder_names_to_relative_paths(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    folder = images / "kanopus" / "irkutsk"
+    folder.mkdir(parents=True)
+    (folder / "scene_a.tif").write_text("", encoding="utf-8")
+    (folder / "scene_b.tiff").write_text("", encoding="utf-8")
+    (images / "other").mkdir()
+    (images / "other" / "scene_a.tif").write_text("", encoding="utf-8")
+
+    image_index = index_image_files(images)
+    expanded = expand_scene_entries(["irkutsk"], image_index)
+    result = filter_existing_scenes(expanded, image_index)
+
+    assert expanded == [
+        "kanopus/irkutsk/scene_a.tif",
+        "kanopus/irkutsk/scene_b.tiff",
+    ]
+    assert result.existing_scenes == expanded
+    assert result.ambiguous_scenes == {}
+    assert result.scene_to_image["kanopus/irkutsk/scene_a.tif"] == folder / "scene_a.tif"
 
 
 def test_split_is_deterministic_and_has_no_overlap() -> None:

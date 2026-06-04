@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import signal
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,8 +11,16 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from mlsystem2.mlflow_adapter.api import create_experiment, list_experiments
-from mlsystem2.mlflow_adapter.contracts import MLflowExperimentRequest
+from mlsystem2.mlflow_adapter.api import (
+    create_experiment,
+    get_best_training_checkpoint,
+    list_experiments,
+)
+from mlsystem2.mlflow_adapter.contracts import (
+    MLflowAdapterError,
+    MLflowBestCheckpoint,
+    MLflowExperimentRequest,
+)
 from mlsystem2.models.api import list_supported_models
 
 from ._config import TrainingUIAPIConfig
@@ -29,6 +35,7 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._templates import initial_templates
+from ._worker import terminate_job_process
 from .contracts import (
     AppLink,
     AppLinksResponse,
@@ -312,6 +319,18 @@ def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
         _stop_process_and_cleanup(row)
     row.status = JobStatus.CANCELLED.value
     row.finished_at = _now()
+    if row.type == JobType.TRAINING.value:
+        for result in session.scalars(
+            select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)
+        ).all():
+            result.status = ResultStatus.ERROR.value
+            result.updated_at = _now()
+    if row.type == JobType.INFERENCE.value:
+        for result in session.scalars(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)
+        ).all():
+            result.status = ResultStatus.ERROR.value
+            result.updated_at = _now()
     session.flush()
     return _job_detail(row)
 
@@ -371,8 +390,10 @@ def create_pseudo_markup_job(
     scenes_bytes: bytes | None,
     config: TrainingUIAPIConfig,
 ) -> JobDetail:
+    dataset_key = (dataset_key or "").strip() or None
     class_info = find_class(config.mlmarkup_root, class_key)
     class_name = class_info.name if class_info else class_key
+    training_result = _resolve_training_result(session, training_result_id)
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
     if scenes_bytes is not None and scenes_name is not None:
@@ -397,6 +418,8 @@ def create_pseudo_markup_job(
                 path=Path(dataset.scenes_file),
             )
             scenes_file_id = scenes_row.id
+    else:
+        raise TrainingUIAPIError("Выберите датасет или загрузите txt со снимками")
     row = JobRow(
         type=JobType.INFERENCE.value,
         status=JobStatus.QUEUED.value,
@@ -410,6 +433,7 @@ def create_pseudo_markup_job(
             "class_key": class_key,
             "dataset_key": dataset_key or CUSTOM_KEY,
             "training_result_id": str(training_result_id) if training_result_id else None,
+            **_checkpoint_config(training_result, config),
         },
     )
     session.add(row)
@@ -426,6 +450,54 @@ def create_pseudo_markup_job(
     )
     session.flush()
     return _job_detail(row)
+
+
+def _resolve_training_result(
+    session: Session,
+    training_result_id: uuid.UUID | None,
+) -> TrainingResultRow | None:
+    if training_result_id is None:
+        return None
+    row = session.get(TrainingResultRow, training_result_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Результат обучения не найден: {training_result_id}")
+    return row
+
+
+def _checkpoint_config(
+    row: TrainingResultRow | None,
+    config: TrainingUIAPIConfig,
+) -> dict[str, object]:
+    if row is None or row.mlflow_run_id is None:
+        return {}
+    payload: dict[str, object] = {
+        "mlflow_run_id": row.mlflow_run_id,
+        "checkpoint_artifact_path": "checkpoints/best.pt",
+    }
+    checkpoint = _best_training_checkpoint(row, config)
+    if checkpoint is not None:
+        payload.update(
+            {
+                "checkpoint_uri": checkpoint.artifact_uri,
+                "checkpoint_metric_name": checkpoint.metric_name,
+                "checkpoint_f1_score": checkpoint.f1_score,
+                "checkpoint_epoch": checkpoint.epoch,
+                "checkpoint_threshold": checkpoint.threshold,
+            }
+        )
+    return payload
+
+
+def _best_training_checkpoint(
+    row: TrainingResultRow,
+    config: TrainingUIAPIConfig,
+) -> MLflowBestCheckpoint | None:
+    if row.mlflow_run_id is None:
+        return None
+    try:
+        return get_best_training_checkpoint(config.mlflow_tracking_uri, row.mlflow_run_id)
+    except MLflowAdapterError:
+        return None
 
 
 def stored_file(session: Session, file_id: uuid.UUID) -> StoredFileRow:
@@ -533,12 +605,7 @@ def _ensure_queue_control(session: Session, queue_name: JobType) -> QueueControl
 
 
 def _stop_process_and_cleanup(row: JobRow) -> None:
-    if row.process_pid is not None:
-        try:
-            os.kill(row.process_pid, signal.SIGTERM)
-        except OSError:
-            pass
-        row.process_pid = None
+    terminate_job_process(row)
     if row.tmp_path:
         shutil.rmtree(row.tmp_path, ignore_errors=True)
         row.tmp_path = None
@@ -671,4 +738,3 @@ def _int_or_none(value: Any) -> int | None:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-

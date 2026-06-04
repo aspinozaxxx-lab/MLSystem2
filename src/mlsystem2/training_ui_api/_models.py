@@ -6,22 +6,31 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from ._database import Base
 
 
+def _json_type():
+    return JSON().with_variant(JSONB, "postgresql")
+
+
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
+    __table_args__ = (
+        UniqueConstraint("architecture", name="uq_training_templates_architecture"),
+        Index("ix_training_templates_architecture", "architecture"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    architecture: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    architecture: Mapped[str] = mapped_column(String(96))
     display_name: Mapped[str] = mapped_column(String(160))
-    config_schema: Mapped[dict[str, Any]] = mapped_column(JSON)
-    default_config: Mapped[dict[str, Any]] = mapped_column(JSON)
-    baseline_default_config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    config_schema: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    default_config: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    baseline_default_config: Mapped[dict[str, Any]] = mapped_column(_json_type())
     source: Mapped[str] = mapped_column(String(32))
     baseline_source: Mapped[str] = mapped_column(String(32))
     source_mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -95,7 +104,7 @@ class JobRow(Base):
     mlflow_experiment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mlflow_experiment_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     mlflow_run_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    config: Mapped[dict[str, Any]] = mapped_column(_json_type())
     custom_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("custom_datasets.id"),
@@ -166,4 +175,3 @@ class PseudoMarkupResultRow(Base):
     training_result: Mapped[TrainingResultRow | None] = relationship()
     scenes_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[scenes_file_id])
     geojson_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[geojson_file_id])
-

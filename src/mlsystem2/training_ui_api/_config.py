@@ -25,6 +25,7 @@ def _bool_env(name: str, default: bool) -> bool:
 class TrainingUIAPIConfig:
     host: str
     port: int
+    project_root: Path
     database_url: str
     database_schema: str | None
     mlmarkup_root: Path
@@ -43,12 +44,15 @@ class TrainingUIAPIConfig:
     mlflow_ui_url: str
     minio_ui_url: str
     cors_origin: str | None
+    worker_enabled: bool
+    worker_interval_seconds: int
 
 
 def get_config() -> TrainingUIAPIConfig:
     return TrainingUIAPIConfig(
         host=os.getenv("MLSYSTEM2_TRAINING_UI_API_HOST", "0.0.0.0"),
         port=_int_env("MLSYSTEM2_TRAINING_UI_API_PORT", 8091),
+        project_root=Path(os.getenv("MLSYSTEM2_PROJECT_ROOT", os.getcwd())),
         database_url=os.getenv(
             "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
             os.getenv(
@@ -103,4 +107,6 @@ def get_config() -> TrainingUIAPIConfig:
             os.getenv("FRONTEND_MINIO_UI_URL", "/minio/browser/mlsystems/images/"),
         ),
         cors_origin=os.getenv("MLSYSTEM2_TRAINING_UI_CORS_ORIGIN"),
+        worker_enabled=_bool_env("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", True),
+        worker_interval_seconds=_int_env("MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS", 5),
     )

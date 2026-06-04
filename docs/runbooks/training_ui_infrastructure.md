@@ -38,6 +38,7 @@ psql "$MLSYSTEM2_TRAINING_UI_DATABASE_URL" -c 'CREATE SCHEMA IF NOT EXISTS train
 ```bash
 MLSYSTEM2_TRAINING_UI_DATABASE_URL=postgresql+psycopg://mlsystem2_training_ui:<пароль>@127.0.0.1:55432/mlsystem2_training_ui
 MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA=training_ui
+MLSYSTEM2_PROJECT_ROOT=/opt/mlsystem2/repo
 MLSYSTEM2_MLMARKUP_ROOT=/data/MLMarkup
 MLSYSTEM2_IMAGES_ROOT=/data/mlsystem2/prepared_images
 MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT=/data/mlsystem2/training-ui/files
@@ -50,6 +51,8 @@ MLSYSTEM2_MINIO_UI_URL=/minio/browser/mlsystems/images/
 MLSYSTEM2_TRAINING_UI_USER=<тот же пользователь, что в старом MLSystem>
 MLSYSTEM2_TRAINING_UI_PASSWORD=<тот же пароль, что в старом MLSystem>
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
+MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=true
+MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS=5
 ```
 
 Секреты не коммитить.

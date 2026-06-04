@@ -13,6 +13,8 @@ EXPECTED_API = {
     "mlflow_adapter.api": [
         "list_experiments",
         "create_experiment",
+        "get_best_training_checkpoint",
+        "download_run_artifact",
         "start_run",
         "log_dataset_preparation",
         "log_tile_preparation",

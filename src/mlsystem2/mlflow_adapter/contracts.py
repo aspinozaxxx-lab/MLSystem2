@@ -59,9 +59,32 @@ class MLflowArtifactRef(BaseModel):
     artifact_path: str
 
 
+class MLflowBestCheckpoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tracking_uri: str
+    run_id: str
+    metric_name: str
+    f1_score: float
+    epoch: int
+    threshold: float | None = None
+    artifact_path: str
+    artifact_uri: str | None = None
+
+
+class MLflowDownloadedArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    artifact_path: str
+    local_path: str
+
+
 __all__ = [
     "MLflowAdapterError",
     "MLflowArtifactRef",
+    "MLflowBestCheckpoint",
+    "MLflowDownloadedArtifact",
     "MLflowExperiment",
     "MLflowExperimentRequest",
     "MLflowRunRef",

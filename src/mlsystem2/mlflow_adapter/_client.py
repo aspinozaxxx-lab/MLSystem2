@@ -12,12 +12,19 @@ from mlsystem2.train_pipeline.contracts import PipelineReport, TimingReport
 
 from .contracts import (
     MLflowAdapterError,
+    MLflowBestCheckpoint,
+    MLflowDownloadedArtifact,
     MLflowExperiment,
     MLflowExperimentRequest,
     MLflowRunRef,
     MLflowRunStatus,
     MLflowStartRunRequest,
 )
+
+
+BEST_CHECKPOINT_METRIC = "val/best_threshold_pixel_f1"
+BEST_THRESHOLD_METRIC = "val/best_threshold"
+BEST_CHECKPOINT_ARTIFACT_PATH = "checkpoints/best.pt"
 
 
 def list_experiments(tracking_uri: str) -> list[MLflowExperiment]:
@@ -53,6 +60,71 @@ def create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment:
     except Exception as exc:
         raise MLflowAdapterError("Не удалось создать эксперимент MLflow") from exc
     return MLflowExperiment(experiment_id=experiment_id, name=request.name, lifecycle_stage="active")
+
+
+def get_best_training_checkpoint(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowBestCheckpoint | None:
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        history = client.get_metric_history(run_id, BEST_CHECKPOINT_METRIC)
+        thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось прочитать лучшую метрику training run из MLflow") from exc
+    if not history:
+        return None
+    best = max(history, key=lambda item: (float(item.value), -int(item.step)))
+    threshold = _metric_value_at_step(thresholds, int(best.step))
+    artifact_root = getattr(run.info, "artifact_uri", None)
+    artifact_uri = (
+        f"{artifact_root.rstrip('/')}/{BEST_CHECKPOINT_ARTIFACT_PATH}"
+        if isinstance(artifact_root, str) and artifact_root.strip()
+        else None
+    )
+    return MLflowBestCheckpoint(
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+        metric_name=BEST_CHECKPOINT_METRIC,
+        f1_score=float(best.value),
+        epoch=int(best.step),
+        threshold=threshold,
+        artifact_path=BEST_CHECKPOINT_ARTIFACT_PATH,
+        artifact_uri=artifact_uri,
+    )
+
+
+def download_run_artifact(
+    *,
+    tracking_uri: str,
+    run_id: str,
+    artifact_path: str,
+    dst_dir: str | Path,
+) -> MLflowDownloadedArtifact:
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        local_path = client.download_artifacts(run_id, artifact_path, str(dst_dir))
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось скачать артефакт MLflow") from exc
+    return MLflowDownloadedArtifact(
+        run_id=run_id,
+        artifact_path=artifact_path,
+        local_path=str(local_path),
+    )
+
+
+def _metric_value_at_step(history: object, step: int) -> float | None:
+    values = [
+        float(item.value)
+        for item in history or []
+        if int(getattr(item, "step", -1)) == step
+    ]
+    return values[-1] if values else None
 
 
 def start_run(request: MLflowStartRunRequest) -> MLflowRunRef:

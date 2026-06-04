@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mlsystem2.mlflow_adapter.api import log_run_config, log_tile_preparation
+from mlsystem2.mlflow_adapter.api import (
+    download_run_artifact,
+    get_best_training_checkpoint,
+    log_run_config,
+    log_tile_preparation,
+)
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowStartRunRequest
 from mlsystem2.mlflow_adapter import _client
 from mlsystem2.train.contracts import EpochMetrics
@@ -127,6 +132,90 @@ def test_start_run_writes_dataset_tag(monkeypatch) -> None:
     )
     assert calls["input_context"] == "train"
     assert calls["input_tags"] == {"dataset": "deforestation"}
+
+
+def test_get_best_training_checkpoint_uses_metric_history(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class Metric:
+        def __init__(self, value: float, step: int) -> None:
+            self.value = value
+            self.step = step
+
+    class RunInfo:
+        artifact_uri = "s3://mlflow-artifacts/45/run-1/artifacts"
+
+    class Run:
+        info = RunInfo()
+
+    class Client:
+        def get_run(self, run_id: str):
+            calls["run_id"] = run_id
+            return Run()
+
+        def get_metric_history(self, run_id: str, metric_name: str):
+            calls["metric"] = (run_id, metric_name)
+            if metric_name == "val/best_threshold":
+                return [Metric(0.5, 1), Metric(0.7, 4), Metric(0.8, 5)]
+            return [Metric(0.3, 1), Metric(0.8, 4), Metric(0.8, 5), Metric(0.7, 6)]
+
+    class MLflow:
+        class tracking:
+            @staticmethod
+            def MlflowClient():
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls["tracking_uri"] = uri
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    checkpoint = get_best_training_checkpoint("http://mlflow:5000", "run-1")
+
+    assert checkpoint is not None
+    assert checkpoint.metric_name == "val/best_threshold_pixel_f1"
+    assert checkpoint.f1_score == 0.8
+    assert checkpoint.epoch == 4
+    assert checkpoint.threshold == 0.7
+    assert checkpoint.artifact_path == "checkpoints/best.pt"
+    assert checkpoint.artifact_uri == "s3://mlflow-artifacts/45/run-1/artifacts/checkpoints/best.pt"
+    assert calls["tracking_uri"] == "http://mlflow:5000"
+    assert calls["run_id"] == "run-1"
+
+
+def test_download_run_artifact_uses_mlflow_client(monkeypatch, tmp_path: Path) -> None:
+    calls: dict[str, object] = {}
+
+    class Client:
+        def download_artifacts(self, run_id: str, artifact_path: str, dst_path: str) -> str:
+            calls["download"] = (run_id, artifact_path, dst_path)
+            return str(Path(dst_path) / "checkpoints" / "best.pt")
+
+    class MLflow:
+        class tracking:
+            @staticmethod
+            def MlflowClient():
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls["tracking_uri"] = uri
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    artifact = download_run_artifact(
+        tracking_uri="http://mlflow:5000",
+        run_id="run-1",
+        artifact_path="checkpoints/best.pt",
+        dst_dir=tmp_path,
+    )
+
+    assert artifact.local_path == str(tmp_path / "checkpoints" / "best.pt")
+    assert artifact.run_id == "run-1"
+    assert artifact.artifact_path == "checkpoints/best.pt"
+    assert calls["tracking_uri"] == "http://mlflow:5000"
+    assert calls["download"] == ("run-1", "checkpoints/best.pt", str(tmp_path))
 
 
 def test_log_run_config_uses_fixed_artifact_path(

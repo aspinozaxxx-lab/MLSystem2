@@ -6,9 +6,19 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-from ._object_counts import SceneObjectCount, count_objects_per_scene
+from ._object_counts import (
+    ImageGeometryScore,
+    SceneObjectCount,
+    count_objects_per_scene,
+    score_images_by_annotation_geometry,
+)
 from ._raster_validation import validate_rasters
-from ._scene_matching import filter_existing_scenes, index_image_files, read_scene_list
+from ._scene_matching import (
+    expand_scene_entries,
+    filter_existing_scenes,
+    index_image_files,
+    read_scene_list,
+)
 from ._split import split_train_val_by_object_counts
 from ._vrt import build_vrt_xml
 from .contracts import (
@@ -82,15 +92,23 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         )
         return DatasetPreparationResult(dataset=None, report=report)
 
+    scenes = expand_scene_entries(scenes, image_index)
     filtered = filter_existing_scenes(scenes, image_index)
     missing_files = list(filtered.missing_scenes)
     scene_to_image = {
         scene: path.resolve()
         for scene, path in filtered.scene_to_image.items()
     }
+    resolved_ambiguous = _resolve_ambiguous_scenes(filtered.ambiguous_scenes, [annotation_file])
+    scene_to_image.update({
+        scene: path.resolve()
+        for scene, path in resolved_ambiguous.items()
+    })
     if missing_files:
         errors.append(f"Не найдены снимки для сцен: {', '.join(missing_files)}")
     for scene, paths in filtered.ambiguous_scenes.items():
+        if scene in resolved_ambiguous:
+            continue
         joined = "; ".join(path.resolve().as_posix() for path in paths)
         errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
 
@@ -235,15 +253,34 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         )
         return DatasetPreparationResult(dataset=None, report=report)
 
+    scenes_by_class = {
+        slug: expand_scene_entries(class_scenes, image_index)
+        for slug, class_scenes in scenes_by_class.items()
+    }
+    scenes = _unique_preserving_order(
+        scene
+        for class_scenes in scenes_by_class.values()
+        for scene in class_scenes
+    )
     filtered = filter_existing_scenes(scenes, image_index)
     missing_files = list(filtered.missing_scenes)
     scene_to_image = {
         scene: path.resolve()
         for scene, path in filtered.scene_to_image.items()
     }
+    resolved_ambiguous = _resolve_ambiguous_scenes(
+        filtered.ambiguous_scenes,
+        list(annotation_by_slug.values()),
+    )
+    scene_to_image.update({
+        scene: path.resolve()
+        for scene, path in resolved_ambiguous.items()
+    })
     if missing_files:
         errors.append(f"Не найдены снимки для сцен: {', '.join(missing_files)}")
     for scene, paths in filtered.ambiguous_scenes.items():
+        if scene in resolved_ambiguous:
+            continue
         joined = "; ".join(path.resolve().as_posix() for path in paths)
         errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
 
@@ -413,6 +450,67 @@ def _count_multiclass_objects_or_collect_errors(
                 object_count=existing.object_count + row.object_count,
             )
     return [counts_by_scene[scene] for scene in scenes]
+
+
+def _resolve_ambiguous_scenes(
+    ambiguous_scenes: dict[str, list[Path]],
+    annotation_files: list[Path],
+) -> dict[str, Path]:
+    if not ambiguous_scenes:
+        return {}
+
+    candidate_paths = _unique_paths(
+        path
+        for paths in ambiguous_scenes.values()
+        for path in paths
+    )
+    scores_by_path: dict[Path, ImageGeometryScore] = {}
+    for annotation_file in annotation_files:
+        annotation_scores = score_images_by_annotation_geometry(candidate_paths, annotation_file)
+        for path, score in annotation_scores.items():
+            existing = scores_by_path.get(path)
+            if existing is None:
+                scores_by_path[path] = score
+                continue
+            scores_by_path[path] = ImageGeometryScore(
+                image_path=path,
+                object_count=existing.object_count + score.object_count,
+                distance_to_annotation=min(
+                    existing.distance_to_annotation,
+                    score.distance_to_annotation,
+                ),
+            )
+
+    resolved: dict[str, Path] = {}
+    for scene, paths in ambiguous_scenes.items():
+        scored_paths = [
+            scores_by_path[path]
+            for path in paths
+            if path in scores_by_path
+        ]
+        if not scored_paths:
+            continue
+        best = sorted(
+            scored_paths,
+            key=lambda item: (
+                -item.object_count,
+                item.distance_to_annotation,
+                item.image_path.as_posix().casefold(),
+            ),
+        )[0]
+        resolved[scene] = best.image_path
+    return resolved
+
+
+def _unique_paths(values) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _unique_preserving_order(values) -> list[str]:

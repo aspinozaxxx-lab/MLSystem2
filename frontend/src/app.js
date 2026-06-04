@@ -542,7 +542,7 @@ function renderResultsTable(payload) {
   const rows = payload.results.map((item) => `
     <tr>
       <td>${escapeHtml(item.model_name)}</td>
-      <td>${item.f1_score ?? ""}</td>
+      <td>${formatF1Score(item.f1_score)}</td>
       <td>${item.epoch ?? ""}</td>
       <td>${formatDate(item.trained_at)}</td>
       <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
@@ -637,8 +637,14 @@ function showPseudoModal(classKey, resultId) {
       showModal("Ошибка", "Выберите датасет или загрузите txt.", "Понятно");
       return;
     }
-    if (resultId) form.set("training_result_id", resultId);
-    await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, form);
+    const request = new FormData();
+    if (resultId) request.set("training_result_id", resultId);
+    if (datasetKey) {
+      request.set("dataset_key", datasetKey);
+    } else if (file instanceof File && file.name) {
+      request.set("scenes_txt", file);
+    }
+    await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request);
     closeModal();
     renderClassResultPage(classKey);
   });
@@ -843,6 +849,12 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}`;
+}
+
+function formatF1Score(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const score = Number(value);
+  return Number.isFinite(score) ? score.toFixed(2) : escapeHtml(String(value));
 }
 
 function pad(value) {

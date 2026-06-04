@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,7 @@ def list_classes(mlmarkup_root: Path) -> list[ClassInfo]:
         ClassInfo(
             key=path.name,
             name=path.name,
-            updated_at=_path_updated_at(path),
+            updated_at=_path_updated_at(path, mlmarkup_root),
             is_custom=False,
         )
         for path in _class_dirs(mlmarkup_root)
@@ -57,7 +58,7 @@ def _dataset_from_folder(path: Path) -> DatasetInfo | None:
         path=str(path),
         scenes_file=str(scenes_file) if scenes_file else None,
         annotation_file=str(annotation_file) if annotation_file else None,
-        updated_at=_path_updated_at(path),
+        updated_at=_path_updated_at(path, path.parent),
     )
 
 
@@ -66,9 +67,55 @@ def _first_file(path: Path, suffix: str) -> Path | None:
     return files[0] if files else None
 
 
-def _path_updated_at(path: Path) -> datetime | None:
+def _path_updated_at(path: Path, repo_root: Path) -> datetime | None:
+    return _git_path_updated_at(path, repo_root) or _filesystem_path_updated_at(path)
+
+
+def _git_path_updated_at(path: Path, repo_root: Path) -> datetime | None:
+    root = Path(repo_root)
+    if not (root / ".git").exists():
+        return None
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    except OSError:
+        relative_path = Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError):
         return None
 
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"safe.directory={root.resolve()}",
+                "-C",
+                str(root),
+                "log",
+                "-1",
+                "--format=%cI",
+                "--",
+                relative_path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, ValueError):
+        return None
+    if result.returncode != 0:
+        return None
+
+    value = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _filesystem_path_updated_at(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(Path(path).stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None

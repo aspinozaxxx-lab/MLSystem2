@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
+import asyncio
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated
 
@@ -41,6 +43,7 @@ from ._service import (
     training_templates,
     update_training_template,
 )
+from ._worker import run_queue_worker
 from .contracts import (
     AppLinksResponse,
     ClassListResponse,
@@ -79,7 +82,16 @@ def create_app() -> FastAPI:
         with session_factory() as session:
             ensure_seed_templates(session)
             session.commit()
-        yield
+        worker_task: asyncio.Task[None] | None = None
+        if config.worker_enabled:
+            worker_task = asyncio.create_task(run_queue_worker(session_factory, config))
+        try:
+            yield
+        finally:
+            if worker_task is not None:
+                worker_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await worker_task
 
     app = FastAPI(
         title="MLSystem2 Training UI API",
@@ -297,14 +309,15 @@ def create_app() -> FastAPI:
         scenes_txt: Annotated[UploadFile | None, File()] = None,
     ) -> JobDetail:
         parsed_training_result_id = uuid.UUID(training_result_id) if training_result_id else None
-        scenes_bytes = await scenes_txt.read() if scenes_txt is not None else None
+        scenes_name = scenes_txt.filename if scenes_txt is not None and scenes_txt.filename else None
+        scenes_bytes = await scenes_txt.read() if scenes_name is not None else None
         return create_pseudo_markup_job(
             db,
             class_key=class_key,
             dataset_key=dataset_key,
             training_result_id=parsed_training_result_id,
-            scenes_name=scenes_txt.filename if scenes_txt is not None else None,
-            scenes_content_type=scenes_txt.content_type if scenes_txt is not None else None,
+            scenes_name=scenes_name,
+            scenes_content_type=scenes_txt.content_type if scenes_name is not None else None,
             scenes_bytes=scenes_bytes,
             config=config,
         )

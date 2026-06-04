@@ -36,6 +36,13 @@ configure_schema(schema)
 target_metadata = Base.metadata
 
 
+def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+    del obj, compare_to
+    if reflected and type_ == "table" and name == "alembic_version":
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
@@ -44,6 +51,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         include_schemas=True,
         version_table_schema=schema,
+        include_object=_include_object,
     )
 
     with context.begin_transaction():
@@ -71,6 +79,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             include_schemas=True,
             version_table_schema=schema,
+            include_object=_include_object,
         )
 
         with context.begin_transaction():
