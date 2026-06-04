@@ -25,6 +25,11 @@ class JobType(StrEnum):
     INFERENCE = "inference"
 
 
+class JobSource(StrEnum):
+    MANUAL = "manual"
+    AUTOMATION = "automation"
+
+
 class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -37,6 +42,7 @@ class ResultStatus(StrEnum):
     RUNNING = "running"
     OK = "ok"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class StoredFileKind(StrEnum):
@@ -85,6 +91,7 @@ class DatasetInfo(BaseModel):
     is_custom: bool = False
     scenes_file: str | None = None
     annotation_file: str | None = None
+    version: str | None = None
     updated_at: datetime | None = None
 
 
@@ -208,6 +215,21 @@ class TrainingJobCreate(BaseModel):
     config: dict[str, Any]
 
 
+class AutomationEnabledUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class AutomationRuleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str
+    architecture: str
+    training_enabled: bool
+    pseudo_markup_enabled: bool
+
+
 class QueueEnabledUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -227,8 +249,11 @@ class JobSummary(BaseModel):
 
     id: UUID
     type: JobType
+    source: JobSource = JobSource.MANUAL
     status: JobStatus
     queue_position: int
+    dataset_key: str | None = None
+    dataset_version: str | None = None
     dataset_name: str
     training_dataset_name: str | None = None
     inference_dataset_name: str | None = None
@@ -254,8 +279,11 @@ class JobDetail(BaseModel):
 
     id: UUID
     type: JobType
+    source: JobSource = JobSource.MANUAL
     status: JobStatus
     queue_position: int
+    dataset_key: str | None = None
+    dataset_version: str | None = None
     dataset_name: str
     training_dataset_name: str | None = None
     inference_dataset_name: str | None = None
@@ -275,6 +303,9 @@ class PseudoMarkupResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    source: JobSource = JobSource.MANUAL
+    dataset_key: str | None = None
+    dataset_version: str | None = None
     source_dataset_name: str
     scenes_file: StoredFileInfo | None = None
     geojson_file: StoredFileInfo | None = None
@@ -286,6 +317,9 @@ class TrainingResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    source: JobSource = JobSource.MANUAL
+    dataset_key: str | None = None
+    dataset_version: str | None = None
     model_name: str
     architecture: str
     f1_score: float | None = None
@@ -305,9 +339,36 @@ class ClassResultsResponse(BaseModel):
     results: list[TrainingResultInfo]
 
 
+class AutomationRuleInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID | None = None
+    dataset_key: str
+    architecture: str
+    training_enabled: bool = False
+    pseudo_markup_enabled: bool = False
+    dataset_version: str | None = None
+    training_status: ResultStatus | None = None
+    pseudo_markup_status: ResultStatus | None = None
+    current_training_result_id: UUID | None = None
+
+
+class AutomationSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    datasets: list[DatasetInfo]
+    models: list[ModelInfo]
+    rules: list[AutomationRuleInfo]
+
+
 __all__ = [
     "AppLink",
     "AppLinksResponse",
+    "AutomationEnabledUpdate",
+    "AutomationRuleInfo",
+    "AutomationRuleUpdate",
+    "AutomationSnapshot",
     "ClassInfo",
     "ClassListResponse",
     "ClassResultsResponse",
@@ -317,6 +378,7 @@ __all__ = [
     "DatasetInfo",
     "DatasetListResponse",
     "JobDetail",
+    "JobSource",
     "JobStatus",
     "JobSummary",
     "JobType",

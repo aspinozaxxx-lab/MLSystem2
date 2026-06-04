@@ -18,3 +18,9 @@ python frontend/build.py
 Форма запуска показывает только параметры обычного binary tile-training, которые оператор реально меняет:
 долю валидации, tile/stride, аугментации, positive sampling и основные train-гиперпараметры. DataLoader
 workers/prefetch, seed, smart tiling, device, task и каналы модели задаются defaults модулей MLSystem2.
+
+Страница `Автоматизация` строит матрицу `датасет × модель` из `GET /api/v1/automation`. В каждой ячейке есть две
+галочки: синяя для auto training и красная для auto pseudo-markup. Изменения сохраняются сразу через
+`PUT /api/v1/automation/rules`, глобальный switch работает через `PUT /api/v1/automation/enabled`. Frontend не
+решает, какие jobs создавать: он только сохраняет правила, а синхронизацию по `dataset_version` выполняет
+FastAPI worker.

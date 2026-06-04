@@ -102,6 +102,7 @@ def _dataset_from_variant_folder(
     dataset_name = _dataset_display_name(class_path.name, variant_name)
     scenes_file = _first_file(variant_path, ".txt")
     annotation_file = _first_file(variant_path, ".geojson")
+    updated_at, version = _path_metadata(variant_path, repo_root)
     return DatasetInfo(
         key=dataset_name,
         name=dataset_name,
@@ -112,7 +113,8 @@ def _dataset_from_variant_folder(
         path=str(variant_path),
         scenes_file=str(scenes_file) if scenes_file else None,
         annotation_file=str(annotation_file) if annotation_file else None,
-        updated_at=_path_updated_at(variant_path, repo_root),
+        version=version,
+        updated_at=updated_at,
     )
 
 
@@ -134,11 +136,11 @@ def _latest_updated_at(datasets: list[DatasetInfo]) -> datetime | None:
     return max(values) if values else None
 
 
-def _path_updated_at(path: Path, repo_root: Path) -> datetime | None:
-    return _git_path_updated_at(path, repo_root) or _filesystem_path_updated_at(path)
+def _path_metadata(path: Path, repo_root: Path) -> tuple[datetime | None, str | None]:
+    return _git_path_metadata(path, repo_root) or _filesystem_path_metadata(path)
 
 
-def _git_path_updated_at(path: Path, repo_root: Path) -> datetime | None:
+def _git_path_metadata(path: Path, repo_root: Path) -> tuple[datetime | None, str] | None:
     root = Path(repo_root)
     if not (root / ".git").exists():
         return None
@@ -157,7 +159,7 @@ def _git_path_updated_at(path: Path, repo_root: Path) -> datetime | None:
                 str(root),
                 "log",
                 "-1",
-                "--format=%cI",
+                "--format=%H%x00%cI",
                 "--",
                 relative_path,
             ],
@@ -175,10 +177,32 @@ def _git_path_updated_at(path: Path, repo_root: Path) -> datetime | None:
     value = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
     if not value:
         return None
+    parts = value.split("\x00", 1)
+    if len(parts) != 2:
+        return None
+    commit_sha, committed_at = parts
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(committed_at.replace("Z", "+00:00")), f"git:{commit_sha}"
     except ValueError:
         return None
+
+
+def _filesystem_path_metadata(path: Path) -> tuple[datetime | None, str | None]:
+    max_mtime_ns: int | None = None
+    for item in Path(path).rglob("*"):
+        if not item.is_file():
+            continue
+        try:
+            mtime_ns = item.stat().st_mtime_ns
+        except OSError:
+            continue
+        max_mtime_ns = mtime_ns if max_mtime_ns is None else max(max_mtime_ns, mtime_ns)
+    if max_mtime_ns is None:
+        try:
+            max_mtime_ns = Path(path).stat().st_mtime_ns
+        except OSError:
+            return None, None
+    return datetime.fromtimestamp(max_mtime_ns / 1_000_000_000, tz=timezone.utc), f"fs:{max_mtime_ns}"
 
 
 def _filesystem_path_updated_at(path: Path) -> datetime | None:

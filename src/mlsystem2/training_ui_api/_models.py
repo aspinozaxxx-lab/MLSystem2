@@ -88,13 +88,54 @@ class QueueControlRow(Base):
     )
 
 
+class AutomationControlRow(Base):
+    __tablename__ = "automation_controls"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AutomationRuleRow(Base):
+    __tablename__ = "automation_rules"
+    __table_args__ = (
+        UniqueConstraint("dataset_key", "architecture", name="uq_automation_rules_dataset_architecture"),
+        Index("ix_automation_rules_dataset_key", "dataset_key"),
+        Index("ix_automation_rules_architecture", "architecture"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_key: Mapped[str] = mapped_column(String(180))
+    architecture: Mapped[str] = mapped_column(String(96))
+    training_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    pseudo_markup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     type: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual", index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     queue_position: Mapped[int] = mapped_column(Integer, index=True)
+    automation_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("automation_rules.id"),
+        nullable=True,
+    )
+    dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     dataset_name: Mapped[str] = mapped_column(String(240))
     training_dataset_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
     inference_dataset_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
@@ -117,12 +158,21 @@ class JobRow(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     custom_dataset: Mapped[CustomDatasetRow | None] = relationship()
+    automation_rule: Mapped[AutomationRuleRow | None] = relationship()
 
 
 class TrainingResultRow(Base):
     __tablename__ = "training_results"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(32), default="manual", index=True)
+    automation_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("automation_rules.id"),
+        nullable=True,
+    )
+    dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     class_key: Mapped[str] = mapped_column(String(180), index=True)
     class_display_name: Mapped[str] = mapped_column(String(240))
     architecture: Mapped[str] = mapped_column(String(96))
@@ -146,6 +196,14 @@ class PseudoMarkupResultRow(Base):
     __tablename__ = "pseudo_markup_results"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(32), default="manual", index=True)
+    automation_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("automation_rules.id"),
+        nullable=True,
+    )
+    dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     training_result_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("training_results.id"),
@@ -173,5 +231,6 @@ class PseudoMarkupResultRow(Base):
     )
 
     training_result: Mapped[TrainingResultRow | None] = relationship()
+    automation_rule: Mapped[AutomationRuleRow | None] = relationship()
     scenes_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[scenes_file_id])
     geojson_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[geojson_file_id])

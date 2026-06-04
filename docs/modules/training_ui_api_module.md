@@ -13,7 +13,7 @@
 ## Публичные контракты
 
 - `TrainingUIAPIError` - ошибка сервиса.
-- `TemplateSource`, `JobType`, `JobStatus`, `ResultStatus`, `StoredFileKind` - enum-значения API.
+- `TemplateSource`, `JobType`, `JobSource`, `JobStatus`, `ResultStatus`, `StoredFileKind` - enum-значения API.
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
 - `DatasetInfo`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - датасеты и классы MLMarkup.
@@ -21,6 +21,7 @@
 - `ConfigField`, `ConfigSchema`, `TrainingTemplate`, `TrainingTemplateListResponse`, `TrainingTemplateUpdate` - шаблоны обучения.
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
 - `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди.
+- `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse` - результаты обучения и псевдоразметки.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -29,6 +30,21 @@
 - `mlflow_adapter.api` - получить и создать MLflow experiments, прочитать лучший checkpoint training run и скачать `checkpoints/best.pt` для псевдоразметки.
 - `mlflow_adapter.contracts` - передать публичные DTO создания experiment и summary лучшего checkpoint.
 - `settings.contracts` - валидировать YAML-настройки, сформированные для запуска training CLI.
+
+### Автоматизация
+
+Автоматизация хранится в таблицах `automation_controls` и `automation_rules`. Правило задается парой
+`dataset_key + architecture` и двумя флагами: `training_enabled` и `pseudo_markup_enabled`. `Custom` не участвует в
+автоматизации. `DatasetInfo.version` вычисляется как `git:{commit_sha}` по последнему коммиту папки варианта
+MLMarkup, а если git checkout недоступен - как `fs:{mtime_ns}` по filesystem mtime.
+
+Worker перед dispatch очередей вызывает синхронизацию автоматизации. При включенном глобальном switch он создает
+auto training job для текущей версии датасета, если нет текущего auto result/job для этой версии. После успешного
+auto training result с MLflow run id создается auto pseudo-markup job по txt того же датасета. Manual jobs имеют
+приоритет выше automation jobs. Auto jobs нельзя удалить или двигать через endpoints очереди; снятие галочки
+отменяет соответствующие queued/running auto jobs. Если меняется версия конкретного датасета, активные auto jobs
+предыдущей версии отменяются только для этого датасета и модели. Failed auto attempt не ретраится до новой версии
+или снятия и повторного включения галочки.
 
 ## Алгоритм работы и его особенности
 

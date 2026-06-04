@@ -35,6 +35,9 @@
 - `GET /api/v1/classes`
 - `POST /api/v1/custom-datasets`
 - `GET /api/v1/models`
+- `GET /api/v1/automation`
+- `PUT /api/v1/automation/enabled`
+- `PUT /api/v1/automation/rules`
 - `GET /api/v1/training-templates`
 - `GET /api/v1/training-templates/{architecture}`
 - `PUT /api/v1/training-templates/{architecture}`
@@ -58,7 +61,13 @@ OpenAPI доступен стандартно по `/openapi.json`.
 возвращают классы с вложенным списком `variants`; frontend не выбирает класс целиком, а открывает конкретный
 вариант. `updated_at` у варианта заполняется по последнему git-коммиту, затронувшему папку варианта в
 `MLSYSTEM2_MLMARKUP_ROOT`. Если `MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem
-mtime как fallback.
+mtime как fallback. `version` у варианта равен `git:{commit_sha}` или `fs:{mtime_ns}` и используется автоматизацией
+для дедупликации jobs по конкретной версии датасета.
+
+`GET /api/v1/automation` возвращает глобальный выключатель, непустые MLMarkup-датасеты без `Custom`, UI-модели и
+матрицу правил `(dataset_key, architecture)`. `PUT /api/v1/automation/enabled` включает или ставит на паузу создание
+и запуск auto jobs. `PUT /api/v1/automation/rules` сохраняет две галочки правила: `training_enabled` и
+`pseudo_markup_enabled`.
 
 Для reverse proxy дополнительно есть совместимый endpoint `GET /auth/proxy-check`: он не входит в OpenAPI,
 возвращает `204` и `X-Remote-User` для авторизованной cookie-сессии, иначе `401`.
@@ -72,6 +81,8 @@ mtime как fallback.
 - `custom_datasets`
 - `jobs`
 - `queue_controls`
+- `automation_controls`
+- `automation_rules`
 - `training_results`
 - `pseudo_markup_results`
 
@@ -79,6 +90,11 @@ mtime как fallback.
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
+
+`jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
+`dataset_version`. Для auto rows дополнительно заполнен `automation_rule_id`. Auto jobs нельзя удалить или двигать
+через endpoints очереди; они отменяются снятием соответствующей галочки в автоматизации или заменяются при новой
+версии конкретного датасета.
 
 ## Границы
 
@@ -89,6 +105,13 @@ Frontend не обращается к Postgres. Сервис не импорти
 YAML config из сохраненных параметров и модульных defaults, запускает публичный CLI `python -m mlsystem2.cli.train --config ...` отдельным
 процессом и обновляет статусы jobs/results по exit code. Pause/delete отправляют SIGTERM группе процесса и
 очищают временную папку job.
+
+Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
+нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
+После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job по txt того же датасета.
+Manual jobs всегда запускаются раньше automation jobs. При выключенной автоматизации новые auto jobs не создаются и
+queued auto jobs не стартуют; running auto jobs продолжают работу. Failed auto attempt не ретраится до новой версии
+датасета или снятия и повторной установки галочки.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший

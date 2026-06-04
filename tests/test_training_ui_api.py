@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint
-from mlsystem2.training_ui_api import _service, _worker
+from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment
+from mlsystem2.training_ui_api import _automation, _service, _worker
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
-from mlsystem2.training_ui_api._models import JobRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, TrainingResultRow
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
 from mlsystem2.training_ui_api._worker import dispatch_inference_queue_once, dispatch_training_queue_once
-from mlsystem2.training_ui_api.contracts import JobStatus, ResultStatus, TrainingJobCreate
+from mlsystem2.training_ui_api.contracts import (
+    AutomationEnabledUpdate,
+    AutomationRuleUpdate,
+    JobSource,
+    JobStatus,
+    ResultStatus,
+    TrainingJobCreate,
+    TrainingUIAPIError,
+)
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -79,6 +89,26 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "unet + resnet101",
             "unet + resnet152",
         ]
+        automation = client.get("/api/v1/automation").json()
+        assert automation["enabled"] is False
+        assert [item["name"] for item in automation["datasets"]] == [
+            "Вырубки\\main",
+            "Пожары\\main",
+        ]
+        assert len(automation["rules"]) == len(automation["datasets"]) * len(models)
+        enabled_automation = client.put("/api/v1/automation/enabled", json={"enabled": True}).json()
+        assert enabled_automation["enabled"] is True
+        rule = client.put(
+            "/api/v1/automation/rules",
+            json={
+                "dataset_key": "Вырубки\\main",
+                "architecture": "smp_segformer_b2",
+                "training_enabled": True,
+                "pseudo_markup_enabled": True,
+            },
+        ).json()
+        assert rule["training_enabled"] is True
+        assert rule["pseudo_markup_enabled"] is True
 
         templates = client.get("/api/v1/training-templates").json()["templates"]
         assert len(templates) == 7
@@ -255,6 +285,211 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
+def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Path, monkeypatch) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_popen(args: list[str], **kwargs: object) -> SimpleNamespace:
+        started.append((args, kwargs))
+        return SimpleNamespace(pid=4321)
+
+    def fake_experiment(request) -> MLflowExperiment:
+        return MLflowExperiment(experiment_id="auto-exp", name=request.name)
+
+    monkeypatch.setattr(_automation, "create_experiment", fake_experiment)
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
+        _service.update_automation(
+            session,
+            AutomationRuleUpdate(
+                dataset_key="Вырубки\\main",
+                architecture="smp_segformer_b2",
+                training_enabled=True,
+                pseudo_markup_enabled=False,
+            ),
+            config,
+        )
+        _automation.sync_automation_once(session, config)
+        auto_job = session.scalar(select(JobRow).where(JobRow.source == JobSource.AUTOMATION.value))
+        assert auto_job is not None
+        assert auto_job.status == JobStatus.QUEUED.value
+        assert auto_job.dataset_key == "Вырубки\\main"
+        assert auto_job.dataset_version is not None
+        old_auto_job_id = auto_job.id
+        old_version = auto_job.dataset_version
+        annotation_path = class_dir / "annotation.geojson"
+        annotation_path.write_text('{"type":"FeatureCollection","features":[{"type":"Feature"}]}', encoding="utf-8")
+        stat = annotation_path.stat()
+        os.utime(annotation_path, ns=(stat.st_atime_ns + 2_000_000_000, stat.st_mtime_ns + 2_000_000_000))
+        _automation.sync_automation_once(session, config)
+        assert session.get(JobRow, old_auto_job_id).status == JobStatus.CANCELLED.value
+        auto_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.status == JobStatus.QUEUED.value,
+            )
+        )
+        assert auto_job is not None
+        assert auto_job.dataset_version != old_version
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=False), config)
+        dispatch_training_queue_once(session, config, popen_factory=fake_popen)
+        assert started == []
+        assert session.get(JobRow, auto_job.id).status == JobStatus.QUEUED.value
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
+
+        manual_job = create_training_job(
+            session,
+            TrainingJobCreate(
+                mlflow_experiment_id="1",
+                mlflow_experiment_name="ui-test",
+                mlflow_run_name="manual-test",
+                dataset_key="Вырубки\\main",
+                architecture="smp_segformer_b2",
+                config=_short_training_config(),
+            ),
+            config,
+        )
+        dispatch_training_queue_once(session, config, popen_factory=fake_popen)
+        session.commit()
+
+        running = session.scalar(select(JobRow).where(JobRow.status == JobStatus.RUNNING.value))
+        assert running is not None
+        assert running.id == manual_job.id
+        assert running.source == JobSource.MANUAL.value
+        assert session.get(JobRow, auto_job.id).status == JobStatus.QUEUED.value
+        with pytest.raises(TrainingUIAPIError):
+            _service.delete_job(session, auto_job.id)
+        with pytest.raises(TrainingUIAPIError):
+            _service.move_job(session, auto_job.id, direction=-1)
+
+
+def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry_failed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    def fake_experiment(request) -> MLflowExperiment:
+        return MLflowExperiment(experiment_id="auto-exp", name=request.name)
+
+    def fake_best_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint:
+        return MLflowBestCheckpoint(
+            tracking_uri=tracking_uri,
+            run_id=run_id,
+            metric_name="val/best_threshold_pixel_f1",
+            f1_score=0.91,
+            epoch=4,
+            artifact_path="checkpoints/best.pt",
+            artifact_uri="s3://mlflow-artifacts/auto/run/artifacts/checkpoints/best.pt",
+            threshold=0.63,
+        )
+
+    monkeypatch.setattr(_automation, "create_experiment", fake_experiment)
+    monkeypatch.setattr(_automation, "get_best_training_checkpoint", fake_best_checkpoint)
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
+        _service.update_automation(
+            session,
+            AutomationRuleUpdate(
+                dataset_key="Вырубки\\main",
+                architecture="smp_segformer_b2",
+                training_enabled=True,
+                pseudo_markup_enabled=True,
+            ),
+            config,
+        )
+        _automation.sync_automation_once(session, config)
+        training_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.type == "training",
+            )
+        )
+        assert training_job is not None
+        training_result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == training_job.id))
+        assert training_result is not None
+        training_job.status = JobStatus.COMPLETED.value
+        training_result.status = ResultStatus.OK.value
+        training_result.mlflow_run_id = "run-auto"
+        training_result.f1_score = 0.91
+        training_result.epoch = 4
+
+        _automation.sync_automation_once(session, config)
+        pseudo_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.type == "inference",
+            )
+        )
+        assert pseudo_job is not None
+        assert pseudo_job.dataset_key == "Вырубки\\main"
+        assert pseudo_job.dataset_version == training_job.dataset_version
+        assert pseudo_job.config["training_result_id"] == str(training_result.id)
+        assert pseudo_job.config["checkpoint_uri"] == "s3://mlflow-artifacts/auto/run/artifacts/checkpoints/best.pt"
+        pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
+        assert pseudo_result is not None
+        assert pseudo_result.scenes_file is not None
+        assert Path(pseudo_result.scenes_file.path).read_text(encoding="utf-8") == "scene-1\n"
+
+        training_result.status = ResultStatus.ERROR.value
+        pseudo_job.status = JobStatus.CANCELLED.value
+        pseudo_result.status = ResultStatus.CANCELLED.value
+        _automation.sync_automation_once(session, config)
+        training_jobs = session.scalars(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.type == "training",
+            )
+        ).all()
+        assert len(training_jobs) == 1
+
+
 def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
@@ -406,3 +641,24 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_results[0].geojson_file is not None
         geojson_path = config.stored_files_root / "pseudo_markup_geojson"
         assert any(path.suffix == ".geojson" for path in geojson_path.iterdir())
+
+
+def _short_training_config() -> dict[str, object]:
+    return {
+        "dataset.val_fraction": 0.2,
+        "tile_preparation.tile_size": 32,
+        "tile_preparation.stride": 32,
+        "tile_preparation.augmentation_level": 0,
+        "tile_preparation.positive_factor": 0.5,
+        "train.epochs": 1,
+        "train.batch_size": 1,
+        "train.learning_rate": 0.0001,
+        "train.weight_decay": 0.0,
+        "train.loss": "bce_dice",
+        "train.focal_alpha": 0.6,
+        "train.pos_weight": 1.0,
+        "train.tversky_alpha": 0.4,
+        "train.tversky_beta": 0.6,
+        "train.threshold": 0.5,
+        "train.early_stopping_patience": 1,
+    }

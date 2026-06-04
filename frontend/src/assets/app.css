@@ -354,6 +354,73 @@ th {
   background: #f1f7ff;
 }
 
+.automation-table-wrap {
+  max-height: calc(100vh - 260px);
+}
+
+.automation-table th,
+.automation-table td {
+  min-width: 170px;
+  vertical-align: top;
+}
+
+.automation-table th:first-child,
+.automation-table td:first-child {
+  min-width: 220px;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.automation-table th:first-child {
+  z-index: 3;
+  background: var(--blue-2);
+}
+
+.automation-dataset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.automation-dataset small {
+  color: var(--muted);
+}
+
+.automation-cell {
+  background: #fbfdff;
+}
+
+.automation-check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
+.automation-check input {
+  width: auto;
+}
+
+.automation-check.training {
+  color: var(--blue);
+}
+
+.automation-check.pseudo {
+  color: var(--error);
+}
+
+.automation-status {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

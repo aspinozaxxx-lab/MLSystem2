@@ -34,6 +34,7 @@ def test_list_classes_uses_git_history_for_dataset_update_dates(tmp_path: Path) 
         mlmarkup_root,
         date="2024-01-02T10:20:30+00:00",
     )
+    initial_datasets = {item.key: item for item in list_datasets(mlmarkup_root)}
     (class_b_test / "class_b_test.geojson").write_text('{"updated":true}', encoding="utf-8")
     _git(["add", "class_b/test/class_b_test.geojson"], mlmarkup_root)
     _git(
@@ -52,6 +53,10 @@ def test_list_classes_uses_git_history_for_dataset_update_dates(tmp_path: Path) 
     assert datasets["class_a\\main"].class_name == "class_a"
     assert datasets["class_a\\main"].variant_name == "main"
     assert datasets["class_b\\test"].updated_at == datetime(2024, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+    assert datasets["class_a\\main"].version == initial_datasets["class_a\\main"].version
+    assert datasets["class_b\\main"].version == initial_datasets["class_b\\main"].version
+    assert datasets["class_b\\test"].version != initial_datasets["class_b\\test"].version
+    assert datasets["class_b\\test"].version.startswith("git:")
 
 
 def _git(args: list[str], cwd: Path, *, date: str | None = None) -> None:

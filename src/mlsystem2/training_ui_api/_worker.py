@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import shlex
-import signal
 import subprocess
 import sys
 import uuid
@@ -26,9 +25,11 @@ from mlsystem2.mlflow_adapter.api import get_best_training_checkpoint
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
 from mlsystem2.settings.contracts import SystemSettings
 
+from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
 from ._datasets import CUSTOM_KEY, list_datasets
 from ._models import (
+    AutomationControlRow,
     CustomDatasetRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -36,7 +37,7 @@ from ._models import (
     StoredFileRow,
     TrainingResultRow,
 )
-from .contracts import JobStatus, JobType, ResultStatus, StoredFileKind
+from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
 
 LOGGER = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ async def run_queue_worker(
     while True:
         try:
             with session_factory() as session:
+                sync_automation_once(session, config)
                 dispatch_training_queue_once(session, config)
                 dispatch_inference_queue_once(session, config)
                 session.commit()
@@ -80,11 +82,7 @@ def dispatch_training_queue_once(
     control = session.get(QueueControlRow, JobType.TRAINING.value)
     if control is not None and not control.enabled:
         return
-    job = session.scalar(
-        select(JobRow)
-        .where(JobRow.type == JobType.TRAINING.value, JobRow.status == JobStatus.QUEUED.value)
-        .order_by(JobRow.queue_position, JobRow.created_at)
-    )
+    job = _next_dispatch_job(session, JobType.TRAINING)
     if job is None:
         return
     _start_training_job(session, job, config, popen_factory=popen_factory)
@@ -102,28 +100,38 @@ def dispatch_inference_queue_once(
     control = session.get(QueueControlRow, JobType.INFERENCE.value)
     if control is not None and not control.enabled:
         return
-    job = session.scalar(
-        select(JobRow)
-        .where(JobRow.type == JobType.INFERENCE.value, JobRow.status == JobStatus.QUEUED.value)
-        .order_by(JobRow.queue_position, JobRow.created_at)
-    )
+    job = _next_dispatch_job(session, JobType.INFERENCE)
     if job is None:
         return
     _start_inference_job(session, job, config, popen_factory=popen_factory)
 
 
-def terminate_job_process(row: JobRow) -> None:
-    if row.process_pid is None:
-        return
-    pid = row.process_pid
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except (AttributeError, OSError):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    row.process_pid = None
+def _next_dispatch_job(session: Session, job_type: JobType) -> JobRow | None:
+    rows = session.scalars(
+        select(JobRow).where(
+            JobRow.type == job_type.value,
+            JobRow.status == JobStatus.QUEUED.value,
+        )
+    ).all()
+    automation_enabled = _automation_enabled(session)
+    candidates = [
+        row
+        for row in rows
+        if row.source != JobSource.AUTOMATION.value or automation_enabled
+    ]
+    candidates.sort(
+        key=lambda row: (
+            0 if row.source == JobSource.MANUAL.value else 1,
+            row.queue_position,
+            row.created_at,
+        )
+    )
+    return candidates[0] if candidates else None
+
+
+def _automation_enabled(session: Session) -> bool:
+    row = session.get(AutomationControlRow, AUTOMATION_KEY)
+    return bool(row and row.enabled)
 
 
 def _reconcile_running_training_jobs(session: Session, config: TrainingUIAPIConfig) -> None:

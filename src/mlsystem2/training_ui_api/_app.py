@@ -23,6 +23,7 @@ from ._database import Base, configure_schema, create_session_factory, session_s
 from ._models import StoredFileRow
 from ._service import (
     app_links,
+    automation,
     class_results,
     classes,
     create_custom_dataset,
@@ -37,15 +38,21 @@ from ._service import (
     models,
     move_job,
     queues,
+    set_automation,
     set_queue_enabled,
     stored_file,
     training_template,
     training_templates,
     update_training_template,
+    update_automation,
 )
 from ._worker import run_queue_worker
 from .contracts import (
     AppLinksResponse,
+    AutomationEnabledUpdate,
+    AutomationRuleInfo,
+    AutomationRuleUpdate,
+    AutomationSnapshot,
     ClassListResponse,
     ClassResultsResponse,
     CustomDatasetInfo,
@@ -199,6 +206,29 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/models", response_model=ModelListResponse)
     def get_models(_: str = Depends(authenticated)) -> ModelListResponse:
         return models()
+
+    @app.get("/api/v1/automation", response_model=AutomationSnapshot)
+    def get_automation(
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> AutomationSnapshot:
+        return automation(db, config)
+
+    @app.put("/api/v1/automation/enabled", response_model=AutomationSnapshot)
+    def put_automation_enabled(
+        request: AutomationEnabledUpdate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> AutomationSnapshot:
+        return set_automation(db, request, config)
+
+    @app.put("/api/v1/automation/rules", response_model=AutomationRuleInfo)
+    def put_automation_rule(
+        request: AutomationRuleUpdate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> AutomationRuleInfo:
+        return update_automation(db, request, config)
 
     @app.get("/api/v1/training-templates", response_model=TrainingTemplateListResponse)
     def get_training_templates(

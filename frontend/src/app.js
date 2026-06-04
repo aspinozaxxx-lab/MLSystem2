@@ -32,6 +32,7 @@ async function render() {
   if (route[0] === "start") return renderStartPage();
   if (route[0] === "queue") return renderQueuePage();
   if (route[0] === "templates") return renderTemplatesPage();
+  if (route[0] === "automation") return renderAutomationPage();
   if (route[0] === "results" && route[1]) return renderClassResultPage(decodeURIComponent(route[1]));
   if (route[0] === "results") return renderResultsPage();
   if (route[0] === "jobs" && route[1]) return renderJobPage(route[1]);
@@ -87,6 +88,7 @@ function renderShell(content) {
         <a href="#/start">Запуск обучения</a>
         <a href="#/queue">В процессе</a>
         <a href="#/templates">Шаблоны обучения</a>
+        <a href="#/automation">Автоматизация</a>
         <a href="#/results">Результаты</a>
         <button class="link-button" id="logout-button" type="button">Выйти</button>
       </nav>
@@ -178,6 +180,7 @@ function renderHomePage() {
       ${homeTrainingCard("Запуск обучения", "Форма создания training job.", "#/start")}
       ${homeTrainingCard("В процессе", "Очереди обучения и инференса.", "#/queue")}
       ${homeTrainingCard("Шаблоны обучения", "Defaults по архитектурам.", "#/templates")}
+      ${homeTrainingCard("Автоматизация", "Автозапуск обучения и псевдоразметки по версиям датасетов.", "#/automation")}
       ${homeTrainingCard("Результаты", "Классы, метрики и псевдоразметка.", "#/results")}
     </section>
   `);
@@ -369,6 +372,92 @@ function renderTemplatesPage() {
   });
 }
 
+async function renderAutomationPage() {
+  const snapshot = await apiJson("/automation");
+  const rules = Object.fromEntries(
+    (snapshot.rules || []).map((rule) => [automationRuleKey(rule.dataset_key, rule.architecture), rule])
+  );
+  const headers = [
+    "<th>Датасет</th>",
+    ...(snapshot.models || []).map((model) => `<th>${escapeHtml(model.display_name)}</th>`),
+  ].join("");
+  const rows = (snapshot.datasets || []).map((dataset) => `
+    <tr>
+      <td class="automation-dataset">
+        <strong>${escapeHtml(dataset.name)}</strong>
+        <small>${formatDate(dataset.updated_at) || "нет даты"} · ${escapeHtml(shortVersion(dataset.version))}</small>
+      </td>
+      ${(snapshot.models || []).map((model) => {
+        const rule = rules[automationRuleKey(dataset.key, model.architecture)] || {};
+        return `
+          <td
+            class="automation-cell"
+            data-dataset-key="${escapeAttr(dataset.key)}"
+            data-architecture="${escapeAttr(model.architecture)}"
+          >
+            <label class="automation-check training">
+              <input class="automation-checkbox" data-kind="training" type="checkbox" ${rule.training_enabled ? "checked" : ""}>
+              <span>обучение</span>
+            </label>
+            <label class="automation-check pseudo">
+              <input class="automation-checkbox" data-kind="pseudo" type="checkbox" ${rule.pseudo_markup_enabled ? "checked" : ""}>
+              <span>разметка</span>
+            </label>
+            <div class="automation-status">
+              ${automationStatus("обучение", rule.training_status)}
+              ${automationStatus("разметка", rule.pseudo_markup_status)}
+            </div>
+          </td>
+        `;
+      }).join("")}
+    </tr>
+  `).join("");
+  renderShell(`
+    <section class="hero compact-hero">
+      <h1>Автоматизация</h1>
+      <p>Автозапуск обучения и псевдоразметки для актуальных версий датасетов MLMarkup</p>
+    </section>
+    <section class="switch-row">
+      <label class="switch">
+        <input id="automation-toggle" type="checkbox" ${snapshot.enabled ? "checked" : ""}>
+        автоматизация ${snapshot.enabled ? "включена" : "выключена"}
+      </label>
+      <button class="secondary" id="refresh-automation" type="button">Обновить</button>
+    </section>
+    <section class="panel">
+      <div class="table-wrap automation-table-wrap">
+        <table class="automation-table">
+          <thead><tr>${headers}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>
+  `);
+  document.getElementById("automation-toggle").addEventListener("change", async (event) => {
+    await apiJson("/automation/enabled", {
+      method: "PUT",
+      body: { enabled: event.currentTarget.checked },
+    });
+    renderAutomationPage();
+  });
+  document.getElementById("refresh-automation").addEventListener("click", renderAutomationPage);
+  for (const input of document.querySelectorAll(".automation-checkbox")) {
+    input.addEventListener("change", async (event) => {
+      const cell = event.currentTarget.closest(".automation-cell");
+      await apiJson("/automation/rules", {
+        method: "PUT",
+        body: {
+          dataset_key: cell.dataset.datasetKey,
+          architecture: cell.dataset.architecture,
+          training_enabled: cell.querySelector("[data-kind='training']").checked,
+          pseudo_markup_enabled: cell.querySelector("[data-kind='pseudo']").checked,
+        },
+      });
+      renderAutomationPage();
+    });
+  }
+}
+
 async function renderQueuePage() {
   const snapshot = await apiJson("/queues");
   renderShell(`
@@ -437,12 +526,16 @@ function renderInferenceQueue(jobs) {
 }
 
 function queueButtons(job) {
-  const running = job.status === "running";
+  const actions = job.actions || [];
+  if (!actions.length) {
+    return job.source === "automation" ? `<span class="badge neutral">авто</span>` : "";
+  }
   return `
     <div class="inline-row">
-      <button class="icon-button queue-action" data-action="up" data-job="${job.id}" title="Повысить" ${running ? "disabled" : ""}>↑</button>
-      <button class="icon-button queue-action" data-action="down" data-job="${job.id}" title="Понизить" ${running ? "disabled" : ""}>↓</button>
-      <button class="icon-button queue-action danger" data-action="delete" data-job="${job.id}" title="Удалить">×</button>
+      ${actions.includes("move_up") ? `<button class="icon-button queue-action" data-action="up" data-job="${job.id}" title="Повысить">↑</button>` : ""}
+      ${actions.includes("move_down") ? `<button class="icon-button queue-action" data-action="down" data-job="${job.id}" title="Понизить">↓</button>` : ""}
+      ${actions.includes("delete") ? `<button class="icon-button queue-action danger" data-action="delete" data-job="${job.id}" title="Удалить">×</button>` : ""}
+      ${job.source === "automation" ? `<span class="badge neutral">авто</span>` : ""}
     </div>
   `;
 }
@@ -761,7 +854,37 @@ function statusView(status) {
   if (status === "running") return `<span class="status-icon running"><span class="spinner">↻</span>в процессе</span>`;
   if (status === "ok") return `<span class="status-icon ok">✓ ОК</span>`;
   if (status === "error") return `<span class="status-icon error">× ошибка</span>`;
+  if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
+}
+
+function automationRuleKey(datasetKey, architecture) {
+  return `${datasetKey}|||${architecture}`;
+}
+
+function automationStatus(label, status) {
+  if (!status) return "";
+  return `<span class="badge ${statusClass(status)}">${escapeHtml(label)}: ${escapeHtml(statusLabel(status))}</span>`;
+}
+
+function statusClass(status) {
+  if (status === "ok") return "ok";
+  if (status === "running") return "warning";
+  if (status === "error") return "error";
+  return "neutral";
+}
+
+function statusLabel(status) {
+  if (status === "running") return "в процессе";
+  if (status === "ok") return "ОК";
+  if (status === "error") return "ошибка";
+  if (status === "cancelled") return "отменено";
+  return status || "";
+}
+
+function shortVersion(version) {
+  if (!version) return "нет версии";
+  return version.replace(/^git:/, "").replace(/^fs:/, "").slice(0, 8);
 }
 
 function option(value, label, selected) {

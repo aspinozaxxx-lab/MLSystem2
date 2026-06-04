@@ -21,8 +21,14 @@ from mlsystem2.mlflow_adapter.contracts import (
     MLflowBestCheckpoint,
     MLflowExperimentRequest,
 )
-from mlsystem2.models.api import list_supported_models
 
+from ._automation import (
+    automation_snapshot,
+    ensure_automation_control,
+    set_automation_enabled,
+    update_automation_rule,
+)
+from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
 from ._config import TrainingUIAPIConfig
 from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_dataset, list_classes, list_datasets
 from ._models import (
@@ -34,11 +40,15 @@ from ._models import (
     TrainingResultRow,
     TrainingTemplateRow,
 )
+from ._processes import terminate_job_process
 from ._templates import initial_templates, sanitize_template_config
-from ._worker import terminate_job_process
 from .contracts import (
     AppLink,
     AppLinksResponse,
+    AutomationEnabledUpdate,
+    AutomationRuleInfo,
+    AutomationRuleUpdate,
+    AutomationSnapshot,
     ClassListResponse,
     ClassResultsResponse,
     ConfigSchema,
@@ -46,12 +56,12 @@ from .contracts import (
     DatasetInfo,
     DatasetListResponse,
     JobDetail,
+    JobSource,
     JobStatus,
     JobSummary,
     JobType,
     MLflowExperimentCreate,
     MLflowExperimentInfo,
-    ModelInfo,
     ModelListResponse,
     PseudoMarkupResultInfo,
     QueueEnabledUpdate,
@@ -69,16 +79,6 @@ from .contracts import (
 )
 
 
-MODEL_DISPLAY_NAMES = {
-    "smp_deeplabv3plus_resnet50": "deeplabV3+",
-    "smp_segformer_b2": "segformer b2",
-    "smp_segformer_b3": "segformer b3",
-    "smp_unet_resnet34": "unet + resnet34",
-    "smp_unet_resnet50": "unet + resnet50",
-    "smp_unet_resnet101": "unet + resnet101",
-    "smp_unet_resnet152": "unet + resnet152",
-}
-UI_ARCHITECTURES = tuple(MODEL_DISPLAY_NAMES)
 ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
 
 
@@ -119,22 +119,30 @@ def classes(config: TrainingUIAPIConfig) -> ClassListResponse:
 
 
 def models() -> ModelListResponse:
-    supported = {item.name: item for item in list_supported_models()}
-    ui_models = []
-    for architecture in UI_ARCHITECTURES:
-        spec = supported.get(architecture)
-        if spec is None:
-            continue
-        ui_models.append(
-            ModelInfo(
-                architecture=architecture,
-                display_name=MODEL_DISPLAY_NAMES[architecture],
-                input_channels=spec.input_channels,
-                output_channels=spec.output_channels,
-                pretrained=spec.pretrained,
-            )
-        )
-    return ModelListResponse(models=ui_models)
+    return ModelListResponse(models=ui_model_infos())
+
+
+def automation(session: Session, config: TrainingUIAPIConfig) -> AutomationSnapshot:
+    ensure_seed_templates(session)
+    return automation_snapshot(session, config)
+
+
+def set_automation(
+    session: Session,
+    request: AutomationEnabledUpdate,
+    config: TrainingUIAPIConfig,
+) -> AutomationSnapshot:
+    set_automation_enabled(session, request)
+    return automation_snapshot(session, config)
+
+
+def update_automation(
+    session: Session,
+    request: AutomationRuleUpdate,
+    config: TrainingUIAPIConfig,
+) -> AutomationRuleInfo:
+    ensure_seed_templates(session)
+    return update_automation_rule(session, request, config)
 
 
 def ensure_seed_templates(session: Session) -> None:
@@ -158,6 +166,7 @@ def ensure_seed_templates(session: Session) -> None:
         )
     _ensure_queue_control(session, JobType.TRAINING)
     _ensure_queue_control(session, JobType.INFERENCE)
+    ensure_automation_control(session)
 
 
 def training_templates(session: Session) -> TrainingTemplateListResponse:
@@ -262,8 +271,11 @@ def create_training_job(
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
         type=JobType.TRAINING.value,
+        source=JobSource.MANUAL.value,
         status=JobStatus.QUEUED.value,
-        queue_position=_next_queue_position(session, JobType.TRAINING),
+        queue_position=_next_queue_position(session, JobType.TRAINING, JobSource.MANUAL),
+        dataset_key=request.dataset_key,
+        dataset_version=dataset.version,
         dataset_name=dataset.name,
         training_dataset_name=dataset.name,
         model_name=model_name,
@@ -279,6 +291,9 @@ def create_training_job(
     session.flush()
     session.add(
         TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key=request.dataset_key,
+            dataset_version=dataset.version,
             class_key=request.dataset_key,
             class_display_name=dataset.name,
             architecture=request.architecture,
@@ -337,6 +352,8 @@ def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
     row = session.get(JobRow, job_id)
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
+    if row.source == JobSource.AUTOMATION.value:
+        raise TrainingUIAPIError("Автоматические задания отменяются только через форму автоматизации")
     if row.status == JobStatus.RUNNING.value:
         _stop_process_and_cleanup(row)
     row.status = JobStatus.CANCELLED.value
@@ -361,11 +378,17 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
     row = session.get(JobRow, job_id)
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
+    if row.source == JobSource.AUTOMATION.value:
+        raise TrainingUIAPIError("Автоматические задания нельзя двигать вручную")
     if row.status != JobStatus.QUEUED.value:
         raise TrainingUIAPIError("Можно двигать только queued задания")
     queued = session.scalars(
         select(JobRow)
-        .where(JobRow.type == row.type, JobRow.status == JobStatus.QUEUED.value)
+        .where(
+            JobRow.type == row.type,
+            JobRow.source == JobSource.MANUAL.value,
+            JobRow.status == JobStatus.QUEUED.value,
+        )
         .order_by(JobRow.queue_position, JobRow.created_at)
     ).all()
     index = next((i for i, item in enumerate(queued) if item.id == row.id), None)
@@ -418,6 +441,7 @@ def create_pseudo_markup_job(
     training_result = _resolve_training_result(session, training_result_id)
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
+    inference_dataset_version: str | None = None
     if scenes_bytes is not None and scenes_name is not None:
         _validate_upload_name(scenes_name, ".txt")
         scenes_row = _store_file(
@@ -433,6 +457,7 @@ def create_pseudo_markup_job(
     elif dataset_key:
         dataset = _resolve_dataset_name(session, dataset_key, None, config)
         dataset_name = dataset.name
+        inference_dataset_version = dataset.version
         if dataset.scenes_file:
             scenes_row = _store_existing_file(
                 session,
@@ -444,8 +469,11 @@ def create_pseudo_markup_job(
         raise TrainingUIAPIError("Выберите датасет или загрузите txt со снимками")
     row = JobRow(
         type=JobType.INFERENCE.value,
+        source=JobSource.MANUAL.value,
         status=JobStatus.QUEUED.value,
-        queue_position=_next_queue_position(session, JobType.INFERENCE),
+        queue_position=_next_queue_position(session, JobType.INFERENCE, JobSource.MANUAL),
+        dataset_key=dataset_key or CUSTOM_KEY,
+        dataset_version=inference_dataset_version,
         dataset_name=dataset_name,
         training_dataset_name=class_name,
         inference_dataset_name=dataset_name,
@@ -462,6 +490,9 @@ def create_pseudo_markup_job(
     session.flush()
     session.add(
         PseudoMarkupResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key=dataset_key or CUSTOM_KEY,
+            dataset_version=inference_dataset_version,
             training_result_id=training_result_id,
             class_key=class_key,
             source_dataset_name=dataset_name,
@@ -596,10 +627,15 @@ def _validate_upload_name(name: str, suffix: str) -> None:
         raise TrainingUIAPIError(f"Ожидался файл {suffix}: {name}")
 
 
-def _next_queue_position(session: Session, queue_name: JobType) -> int:
+def _next_queue_position(
+    session: Session,
+    queue_name: JobType,
+    source: JobSource = JobSource.MANUAL,
+) -> int:
     value = session.scalar(
         select(func.max(JobRow.queue_position)).where(
             JobRow.type == queue_name.value,
+            JobRow.source == source.value,
             JobRow.status.in_(ACTIVE_JOB_STATUSES),
         )
     )
@@ -610,11 +646,16 @@ def _queue_jobs(session: Session, queue_name: JobType) -> list[JobSummary]:
     rows = session.scalars(
         select(JobRow)
         .where(JobRow.type == queue_name.value, JobRow.status.in_(ACTIVE_JOB_STATUSES))
-        .order_by(JobRow.status.desc(), JobRow.queue_position, JobRow.created_at)
+        .order_by(JobRow.queue_position, JobRow.created_at)
     ).all()
-    running = [row for row in rows if row.status == JobStatus.RUNNING.value]
-    queued = [row for row in rows if row.status == JobStatus.QUEUED.value]
-    return [_job_summary(row) for row in [*running, *queued]]
+    rows.sort(key=_queue_sort_key)
+    return [_job_summary(row) for row in rows]
+
+
+def _queue_sort_key(row: JobRow) -> tuple[int, int, int, datetime]:
+    status_rank = 0 if row.status == JobStatus.RUNNING.value else 1
+    source_rank = 0 if row.source == JobSource.MANUAL.value else 1
+    return status_rank, source_rank, row.queue_position, row.created_at
 
 
 def _ensure_queue_control(session: Session, queue_name: JobType) -> QueueControlRow:
@@ -676,8 +717,11 @@ def _job_summary(row: JobRow) -> JobSummary:
     return JobSummary(
         id=row.id,
         type=JobType(row.type),
+        source=JobSource(row.source),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
+        dataset_key=row.dataset_key,
+        dataset_version=row.dataset_version,
         dataset_name=row.dataset_name,
         training_dataset_name=row.training_dataset_name,
         inference_dataset_name=row.inference_dataset_name,
@@ -694,8 +738,11 @@ def _job_detail(row: JobRow) -> JobDetail:
     return JobDetail(
         id=row.id,
         type=JobType(row.type),
+        source=JobSource(row.source),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
+        dataset_key=row.dataset_key,
+        dataset_version=row.dataset_version,
         dataset_name=row.dataset_name,
         training_dataset_name=row.training_dataset_name,
         inference_dataset_name=row.inference_dataset_name,
@@ -719,6 +766,9 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
     ).all()
     return TrainingResultInfo(
         id=row.id,
+        source=JobSource(row.source),
+        dataset_key=row.dataset_key,
+        dataset_version=row.dataset_version,
         model_name=row.model_name,
         architecture=row.architecture,
         f1_score=row.f1_score,
@@ -733,6 +783,9 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
 def _pseudo_markup_info(row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
     return PseudoMarkupResultInfo(
         id=row.id,
+        source=JobSource(row.source),
+        dataset_key=row.dataset_key,
+        dataset_version=row.dataset_version,
         source_dataset_name=row.source_dataset_name,
         scenes_file=_stored_file_info(row.scenes_file),
         geojson_file=_stored_file_info(row.geojson_file),
@@ -742,6 +795,8 @@ def _pseudo_markup_info(row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
 
 
 def _job_actions(row: JobRow) -> list[str]:
+    if row.source == JobSource.AUTOMATION.value:
+        return []
     if row.status == JobStatus.RUNNING.value:
         return ["delete"]
     if row.status == JobStatus.QUEUED.value:
