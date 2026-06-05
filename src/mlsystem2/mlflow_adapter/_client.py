@@ -24,8 +24,6 @@ from .contracts import (
 
 
 BEST_CHECKPOINT_METRIC = "val/best_threshold_pixel_f1"
-CHECKPOINT_F1_METRIC = "val/checkpoint_f1_score"
-BEST_CHECKPOINT_SUMMARY_METRIC = "val/best_checkpoint_f1_score"
 BEST_THRESHOLD_METRIC = "val/best_threshold"
 BEST_CHECKPOINT_ARTIFACT_PATH = "checkpoints/best.pt"
 
@@ -296,11 +294,6 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
             step=metrics.epoch,
         )
         mlflow.log_metric(
-            CHECKPOINT_F1_METRIC,
-            metrics.val_best_threshold_pixel_f1,
-            step=metrics.epoch,
-        )
-        mlflow.log_metric(
             "val/best_threshold_precision",
             metrics.val_best_threshold_precision,
             step=metrics.epoch,
@@ -375,10 +368,6 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         if result.history:
             mlflow.log_metric("val/best_pixel_f1", max(item.val_pixel_f1 for item in result.history))
-            mlflow.log_metric(
-                BEST_CHECKPOINT_SUMMARY_METRIC,
-                max(item.val_best_threshold_pixel_f1 for item in result.history),
-            )
             mlflow.log_metric("val/final_pixel_f1", result.history[-1].val_pixel_f1)
             macro_values = [
                 item.val_macro_f1

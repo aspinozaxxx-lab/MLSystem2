@@ -7,12 +7,11 @@ from mlsystem2.mlflow_adapter.api import (
     get_best_training_checkpoint,
     log_run_config,
     log_tile_preparation,
-    log_training_metrics,
     mark_run_killed,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowStartRunRequest
 from mlsystem2.mlflow_adapter import _client
-from mlsystem2.train.contracts import EpochMetrics, TrainResult
+from mlsystem2.train.contracts import EpochMetrics
 
 
 def test_next_run_name_uses_class_date_and_daily_counter() -> None:
@@ -392,51 +391,7 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
     assert ("train/loss_bce", 0.4, 3) in logged
     assert not any(item[0] == "train/loss_dice" for item in logged)
     assert ("val/best_threshold", 0.0, 3) in logged
-    assert ("val/checkpoint_f1_score", 0.0, 3) in logged
     assert ("val/prob_mean", 0.0, 3) in logged
-
-
-def test_log_training_metrics_writes_best_checkpoint_summary(monkeypatch) -> None:
-    logged: list[tuple[str, float]] = []
-
-    class MLflow:
-        @staticmethod
-        def log_metric(name: str, value: float, step: int = 0) -> None:
-            logged.append((name, value))
-
-    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
-
-    base = {
-        "train_loss": 1.0,
-        "train_optimizer_steps": 1,
-        "train_skipped_optimizer_steps": 0,
-        "val_loss": 1.0,
-        "val_pixel_precision": 0.0,
-        "val_pixel_recall": 0.0,
-        "val_pixel_f1": 0.0,
-        "val_positive_pixels": 0,
-        "val_pred_positive_pixels": 0,
-        "val_true_positive": 0,
-        "val_false_positive": 0,
-        "val_false_negative": 0,
-        "epoch_time_sec": 1.0,
-    }
-
-    log_training_metrics(
-        run,
-        TrainResult(
-            history=[
-                EpochMetrics(epoch=1, val_best_threshold_pixel_f1=0.2, **base),
-                EpochMetrics(epoch=2, val_best_threshold_pixel_f1=0.7, **base),
-                EpochMetrics(epoch=3, val_best_threshold_pixel_f1=0.5, **base),
-            ],
-            epochs_total=3,
-            training_time_sec=30.0,
-        ),
-    )
-
-    assert ("val/best_checkpoint_f1_score", 0.7) in logged
 
 
 def test_log_training_epoch_writes_multiclass_metrics(monkeypatch) -> None:
