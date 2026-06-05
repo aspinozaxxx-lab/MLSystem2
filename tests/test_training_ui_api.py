@@ -22,6 +22,7 @@ from mlsystem2.training_ui_api.contracts import (
     AutomationRuleUpdate,
     JobSource,
     JobStatus,
+    JobType,
     ResultStatus,
     TrainingJobCreate,
     TrainingUIAPIError,
@@ -205,7 +206,72 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
 
         deleted = client.delete(f"/api/v1/jobs/{job['id']}").json()
         assert deleted["status"] == "cancelled"
+        assert client.get(f"/api/v1/jobs/{job['id']}").status_code == 400
         assert client.get("/api/v1/queues").json()["training_jobs"] == []
+        assert client.get("/api/v1/results/classes/custom").json()["results"] == []
+
+
+def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, monkeypatch) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = JobRow(
+            type=JobType.TRAINING.value,
+            source=JobSource.MANUAL.value,
+            status=JobStatus.CANCELLED.value,
+            queue_position=1,
+            dataset_key="Вырубки\\main",
+            dataset_name="Вырубки\\main",
+            model_name="segformer b2",
+            architecture="smp_segformer_b2",
+            config={},
+        )
+        session.add(job)
+        session.flush()
+        result = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.CANCELLED.value,
+            job_id=job.id,
+        )
+        session.add(result)
+        session.flush()
+        pseudo = PseudoMarkupResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="Вырубки\\main",
+            training_result_id=result.id,
+            class_key="Вырубки\\main",
+            source_dataset_name="Вырубки\\main",
+            status=ResultStatus.CANCELLED.value,
+            job_id=job.id,
+        )
+        session.add(pseudo)
+        session.flush()
+
+        response = _service.class_results(session, "Вырубки\\main", config)
+
+        assert response.results == []
+        assert session.get(JobRow, job.id) is None
+        assert session.get(TrainingResultRow, result.id) is None
+        assert session.get(PseudoMarkupResultRow, pseudo.id) is None
 
 
 def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatch) -> None:

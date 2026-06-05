@@ -650,21 +650,29 @@ function renderResultsTable(payload) {
   if (!payload.results.length) {
     return `<div class="info-box">Результатов пока нет.</div>`;
   }
-  const rows = payload.results.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.model_name)}</td>
-      <td>${formatF1Score(item.f1_score)}</td>
-      <td>${item.epoch ?? ""}</td>
-      <td>${formatDate(item.trained_at)}</td>
-      <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
-      <td>${statusView(item.status)}</td>
-    </tr>
-    <tr>
-      <td colspan="6">
-        ${renderPseudoTable(item)}
-      </td>
-    </tr>
-  `).join("");
+  const rows = payload.results.map((item) => {
+    const pseudoTable = item.pseudo_markup_results.length ? `
+      <tr>
+        <td colspan="7">
+          ${renderPseudoTable(item)}
+        </td>
+      </tr>
+    ` : "";
+    return `
+      <tr>
+        <td>${escapeHtml(item.model_name)}</td>
+        <td>${formatF1Score(item.f1_score)}</td>
+        <td>${item.epoch ?? ""}</td>
+        <td>${formatDate(item.trained_at)}</td>
+        <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
+        <td>${statusView(item.status)}</td>
+        <td>
+          <button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>
+        </td>
+      </tr>
+      ${pseudoTable}
+    `;
+  }).join("");
   return `
     <div class="plain-table-wrap">
       <table class="plain-table">
@@ -676,6 +684,7 @@ function renderResultsTable(payload) {
             <th>дата обучения</th>
             <th>MLflow</th>
             <th>статус</th>
+            <th>действия</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -705,11 +714,6 @@ function renderPseudoTable(result) {
       </thead>
       <tbody>
         ${rows}
-        <tr>
-          <td colspan="4">
-            <button class="secondary pseudo-button" type="button" data-result="${result.id}">Сделать псевдоразметку</button>
-          </td>
-        </tr>
       </tbody>
     </table>
   `;

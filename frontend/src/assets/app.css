@@ -354,6 +354,12 @@ th {
   background: #f1f7ff;
 }
 
+.compact-action {
+  min-height: 32px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
 .automation-table-wrap {
   max-height: calc(100vh - 260px);
 }

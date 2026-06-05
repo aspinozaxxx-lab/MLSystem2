@@ -15,6 +15,7 @@ from mlsystem2.mlflow_adapter.api import (
     create_experiment,
     get_best_training_checkpoint,
     list_experiments,
+    mark_run_killed,
 )
 from mlsystem2.mlflow_adapter.contracts import (
     MLflowAdapterError,
@@ -30,7 +31,7 @@ from ._automation import (
     update_automation_rule,
 )
 from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
-from ._config import TrainingUIAPIConfig
+from ._config import TrainingUIAPIConfig, get_config
 from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_dataset, list_classes, list_datasets
 from ._models import (
     CustomDatasetRow,
@@ -311,6 +312,7 @@ def create_training_job(
 
 def queues(session: Session) -> QueueSnapshot:
     ensure_seed_templates(session)
+    _delete_cancelled_manual_jobs(session)
     training_control = _ensure_queue_control(session, JobType.TRAINING)
     inference_control = _ensure_queue_control(session, JobType.INFERENCE)
     return QueueSnapshot(
@@ -357,24 +359,15 @@ def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     if row.source == JobSource.AUTOMATION.value:
         raise TrainingUIAPIError("Автоматические задания отменяются только через форму автоматизации")
+    detail = _job_detail(row).model_copy(update={"status": JobStatus.CANCELLED})
+    mlflow_run_id = _job_mlflow_run_id(session, row)
     if row.status == JobStatus.RUNNING.value:
         _stop_process_and_cleanup(row)
-    row.status = JobStatus.CANCELLED.value
-    row.finished_at = _now()
-    if row.type == JobType.TRAINING.value:
-        for result in session.scalars(
-            select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)
-        ).all():
-            result.status = ResultStatus.ERROR.value
-            result.updated_at = _now()
-    if row.type == JobType.INFERENCE.value:
-        for result in session.scalars(
-            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)
-        ).all():
-            result.status = ResultStatus.ERROR.value
-            result.updated_at = _now()
+        if mlflow_run_id:
+            _mark_mlflow_run_killed(mlflow_run_id)
+    _delete_job_rows(session, row)
     session.flush()
-    return _job_detail(row)
+    return detail
 
 
 def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetail:
@@ -414,9 +407,14 @@ def class_results(
     dataset_info = find_dataset(config.mlmarkup_root, class_key)
     if dataset_info is None:
         dataset_info = DatasetInfo(key=class_key, name=class_key)
+    _delete_cancelled_manual_jobs(session)
+    _delete_cancelled_results_for_class(session, class_key)
     rows = session.scalars(
         select(TrainingResultRow)
-        .where(TrainingResultRow.class_key == class_key)
+        .where(
+            TrainingResultRow.class_key == class_key,
+            TrainingResultRow.status != ResultStatus.CANCELLED.value,
+        )
         .order_by(TrainingResultRow.created_at.desc())
     ).all()
     return ClassResultsResponse(
@@ -675,6 +673,81 @@ def _stop_process_and_cleanup(row: JobRow) -> None:
     if row.tmp_path:
         shutil.rmtree(row.tmp_path, ignore_errors=True)
         row.tmp_path = None
+
+
+def _delete_job_rows(session: Session, row: JobRow) -> None:
+    training_results = session.scalars(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)).all()
+    training_result_ids = [item.id for item in training_results]
+    for result in session.scalars(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)).all():
+        session.delete(result)
+    if training_result_ids:
+        for result in session.scalars(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
+        ).all():
+            session.delete(result)
+    for result in training_results:
+        session.delete(result)
+    session.delete(row)
+
+
+def _delete_cancelled_results_for_class(session: Session, class_key: str) -> None:
+    training_results = session.scalars(
+        select(TrainingResultRow).where(
+            TrainingResultRow.class_key == class_key,
+            TrainingResultRow.status == ResultStatus.CANCELLED.value,
+        )
+    ).all()
+    training_result_ids = [item.id for item in training_results]
+    for result in session.scalars(
+        select(PseudoMarkupResultRow).where(
+            PseudoMarkupResultRow.class_key == class_key,
+            PseudoMarkupResultRow.status == ResultStatus.CANCELLED.value,
+        )
+    ).all():
+        session.delete(result)
+    if training_result_ids:
+        for result in session.scalars(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
+        ).all():
+            session.delete(result)
+    for result in training_results:
+        session.delete(result)
+    session.flush()
+
+
+def _delete_cancelled_manual_jobs(session: Session) -> None:
+    rows = session.scalars(
+        select(JobRow).where(
+            JobRow.source == JobSource.MANUAL.value,
+            JobRow.status == JobStatus.CANCELLED.value,
+        )
+    ).all()
+    for row in rows:
+        _delete_job_rows(session, row)
+    if rows:
+        session.flush()
+
+
+def _job_mlflow_run_id(session: Session, row: JobRow) -> str | None:
+    if row.type != JobType.TRAINING.value:
+        return None
+    result_run_id = session.scalar(
+        select(TrainingResultRow.mlflow_run_id)
+        .where(
+            TrainingResultRow.job_id == row.id,
+            TrainingResultRow.mlflow_run_id.is_not(None),
+        )
+        .order_by(TrainingResultRow.updated_at.desc())
+    )
+    return str(result_run_id) if result_run_id else None
+
+
+def _mark_mlflow_run_killed(run_id: str) -> None:
+    try:
+        config = get_config()
+        mark_run_killed(config.mlflow_tracking_uri, run_id)
+    except Exception:
+        return
 
 
 def _template_info(row: TrainingTemplateRow) -> TrainingTemplate:
