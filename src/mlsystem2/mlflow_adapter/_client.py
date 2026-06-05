@@ -292,7 +292,7 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         if result.history:
             mlflow.log_metric(
-                "val/run_best_threshold_pixel_f1",
+                "run/best_threshold_pixel_f1",
                 max(item.val_best_threshold_pixel_f1 for item in result.history),
             )
     except Exception as exc:

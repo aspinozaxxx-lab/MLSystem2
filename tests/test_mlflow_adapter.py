@@ -413,5 +413,5 @@ def test_log_training_metrics_writes_run_best_hpo_metric(monkeypatch) -> None:
     assert logged == [
         ("train/epochs_total", 2, None),
         ("train/training_time_sec", 2.2, None),
-        ("val/run_best_threshold_pixel_f1", 0.6, None),
+        ("run/best_threshold_pixel_f1", 0.6, None),
     ]
