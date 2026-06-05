@@ -650,32 +650,34 @@ function renderResultsTable(payload) {
   if (!payload.results.length) {
     return `<div class="info-box">Результатов пока нет.</div>`;
   }
-  const rows = payload.results.map((item) => {
+  const groups = payload.results.map((item) => {
     const pseudoTable = item.pseudo_markup_results.length ? `
-      <tr>
+      <tr class="result-pseudo-row">
         <td colspan="7">
           ${renderPseudoTable(item)}
         </td>
       </tr>
     ` : "";
     return `
-      <tr>
-        <td>${escapeHtml(item.model_name)}</td>
+      <tbody class="result-group">
+      <tr class="result-main-row">
+        <td class="result-model-cell">${escapeHtml(item.model_name)}</td>
         <td>${formatF1Score(item.f1_score)}</td>
         <td>${item.epoch ?? ""}</td>
         <td>${formatDate(item.trained_at)}</td>
         <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
-        <td>${statusView(item.status)}</td>
+        <td>${resultStatusView(item.status, item.source)}</td>
         <td>
           <button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>
         </td>
       </tr>
       ${pseudoTable}
+      </tbody>
     `;
   }).join("");
   return `
     <div class="plain-table-wrap">
-      <table class="plain-table">
+      <table class="plain-table results-table">
         <thead>
           <tr>
             <th>модель</th>
@@ -687,7 +689,7 @@ function renderResultsTable(payload) {
             <th>действия</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        ${groups}
       </table>
     </div>
   `;
@@ -698,7 +700,7 @@ function renderPseudoTable(result) {
     <tr>
       <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}"> ${escapeHtml(item.source_dataset_name)}</a>` : escapeHtml(item.source_dataset_name)}</td>
       <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">скачать geojson</a>` : ""}</td>
-      <td>${statusView(item.status)}</td>
+      <td>${resultStatusView(item.status, item.source)}</td>
       <td>${formatDateTime(item.created_at)}</td>
     </tr>
   `).join("");
@@ -895,6 +897,28 @@ function statusView(status) {
   if (status === "running") return `<span class="status-icon running"><span class="spinner">↻</span>в процессе</span>`;
   if (status === "ok") return `<span class="status-icon ok">✓ ОК</span>`;
   if (status === "error") return `<span class="status-icon error">× ошибка</span>`;
+  if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
+  return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
+}
+
+function resultStatusView(status, source) {
+  return `
+    <span class="result-status-badges">
+      ${sourceBadge(source)}
+      ${statusBadge(status)}
+    </span>
+  `;
+}
+
+function sourceBadge(source) {
+  if (source === "automation") return `<span class="badge automation">auto</span>`;
+  return `<span class="badge manual">manual</span>`;
+}
+
+function statusBadge(status) {
+  if (status === "running") return `<span class="badge warning"><span class="spinner">↻</span> в процессе</span>`;
+  if (status === "ok") return `<span class="badge ok">✓ ОК</span>`;
+  if (status === "error") return `<span class="badge error">× ошибка</span>`;
   if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
 }
