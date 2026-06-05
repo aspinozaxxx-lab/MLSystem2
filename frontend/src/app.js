@@ -671,7 +671,7 @@ function renderResultsTable(payload) {
         <thead>
           <tr>
             <th>модель</th>
-            <th>f1 score</th>
+            <th title="Метрика val/best_threshold_pixel_f1, по которой сохраняется best.pt">F1 best.pt</th>
             <th>на эпохе</th>
             <th>дата обучения</th>
             <th>MLflow</th>
