@@ -449,13 +449,16 @@ th {
 }
 
 .automation-dataset {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   overflow-wrap: anywhere;
 }
 
+.automation-dataset strong,
 .automation-dataset small {
+  display: block;
+}
+
+.automation-dataset small {
+  margin-top: 4px;
   color: var(--muted);
 }
 
