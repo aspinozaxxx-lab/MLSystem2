@@ -464,12 +464,12 @@ th {
 
 .automation-cell {
   background: #fbfdff;
+  text-align: center;
 }
 
 .automation-pill {
-  display: flex;
+  display: inline-flex;
   justify-content: center;
-  width: 100%;
   min-height: 24px;
   margin-bottom: 5px;
   padding: 3px 5px;
@@ -483,10 +483,12 @@ th {
 }
 
 .automation-pill.training {
+  border-color: #8ec5ff;
   color: var(--blue);
 }
 
 .automation-pill.pseudo {
+  border-color: #ffb5ad;
   color: var(--error);
 }
 
