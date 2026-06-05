@@ -146,7 +146,7 @@ print(runs)
 
 Для binary segmentation:
 
-- primary metric для сортировки завершенных trials: `run/best_threshold_pixel_f1`;
+- primary metric для сортировки завершенных trials: `train/best_threshold_pixel_f1`;
 - primary metric для мониторинга эпох: `val/best_threshold_pixel_f1`;
 - смотреть `val/best_threshold_precision`, `val/best_threshold_recall`, `val/best_threshold`, `train/loss`, `val/loss`;
 - fixed-threshold, multiclass, per-class, probability и optimizer diagnostics в MLflow не публикуются и не должны использоваться в HPO-решениях.
@@ -302,7 +302,7 @@ train:
 - batch size начать с `4`;
 - если OOM, использовать `2`;
 - tile size `1024`, stride `512` initially;
-- primary metric: `run/best_threshold_pixel_f1`;
+- primary metric: `train/best_threshold_pixel_f1`;
 - speed secondary objective.
 
 Не фиксируй заранее trial numbers или run ids. Сначала посмотри предыдущие MLflow результаты и отчеты, затем сформируй стартовую стратегию.
@@ -356,7 +356,7 @@ Resume:
 - model_name: smp_deeplabv3plus_resnet50
 - dataset/class: deforestation / Вырубки
 - MLflow experiment: Deeplabv3plus-resnet50-HPO-deforest-2605
-- primary metric: run/best_threshold_pixel_f1
+- primary metric: train/best_threshold_pixel_f1
 - secondary objective: training speed
 - report workspace: /opt/hpo/report/deeplabv3plus_deforest_2605
 

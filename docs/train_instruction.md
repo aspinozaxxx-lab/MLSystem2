@@ -331,7 +331,7 @@ nvidia-smi
 - длительность обучения;
 - ошибки или отклонения.
 
-Основная метрика обучения и выбора checkpoint - `val/best_threshold_pixel_f1`. Для HPO-сравнения завершенных запусков используй итоговую `run/best_threshold_pixel_f1`. Также смотри `val/best_threshold_precision`, `val/best_threshold_recall`, `val/best_threshold`, `train/loss`, `val/loss`, `train/epoch_time_sec` и итоговое `train/training_time_sec`.
+Основная метрика обучения и выбора checkpoint - `val/best_threshold_pixel_f1`. Для HPO-сравнения завершенных запусков используй итоговую `train/best_threshold_pixel_f1`. Также смотри `val/best_threshold_precision`, `val/best_threshold_recall`, `val/best_threshold`, `train/loss`, `val/loss`, `train/epoch_time_sec` и итоговое `train/training_time_sec`.
 
 ## 11. Отчетность
 

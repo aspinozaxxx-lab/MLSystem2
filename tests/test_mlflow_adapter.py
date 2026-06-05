@@ -375,7 +375,7 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
     ]
 
 
-def test_log_training_metrics_writes_run_best_hpo_metric(monkeypatch) -> None:
+def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
     logged: list[tuple[str, float, int | None]] = []
 
     class MLflow:
@@ -413,5 +413,5 @@ def test_log_training_metrics_writes_run_best_hpo_metric(monkeypatch) -> None:
     assert logged == [
         ("train/epochs_total", 2, None),
         ("train/training_time_sec", 2.2, None),
-        ("run/best_threshold_pixel_f1", 0.6, None),
+        ("train/best_threshold_pixel_f1", 0.6, None),
     ]
