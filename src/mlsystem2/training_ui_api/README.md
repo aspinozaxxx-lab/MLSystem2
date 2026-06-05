@@ -112,7 +112,8 @@ Frontend не обращается к Postgres. Сервис не импорти
 из сохраненных параметров задания и запускает публичный CLI
 `python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...` отдельным процессом.
 Стабильные параметры приложения, такие как workers/prefetch/seed/smart_tiling/device, берутся из `settings.yml`
-и не записываются в `run.yml`. Training-процесс сразу после создания MLflow run пишет
+и не записываются в `run.yml`. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
+batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
 еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
 MLflow run со статусом `KILLED`.

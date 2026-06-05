@@ -183,11 +183,6 @@ train:
   max_val_batches_per_epoch: 1000
   max_training_time_sec: null
 
-inference:
-  checkpoint_uri: /tmp/run/scratch/checkpoints/best.pt
-  threshold: 0.7
-  batch_size: 4
-
 mlflow:
   experiment_name: MLSystem2
 """,
@@ -203,9 +198,26 @@ mlflow:
     assert settings.train.device == "cuda"
     assert settings.train.max_train_batches_per_epoch == 72
     assert settings.train.max_val_batches_per_epoch == 1000
+    assert settings.inference.checkpoint_uri is None
+    assert settings.inference.threshold == 0.5
+    assert settings.inference.batch_size == 1
+    assert settings.inference.device == "cuda"
     assert settings.mlflow.tracking_uri == "http://mlflow:5000"
     assert settings.mlflow.experiment_name == "MLSystem2"
     assert api.get_settings_path() == run_config.resolve()
+
+
+def test_load_settings_accepts_training_config_without_inference(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(_without_inference_section(_minimal_config()), encoding="utf-8")
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.inference.checkpoint_uri is None
+    assert settings.inference.threshold == 0.5
+    assert settings.inference.batch_size == 1
+    assert settings.inference.device == "cuda"
 
 
 def test_load_settings_rejects_storage_section(tmp_path: Path) -> None:
@@ -439,3 +451,18 @@ mlflow:
   tracking_uri: http://mlflow.example.local:5000
   experiment_name: MLSystem2
 """
+
+
+def _without_inference_section(config: str) -> str:
+    lines = config.splitlines()
+    result: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.startswith("inference:"):
+            skipping = True
+            continue
+        if skipping and line and not line.startswith(" "):
+            skipping = False
+        if not skipping:
+            result.append(line)
+    return "\n".join(result) + "\n"

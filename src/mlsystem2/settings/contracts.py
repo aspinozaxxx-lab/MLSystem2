@@ -123,10 +123,10 @@ class TrainSettings(BaseModel):
 class InferenceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    checkpoint_uri: str
-    threshold: float = Field(ge=0.0, le=1.0)
-    batch_size: int = Field(gt=0)
-    device: str
+    checkpoint_uri: str | None = None
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    batch_size: int = Field(default=1, gt=0)
+    device: str = "cuda"
 
 
 class MLflowSettings(BaseModel):
@@ -144,7 +144,7 @@ class SystemSettings(BaseModel):
     dataset: DatasetSettings
     tile_preparation: TilePreparationSettings
     train: TrainSettings
-    inference: InferenceSettings
+    inference: InferenceSettings = Field(default_factory=InferenceSettings)
     mlflow: MLflowSettings
 
     @model_validator(mode="after")

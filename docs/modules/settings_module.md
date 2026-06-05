@@ -31,7 +31,7 @@
 
 `settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `dataset.negative_scene_limit`, `tile_preparation.num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `smart_tiling`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
 
-`run.yml` хранит задание конкретного обучения: пути разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, positive sampling, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`, checkpoint для inference и имя MLflow experiment.
+`run.yml` хранит задание конкретного обучения: пути разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, positive sampling, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. Параметры inference задаются отдельно при создании задания псевдоразметки.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 

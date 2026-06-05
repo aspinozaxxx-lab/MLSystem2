@@ -33,10 +33,5 @@ train:
   max_val_batches_per_epoch: 1000
   max_training_time_sec: 1800
 
-inference:
-  checkpoint_uri: /data/mlsystem2/runtime/train/example/scratch/checkpoints/best.pt
-  threshold: 0.7
-  batch_size: 4
-
 mlflow:
   experiment_name: MLSystem2

@@ -290,6 +290,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "num_workers" not in config_yaml
         assert "input_channels" not in config_yaml
         assert "images_dir" not in config_yaml
+        assert "inference:" not in config_yaml
         assert "max_train_batches_per_epoch: 72" in config_yaml
         assert "max_val_batches_per_epoch: 1000" in config_yaml
         assert "max_training_time_sec: null" in config_yaml

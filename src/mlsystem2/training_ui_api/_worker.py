@@ -284,8 +284,6 @@ def _build_training_config(
     run_dir: Path,
 ) -> dict[str, Any]:
     flat = dict(row.config or {})
-    train_batch_size = _int_value(flat, "train.batch_size", 1)
-    train_threshold = _float_value(flat, "train.threshold", 0.5)
     return {
         "runtime": {
             "project_root": str(config.project_root),
@@ -309,7 +307,7 @@ def _build_training_config(
                 _flat_value(flat, "train.initial_checkpoint_uri", None)
             ),
             "epochs": _int_value(flat, "train.epochs", 1),
-            "batch_size": train_batch_size,
+            "batch_size": _int_value(flat, "train.batch_size", 1),
             "learning_rate": _float_value(flat, "train.learning_rate", 0.0001),
             "weight_decay": _float_value(flat, "train.weight_decay", 0.0),
             "loss": str(_flat_value(flat, "train.loss", "bce_dice")),
@@ -317,16 +315,11 @@ def _build_training_config(
             "pos_weight": _float_value(flat, "train.pos_weight", 1.0),
             "tversky_alpha": _float_value(flat, "train.tversky_alpha", 0.4),
             "tversky_beta": _float_value(flat, "train.tversky_beta", 0.6),
-            "threshold": train_threshold,
+            "threshold": _float_value(flat, "train.threshold", 0.5),
             "early_stopping_patience": _int_value(flat, "train.early_stopping_patience", 10),
             "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
             "max_val_batches_per_epoch": _optional_int(flat, "train.max_val_batches_per_epoch"),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
-        },
-        "inference": {
-            "checkpoint_uri": str(run_dir / "scratch" / "checkpoints" / "best.pt"),
-            "threshold": train_threshold,
-            "batch_size": train_batch_size,
         },
         "mlflow": {
             "experiment_name": row.mlflow_experiment_name or "MLSystem2",
@@ -356,6 +349,11 @@ def _build_pseudo_markup_config(
     flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
     tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
     threshold = _optional_float(row.config, "checkpoint_threshold")
+    if threshold is None and training_result is not None:
+        raise RuntimeError(
+            "Для псевдоразметки по результату обучения не найден MLflow val/best_threshold "
+            "на эпохе best checkpoint."
+        )
     if threshold is None:
         threshold = _float_value(flat, "train.threshold", 0.5)
     return {
