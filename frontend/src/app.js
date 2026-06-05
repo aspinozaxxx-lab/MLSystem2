@@ -379,7 +379,7 @@ async function renderAutomationPage() {
   );
   const headers = [
     "<th>Датасет</th>",
-    ...(snapshot.models || []).map((model) => `<th>${escapeHtml(model.display_name)}</th>`),
+    ...(snapshot.models || []).map((model) => `<th><span class="automation-model-name">${escapeHtml(model.display_name)}</span></th>`),
   ].join("");
   const rows = (snapshot.datasets || []).map((dataset) => `
     <tr>
@@ -395,14 +395,18 @@ async function renderAutomationPage() {
             data-dataset-key="${escapeAttr(dataset.key)}"
             data-architecture="${escapeAttr(model.architecture)}"
           >
-            <label class="automation-check training">
-              <input class="automation-checkbox" data-kind="training" type="checkbox" ${rule.training_enabled ? "checked" : ""}>
-              <span>обучение</span>
-            </label>
-            <label class="automation-check pseudo">
-              <input class="automation-checkbox" data-kind="pseudo" type="checkbox" ${rule.pseudo_markup_enabled ? "checked" : ""}>
-              <span>разметка</span>
-            </label>
+            <button
+              class="automation-pill training ${rule.training_enabled ? "active" : ""}"
+              data-kind="training"
+              data-enabled="${rule.training_enabled ? "true" : "false"}"
+              type="button"
+            >обучение</button>
+            <button
+              class="automation-pill pseudo ${rule.pseudo_markup_enabled ? "active" : ""}"
+              data-kind="pseudo"
+              data-enabled="${rule.pseudo_markup_enabled ? "true" : "false"}"
+              type="button"
+            >разметка</button>
             <div class="automation-status">
               ${automationStatus("обучение", rule.training_status)}
               ${automationStatus("разметка", rule.pseudo_markup_status)}
@@ -418,14 +422,16 @@ async function renderAutomationPage() {
       <p>Автозапуск обучения и псевдоразметки для актуальных версий датасетов MLMarkup</p>
     </section>
     <section class="switch-row">
-      <label class="switch">
-        <input id="automation-toggle" type="checkbox" ${snapshot.enabled ? "checked" : ""}>
-        автоматизация ${snapshot.enabled ? "включена" : "выключена"}
-      </label>
+      <button
+        class="automation-toggle-pill ${snapshot.enabled ? "active" : ""}"
+        id="automation-toggle"
+        type="button"
+        data-enabled="${snapshot.enabled ? "true" : "false"}"
+      >Автоматизация<br>включена</button>
       <button class="secondary" id="refresh-automation" type="button">Обновить</button>
     </section>
     <section class="panel">
-      <div class="table-wrap automation-table-wrap">
+      <div class="automation-table-wrap">
         <table class="automation-table">
           <thead><tr>${headers}</tr></thead>
           <tbody>${rows}</tbody>
@@ -433,30 +439,38 @@ async function renderAutomationPage() {
       </div>
     </section>
   `);
-  document.getElementById("automation-toggle").addEventListener("change", async (event) => {
-    const enabled = event.currentTarget.checked;
+  document.getElementById("automation-toggle").addEventListener("click", async (event) => {
+    const enabled = event.currentTarget.dataset.enabled === "true";
     if (!enabled) {
-      event.currentTarget.checked = true;
-      showAutomationDisableModal();
+      await apiJson("/automation/enabled", {
+        method: "PUT",
+        body: { enabled: true },
+      });
+      renderAutomationPage();
       return;
     }
-    await apiJson("/automation/enabled", {
-      method: "PUT",
-      body: { enabled: true },
-    });
-    renderAutomationPage();
+    showAutomationDisableModal();
   });
   document.getElementById("refresh-automation").addEventListener("click", renderAutomationPage);
-  for (const input of document.querySelectorAll(".automation-checkbox")) {
-    input.addEventListener("change", async (event) => {
+  for (const button of document.querySelectorAll(".automation-pill")) {
+    button.addEventListener("click", async (event) => {
       const cell = event.currentTarget.closest(".automation-cell");
+      const trainingButton = cell.querySelector("[data-kind='training']");
+      const pseudoButton = cell.querySelector("[data-kind='pseudo']");
+      const kind = event.currentTarget.dataset.kind;
+      const trainingEnabled = kind === "training"
+        ? event.currentTarget.dataset.enabled !== "true"
+        : trainingButton.dataset.enabled === "true";
+      const pseudoEnabled = kind === "pseudo"
+        ? event.currentTarget.dataset.enabled !== "true"
+        : pseudoButton.dataset.enabled === "true";
       await apiJson("/automation/rules", {
         method: "PUT",
         body: {
           dataset_key: cell.dataset.datasetKey,
           architecture: cell.dataset.architecture,
-          training_enabled: cell.querySelector("[data-kind='training']").checked,
-          pseudo_markup_enabled: cell.querySelector("[data-kind='pseudo']").checked,
+          training_enabled: trainingEnabled,
+          pseudo_markup_enabled: pseudoEnabled,
         },
       });
       renderAutomationPage();

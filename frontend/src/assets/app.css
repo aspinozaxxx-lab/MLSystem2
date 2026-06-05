@@ -415,33 +415,44 @@ th {
 }
 
 .automation-table-wrap {
-  max-height: calc(100vh - 260px);
+  width: 100%;
+}
+
+.automation-table {
+  table-layout: fixed;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .automation-table th,
 .automation-table td {
-  min-width: 170px;
+  padding: 7px 6px;
   vertical-align: top;
+  font-size: 12px;
 }
 
 .automation-table th:first-child,
 .automation-table td:first-child {
-  min-width: 220px;
-  position: sticky;
-  left: 0;
-  z-index: 2;
+  width: 150px;
   background: #fff;
 }
 
 .automation-table th:first-child {
-  z-index: 3;
   background: var(--blue-2);
+}
+
+.automation-model-name {
+  display: block;
+  font-size: 12px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
 }
 
 .automation-dataset {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-wrap: anywhere;
 }
 
 .automation-dataset small {
@@ -452,26 +463,38 @@ th {
   background: #fbfdff;
 }
 
-.automation-check {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
+.automation-pill {
+  display: flex;
+  justify-content: center;
   width: 100%;
-  margin-bottom: 6px;
+  min-height: 24px;
+  margin-bottom: 5px;
+  padding: 3px 5px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: #fff;
+  font-size: 11px;
   font-weight: 700;
+  line-height: 1.15;
+  cursor: pointer;
 }
 
-.automation-check input {
-  width: auto;
-}
-
-.automation-check.training {
+.automation-pill.training {
   color: var(--blue);
 }
 
-.automation-check.pseudo {
+.automation-pill.pseudo {
   color: var(--error);
+}
+
+.automation-pill.training.active {
+  border-color: #8ec5ff;
+  background: #dff0ff;
+}
+
+.automation-pill.pseudo.active {
+  border-color: #ffb5ad;
+  background: #fff1f0;
 }
 
 .automation-status {
@@ -479,6 +502,14 @@ th {
   gap: 5px;
   flex-wrap: wrap;
   padding-top: 4px;
+}
+
+.automation-status .badge {
+  min-height: 18px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: normal;
 }
 
 .badge {
@@ -593,6 +624,27 @@ th {
 
 .switch input {
   width: auto;
+}
+
+.automation-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 126px;
+  min-height: 44px;
+  padding: 7px 12px;
+  border: 1px solid var(--ok);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ok);
+  box-shadow: var(--shadow);
+  font-weight: 800;
+  line-height: 1.12;
+  cursor: pointer;
+}
+
+.automation-toggle-pill.active {
+  background: #ecfdf3;
 }
 
 .job-row {
