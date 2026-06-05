@@ -51,11 +51,8 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert Path(result.best_checkpoint_path).is_file()
     assert Path(result.final_checkpoint_path).is_file()
     assert result.history[0].train_loss >= 0.0
-    assert result.history[0].train_optimizer_steps == 2
-    assert result.history[0].train_skipped_optimizer_steps == 0
-    assert result.history[0].train_loss_bce is not None
-    assert result.history[0].train_loss_dice is not None
     assert result.history[0].val_loss >= 0.0
+    assert 0.0 <= result.history[0].val_best_threshold_pixel_f1 <= 1.0
 
 
 def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:
@@ -97,10 +94,9 @@ def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:
 
     metrics = result.history[0]
     assert result.epochs_total == 1
-    assert metrics.val_macro_f1 is not None
-    assert metrics.val_mean_iou is not None
-    assert metrics.val_pixel_accuracy is not None
-    assert set(metrics.val_per_class_metrics) == {"class_a", "class_b"}
+    assert 0.0 <= metrics.val_best_threshold_pixel_f1 <= 1.0
+    assert 0.0 <= metrics.val_best_threshold_precision <= 1.0
+    assert 0.0 <= metrics.val_best_threshold_recall <= 1.0
     assert Path(result.best_checkpoint_path).is_file()
     assert Path(result.final_checkpoint_path).is_file()
 
@@ -250,7 +246,7 @@ def test_train_model_accepts_batch_metadata(tmp_path: Path) -> None:
     )
 
     assert result.epochs_total == 1
-    assert result.history[0].val_positive_pixels > 0
+    assert 0.0 <= result.history[0].val_best_threshold_pixel_f1 <= 1.0
 
 
 def test_validation_pixel_f1_counts_known_confusion_matrix() -> None:
@@ -284,15 +280,10 @@ def test_validation_pixel_f1_counts_known_confusion_matrix() -> None:
         1,
     )
 
-    assert result["true_positive"] == 1
-    assert result["false_positive"] == 1
-    assert result["false_negative"] == 1
-    assert result["positive_pixels"] == 2
-    assert result["pred_positive_pixels"] == 2
-    assert result["f1"] == 0.5
     assert result["best_threshold"] == 0.3
     assert result["best_threshold_pixel_f1"] == 0.5
-    assert 0.0 <= result["prob_p50"] <= 1.0
+    assert result["best_threshold_precision"] == 0.5
+    assert result["best_threshold_recall"] == 0.5
 
 
 def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
@@ -326,11 +317,6 @@ def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
         1,
     )
 
-    assert result["positive_pixels"] == 0
-    assert result["pred_positive_pixels"] == 4
-    assert result["true_positive"] == 0
-    assert result["false_negative"] == 0
-    assert result["f1"] == 0.0
     assert result["best_threshold_pixel_f1"] == 0.0
 
 
@@ -340,17 +326,7 @@ def test_checkpoint_score_uses_best_threshold_pixel_f1() -> None:
     metrics = EpochMetrics(
         epoch=1,
         train_loss=1.0,
-        train_optimizer_steps=1,
-        train_skipped_optimizer_steps=0,
         val_loss=1.0,
-        val_pixel_precision=0.2,
-        val_pixel_recall=0.2,
-        val_pixel_f1=0.2,
-        val_positive_pixels=10,
-        val_pred_positive_pixels=10,
-        val_true_positive=2,
-        val_false_positive=8,
-        val_false_negative=8,
         val_best_threshold=0.8,
         val_best_threshold_pixel_f1=0.7,
         val_best_threshold_precision=0.8,
@@ -462,8 +438,7 @@ def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
     assert hook_calls >= 2
     assert result.epochs_total == 1
     assert len(result.history) == 1
-    assert result.history[0].train_skipped_optimizer_steps == 1
-    assert result.history[0].train_optimizer_steps == 1
+    assert result.history[0].train_loss >= 0.0
 
 
 def test_train_model_fails_after_second_nonfinite_gradient_batch(tmp_path: Path) -> None:

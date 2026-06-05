@@ -261,32 +261,7 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
-        _log_optional_metric(mlflow, "train/loss_focal", metrics.train_loss_focal, metrics.epoch)
-        _log_optional_metric(mlflow, "train/loss_tversky", metrics.train_loss_tversky, metrics.epoch)
-        _log_optional_metric(mlflow, "train/loss_bce", metrics.train_loss_bce, metrics.epoch)
-        _log_optional_metric(mlflow, "train/loss_dice", metrics.train_loss_dice, metrics.epoch)
-        mlflow.log_metric("train/optimizer_steps", metrics.train_optimizer_steps, step=metrics.epoch)
-        mlflow.log_metric(
-            "train/skipped_optimizer_steps",
-            metrics.train_skipped_optimizer_steps,
-            step=metrics.epoch,
-        )
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
-        mlflow.log_metric("val/pixel_precision", metrics.val_pixel_precision, step=metrics.epoch)
-        mlflow.log_metric("val/pixel_recall", metrics.val_pixel_recall, step=metrics.epoch)
-        mlflow.log_metric("val/pixel_f1", metrics.val_pixel_f1, step=metrics.epoch)
-        _log_optional_metric(mlflow, "val/macro_f1", metrics.val_macro_f1, metrics.epoch)
-        _log_optional_metric(mlflow, "val/mean_iou", metrics.val_mean_iou, metrics.epoch)
-        _log_optional_metric(mlflow, "val/pixel_accuracy", metrics.val_pixel_accuracy, metrics.epoch)
-        mlflow.log_metric("val/positive_pixels", metrics.val_positive_pixels, step=metrics.epoch)
-        mlflow.log_metric(
-            "val/pred_positive_pixels",
-            metrics.val_pred_positive_pixels,
-            step=metrics.epoch,
-        )
-        mlflow.log_metric("val/true_positive", metrics.val_true_positive, step=metrics.epoch)
-        mlflow.log_metric("val/false_positive", metrics.val_false_positive, step=metrics.epoch)
-        mlflow.log_metric("val/false_negative", metrics.val_false_negative, step=metrics.epoch)
         mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
         mlflow.log_metric(
             "val/best_threshold_pixel_f1",
@@ -303,60 +278,9 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
             metrics.val_best_threshold_recall,
             step=metrics.epoch,
         )
-        mlflow.log_metric("val/prob_mean", metrics.val_prob_mean, step=metrics.epoch)
-        mlflow.log_metric("val/prob_min", metrics.val_prob_min, step=metrics.epoch)
-        mlflow.log_metric("val/prob_max", metrics.val_prob_max, step=metrics.epoch)
-        mlflow.log_metric("val/prob_p50", metrics.val_prob_p50, step=metrics.epoch)
-        mlflow.log_metric("val/prob_p90", metrics.val_prob_p90, step=metrics.epoch)
-        mlflow.log_metric("val/prob_p99", metrics.val_prob_p99, step=metrics.epoch)
-        mlflow.log_metric("val/prob_p999", metrics.val_prob_p999, step=metrics.epoch)
-        mlflow.log_metric(
-            "val/prob_positive_mean",
-            metrics.val_prob_positive_mean,
-            step=metrics.epoch,
-        )
-        mlflow.log_metric("val/prob_positive_p50", metrics.val_prob_positive_p50, step=metrics.epoch)
-        mlflow.log_metric("val/prob_positive_p90", metrics.val_prob_positive_p90, step=metrics.epoch)
-        mlflow.log_metric("val/prob_positive_p99", metrics.val_prob_positive_p99, step=metrics.epoch)
-        mlflow.log_metric(
-            "val/prob_negative_mean",
-            metrics.val_prob_negative_mean,
-            step=metrics.epoch,
-        )
-        mlflow.log_metric("val/prob_negative_p50", metrics.val_prob_negative_p50, step=metrics.epoch)
-        mlflow.log_metric("val/prob_negative_p90", metrics.val_prob_negative_p90, step=metrics.epoch)
-        mlflow.log_metric("val/prob_negative_p99", metrics.val_prob_negative_p99, step=metrics.epoch)
-        for threshold_key, values in metrics.val_threshold_sweep.items():
-            mlflow.log_metric(f"val/sweep_{threshold_key}_f1", values["f1"], step=metrics.epoch)
-            mlflow.log_metric(
-                f"val/sweep_{threshold_key}_precision",
-                values["precision"],
-                step=metrics.epoch,
-            )
-            mlflow.log_metric(
-                f"val/sweep_{threshold_key}_recall",
-                values["recall"],
-                step=metrics.epoch,
-            )
-        for slug, values in metrics.val_per_class_metrics.items():
-            mlflow.log_metric(f"val/{slug}/f1", values["f1"], step=metrics.epoch)
-            mlflow.log_metric(f"val/{slug}/iou", values["iou"], step=metrics.epoch)
-            mlflow.log_metric(f"val/{slug}/precision", values["precision"], step=metrics.epoch)
-            mlflow.log_metric(f"val/{slug}/recall", values["recall"], step=metrics.epoch)
-            mlflow.log_metric(
-                f"val/{slug}/support_pixels",
-                values["support_pixels"],
-                step=metrics.epoch,
-            )
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
-
-
-def _log_optional_metric(mlflow, name: str, value: float | None, step: int) -> None:
-    if value is None:
-        return
-    mlflow.log_metric(name, value, step=step)
 
 
 def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
@@ -367,16 +291,10 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         if result.history:
-            mlflow.log_metric("val/best_pixel_f1", max(item.val_pixel_f1 for item in result.history))
-            mlflow.log_metric("val/final_pixel_f1", result.history[-1].val_pixel_f1)
-            macro_values = [
-                item.val_macro_f1
-                for item in result.history
-                if item.val_macro_f1 is not None
-            ]
-            if macro_values:
-                mlflow.log_metric("val/best_macro_f1", max(macro_values))
-                mlflow.log_metric("val/final_macro_f1", macro_values[-1])
+            mlflow.log_metric(
+                "val/run_best_threshold_pixel_f1",
+                max(item.val_best_threshold_pixel_f1 for item in result.history),
+            )
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
 

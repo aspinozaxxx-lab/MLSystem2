@@ -52,7 +52,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
-    parser.add_argument("--threshold-sweep", action="store_true")
     parser.add_argument("--min-f1", type=float, default=DEFAULT_MIN_F1)
     parser.add_argument("--matrix", action="store_true")
     parser.add_argument("--synthetic", action="store_true")
@@ -148,7 +147,6 @@ def main(argv: list[str] | None = None) -> int:
         **case,
         "config": str(config_path),
         "synthetic": args.synthetic,
-        "threshold_sweep_enabled": args.threshold_sweep,
         "positive_tiles_used": collected["positive_tiles"],
         "negative_tiles_used": collected["negative_tiles"],
         "sample_previews": sample_previews,
@@ -294,14 +292,11 @@ def _run_case(
             "device": device,
             "learning_rate": learning_rate,
             "requested_steps": steps,
-            "actual_optimizer_steps": sum(item.train_optimizer_steps for item in result.history),
             "epochs_total": result.epochs_total,
-            "initial_f1": initial["f1"],
-            "initial_precision": initial["precision"],
-            "initial_recall": initial["recall"],
-            "final_f1": final.val_pixel_f1,
-            "final_precision": final.val_pixel_precision,
-            "final_recall": final.val_pixel_recall,
+            "initial_best_threshold": initial["best_threshold"],
+            "initial_best_threshold_f1": initial["best_threshold_pixel_f1"],
+            "initial_best_threshold_precision": initial["best_threshold_precision"],
+            "initial_best_threshold_recall": initial["best_threshold_recall"],
             "final_best_threshold": final.val_best_threshold,
             "final_best_threshold_f1": final.val_best_threshold_pixel_f1,
             "best_epoch": best_epoch.epoch,
@@ -309,14 +304,7 @@ def _run_case(
             "best_threshold_f1": best_threshold_f1,
             "best_threshold_precision": best_epoch.val_best_threshold_precision,
             "best_threshold_recall": best_epoch.val_best_threshold_recall,
-            "final_prob_positive_mean": final.val_prob_positive_mean,
-            "final_prob_negative_mean": final.val_prob_negative_mean,
-            "final_train_loss_focal": final.train_loss_focal,
-            "final_train_loss_tversky": final.train_loss_tversky,
-            "final_train_loss_bce": final.train_loss_bce,
-            "final_train_loss_dice": final.train_loss_dice,
             "train_loss_history": [item.train_loss for item in result.history],
-            "f1_history": [item.val_pixel_f1 for item in result.history],
             "best_threshold_f1_history": [
                 item.val_best_threshold_pixel_f1 for item in result.history
             ],

@@ -331,9 +331,7 @@ nvidia-smi
 - длительность обучения;
 - ошибки или отклонения.
 
-Для двоичной сегментации основная метрика обычно `val/best_threshold_pixel_f1`. Также смотри precision, recall, fixed-threshold `val/pixel_f1`, `train/loss`, компоненты loss и `train/skipped_optimizer_steps`.
-
-Для многоклассовой сегментации смотри macro F1, mean IoU и per-class метрики. Пиксельная accuracy сама по себе не является достаточным качеством.
+Основная метрика обучения и выбора checkpoint - `val/best_threshold_pixel_f1`. Для HPO-сравнения завершенных запусков используй итоговую `val/run_best_threshold_pixel_f1`. Также смотри `val/best_threshold_precision`, `val/best_threshold_recall`, `val/best_threshold`, `train/loss`, `val/loss`, `train/epoch_time_sec` и итоговое `train/training_time_sec`.
 
 ## 11. Отчетность
 

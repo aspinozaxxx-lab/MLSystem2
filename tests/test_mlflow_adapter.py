@@ -11,7 +11,7 @@ from mlsystem2.mlflow_adapter.api import (
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowStartRunRequest
 from mlsystem2.mlflow_adapter import _client
-from mlsystem2.train.contracts import EpochMetrics
+from mlsystem2.train.contracts import EpochMetrics, TrainResult
 
 
 def test_next_run_name_uses_class_date_and_daily_counter() -> None:
@@ -329,17 +329,7 @@ def test_log_training_epoch_reactivates_run_by_id(monkeypatch) -> None:
         EpochMetrics(
             epoch=1,
             train_loss=1.0,
-            train_optimizer_steps=2,
-            train_skipped_optimizer_steps=0,
             val_loss=1.0,
-            val_pixel_precision=0.0,
-            val_pixel_recall=0.0,
-            val_pixel_f1=0.0,
-            val_positive_pixels=0,
-            val_pred_positive_pixels=0,
-            val_true_positive=0,
-            val_false_positive=0,
-            val_false_negative=0,
             epoch_time_sec=1.0,
         ),
     )
@@ -349,7 +339,7 @@ def test_log_training_epoch_reactivates_run_by_id(monkeypatch) -> None:
     assert ("metric", "train/loss", 1.0, 1, "run-42") in calls
 
 
-def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
+def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
     logged: list[tuple[str, float, int]] = []
 
     class MLflow:
@@ -365,83 +355,63 @@ def test_log_training_epoch_writes_optimizer_step_metrics(monkeypatch) -> None:
         EpochMetrics(
             epoch=3,
             train_loss=1.0,
-            train_loss_focal=0.2,
-            train_loss_tversky=0.3,
-            train_loss_bce=0.4,
-            train_loss_dice=None,
-            train_optimizer_steps=71,
-            train_skipped_optimizer_steps=1,
             val_loss=1.0,
-            val_pixel_precision=0.0,
-            val_pixel_recall=0.0,
-            val_pixel_f1=0.0,
-            val_positive_pixels=0,
-            val_pred_positive_pixels=0,
-            val_true_positive=0,
-            val_false_positive=0,
-            val_false_negative=0,
+            val_best_threshold=0.75,
+            val_best_threshold_pixel_f1=0.6,
+            val_best_threshold_precision=0.7,
+            val_best_threshold_recall=0.52,
             epoch_time_sec=1.0,
         ),
     )
 
-    assert ("train/optimizer_steps", 71, 3) in logged
-    assert ("train/skipped_optimizer_steps", 1, 3) in logged
-    assert ("train/loss_focal", 0.2, 3) in logged
-    assert ("train/loss_tversky", 0.3, 3) in logged
-    assert ("train/loss_bce", 0.4, 3) in logged
-    assert not any(item[0] == "train/loss_dice" for item in logged)
-    assert ("val/best_threshold", 0.0, 3) in logged
-    assert ("val/prob_mean", 0.0, 3) in logged
+    assert logged == [
+        ("train/loss", 1.0, 3),
+        ("val/loss", 1.0, 3),
+        ("val/best_threshold", 0.75, 3),
+        ("val/best_threshold_pixel_f1", 0.6, 3),
+        ("val/best_threshold_precision", 0.7, 3),
+        ("val/best_threshold_recall", 0.52, 3),
+        ("train/epoch_time_sec", 1.0, 3),
+    ]
 
 
-def test_log_training_epoch_writes_multiclass_metrics(monkeypatch) -> None:
-    logged: list[tuple[str, float, int]] = []
+def test_log_training_metrics_writes_run_best_hpo_metric(monkeypatch) -> None:
+    logged: list[tuple[str, float, int | None]] = []
 
     class MLflow:
         @staticmethod
-        def log_metric(name: str, value: float, step: int = 0) -> None:
+        def log_metric(name: str, value: float, step: int | None = None) -> None:
             logged.append((name, value, step))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
     run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
 
-    _client.log_training_epoch(
+    _client.log_training_metrics(
         run,
-        EpochMetrics(
-            epoch=2,
-            train_loss=1.0,
-            train_optimizer_steps=1,
-            train_skipped_optimizer_steps=0,
-            val_loss=1.0,
-            val_pixel_precision=0.5,
-            val_pixel_recall=0.25,
-            val_pixel_f1=0.333,
-            val_positive_pixels=10,
-            val_pred_positive_pixels=8,
-            val_true_positive=4,
-            val_false_positive=4,
-            val_false_negative=6,
-            val_macro_f1=0.333,
-            val_mean_iou=0.25,
-            val_pixel_accuracy=0.9,
-            val_per_class_metrics={
-                "class_a": {
-                    "precision": 0.5,
-                    "recall": 0.25,
-                    "f1": 0.333,
-                    "iou": 0.2,
-                    "support_pixels": 10.0,
-                }
-            },
-            epoch_time_sec=1.0,
+        TrainResult(
+            history=[
+                EpochMetrics(
+                    epoch=1,
+                    train_loss=1.0,
+                    val_loss=1.0,
+                    val_best_threshold_pixel_f1=0.4,
+                    epoch_time_sec=1.0,
+                ),
+                EpochMetrics(
+                    epoch=2,
+                    train_loss=0.8,
+                    val_loss=0.9,
+                    val_best_threshold_pixel_f1=0.6,
+                    epoch_time_sec=1.2,
+                ),
+            ],
+            epochs_total=2,
+            training_time_sec=2.2,
         ),
     )
 
-    assert ("val/macro_f1", 0.333, 2) in logged
-    assert ("val/mean_iou", 0.25, 2) in logged
-    assert ("val/pixel_accuracy", 0.9, 2) in logged
-    assert ("val/class_a/f1", 0.333, 2) in logged
-    assert ("val/class_a/iou", 0.2, 2) in logged
-    assert ("val/class_a/precision", 0.5, 2) in logged
-    assert ("val/class_a/recall", 0.25, 2) in logged
-    assert ("val/class_a/support_pixels", 10.0, 2) in logged
+    assert logged == [
+        ("train/epochs_total", 2, None),
+        ("train/training_time_sec", 2.2, None),
+        ("val/run_best_threshold_pixel_f1", 0.6, None),
+    ]

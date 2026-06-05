@@ -13,9 +13,8 @@ from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgre
 from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
 
-MAX_SKIPPED_OPTIMIZER_STEPS_PER_EPOCH = 1
-THRESHOLD_SWEEP = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
-PROBABILITY_HISTOGRAM_BINS = 1000
+MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH = 1
+THRESHOLD_CANDIDATES = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
 
 
 def train_model(
@@ -72,45 +71,11 @@ def train_model(
             metrics = EpochMetrics(
                 epoch=epoch,
                 train_loss=train_epoch["loss"],
-                train_loss_focal=train_epoch["loss_focal"],
-                train_loss_tversky=train_epoch["loss_tversky"],
-                train_loss_bce=train_epoch["loss_bce"],
-                train_loss_dice=train_epoch["loss_dice"],
-                train_optimizer_steps=train_epoch["optimizer_steps"],
-                train_skipped_optimizer_steps=train_epoch["skipped_optimizer_steps"],
                 val_loss=val["loss"],
-                val_pixel_precision=val["precision"],
-                val_pixel_recall=val["recall"],
-                val_pixel_f1=val["f1"],
-                val_positive_pixels=val["positive_pixels"],
-                val_pred_positive_pixels=val["pred_positive_pixels"],
-                val_true_positive=val["true_positive"],
-                val_false_positive=val["false_positive"],
-                val_false_negative=val["false_negative"],
                 val_best_threshold=val["best_threshold"],
                 val_best_threshold_pixel_f1=val["best_threshold_pixel_f1"],
                 val_best_threshold_precision=val["best_threshold_precision"],
                 val_best_threshold_recall=val["best_threshold_recall"],
-                val_prob_mean=val["prob_mean"],
-                val_prob_min=val["prob_min"],
-                val_prob_max=val["prob_max"],
-                val_prob_p50=val["prob_p50"],
-                val_prob_p90=val["prob_p90"],
-                val_prob_p99=val["prob_p99"],
-                val_prob_p999=val["prob_p999"],
-                val_prob_positive_mean=val["prob_positive_mean"],
-                val_prob_positive_p50=val["prob_positive_p50"],
-                val_prob_positive_p90=val["prob_positive_p90"],
-                val_prob_positive_p99=val["prob_positive_p99"],
-                val_prob_negative_mean=val["prob_negative_mean"],
-                val_prob_negative_p50=val["prob_negative_p50"],
-                val_prob_negative_p90=val["prob_negative_p90"],
-                val_prob_negative_p99=val["prob_negative_p99"],
-                val_threshold_sweep=val["threshold_sweep"],
-                val_macro_f1=val.get("macro_f1"),
-                val_mean_iou=val.get("mean_iou"),
-                val_pixel_accuracy=val.get("pixel_accuracy"),
-                val_per_class_metrics=val.get("per_class_metrics", {}),
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -158,19 +123,12 @@ def _train_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float | int | None]:
+) -> dict[str, float]:
     model.train()
     total_loss = 0.0
-    component_totals = {
-        "focal": 0.0,
-        "tversky": 0.0,
-        "bce": 0.0,
-        "dice": 0.0,
-    }
-    component_counts = {name: 0 for name in component_totals}
     batches = 0
-    optimizer_steps = 0
-    skipped_optimizer_steps = 0
+    has_optimizer_step = False
+    nonfinite_gradient_skips = 0
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
@@ -182,24 +140,22 @@ def _train_epoch(
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         if config.task == "multiclass":
             _validate_multiclass_targets(torch, masks, logits.shape[1], epoch, batch_index, "train")
-        loss_info = _loss_components(torch, logits, masks, config)
-        loss = loss_info["loss"]
+        loss = _loss(torch, logits, masks, config)
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
-        _accumulate_loss_components(component_totals, component_counts, loss_info)
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
         if bad_gradient is not None:
-            skipped_optimizer_steps += 1
+            nonfinite_gradient_skips += 1
             warnings.warn(
                 "Пропущен optimizer step из-за non-finite gradient: "
                 f"epoch={epoch}, batch={batch_index}, parameter={bad_gradient}",
                 stacklevel=2,
             )
             optimizer.zero_grad(set_to_none=True)
-            if skipped_optimizer_steps > MAX_SKIPPED_OPTIMIZER_STEPS_PER_EPOCH:
+            if nonfinite_gradient_skips > MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH:
                 raise TrainError(
                     "Слишком много non-finite gradients за эпоху: "
-                    f"epoch={epoch}, skipped_optimizer_steps={skipped_optimizer_steps}"
+                    f"epoch={epoch}, nonfinite_gradient_skips={nonfinite_gradient_skips}"
                 )
             total_loss += float(loss.detach().item())
             batches += 1
@@ -212,7 +168,7 @@ def _train_epoch(
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index, "train")
         optimizer.step()
-        optimizer_steps += 1
+        has_optimizer_step = True
         total_loss += float(loss.detach().item())
         batches += 1
         if (
@@ -222,16 +178,10 @@ def _train_epoch(
             break
     if batches == 0:
         raise TrainError("Train DataLoader не вернул ни одного batch.")
-    if optimizer_steps == 0:
+    if not has_optimizer_step:
         raise TrainError(f"За эпоху {epoch} не выполнено ни одного optimizer step.")
     return {
         "loss": total_loss / batches,
-        "loss_focal": _average_component(component_totals, component_counts, "focal"),
-        "loss_tversky": _average_component(component_totals, component_counts, "tversky"),
-        "loss_bce": _average_component(component_totals, component_counts, "bce"),
-        "loss_dice": _average_component(component_totals, component_counts, "dice"),
-        "optimizer_steps": optimizer_steps,
-        "skipped_optimizer_steps": skipped_optimizer_steps,
     }
 
 
@@ -242,25 +192,17 @@ def _validate_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float | int]:
+) -> dict[str, float]:
     if config.task == "multiclass":
         return _validate_multiclass_epoch(torch, model, loader, device, config, epoch)
 
     model.eval()
     total_loss = 0.0
     batches = 0
-    true_positive = 0
-    false_positive = 0
-    false_negative = 0
-    positive_pixels = 0
-    pred_positive_pixels = 0
-    sweep_counts = {
+    threshold_counts = {
         threshold: {"tp": 0, "fp": 0, "fn": 0}
-        for threshold in THRESHOLD_SWEEP
+        for threshold in THRESHOLD_CANDIDATES
     }
-    prob_stats = _ProbabilityStats(torch, "prob")
-    positive_prob_stats = _ProbabilityStats(torch, "prob_positive")
-    negative_prob_stats = _ProbabilityStats(torch, "prob_negative")
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
@@ -276,17 +218,8 @@ def _validate_epoch(
             batches += 1
 
             probs = torch.sigmoid(logits)
-            pred = probs >= config.threshold
             true = masks >= 0.5
-            prob_stats.update(probs)
-            positive_prob_stats.update(probs, true)
-            negative_prob_stats.update(probs, ~true)
-            positive_pixels += int(true.sum().item())
-            pred_positive_pixels += int(pred.sum().item())
-            true_positive += int((pred & true).sum().item())
-            false_positive += int((pred & ~true).sum().item())
-            false_negative += int((~pred & true).sum().item())
-            for threshold, counts in sweep_counts.items():
+            for threshold, counts in threshold_counts.items():
                 threshold_pred = probs >= threshold
                 counts["tp"] += int((threshold_pred & true).sum().item())
                 counts["fp"] += int((threshold_pred & ~true).sum().item())
@@ -300,32 +233,13 @@ def _validate_epoch(
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
-    precision = _safe_div(true_positive, true_positive + false_positive)
-    recall = _safe_div(true_positive, true_positive + false_negative)
-    f1 = _safe_div(2.0 * precision * recall, precision + recall)
-    threshold_sweep = _threshold_sweep_metrics(sweep_counts)
-    best_threshold, best_precision, best_recall, best_f1 = _best_threshold_metrics(threshold_sweep)
-    prob_snapshot = {
-        **prob_stats.snapshot(),
-        **positive_prob_stats.snapshot(),
-        **negative_prob_stats.snapshot(),
-    }
+    best_threshold, best_precision, best_recall, best_f1 = _best_threshold_metrics(threshold_counts)
     return {
         "loss": total_loss / batches,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "positive_pixels": positive_pixels,
-        "pred_positive_pixels": pred_positive_pixels,
-        "true_positive": true_positive,
-        "false_positive": false_positive,
-        "false_negative": false_negative,
         "best_threshold": best_threshold,
         "best_threshold_pixel_f1": best_f1,
         "best_threshold_precision": best_precision,
         "best_threshold_recall": best_recall,
-        "threshold_sweep": threshold_sweep,
-        **prob_snapshot,
     }
 
 
@@ -336,16 +250,13 @@ def _validate_multiclass_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float | int | dict[str, dict[str, float]]]:
+) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     batches = 0
-    num_classes = 0
-    class_stats: dict[int, dict[str, int]] = {}
-    correct_pixels = 0
-    total_pixels = 0
-    positive_pixels = 0
-    pred_positive_pixels = 0
+    true_positive = 0
+    false_positive = 0
+    false_negative = 0
 
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
@@ -364,22 +275,11 @@ def _validate_multiclass_epoch(
             batches += 1
 
             preds = torch.argmax(logits, dim=1)
-            correct_pixels += int((preds == masks).sum().item())
-            total_pixels += int(masks.numel())
-            positive_pixels += int((masks > 0).sum().item())
-            pred_positive_pixels += int((preds > 0).sum().item())
-            for class_id in range(1, num_classes):
-                stats = class_stats.setdefault(
-                    class_id,
-                    {"tp": 0, "fp": 0, "fn": 0, "support_pixels": 0, "pred_pixels": 0},
-                )
-                pred_class = preds == class_id
-                true_class = masks == class_id
-                stats["tp"] += int((pred_class & true_class).sum().item())
-                stats["fp"] += int((pred_class & ~true_class).sum().item())
-                stats["fn"] += int((~pred_class & true_class).sum().item())
-                stats["support_pixels"] += int(true_class.sum().item())
-                stats["pred_pixels"] += int(pred_class.sum().item())
+            pred_foreground = preds > 0
+            true_foreground = masks > 0
+            true_positive += int((pred_foreground & true_foreground).sum().item())
+            false_positive += int((pred_foreground & ~true_foreground).sum().item())
+            false_negative += int((~pred_foreground & true_foreground).sum().item())
 
             if (
                 config.max_val_batches_per_epoch is not None
@@ -390,54 +290,19 @@ def _validate_multiclass_epoch(
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
-    per_class_metrics = _multiclass_per_class_metrics(class_stats, config)
-    foreground_keys = [
-        slug
-        for slug, values in per_class_metrics.items()
-        if values["support_pixels"] > 0
-    ]
-    macro_f1 = _mean([per_class_metrics[key]["f1"] for key in foreground_keys])
-    macro_precision = _mean([per_class_metrics[key]["precision"] for key in foreground_keys])
-    macro_recall = _mean([per_class_metrics[key]["recall"] for key in foreground_keys])
-    mean_iou = _mean([per_class_metrics[key]["iou"] for key in foreground_keys])
-    true_positive = sum(stats["tp"] for stats in class_stats.values())
-    false_positive = sum(stats["fp"] for stats in class_stats.values())
-    false_negative = sum(stats["fn"] for stats in class_stats.values())
+    foreground_precision = _safe_div(true_positive, true_positive + false_positive)
+    foreground_recall = _safe_div(true_positive, true_positive + false_negative)
+    foreground_f1 = _safe_div(
+        2.0 * foreground_precision * foreground_recall,
+        foreground_precision + foreground_recall,
+    )
 
     return {
         "loss": total_loss / batches,
-        "precision": macro_precision,
-        "recall": macro_recall,
-        "f1": macro_f1,
-        "positive_pixels": positive_pixels,
-        "pred_positive_pixels": pred_positive_pixels,
-        "true_positive": true_positive,
-        "false_positive": false_positive,
-        "false_negative": false_negative,
         "best_threshold": 0.0,
-        "best_threshold_pixel_f1": macro_f1,
-        "best_threshold_precision": macro_precision,
-        "best_threshold_recall": macro_recall,
-        "threshold_sweep": {},
-        "prob_mean": 0.0,
-        "prob_min": 0.0,
-        "prob_max": 0.0,
-        "prob_p50": 0.0,
-        "prob_p90": 0.0,
-        "prob_p99": 0.0,
-        "prob_p999": 0.0,
-        "prob_positive_mean": 0.0,
-        "prob_positive_p50": 0.0,
-        "prob_positive_p90": 0.0,
-        "prob_positive_p99": 0.0,
-        "prob_negative_mean": 0.0,
-        "prob_negative_p50": 0.0,
-        "prob_negative_p90": 0.0,
-        "prob_negative_p99": 0.0,
-        "macro_f1": macro_f1,
-        "mean_iou": mean_iou,
-        "pixel_accuracy": _safe_div(correct_pixels, total_pixels),
-        "per_class_metrics": per_class_metrics,
+        "best_threshold_pixel_f1": foreground_f1,
+        "best_threshold_precision": foreground_precision,
+        "best_threshold_recall": foreground_recall,
     }
 
 
@@ -485,10 +350,6 @@ def _prepare_masks(torch, masks, config, device):
 
 
 def _loss(torch, logits, masks, config):
-    return _loss_components(torch, logits, masks, config)["loss"]
-
-
-def _loss_components(torch, logits, masks, config) -> dict[str, object]:
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(
@@ -496,18 +357,8 @@ def _loss_components(torch, logits, masks, config) -> dict[str, object]:
             )
         cross_entropy = torch.nn.functional.cross_entropy(logits, masks)
         if config.loss == "cross_entropy_dice":
-            dice = _multiclass_dice_loss(torch, logits, masks)
-            loss = cross_entropy + dice
-        else:
-            dice = None
-            loss = cross_entropy
-        return {
-            "loss": loss,
-            "focal": None,
-            "tversky": None,
-            "bce": None,
-            "dice": dice,
-        }
+            return cross_entropy + _multiclass_dice_loss(torch, logits, masks)
+        return cross_entropy
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -515,14 +366,7 @@ def _loss_components(torch, logits, masks, config) -> dict[str, object]:
             masks,
             pos_weight=pos_weight,
         )
-        dice = _dice_loss(torch, logits, masks)
-        return {
-            "loss": bce + dice,
-            "focal": None,
-            "tversky": None,
-            "bce": bce,
-            "dice": dice,
-        }
+        return bce + _dice_loss(torch, logits, masks)
     if config.loss == "focal_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -533,157 +377,31 @@ def _loss_components(torch, logits, masks, config) -> dict[str, object]:
         )
         pt = torch.exp(-bce)
         focal = (config.focal_alpha * torch.pow(1.0 - pt, 2.0) * bce).mean()
-        dice = _dice_loss(torch, logits, masks)
-        return {
-            "loss": focal + dice,
-            "focal": focal,
-            "tversky": None,
-            "bce": bce.mean(),
-            "dice": dice,
-        }
+        return focal + _dice_loss(torch, logits, masks)
     if config.loss == "focal_tversky":
-        focal, bce = _focal_loss_with_bce(torch, logits, masks, config)
-        tversky = _tversky_loss(torch, logits, masks, config)
-        return {
-            "loss": focal + tversky,
-            "focal": focal,
-            "tversky": tversky,
-            "bce": bce,
-            "dice": None,
-        }
+        focal, _bce = _focal_loss_with_bce(torch, logits, masks, config)
+        return focal + _tversky_loss(torch, logits, masks, config)
     raise TrainError(f"Неподдерживаемый loss: {config.loss}")
 
 
-def _accumulate_loss_components(
-    totals: dict[str, float],
-    counts: dict[str, int],
-    loss_info: dict[str, object],
-) -> None:
-    for name in totals:
-        value = loss_info[name]
-        if value is None:
-            continue
-        totals[name] += float(value.detach().item())
-        counts[name] += 1
-
-
-def _average_component(
-    totals: dict[str, float],
-    counts: dict[str, int],
-    name: str,
-) -> float | None:
-    count = counts[name]
-    if count == 0:
-        return None
-    return totals[name] / count
-
-
-class _ProbabilityStats:
-    def __init__(self, torch, prefix: str) -> None:
-        self._torch = torch
-        self._prefix = prefix
-        self._histogram = torch.zeros(PROBABILITY_HISTOGRAM_BINS, dtype=torch.long, device="cpu")
-        self._count = 0
-        self._sum = 0.0
-        self._min = 1.0
-        self._max = 0.0
-
-    def update(self, probs, selector=None) -> None:
-        detached = probs.detach()
-        if selector is not None:
-            detached = detached[selector.detach()]
-        count = int(detached.numel())
-        if count == 0:
-            return
-
-        self._count += count
-        self._sum += float(detached.sum().item())
-        self._min = min(self._min, float(detached.min().item()))
-        self._max = max(self._max, float(detached.max().item()))
-
-        bins = self._torch.clamp(
-            (detached * PROBABILITY_HISTOGRAM_BINS).to(dtype=self._torch.long),
-            min=0,
-            max=PROBABILITY_HISTOGRAM_BINS - 1,
-        )
-        histogram = self._torch.bincount(
-            bins.reshape(-1).cpu(),
-            minlength=PROBABILITY_HISTOGRAM_BINS,
-        )
-        self._histogram += histogram
-
-    def snapshot(self) -> dict[str, float]:
-        if self._count == 0:
-            return {
-                f"{self._prefix}_mean": 0.0,
-                f"{self._prefix}_min": 0.0,
-                f"{self._prefix}_max": 0.0,
-                f"{self._prefix}_p50": 0.0,
-                f"{self._prefix}_p90": 0.0,
-                f"{self._prefix}_p99": 0.0,
-                f"{self._prefix}_p999": 0.0,
-            }
-        return {
-            f"{self._prefix}_mean": self._sum / self._count,
-            f"{self._prefix}_min": self._min,
-            f"{self._prefix}_max": self._max,
-            f"{self._prefix}_p50": self._percentile(0.50),
-            f"{self._prefix}_p90": self._percentile(0.90),
-            f"{self._prefix}_p99": self._percentile(0.99),
-            f"{self._prefix}_p999": self._percentile(0.999),
-        }
-
-    def _percentile(self, fraction: float) -> float:
-        target = max(1, int(self._count * fraction))
-        cumulative = self._torch.cumsum(self._histogram, dim=0)
-        bin_index = int(self._torch.searchsorted(cumulative, target).item())
-        return min(1.0, (bin_index + 0.5) / PROBABILITY_HISTOGRAM_BINS)
-
-
-def _threshold_sweep_metrics(
-    sweep_counts: dict[float, dict[str, int]],
-) -> dict[str, dict[str, float]]:
-    metrics: dict[str, dict[str, float]] = {}
-    for threshold in THRESHOLD_SWEEP:
-        counts = sweep_counts[threshold]
-        precision = _safe_div(counts["tp"], counts["tp"] + counts["fp"])
-        recall = _safe_div(counts["tp"], counts["tp"] + counts["fn"])
-        f1 = _safe_div(2.0 * precision * recall, precision + recall)
-        metrics[_threshold_key(threshold)] = {
-            "threshold": threshold,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-        }
-    return metrics
-
-
 def _best_threshold_metrics(
-    sweep_metrics: dict[str, dict[str, float]],
+    threshold_counts: dict[float, dict[str, int]],
 ) -> tuple[float, float, float, float]:
-    best_threshold = THRESHOLD_SWEEP[0]
+    best_threshold = THRESHOLD_CANDIDATES[0]
     best_precision = 0.0
     best_recall = 0.0
     best_f1 = -1.0
-    for item in sweep_metrics.values():
-        threshold = item["threshold"]
-        precision = item["precision"]
-        recall = item["recall"]
-        f1 = item["f1"]
+    for threshold in THRESHOLD_CANDIDATES:
+        counts = threshold_counts[threshold]
+        precision = _safe_div(counts["tp"], counts["tp"] + counts["fp"])
+        recall = _safe_div(counts["tp"], counts["tp"] + counts["fn"])
+        f1 = _safe_div(2.0 * precision * recall, precision + recall)
         if f1 > best_f1:
             best_threshold = threshold
             best_precision = precision
             best_recall = recall
             best_f1 = f1
     return best_threshold, best_precision, best_recall, max(best_f1, 0.0)
-
-
-def _threshold_key(threshold: float) -> str:
-    return f"{threshold:.3f}".replace(".", "_")
-
-
-def _focal_loss(torch, logits, masks, config):
-    return _focal_loss_with_bce(torch, logits, masks, config)[0]
 
 
 def _focal_loss_with_bce(torch, logits, masks, config):
@@ -793,18 +511,12 @@ def _save_training_checkpoint(
             metadata={
                 "label": label,
                 "epoch": metrics.epoch,
-                "val_pixel_f1": metrics.val_pixel_f1,
                 "val_best_threshold": metrics.val_best_threshold,
                 "val_best_threshold_pixel_f1": metrics.val_best_threshold_pixel_f1,
                 "val_best_threshold_precision": metrics.val_best_threshold_precision,
                 "val_best_threshold_recall": metrics.val_best_threshold_recall,
-                "val_macro_f1": metrics.val_macro_f1,
-                "val_mean_iou": metrics.val_mean_iou,
-                "val_pixel_accuracy": metrics.val_pixel_accuracy,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
-                "train_optimizer_steps": metrics.train_optimizer_steps,
-                "train_skipped_optimizer_steps": metrics.train_skipped_optimizer_steps,
                 "train_config": request.config.model_dump(mode="json"),
             },
         )
@@ -864,38 +576,3 @@ def _validate_multiclass_targets(
             f"Некорректные значения multiclass mask at stage={stage}, epoch={epoch}, "
             f"batch={batch_index}: ожидается диапазон 0..{num_classes - 1}"
         )
-
-
-def _multiclass_per_class_metrics(
-    class_stats: dict[int, dict[str, int]],
-    config,
-) -> dict[str, dict[str, float]]:
-    metrics: dict[str, dict[str, float]] = {}
-    for class_id in sorted(class_stats):
-        stats = class_stats[class_id]
-        precision = _safe_div(stats["tp"], stats["tp"] + stats["fp"])
-        recall = _safe_div(stats["tp"], stats["tp"] + stats["fn"])
-        f1 = _safe_div(2.0 * precision * recall, precision + recall)
-        iou = _safe_div(stats["tp"], stats["tp"] + stats["fp"] + stats["fn"])
-        metrics[_class_slug(config, class_id)] = {
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "iou": iou,
-            "support_pixels": float(stats["support_pixels"]),
-            "pred_pixels": float(stats["pred_pixels"]),
-        }
-    return metrics
-
-
-def _class_slug(config, class_id: int) -> str:
-    index = class_id - 1
-    if 0 <= index < len(config.class_slugs):
-        return str(config.class_slugs[index])
-    return f"class_{class_id}"
-
-
-def _mean(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    return float(sum(values) / len(values))

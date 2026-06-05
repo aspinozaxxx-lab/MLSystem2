@@ -146,19 +146,10 @@ print(runs)
 
 Для binary segmentation:
 
-- primary metric: `val/best_threshold_pixel_f1` или `val/pixel_f1`, как указано оператором;
-- смотреть precision, recall и threshold sweep;
-- смотреть `train/loss`, `train/loss_focal`, `train/loss_tversky`;
-- смотреть `train/skipped_optimizer_steps`;
-- fixed threshold может быть хуже best threshold, поэтому не prune только по fixed-threshold F1, если sweep растет.
-
-Для multiclass segmentation:
-
-- primary metric: `val/macro_f1` или `val/mean_iou`;
-- смотреть per-class f1/iou/support;
-- учитывать class imbalance;
-- проверять, что редкие классы реально попадают в train batches;
-- не считать высокий pixel accuracy достаточным качеством, если macro metrics слабые.
+- primary metric для сортировки завершенных trials: `val/run_best_threshold_pixel_f1`;
+- primary metric для мониторинга эпох: `val/best_threshold_pixel_f1`;
+- смотреть `val/best_threshold_precision`, `val/best_threshold_recall`, `val/best_threshold`, `train/loss`, `val/loss`;
+- fixed-threshold, multiclass, per-class, probability и optimizer diagnostics в MLflow не публикуются и не должны использоваться в HPO-решениях.
 
 ## 6. Trial lifecycle
 
@@ -198,7 +189,6 @@ Pruning должен быть адаптивным:
 - если trial сильно ниже baseline после нескольких эпох и динамика плохая, prune;
 - если trial медленный и качество низкое, prune;
 - если precision/recall деградируют и best threshold не помогает, prune;
-- если `skipped_optimizer_steps > 0`, сначала исследовать причину;
 - если OOM, снизить batch size или изменить параметры, а не повторять тот же запуск;
 - если train loss падает, а целевая метрика медленно растет, можно продолжать.
 
@@ -206,8 +196,7 @@ Pruning должен быть адаптивным:
 
 - если F1 не приблизился к предыдущему baseline после 5-10 эпох, prune;
 - если train loss падает и `val/best_threshold_pixel_f1` растет, продолжать;
-- если `val/best_threshold_pixel_f1` растет, даже при слабом `val/pixel_f1` на fixed threshold, продолжать;
-- если best threshold постоянно уходит в крайние значения, смотреть precision/recall и распределение вероятностей.
+- если best threshold постоянно уходит в крайние значения, смотреть precision/recall.
 
 Prune не должен оставлять zombie processes. Заверши только процесс текущего trial и не трогай unrelated training processes.
 
@@ -313,7 +302,7 @@ train:
 - batch size начать с `4`;
 - если OOM, использовать `2`;
 - tile size `1024`, stride `512` initially;
-- primary metric: `val/best_threshold_pixel_f1`;
+- primary metric: `val/run_best_threshold_pixel_f1`;
 - speed secondary objective.
 
 Не фиксируй заранее trial numbers или run ids. Сначала посмотри предыдущие MLflow результаты и отчеты, затем сформируй стартовую стратегию.
@@ -367,7 +356,7 @@ Resume:
 - model_name: smp_deeplabv3plus_resnet50
 - dataset/class: deforestation / Вырубки
 - MLflow experiment: Deeplabv3plus-resnet50-HPO-deforest-2605
-- primary metric: val/best_threshold_pixel_f1
+- primary metric: val/run_best_threshold_pixel_f1
 - secondary objective: training speed
 - report workspace: /opt/hpo/report/deeplabv3plus_deforest_2605
 

@@ -530,17 +530,7 @@ def _train_result() -> TrainResult:
             EpochMetrics(
                 epoch=1,
                 train_loss=1.0,
-                train_optimizer_steps=1,
-                train_skipped_optimizer_steps=0,
                 val_loss=1.0,
-                val_pixel_precision=0.0,
-                val_pixel_recall=0.0,
-                val_pixel_f1=0.0,
-                val_positive_pixels=0,
-                val_pred_positive_pixels=0,
-                val_true_positive=0,
-                val_false_positive=0,
-                val_false_negative=0,
                 epoch_time_sec=0.1,
             )
         ],

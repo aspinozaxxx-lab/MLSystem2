@@ -75,10 +75,10 @@ mlflow.set_tracking_uri("http://127.0.0.1:5000")
 exp = mlflow.get_experiment_by_name("<experiment_name>")
 runs = mlflow.search_runs(
     [exp.experiment_id],
-    order_by=["metrics.val/best_threshold_pixel_f1 DESC"],
+    order_by=["metrics.val/run_best_threshold_pixel_f1 DESC"],
     max_results=20,
 )
-print(runs[["run_id", "status", "metrics.val/best_threshold_pixel_f1"]])
+print(runs[["run_id", "status", "metrics.val/run_best_threshold_pixel_f1"]])
 ```
 
 Для псевдоразметки используй `best.pt`, а не `final.pt`, если `best.pt` существует. Threshold бери из checkpoint metadata `val_best_threshold`. Если его нет, используй лучший threshold из MLflow history. Если нет и его, используй `train.threshold` из конфига, но явно напиши это в отчете.
