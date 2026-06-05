@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -753,6 +754,10 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         pseudo_results = refreshed_results.results[0].pseudo_markup_results
         assert pseudo_results[0].status == ResultStatus.OK
         assert pseudo_results[0].geojson_file is not None
+        assert re.fullmatch(
+            r"Вырубки\\main_segformer b2_\d{2}_\d{2}_\d{2}_\d{2}\.geojson",
+            pseudo_results[0].geojson_file.original_name,
+        )
         geojson_path = config.stored_files_root / "pseudo_markup_geojson"
         assert any(path.suffix == ".geojson" for path in geojson_path.iterdir())
 

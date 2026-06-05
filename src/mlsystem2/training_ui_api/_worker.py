@@ -555,11 +555,17 @@ def _finish_inference_job(
     output_path = _pseudo_output_path(row)
     report = _pseudo_report(row)
     has_geojson = output_path is not None and output_path.is_file()
+    pseudo_results = _pseudo_markup_results(session, row)
     if succeeded and has_geojson:
-        file_row = _store_generated_geojson(session, output_path, config)
+        file_row = _store_generated_geojson(
+            session,
+            output_path,
+            config,
+            original_name=_pseudo_geojson_download_name(row, pseudo_results, row.finished_at),
+        )
     else:
         file_row = None
-    for result in _pseudo_markup_results(session, row):
+    for result in pseudo_results:
         result.status = ResultStatus.OK.value if file_row is not None else ResultStatus.ERROR.value
         result.geojson_file_id = file_row.id if file_row is not None else result.geojson_file_id
         result.updated_at = _now()
@@ -597,6 +603,8 @@ def _store_generated_geojson(
     session: Session,
     source_path: Path,
     config: TrainingUIAPIConfig,
+    *,
+    original_name: str,
 ) -> StoredFileRow:
     file_id = uuid.uuid4()
     target_dir = config.stored_files_root / StoredFileKind.PSEUDO_MARKUP_GEOJSON.value
@@ -606,7 +614,7 @@ def _store_generated_geojson(
     row = StoredFileRow(
         id=file_id,
         kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
-        original_name=source_path.name,
+        original_name=original_name,
         content_type="application/geo+json",
         path=str(target_path),
         size_bytes=target_path.stat().st_size,
@@ -614,6 +622,22 @@ def _store_generated_geojson(
     session.add(row)
     session.flush()
     return row
+
+
+def _pseudo_geojson_download_name(
+    row: JobRow,
+    results: list[PseudoMarkupResultRow],
+    created_at: datetime | None,
+) -> str:
+    result = results[0] if results else None
+    dataset_name = result.class_key if result is not None else row.dataset_name
+    model_name = result.training_result.model_name if result is not None and result.training_result is not None else row.model_name
+    timestamp = (created_at or _now()).strftime("%H_%M_%d_%m")
+    return f"{_filename_part(dataset_name)}_{_filename_part(model_name)}_{timestamp}.geojson"
+
+
+def _filename_part(value: str) -> str:
+    return " ".join(str(value).strip().split()) or "unknown"
 
 
 def _best_training_checkpoint(
