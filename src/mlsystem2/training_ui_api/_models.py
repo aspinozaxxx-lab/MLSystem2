@@ -21,12 +21,20 @@ def _json_type():
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
     __table_args__ = (
-        UniqueConstraint("architecture", name="uq_training_templates_architecture"),
+        UniqueConstraint("architecture", "dataset_key", name="uq_training_templates_architecture_dataset"),
         Index("ix_training_templates_architecture", "architecture"),
+        Index("ix_training_templates_dataset_key", "dataset_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     architecture: Mapped[str] = mapped_column(String(96))
+    dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    dataset_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    parent_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_templates.id"),
+        nullable=True,
+    )
     display_name: Mapped[str] = mapped_column(String(160))
     config_schema: Mapped[dict[str, Any]] = mapped_column(_json_type())
     default_config: Mapped[dict[str, Any]] = mapped_column(_json_type())
@@ -46,6 +54,8 @@ class TrainingTemplateRow(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    parent_template: Mapped["TrainingTemplateRow | None"] = relationship(remote_side=[id])
 
 
 class StoredFileRow(Base):

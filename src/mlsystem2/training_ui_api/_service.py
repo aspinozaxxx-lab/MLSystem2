@@ -69,9 +69,13 @@ from .contracts import (
     QueueEnabledUpdate,
     QueueSnapshot,
     ResultStatus,
+    ResultChangeInfo,
+    ResultChangesResponse,
     StoredFileInfo,
     StoredFileKind,
     TemplateSource,
+    TrainingTemplateApplyField,
+    TrainingTemplateCreate,
     TrainingJobCreate,
     TrainingResultInfo,
     TrainingTemplate,
@@ -151,14 +155,19 @@ def update_automation(
 
 def ensure_seed_templates(session: Session) -> None:
     existing = {
-        row.architecture: row
+        (row.architecture, row.dataset_key): row
         for row in session.scalars(select(TrainingTemplateRow)).all()
     }
-    for payload in initial_templates():
-        row = existing.get(payload["architecture"])
+    seed_payloads = initial_templates()
+    for payload in seed_payloads:
+        row = existing.get((payload["architecture"], None))
         if row is None:
             session.add(TrainingTemplateRow(**payload))
             continue
+        row.dataset_key = None
+        row.dataset_name = None
+        row.parent_template_id = None
+        row.display_name = payload["display_name"]
         row.config_schema = payload["config_schema"]
         row.default_config = sanitize_template_config(
             row.default_config,
@@ -168,6 +177,23 @@ def ensure_seed_templates(session: Session) -> None:
             row.baseline_default_config,
             fallback=payload["baseline_default_config"],
         )
+    baselines = {payload["architecture"]: payload for payload in seed_payloads}
+    dataset_rows = session.scalars(
+        select(TrainingTemplateRow).where(TrainingTemplateRow.dataset_key.is_not(None))
+    ).all()
+    for row in dataset_rows:
+        baseline = baselines.get(row.architecture)
+        if baseline is None:
+            continue
+        row.config_schema = baseline["config_schema"]
+        row.default_config = sanitize_template_config(
+            row.default_config,
+            fallback=baseline["default_config"],
+        )
+        row.baseline_default_config = sanitize_template_config(
+            row.baseline_default_config,
+            fallback=baseline["baseline_default_config"],
+        )
     _ensure_queue_control(session, JobType.TRAINING)
     _ensure_queue_control(session, JobType.INFERENCE)
     ensure_automation_control(session)
@@ -175,13 +201,18 @@ def ensure_seed_templates(session: Session) -> None:
 
 def training_templates(session: Session) -> TrainingTemplateListResponse:
     ensure_seed_templates(session)
-    rows = session.scalars(select(TrainingTemplateRow).order_by(TrainingTemplateRow.display_name)).all()
+    rows = session.scalars(
+        select(TrainingTemplateRow).order_by(
+            TrainingTemplateRow.display_name,
+            TrainingTemplateRow.dataset_name,
+        )
+    ).all()
     return TrainingTemplateListResponse(templates=[_template_info(row) for row in rows])
 
 
 def training_template(session: Session, architecture: str) -> TrainingTemplate:
     ensure_seed_templates(session)
-    row = session.scalar(select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == architecture))
+    row = _base_template_row(session, architecture)
     if row is None:
         raise TrainingUIAPIError(f"Шаблон не найден: {architecture}")
     return _template_info(row)
@@ -193,9 +224,60 @@ def update_training_template(
     request: TrainingTemplateUpdate,
 ) -> TrainingTemplate:
     ensure_seed_templates(session)
-    row = session.scalar(select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == architecture))
+    row = _base_template_row(session, architecture)
     if row is None:
         raise TrainingUIAPIError(f"Шаблон не найден: {architecture}")
+    return update_training_template_by_id(session, row.id, request)
+
+
+def create_training_template(
+    session: Session,
+    request: TrainingTemplateCreate,
+    config: TrainingUIAPIConfig,
+) -> TrainingTemplate:
+    ensure_seed_templates(session)
+    parent = _base_template_row(session, request.architecture)
+    if parent is None:
+        raise TrainingUIAPIError(f"Шаблон сети не найден: {request.architecture}")
+    dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
+    if dataset is None or dataset.is_custom:
+        raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
+    existing = _dataset_template_row(session, request.architecture, dataset.key)
+    if existing is not None:
+        raise TrainingUIAPIError(f"Шаблон для датасета уже существует: {dataset.name}")
+    now = _now()
+    row = TrainingTemplateRow(
+        architecture=parent.architecture,
+        dataset_key=dataset.key,
+        dataset_name=dataset.name,
+        parent_template_id=parent.id,
+        display_name=f"{parent.display_name} / {dataset.name}",
+        config_schema=parent.config_schema,
+        default_config=sanitize_template_config(parent.default_config),
+        baseline_default_config=sanitize_template_config(parent.default_config),
+        source=parent.source,
+        baseline_source=parent.source,
+        source_mlflow_run_id=parent.source_mlflow_run_id,
+        baseline_source_mlflow_run_id=parent.source_mlflow_run_id,
+        is_active=True,
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.flush()
+    return _template_info(row)
+
+
+def update_training_template_by_id(
+    session: Session,
+    template_id: uuid.UUID,
+    request: TrainingTemplateUpdate,
+) -> TrainingTemplate:
+    ensure_seed_templates(session)
+    row = session.get(TrainingTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон не найден: {template_id}")
     if request.reset_to_baseline:
         row.default_config = row.baseline_default_config
         row.source = row.baseline_source
@@ -215,6 +297,45 @@ def update_training_template(
     row.updated_at = _now()
     session.flush()
     return _template_info(row)
+
+
+def delete_training_template(
+    session: Session,
+    template_id: uuid.UUID,
+) -> TrainingTemplate:
+    ensure_seed_templates(session)
+    row = session.get(TrainingTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон не найден: {template_id}")
+    if row.dataset_key is None:
+        raise TrainingUIAPIError("Базовый шаблон сети удалить нельзя")
+    info = _template_info(row)
+    session.delete(row)
+    session.flush()
+    return info
+
+
+def apply_training_template_field_to_all(
+    session: Session,
+    template_id: uuid.UUID,
+    request: TrainingTemplateApplyField,
+) -> TrainingTemplateListResponse:
+    ensure_seed_templates(session)
+    row = session.get(TrainingTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон не найден: {template_id}")
+    if request.key not in {str(field["key"]) for field in row.config_schema.get("fields", [])}:
+        raise TrainingUIAPIError(f"Параметр шаблона не найден: {request.key}")
+    for template in session.scalars(select(TrainingTemplateRow)).all():
+        current = dict(template.default_config)
+        current[request.key] = request.value
+        template.default_config = sanitize_template_config(current, fallback=template.default_config)
+        template.source = TemplateSource.MANUAL.value
+        template.source_mlflow_run_id = None
+        template.version += 1
+        template.updated_at = _now()
+    session.flush()
+    return training_templates(session)
 
 
 def create_custom_dataset(
@@ -265,9 +386,7 @@ def create_training_job(
     ensure_seed_templates(session)
     dataset = _resolve_dataset_name(session, request.dataset_key, request.custom_dataset_id, config)
     model_name = MODEL_DISPLAY_NAMES.get(request.architecture, request.architecture)
-    template_row = session.scalar(
-        select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == request.architecture)
-    )
+    template_row = training_template_row_for_dataset(session, request.architecture, request.dataset_key)
     job_config = sanitize_template_config(
         request.config,
         fallback=template_row.default_config if template_row is not None else None,
@@ -425,6 +544,55 @@ def class_results(
     )
 
 
+def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
+    training_rows = session.scalars(
+        select(TrainingResultRow)
+        .where(
+            TrainingResultRow.status == ResultStatus.OK.value,
+        )
+        .order_by(TrainingResultRow.updated_at.desc())
+        .limit(limit)
+    ).all()
+    pseudo_rows = session.scalars(
+        select(PseudoMarkupResultRow)
+        .where(
+            PseudoMarkupResultRow.status == ResultStatus.OK.value,
+        )
+        .order_by(PseudoMarkupResultRow.updated_at.desc())
+        .limit(limit)
+    ).all()
+    changes: list[ResultChangeInfo] = []
+    for row in training_rows:
+        changes.append(
+            ResultChangeInfo(
+                id=row.id,
+                class_key=row.class_key,
+                dataset_name=row.class_display_name,
+                model_name=row.model_name,
+                action="обучена сеть",
+                source=JobSource(row.source),
+                status=ResultStatus(row.status),
+                changed_at=row.updated_at or row.trained_at or row.created_at or _now(),
+            )
+        )
+    for row in pseudo_rows:
+        model_name = row.training_result.model_name if row.training_result is not None else "псевдоразметка"
+        changes.append(
+            ResultChangeInfo(
+                id=row.id,
+                class_key=row.class_key,
+                dataset_name=row.source_dataset_name,
+                model_name=model_name,
+                action="создана разметка",
+                source=JobSource(row.source),
+                status=ResultStatus(row.status),
+                changed_at=row.updated_at or row.created_at or _now(),
+            )
+        )
+    changes.sort(key=lambda item: item.changed_at, reverse=True)
+    return ResultChangesResponse(changes=changes[:limit])
+
+
 def create_pseudo_markup_job(
     session: Session,
     *,
@@ -578,6 +746,40 @@ def _resolve_dataset_name(
         if dataset.key == dataset_key:
             return dataset
     raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
+
+
+def training_template_row_for_dataset(
+    session: Session,
+    architecture: str,
+    dataset_key: str | None,
+) -> TrainingTemplateRow | None:
+    if dataset_key and dataset_key != CUSTOM_KEY:
+        row = _dataset_template_row(session, architecture, dataset_key)
+        if row is not None and row.is_active:
+            return row
+    return _base_template_row(session, architecture)
+
+
+def _base_template_row(session: Session, architecture: str) -> TrainingTemplateRow | None:
+    return session.scalar(
+        select(TrainingTemplateRow).where(
+            TrainingTemplateRow.architecture == architecture,
+            TrainingTemplateRow.dataset_key.is_(None),
+        )
+    )
+
+
+def _dataset_template_row(
+    session: Session,
+    architecture: str,
+    dataset_key: str,
+) -> TrainingTemplateRow | None:
+    return session.scalar(
+        select(TrainingTemplateRow).where(
+            TrainingTemplateRow.architecture == architecture,
+            TrainingTemplateRow.dataset_key == dataset_key,
+        )
+    )
 
 
 def _store_file(
@@ -754,6 +956,9 @@ def _template_info(row: TrainingTemplateRow) -> TrainingTemplate:
     return TrainingTemplate(
         id=row.id,
         architecture=row.architecture,
+        dataset_key=row.dataset_key,
+        dataset_name=row.dataset_name,
+        parent_template_id=row.parent_template_id,
         display_name=row.display_name,
         config_schema=ConfigSchema.model_validate(row.config_schema),
         default_config=row.default_config,

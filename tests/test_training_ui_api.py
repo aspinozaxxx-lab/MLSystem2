@@ -4,6 +4,7 @@ import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,8 @@ from mlsystem2.training_ui_api.contracts import (
     JobType,
     ResultStatus,
     TrainingJobCreate,
+    TrainingTemplateCreate,
+    TrainingTemplateUpdate,
     TrainingUIAPIError,
 )
 
@@ -150,6 +153,25 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             json={"reset_to_baseline": True},
         ).json()
         assert reset["source"] == "hpo_best"
+        dataset_template = client.post(
+            "/api/v1/training-templates",
+            json={"architecture": "smp_segformer_b2", "dataset_key": "Вырубки\\main"},
+        ).json()
+        assert dataset_template["architecture"] == "smp_segformer_b2"
+        assert dataset_template["dataset_key"] == "Вырубки\\main"
+        assert dataset_template["parent_template_id"] == reset["id"]
+        assert dataset_template["default_config"] == reset["default_config"]
+        updated_dataset_template = client.put(
+            f"/api/v1/training-templates/by-id/{dataset_template['id']}",
+            json={"default_config": {**dataset_template["default_config"], "train.batch_size": 5}},
+        ).json()
+        assert updated_dataset_template["source"] == "manual"
+        assert updated_dataset_template["default_config"]["train.batch_size"] == 5
+        applied = client.put(
+            f"/api/v1/training-templates/by-id/{dataset_template['id']}/apply-field-to-all",
+            json={"key": "train.batch_size", "value": 9},
+        ).json()["templates"]
+        assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
         custom = client.post(
             "/api/v1/custom-datasets",
@@ -210,12 +232,26 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         class_results = client.get("/api/v1/results/classes/custom").json()
         pseudo_scenes = class_results["results"][0]["pseudo_markup_results"][0]["scenes_file"]
         assert client.get(pseudo_scenes["download_url"]).text.splitlines() == ["scene-1"]
+        result_id = class_results["results"][0]["id"]
+        session_factory = create_session_factory(get_config())
+        with session_factory() as session:
+            training_result = session.get(TrainingResultRow, UUID(result_id))
+            assert training_result is not None
+            training_result.status = ResultStatus.OK.value
+            training_result.updated_at = training_result.created_at
+            session.flush()
+            session.commit()
+        changes = client.get("/api/v1/results/changes").json()["changes"]
+        assert changes[0]["action"] == "обучена сеть"
+        assert changes[0]["class_key"] == "custom"
 
         deleted = client.delete(f"/api/v1/jobs/{job['id']}").json()
         assert deleted["status"] == "cancelled"
         assert client.get(f"/api/v1/jobs/{job['id']}").status_code == 400
         assert client.get("/api/v1/queues").json()["training_jobs"] == []
         assert client.get("/api/v1/results/classes/custom").json()["results"] == []
+        deleted_template = client.delete(f"/api/v1/training-templates/by-id/{dataset_template['id']}").json()
+        assert deleted_template["dataset_key"] == "Вырубки\\main"
 
 
 def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, monkeypatch) -> None:
@@ -414,6 +450,21 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
 
     with session_factory() as session:
         ensure_seed_templates(session)
+        dataset_template = _service.create_training_template(
+            session,
+            TrainingTemplateCreate(
+                architecture="smp_segformer_b2",
+                dataset_key="Вырубки\\main",
+            ),
+            config,
+        )
+        dataset_config = dict(dataset_template.default_config)
+        dataset_config["train.batch_size"] = 11
+        _service.update_training_template_by_id(
+            session,
+            dataset_template.id,
+            TrainingTemplateUpdate(default_config=dataset_config),
+        )
         _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
         _service.update_automation(
             session,
@@ -431,6 +482,7 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
         assert auto_job.status == JobStatus.QUEUED.value
         assert auto_job.dataset_key == "Вырубки\\main"
         assert auto_job.dataset_version is not None
+        assert auto_job.config["train.batch_size"] == 11
         old_auto_job_id = auto_job.id
         old_version = auto_job.dataset_version
         annotation_path = class_dir / "annotation.geojson"

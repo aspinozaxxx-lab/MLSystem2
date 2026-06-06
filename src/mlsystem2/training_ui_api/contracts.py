@@ -157,6 +157,9 @@ class TrainingTemplate(BaseModel):
 
     id: UUID
     architecture: str
+    dataset_key: str | None = None
+    dataset_name: str | None = None
+    parent_template_id: UUID | None = None
     display_name: str
     config_schema: ConfigSchema
     default_config: dict[str, Any]
@@ -180,6 +183,20 @@ class TrainingTemplateUpdate(BaseModel):
     default_config: dict[str, Any] | None = None
     is_active: bool | None = None
     reset_to_baseline: bool = False
+
+
+class TrainingTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    architecture: str
+    dataset_key: str
+
+
+class TrainingTemplateApplyField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    value: Any
 
 
 class StoredFileInfo(BaseModel):
@@ -339,6 +356,25 @@ class ClassResultsResponse(BaseModel):
     results: list[TrainingResultInfo]
 
 
+class ResultChangeInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    class_key: str
+    dataset_name: str
+    model_name: str
+    action: str
+    source: JobSource = JobSource.MANUAL
+    status: ResultStatus
+    changed_at: datetime
+
+
+class ResultChangesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changes: list[ResultChangeInfo]
+
+
 class AutomationRuleInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -395,7 +431,11 @@ __all__ = [
     "StoredFileKind",
     "TemplateSource",
     "TrainingJobCreate",
+    "TrainingTemplateApplyField",
+    "TrainingTemplateCreate",
     "TrainingResultInfo",
+    "ResultChangeInfo",
+    "ResultChangesResponse",
     "TrainingTemplate",
     "TrainingTemplateListResponse",
     "TrainingTemplateUpdate",

@@ -10,6 +10,7 @@ const state = {
   templates: [],
   experiments: [],
   selectedArchitecture: "",
+  selectedTemplateId: "",
   modal: null,
 };
 
@@ -63,6 +64,12 @@ async function ensureSharedData() {
   state.templates = templates.templates || [];
   if (!state.selectedArchitecture && state.models.length) {
     state.selectedArchitecture = state.models[0].architecture;
+  }
+  if (state.selectedTemplateId && !state.templates.some((item) => item.id === state.selectedTemplateId)) {
+    state.selectedTemplateId = "";
+  }
+  if (!state.selectedTemplateId && state.templates.length) {
+    state.selectedTemplateId = selectedTemplate()?.id || state.templates[0].id;
   }
 }
 
@@ -200,7 +207,8 @@ function homeTrainingCard(title, text, href) {
 
 async function renderStartPage() {
   state.experiments = await loadExperimentsSafe();
-  const template = selectedTemplate();
+  const initialDatasetKey = state.datasets[0]?.key || "";
+  const template = templateFor(state.selectedArchitecture, initialDatasetKey);
   const datasets = state.datasets.map((item) => option(item.key, item.name, false)).join("");
   const models = state.models.map((item) => option(item.architecture, item.display_name, item.architecture === state.selectedArchitecture)).join("");
   const experimentsOptions = [
@@ -247,7 +255,7 @@ async function renderStartPage() {
       <section class="panel">
         <div class="panel-header">
           <h2>Параметры</h2>
-          <span class="badge neutral">${escapeHtml(template.display_name)}</span>
+          <span class="badge neutral" id="selected-template-badge">${escapeHtml(template.display_name)}</span>
         </div>
         <div class="form-grid" id="config-fields">
           ${renderConfigFields(template.config_schema, template.default_config)}
@@ -259,9 +267,18 @@ async function renderStartPage() {
 
   const datasetSelect = document.getElementById("dataset-select");
   const uploadPanel = document.getElementById("custom-upload");
+  const syncTemplateFields = () => {
+    const currentTemplate = templateFor(state.selectedArchitecture, datasetSelect.value);
+    document.getElementById("selected-template-badge").textContent = currentTemplate.display_name;
+    document.getElementById("config-fields").innerHTML = renderConfigFields(
+      currentTemplate.config_schema,
+      currentTemplate.default_config
+    );
+  };
   const syncUpload = () => uploadPanel.classList.toggle("hidden", datasetSelect.value !== "custom");
   datasetSelect.addEventListener("change", () => {
     syncUpload();
+    syncTemplateFields();
     document.querySelector("input[name='run_name']").value = recommendedRunName(datasetSelect.value);
   });
   syncUpload();
@@ -324,38 +341,67 @@ async function submitStartForm(event) {
 
 function renderTemplatesPage() {
   const template = selectedTemplate();
-  const templateOptions = state.templates.map((item) => option(item.architecture, item.display_name, item.architecture === state.selectedArchitecture)).join("");
+  const deleteButton = template.dataset_key
+    ? `<button class="danger" type="button" id="template-delete">Удалить</button>`
+    : "";
   renderShell(`
     <section class="hero compact-hero">
       <h1>Шаблоны обучения</h1>
-      <p>Defaults хранятся в Postgres и используются на странице запуска</p>
+      <p>Базовые defaults сети и переопределения для конкретных датасетов</p>
     </section>
-    <section class="panel">
-      <div class="toolbar">
-        <label>Архитектура
-          <select id="template-select">${templateOptions}</select>
-        </label>
-        <div class="inline-row">
-          <span class="badge ${template.source === "manual" ? "warning" : "ok"}">source=${template.source}</span>
-          <span class="badge neutral">version=${template.version}</span>
+    <section class="templates-layout">
+      <aside class="panel template-tree-panel">
+        <div class="panel-header">
+          <h2>Список шаблонов</h2>
+          <button class="secondary compact-action" type="button" id="template-add">Добавить шаблон</button>
         </div>
-      </div>
-      <form id="template-form" class="form-stack">
-        <div class="form-grid">${renderConfigFields(template.config_schema, template.default_config)}</div>
-        <div class="inline-row">
-          <button class="primary" type="submit">Сохранить</button>
-          <button class="secondary" type="button" id="template-reset">Сбросить</button>
+        <div class="template-tree">${renderTemplateTree()}</div>
+      </aside>
+      <section class="panel template-editor-panel">
+        <div class="panel-header">
+          <div>
+            <h2>${escapeHtml(templateTitle(template))}</h2>
+            <p class="muted">${template.dataset_key ? "Шаблон датасета" : "Базовый шаблон сети"}</p>
+          </div>
+          <div class="inline-row template-meta">
+            <span class="badge ${template.source === "manual" ? "warning" : "ok"}">source=${template.source}</span>
+            <span class="badge neutral">version=${template.version}</span>
+          </div>
         </div>
-      </form>
+        <form id="template-form" class="form-stack">
+          <div class="form-grid">${renderConfigFields(template.config_schema, template.default_config, false, { applyAll: true })}</div>
+          <div class="inline-row">
+            <button class="primary" type="submit">Сохранить</button>
+            <button class="secondary" type="button" id="template-reset">Сбросить</button>
+            ${deleteButton}
+          </div>
+        </form>
+      </section>
     </section>
   `);
-  document.getElementById("template-select").addEventListener("change", async (event) => {
-    state.selectedArchitecture = event.currentTarget.value;
+  for (const button of document.querySelectorAll(".template-tree-button")) {
+    button.addEventListener("click", () => {
+      state.selectedTemplateId = button.dataset.templateId;
+      state.selectedArchitecture = button.dataset.architecture;
+      renderTemplatesPage();
+    });
+  }
+  document.getElementById("template-add").addEventListener("click", showTemplateCreateModal);
+  document.getElementById("template-form").addEventListener("click", async (event) => {
+    const button = event.target.closest(".field-apply-all");
+    if (!button) return;
+    event.preventDefault();
+    const config = collectConfig(document.getElementById("template-form"));
+    await apiJson(`/training-templates/by-id/${encodeURIComponent(template.id)}/apply-field-to-all`, {
+      method: "PUT",
+      body: { key: button.dataset.applyKey, value: config[button.dataset.applyKey] },
+    });
+    await ensureSharedData();
     renderTemplatesPage();
   });
   document.getElementById("template-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await apiJson(`/training-templates/${encodeURIComponent(state.selectedArchitecture)}`, {
+    await apiJson(`/training-templates/by-id/${encodeURIComponent(template.id)}`, {
       method: "PUT",
       body: { default_config: collectConfig(event.currentTarget) },
     });
@@ -363,13 +409,132 @@ function renderTemplatesPage() {
     renderTemplatesPage();
   });
   document.getElementById("template-reset").addEventListener("click", async () => {
-    await apiJson(`/training-templates/${encodeURIComponent(state.selectedArchitecture)}`, {
+    await apiJson(`/training-templates/by-id/${encodeURIComponent(template.id)}`, {
       method: "PUT",
       body: { reset_to_baseline: true },
     });
     await ensureSharedData();
     renderTemplatesPage();
   });
+  if (template.dataset_key) {
+    document.getElementById("template-delete").addEventListener("click", () => showTemplateDeleteModal(template));
+  }
+}
+
+function renderTemplateTree() {
+  return baseTemplates().map((parent) => {
+    const children = datasetTemplates(parent.architecture);
+    return `
+      <div class="template-tree-group">
+        ${renderTemplateTreeButton(parent, "parent")}
+        <div class="template-tree-children">
+          ${children.length
+            ? children.map((child) => renderTemplateTreeButton(child, "child")).join("")
+            : `<span class="template-empty-child">датасетных шаблонов нет</span>`}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderTemplateTreeButton(template, level) {
+  const active = template.id === selectedTemplate().id ? "active" : "";
+  return `
+    <button
+      class="template-tree-button ${level} ${active}"
+      type="button"
+      data-template-id="${escapeAttr(template.id)}"
+      data-architecture="${escapeAttr(template.architecture)}"
+    >
+      <span>${escapeHtml(templateTitle(template))}</span>
+      <small>${template.dataset_key ? "датасет" : "сеть"}</small>
+    </button>
+  `;
+}
+
+function showTemplateCreateModal() {
+  const selected = selectedTemplate();
+  const parentOptions = baseTemplates()
+    .map((item) => option(item.architecture, item.display_name, item.architecture === selected.architecture))
+    .join("");
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Добавить шаблон</h2>
+        <form id="template-create-form" class="form-stack">
+          <label>Архитектура
+            <select name="architecture" id="template-create-architecture">${parentOptions}</select>
+          </label>
+          <label>Датасет
+            <select name="dataset_key" id="template-create-dataset"></select>
+          </label>
+          <div class="inline-row">
+            <button class="primary" type="submit">Создать</button>
+            <button class="secondary" type="button" id="modal-close">Отмена</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+  paintModal();
+  const architectureSelect = document.getElementById("template-create-architecture");
+  const datasetSelect = document.getElementById("template-create-dataset");
+  const syncDatasets = () => {
+    datasetSelect.innerHTML = availableDatasetTemplateOptions(architectureSelect.value);
+  };
+  architectureSelect.addEventListener("change", syncDatasets);
+  syncDatasets();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("template-create-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const created = await apiJson("/training-templates", {
+      method: "POST",
+      body: {
+        architecture: String(form.get("architecture") || ""),
+        dataset_key: String(form.get("dataset_key") || ""),
+      },
+    });
+    state.selectedTemplateId = created.id;
+    state.selectedArchitecture = created.architecture;
+    closeModal();
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+}
+
+function showTemplateDeleteModal(template) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Удалить шаблон?</h2>
+        <p>Будет удален только шаблон датасета «${escapeHtml(template.dataset_name || template.display_name)}». Базовый шаблон сети сохранится и снова станет fallback.</p>
+        <div class="inline-row">
+          <button class="danger" type="button" id="template-delete-confirm">Удалить</button>
+          <button class="secondary" type="button" id="modal-close">Отмена</button>
+        </div>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("template-delete-confirm").addEventListener("click", async () => {
+    await apiJson(`/training-templates/by-id/${encodeURIComponent(template.id)}`, { method: "DELETE" });
+    const parent = baseTemplates().find((item) => item.architecture === template.architecture) || state.templates[0];
+    state.selectedTemplateId = parent?.id || "";
+    state.selectedArchitecture = parent?.architecture || state.selectedArchitecture;
+    closeModal();
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+}
+
+function availableDatasetTemplateOptions(architecture) {
+  const existing = new Set(datasetTemplates(architecture).map((item) => item.dataset_key));
+  const options = state.datasets
+    .filter((item) => item.key !== "custom" && !existing.has(item.key))
+    .map((item) => option(item.key, item.name, false));
+  return options.length ? options.join("") : `<option value="">Нет доступных датасетов</option>`;
 }
 
 async function renderAutomationPage() {
@@ -583,7 +748,7 @@ async function updateQueueEnabled(queue, enabled) {
 
 async function renderJobPage(jobId) {
   const job = await apiJson(`/jobs/${encodeURIComponent(jobId)}`);
-  const template = state.templates.find((item) => item.architecture === job.architecture) || selectedTemplate();
+  const template = templateFor(job.architecture, job.dataset_key);
   renderShell(`
     <section class="toolbar">
       <button class="secondary" type="button" id="job-back">← Назад</button>
@@ -608,7 +773,8 @@ async function renderJobPage(jobId) {
   document.getElementById("job-back").addEventListener("click", () => navigate("#/queue"));
 }
 
-function renderResultsPage() {
+async function renderResultsPage() {
+  const changes = await apiJson("/results/changes");
   renderShell(`
     <section class="hero compact-hero">
       <h1>Результаты</h1>
@@ -617,7 +783,14 @@ function renderResultsPage() {
     <section class="grid">
       ${state.classes.map(renderResultClassCard).join("")}
     </section>
+    <section class="panel">
+      <h2>Последние изменения</h2>
+      ${renderResultChangesTable(changes.changes || [])}
+    </section>
   `);
+  for (const row of document.querySelectorAll(".result-change-row")) {
+    row.addEventListener("click", () => navigate(`#/results/${encodeURIComponent(row.dataset.classKey)}`));
+  }
 }
 
 function renderResultClassCard(item) {
@@ -637,6 +810,41 @@ function renderResultClassCard(item) {
         `).join("")}
       </div>
     </article>
+  `;
+}
+
+function renderResultChangesTable(changes) {
+  if (!changes.length) {
+    return `<div class="info-box">Изменений пока нет.</div>`;
+  }
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>время</th>
+            <th>сеть</th>
+            <th>датасет</th>
+            <th>что сделано</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${changes.map((item) => `
+            <tr class="result-change-row" data-class-key="${escapeAttr(item.class_key)}">
+              <td>${formatDateTime(item.changed_at)}</td>
+              <td>${escapeHtml(item.model_name)}</td>
+              <td>${escapeHtml(item.dataset_name)}</td>
+              <td>
+                <span class="result-status-badges">
+                  ${sourceBadge(item.source)}
+                  <span class="badge ok">${escapeHtml(item.action)}</span>
+                </span>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -812,10 +1020,13 @@ function showAutomationDisableModal() {
   });
 }
 
-function renderConfigFields(schema, values, readonly = false) {
+function renderConfigFields(schema, values, readonly = false, options = {}) {
   return (schema.fields || []).map((field) => {
     const value = values[field.key];
     const title = `${field.label} (${field.key})`;
+    const applyAll = options.applyAll && !readonly
+      ? `<button class="secondary field-apply-all" type="button" data-apply-key="${escapeAttr(field.key)}">установить для всех</button>`
+      : "";
     const label = `
       <span class="field-help">
         ${escapeHtml(title)}
@@ -827,6 +1038,7 @@ function renderConfigFields(schema, values, readonly = false) {
         <label class="checkbox-row">
           <input data-config-key="${escapeAttr(field.key)}" data-value-type="${field.value_type}" type="checkbox" ${value ? "checked" : ""} ${readonly ? "disabled" : ""}>
           ${label}
+          ${applyAll}
         </label>
       `;
     }
@@ -836,6 +1048,7 @@ function renderConfigFields(schema, values, readonly = false) {
           <select data-config-key="${escapeAttr(field.key)}" data-value-type="${field.value_type}" ${readonly ? "disabled" : ""}>
             ${(field.options || []).map((item) => option(item, item, item === value)).join("")}
           </select>
+          ${applyAll}
         </label>
       `;
     }
@@ -851,6 +1064,7 @@ function renderConfigFields(schema, values, readonly = false) {
           value="${value === null || value === undefined ? "" : escapeAttr(String(value))}"
           ${readonly ? "readonly" : ""}
         >
+        ${applyAll}
       </label>
     `;
   }).join("");
@@ -884,7 +1098,32 @@ function collectConfig(form) {
 }
 
 function selectedTemplate() {
-  return state.templates.find((item) => item.architecture === state.selectedArchitecture) || state.templates[0];
+  const byId = state.templates.find((item) => item.id === state.selectedTemplateId);
+  if (byId) return byId;
+  return baseTemplates().find((item) => item.architecture === state.selectedArchitecture) || state.templates[0];
+}
+
+function templateFor(architecture, datasetKey = null) {
+  const datasetTemplate = datasetKey && datasetKey !== "custom"
+    ? state.templates.find((item) => item.architecture === architecture && item.dataset_key === datasetKey && item.is_active)
+    : null;
+  return datasetTemplate || baseTemplates().find((item) => item.architecture === architecture) || state.templates[0];
+}
+
+function baseTemplates() {
+  return state.templates
+    .filter((item) => !item.dataset_key)
+    .sort((left, right) => left.display_name.localeCompare(right.display_name, "ru"));
+}
+
+function datasetTemplates(architecture) {
+  return state.templates
+    .filter((item) => item.dataset_key && item.architecture === architecture)
+    .sort((left, right) => templateTitle(left).localeCompare(templateTitle(right), "ru"));
+}
+
+function templateTitle(template) {
+  return template.dataset_name || template.display_name;
 }
 
 function recommendedRunName(datasetKey = null) {

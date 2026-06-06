@@ -41,6 +41,10 @@
 - `PUT /api/v1/automation/enabled`
 - `PUT /api/v1/automation/rules`
 - `GET /api/v1/training-templates`
+- `POST /api/v1/training-templates`
+- `PUT /api/v1/training-templates/by-id/{template_id}`
+- `DELETE /api/v1/training-templates/by-id/{template_id}`
+- `PUT /api/v1/training-templates/by-id/{template_id}/apply-field-to-all`
 - `GET /api/v1/training-templates/{architecture}`
 - `PUT /api/v1/training-templates/{architecture}`
 - `POST /api/v1/training-jobs`
@@ -52,6 +56,7 @@
 - `POST /api/v1/jobs/{job_id}/move-up`
 - `POST /api/v1/jobs/{job_id}/move-down`
 - `GET /api/v1/results/classes`
+- `GET /api/v1/results/changes`
 - `GET /api/v1/results/classes/{class_key}`
 - `POST /api/v1/results/classes/{class_key}/pseudo-markup`
 - `GET /api/v1/files/{file_id}/download`
@@ -96,6 +101,15 @@ process получает SIGTERM, а известный MLflow run помеча�
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
 
+`training_templates.dataset_key` nullable. Строка с `dataset_key=null` является базовым шаблоном сети.
+Строка с заполненным `dataset_key` является переопределением для конкретного варианта MLMarkup, например
+`Вырубки\test`, и создается через `POST /api/v1/training-templates` копированием текущих defaults базового
+шаблона сети. При ручном запуске и автоматизации сервис сначала ищет активный шаблон `(architecture,
+dataset_key)`, а если его нет, использует базовый шаблон `(architecture, null)`. Базовый шаблон удалить нельзя;
+датасетный шаблон удаляется через `DELETE /api/v1/training-templates/by-id/{template_id}`. Endpoint
+`PUT /api/v1/training-templates/by-id/{template_id}/apply-field-to-all` устанавливает одно поле во всех
+существующих шаблонах и помечает их `source=manual`.
+
 `jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
 `dataset_version`. Для auto rows дополнительно заполнен `automation_rule_id`. Auto jobs нельзя удалить или двигать
 через endpoints очереди; они отменяются снятием соответствующей галочки в автоматизации или заменяются при новой
@@ -125,6 +139,10 @@ Manual jobs всегда запускаются раньше automation jobs. П
 queued auto jobs не стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает
 все active auto jobs. Failed auto attempt не ретраится до новой версии датасета или снятия и повторной установки
 галочки.
+
+`GET /api/v1/results/changes` возвращает последние 20 успешных изменений из `training_results` и
+`pseudo_markup_results`, отсортированные по времени изменения. Каждая строка содержит `class_key`, имя модели,
+имя датасета и действие: `обучена сеть` или `создана разметка`.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший

@@ -22,6 +22,7 @@ from ._config import get_config
 from ._database import Base, configure_schema, create_session_factory, session_scope
 from ._models import StoredFileRow
 from ._service import (
+    apply_training_template_field_to_all,
     app_links,
     automation,
     class_results,
@@ -29,8 +30,10 @@ from ._service import (
     create_custom_dataset,
     create_mlflow_experiment,
     create_pseudo_markup_job,
+    create_training_template,
     create_training_job,
     datasets,
+    delete_training_template,
     delete_job,
     ensure_seed_templates,
     job_detail,
@@ -38,11 +41,13 @@ from ._service import (
     models,
     move_job,
     queues,
+    result_changes,
     set_automation,
     set_queue_enabled,
     stored_file,
     training_template,
     training_templates,
+    update_training_template_by_id,
     update_training_template,
     update_automation,
 )
@@ -64,7 +69,10 @@ from .contracts import (
     ModelListResponse,
     QueueEnabledUpdate,
     QueueSnapshot,
+    ResultChangesResponse,
     TrainingJobCreate,
+    TrainingTemplateApplyField,
+    TrainingTemplateCreate,
     TrainingTemplate,
     TrainingTemplateListResponse,
     TrainingTemplateUpdate,
@@ -237,6 +245,40 @@ def create_app() -> FastAPI:
     ) -> TrainingTemplateListResponse:
         return training_templates(db)
 
+    @app.post("/api/v1/training-templates", response_model=TrainingTemplate)
+    def post_training_template(
+        request: TrainingTemplateCreate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> TrainingTemplate:
+        return create_training_template(db, request, config)
+
+    @app.put("/api/v1/training-templates/by-id/{template_id}", response_model=TrainingTemplate)
+    def put_training_template_by_id(
+        template_id: uuid.UUID,
+        request: TrainingTemplateUpdate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> TrainingTemplate:
+        return update_training_template_by_id(db, template_id, request)
+
+    @app.delete("/api/v1/training-templates/by-id/{template_id}", response_model=TrainingTemplate)
+    def delete_training_template_by_id(
+        template_id: uuid.UUID,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> TrainingTemplate:
+        return delete_training_template(db, template_id)
+
+    @app.put("/api/v1/training-templates/by-id/{template_id}/apply-field-to-all", response_model=TrainingTemplateListResponse)
+    def put_training_template_field_to_all(
+        template_id: uuid.UUID,
+        request: TrainingTemplateApplyField,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> TrainingTemplateListResponse:
+        return apply_training_template_field_to_all(db, template_id, request)
+
     @app.get("/api/v1/training-templates/{architecture}", response_model=TrainingTemplate)
     def get_training_template(
         architecture: str,
@@ -320,6 +362,13 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/results/classes", response_model=ClassListResponse)
     def get_result_classes(_: str = Depends(authenticated)) -> ClassListResponse:
         return classes(config)
+
+    @app.get("/api/v1/results/changes", response_model=ResultChangesResponse)
+    def get_result_changes(
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> ResultChangesResponse:
+        return result_changes(db)
 
     @app.get("/api/v1/results/classes/{class_key}", response_model=ClassResultsResponse)
     def get_class_results(

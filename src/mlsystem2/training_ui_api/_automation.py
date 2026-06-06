@@ -240,9 +240,7 @@ def _ensure_training_for_rule(
         return
     if _has_active_automation_job(session, JobType.TRAINING, rule, dataset.version):
         return
-    template = session.scalar(
-        select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == rule.architecture)
-    )
+    template = _training_template_row_for_dataset(session, rule.architecture, dataset.key)
     if template is None or not template.is_active:
         return
     experiment = create_experiment(
@@ -375,6 +373,27 @@ def _current_training_result(
             TrainingResultRow.dataset_version == dataset_version,
         )
         .order_by(TrainingResultRow.created_at.desc())
+    )
+
+
+def _training_template_row_for_dataset(
+    session: Session,
+    architecture: str,
+    dataset_key: str,
+) -> TrainingTemplateRow | None:
+    dataset_template = session.scalar(
+        select(TrainingTemplateRow).where(
+            TrainingTemplateRow.architecture == architecture,
+            TrainingTemplateRow.dataset_key == dataset_key,
+        )
+    )
+    if dataset_template is not None and dataset_template.is_active:
+        return dataset_template
+    return session.scalar(
+        select(TrainingTemplateRow).where(
+            TrainingTemplateRow.architecture == architecture,
+            TrainingTemplateRow.dataset_key.is_(None),
+        )
     )
 
 

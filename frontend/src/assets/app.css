@@ -175,6 +175,84 @@ a { color: var(--blue); }
   gap: 14px;
 }
 
+.templates-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.template-tree-panel,
+.template-editor-panel {
+  margin-bottom: 0;
+}
+
+.template-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.template-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.template-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
+}
+
+.template-tree-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-tree-button.parent {
+  font-weight: 800;
+}
+
+.template-tree-button.child {
+  font-size: 13px;
+}
+
+.template-tree-button.active {
+  border-color: var(--blue);
+  background: var(--blue-2);
+}
+
+.template-tree-button small,
+.template-empty-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-meta > * {
+  flex: 0 0 auto;
+}
+
+.field-apply-all {
+  width: max-content;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
 label,
 .field-label {
   display: flex;
@@ -398,6 +476,14 @@ th {
   padding: 0 10px 10px;
 }
 
+.result-change-row {
+  cursor: pointer;
+}
+
+.result-change-row:hover td {
+  background: var(--blue-2);
+}
+
 .nested-table {
   margin-top: 10px;
   background: #fbfdff;
@@ -563,6 +649,12 @@ th {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 860px) {
+  .templates-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .field-help {
