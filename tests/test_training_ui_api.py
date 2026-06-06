@@ -29,6 +29,13 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 
+def test_pseudo_report_success_requires_processed_scene() -> None:
+    assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 1}) is True
+    assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True
+    assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 0}) is False
+    assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
+
+
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
@@ -806,7 +813,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
         (pseudo_run_dir / "scratch" / "report.json").write_text(
-            '{"status":"ok","feature_count":0}',
+            '{"status":"ok","processed":1,"feature_count":0}',
             encoding="utf-8",
         )
         (pseudo_run_dir / "exit_code").write_text("0\n", encoding="utf-8")

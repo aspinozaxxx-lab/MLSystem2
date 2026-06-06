@@ -6,7 +6,7 @@ import argparse
 import json
 import shutil
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -78,58 +78,60 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     failures: list[dict[str, Any]] = []
     missing: list[str] = []
 
-    for number, scene in enumerate(scenes, 1):
-        image_path = _find_image(scene, image_index)
-        if image_path is None:
+    for scene in scenes:
+        image_paths = _find_images(scene, image_index)
+        if not image_paths:
             missing.append(scene)
             scene_reports.append({"scene_id": scene, "status": "missing_image", "feature_count": 0})
             continue
-        scene_started = time.time()
-        try:
-            scene_features = _infer_scene(
-                torch=torch,
-                model=model,
-                image_path=image_path,
-                scene=scene,
-                config=config,
-                tile_size=tile_size,
-                stride=stride,
-                batch_size=batch_size,
-                threshold=threshold,
-                device=device,
-            )
-            all_features.extend(scene_features)
-            _write_feature_collection(
-                run_root / "per_scene" / scene / "pseudo_markup.geojson",
-                scene_features,
-            )
-            scene_reports.append(
-                {
-                    "scene_id": scene,
-                    "number": number,
-                    "status": "ok",
-                    "image": str(image_path),
-                    "feature_count": len(scene_features),
-                    "elapsed_sec": round(time.time() - scene_started, 3),
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            failures.append({"scene_id": scene, "image": str(image_path), "error": repr(exc)})
-            scene_reports.append(
-                {
-                    "scene_id": scene,
-                    "number": number,
-                    "status": "failed",
-                    "image": str(image_path),
-                    "feature_count": 0,
-                    "error": repr(exc),
-                }
-            )
+        for image_path in image_paths:
+            scene_id = image_path.stem
+            scene_started = time.time()
+            try:
+                scene_features = _infer_scene(
+                    torch=torch,
+                    model=model,
+                    image_path=image_path,
+                    scene=scene_id,
+                    config=config,
+                    tile_size=tile_size,
+                    stride=stride,
+                    batch_size=batch_size,
+                    threshold=threshold,
+                    device=device,
+                )
+                all_features.extend(scene_features)
+                _write_feature_collection(
+                    run_root / "per_scene" / _safe_dir_name(scene_id) / "pseudo_markup.geojson",
+                    scene_features,
+                )
+                scene_reports.append(
+                    {
+                        "scene_id": scene_id,
+                        "request_scene": scene,
+                        "number": len(scene_reports) + 1,
+                        "status": "ok",
+                        "image": str(image_path),
+                        "feature_count": len(scene_features),
+                        "elapsed_sec": round(time.time() - scene_started, 3),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append({"scene_id": scene_id, "image": str(image_path), "error": repr(exc)})
+                scene_reports.append(
+                    {
+                        "scene_id": scene_id,
+                        "request_scene": scene,
+                        "number": len(scene_reports) + 1,
+                        "status": "failed",
+                        "image": str(image_path),
+                        "feature_count": 0,
+                        "error": repr(exc),
+                    }
+                )
 
     _write_feature_collection(output_geojson, all_features)
-    status = "ok" if not failures and not missing else "partial"
-    if failures and len(failures) == len(scenes):
-        status = "error"
+    status = _final_status(scene_reports, failures, missing)
     return _summary(
         config,
         scenes=scenes,
@@ -277,18 +279,95 @@ def _read_scenes(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _image_index(images_root: Path) -> dict[str, Path]:
+def _image_index(images_root: Path) -> dict[str, list[Path]]:
     files = [*images_root.rglob("*.tif"), *images_root.rglob("*.tiff")]
-    return {path.stem: path for path in files}
+    index: dict[str, list[Path]] = {}
+    for path in sorted(files):
+        for key in _scene_lookup_keys(path.name):
+            _add_index_path(index, key, path)
+        for key in _scene_lookup_keys(path.stem):
+            _add_index_path(index, key, path)
+        for parent in path.parents:
+            if parent == images_root:
+                break
+            for key in _scene_lookup_keys(parent.name):
+                _add_index_path(index, key, path)
+            try:
+                relative_parent = parent.relative_to(images_root).as_posix()
+            except ValueError:
+                continue
+            for key in _scene_lookup_keys(relative_parent):
+                _add_index_path(index, key, path)
+    return index
 
 
-def _find_image(scene: str, index: dict[str, Path]) -> Path | None:
-    base = scene[:-4] if scene.endswith("_cog") else scene
-    for candidate in (scene, base, f"{base}_cog"):
-        path = index.get(candidate)
-        if path is not None:
-            return path
+def _add_index_path(index: dict[str, list[Path]], key: str, path: Path) -> None:
+    paths = index.setdefault(key, [])
+    if path not in paths:
+        paths.append(path)
+
+
+def _find_images(scene: str, index: dict[str, list[Path]]) -> list[Path]:
+    found: list[Path] = []
+    for key in _scene_lookup_keys(scene):
+        for path in index.get(key, []):
+            if path not in found:
+                found.append(path)
+    return sorted(found)
+
+
+def _find_image(scene: str, index: dict[str, list[Path]]) -> Path | None:
+    paths = _find_images(scene, index)
+    if paths:
+        return paths[0]
     return None
+
+
+def _scene_lookup_keys(value: str) -> set[str]:
+    raw = value.strip().replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    raw = raw.strip("/")
+    if not raw:
+        return set()
+
+    path = PurePosixPath(raw)
+    variants = {raw, path.name, path.stem, _strip_raster_suffix(raw), _strip_raster_suffix(path.name)}
+    keys: set[str] = set()
+    for variant in variants:
+        if not variant:
+            continue
+        keys.add(variant.lower())
+        if variant.endswith("_cog"):
+            keys.add(variant[:-4].lower())
+        else:
+            keys.add(f"{variant}_cog".lower())
+    return keys
+
+
+def _strip_raster_suffix(value: str) -> str:
+    lowered = value.lower()
+    for suffix in (".tiff", ".tif"):
+        if lowered.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _safe_dir_name(value: str) -> str:
+    return value.replace("\\", "_").replace("/", "_").replace(":", "_")
+
+
+def _final_status(
+    scene_reports: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    missing: list[str],
+) -> str:
+    processed = sum(1 for item in scene_reports if item.get("status") == "ok")
+    if processed == 0:
+        return "error"
+    if failures or missing:
+        return "partial"
+    return "ok"
 
 
 def _resolve_nodata(dataset) -> object:
@@ -337,7 +416,8 @@ def _summary(
         "status": status,
         "class_key": config.get("class_key"),
         "class_name": config.get("class_name"),
-        "scene_count": len(scenes),
+        "input_scene_count": len(scenes),
+        "scene_count": len(scene_reports),
         "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),
         "failed": len(failures),
         "missing_images": len(missing),

@@ -552,6 +552,8 @@ def _finish_inference_job(
     row.process_pid = None
     output_path = _pseudo_output_path(row)
     report = _pseudo_report(row)
+    report_allows_success = _pseudo_report_allows_success(report)
+    succeeded = succeeded and report_allows_success
     has_geojson = output_path is not None and output_path.is_file()
     pseudo_results = _pseudo_markup_results(session, row)
     if succeeded and has_geojson:
@@ -595,6 +597,18 @@ def _pseudo_report(row: JobRow) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _pseudo_report_allows_success(report: dict[str, Any] | None) -> bool:
+    if report is None:
+        return False
+    if report.get("status") not in {"ok", "partial"}:
+        return False
+    try:
+        processed = int(report.get("processed") or 0)
+    except (TypeError, ValueError):
+        return False
+    return processed > 0
 
 
 def _store_generated_geojson(
