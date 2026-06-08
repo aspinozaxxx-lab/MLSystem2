@@ -262,6 +262,54 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     assert val_request.tile_split == tile_split
 
 
+def test_train_pipeline_passes_train_batch_limit_to_tile_request() -> None:
+    settings = _settings(initial_checkpoint_uri=None)
+    settings.train.max_train_batches_per_epoch = 128
+    prepared = PreparedDataset(
+        train_vrt_xml="TRAIN",
+        val_vrt_xml="VAL",
+        pool_vrt_xml="POOL",
+        annotation_file="./annotations.geojson",
+    )
+    requests = []
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=1),
+        model=object(),
+    )
+
+    deps = _runner._PipelineDependencies(
+        get_settings=lambda: settings,
+        get_settings_path=lambda: Path("config.yaml"),
+        start_run=lambda request: MLflowRunRef(
+            run_id="disabled",
+            experiment_name=request.experiment_name,
+            tracking_uri=request.tracking_uri,
+            active=False,
+        ),
+        prepare_dataset=lambda request: _dataset_result(dataset=prepared),
+        create_tile_dataloader=lambda request: requests.append(request) or object(),
+        create_model=lambda spec: model,
+        load_checkpoint=lambda request: None,
+        train_model=lambda request, progress_sink=None: _train_result(),
+        log_dataset_preparation=lambda run, report: None,
+        log_tile_preparation=lambda run, report: None,
+        log_run_config=lambda run, config_path: None,
+        log_training_epoch=lambda run, metrics: None,
+        log_training_metrics=lambda run, result: None,
+        log_training_artifacts=lambda run, result: None,
+        log_timing_report=lambda run, report: None,
+        log_pipeline_report=lambda run, report: None,
+        end_run=lambda run, status: None,
+    )
+
+    result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
+
+    assert result.status.value == "succeeded"
+    assert [request.mode for request in requests] == ["train", "val"]
+    assert requests[0].max_batches_per_epoch == 128
+    assert requests[1].max_batches_per_epoch is None
+
+
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
         source_rect_count = 1
@@ -550,9 +598,10 @@ def _multiclass_settings() -> SystemSettings:
     )
 
 
-def _dataset_result() -> DatasetPreparationResult:
+def _dataset_result(dataset: PreparedDataset | None = None) -> DatasetPreparationResult:
     return DatasetPreparationResult(
-        dataset=PreparedDataset(
+        dataset=dataset
+        or PreparedDataset(
             train_vrt_xml="<VRTDataset />",
             val_vrt_xml="<VRTDataset />",
             annotation_file="./annotations.geojson",

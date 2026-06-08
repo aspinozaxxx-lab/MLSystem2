@@ -38,6 +38,7 @@ class TileDataloaderRequest(BaseModel):
     batch_size: int = Field(gt=0)
     mode: Literal["train", "val"]
     tile_split: TileSplitRequest | None = None
+    max_batches_per_epoch: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:

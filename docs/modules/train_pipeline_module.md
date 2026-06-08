@@ -29,7 +29,7 @@
 
 ## Алгоритм работы и его особенности
 
-`run_train_pipeline` получает settings, открывает MLflow run, пишет YAML-конфиг запуска и вызывает `dataset_preparing`. Если `settings.dataset.classes` непустой, в `DatasetPreparationRequest` передается multiclass список `DatasetClassRequest`; иначе передаются binary `scenes_file` и `annotation_file`. После отчета подготовки датасета создаются train/val DataLoader: для multiclass в `TileDataloaderRequest` передаются `class_annotations`, для binary - `annotation_file`. Оба loader получают общий `pool_vrt_xml` и одинаковый `TileSplitRequest`.
+`run_train_pipeline` получает settings, открывает MLflow run, пишет YAML-конфиг запуска и вызывает `dataset_preparing`. Если `settings.dataset.classes` непустой, в `DatasetPreparationRequest` передается multiclass список `DatasetClassRequest`; иначе передаются binary `scenes_file` и `annotation_file`. После отчета подготовки датасета создаются train/val DataLoader: для multiclass в `TileDataloaderRequest` передаются `class_annotations`, для binary - `annotation_file`. Оба loader получают общий `pool_vrt_xml` и одинаковый `TileSplitRequest`. Для train request дополнительно передается `settings.train.max_train_batches_per_epoch`, чтобы расчет prefetch учитывал фактическую длину train-эпохи; для val этот лимит не передается, потому что val loader работает из RAM cache.
 
 DataLoader оборачивается внутренним счетчиком tile batches, augmented/positive tiles, per-class positive tile counts, per-class pixel counts, диагностик VRT source rects и valid-footprint filter. Если `settings.train.initial_checkpoint_uri` задан, вызывается `models.load_checkpoint` с `LoadCheckpointRequest`; иначе вызывается `models.create_model`.
 

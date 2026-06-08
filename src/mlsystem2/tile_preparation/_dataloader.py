@@ -92,6 +92,7 @@ def create_tile_dataloader(
             dataset_size=len(dataset),
             batch_size=request.batch_size,
             num_workers=tile_settings.num_workers,
+            max_batches_per_epoch=request.max_batches_per_epoch,
         )
         dataloader_kwargs["persistent_workers"] = True
 
@@ -260,10 +261,13 @@ def _effective_prefetch_factor(
     dataset_size: int,
     batch_size: int,
     num_workers: int,
+    max_batches_per_epoch: int | None = None,
 ) -> int:
     if num_workers <= 0 or dataset_size <= 0:
         return 1
     batches_per_epoch = math.ceil(dataset_size / batch_size)
+    if max_batches_per_epoch is not None:
+        batches_per_epoch = min(batches_per_epoch, max_batches_per_epoch)
     target_prefetch_batches = math.ceil(batches_per_epoch * prefetch_epochs)
     return max(1, math.ceil(target_prefetch_batches / num_workers))
 

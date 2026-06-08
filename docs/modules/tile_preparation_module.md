@@ -21,7 +21,7 @@ Batch DataLoader:
 - `TilePreparationError` - ошибка подготовки tile DataLoader.
 - `TileClassAnnotation` - поля `class_id`, `slug`, `name`, `annotation_file`, `priority`.
 - `TileSplitRequest` - поля `val_fraction`, `seed`; задает deterministic split окон общего VRT.
-- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, `class_annotations`, `batch_size`, `mode`, `tile_split`. Валидация: либо задан `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`.
+- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, `class_annotations`, `batch_size`, `mode`, `tile_split`, `max_batches_per_epoch`. Валидация: либо задан `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -30,7 +30,7 @@ Batch DataLoader:
 - `shapely` и `rasterio.features` - загрузить GeoJSON и rasterize mask в окно tile.
 - `torch.utils.data` - создать train `DataLoader`, sampler и batch tensors для cached val loader.
 
-Train DataLoader получает effective `prefetch_factor`, рассчитанный от размера train split, `batch_size`, числа workers и `prefetch_epochs`. Например, для 163 batches/epoch, `num_workers=16` и `prefetch_epochs=2` effective factor будет `21`, то есть PyTorch будет стремиться держать около двух эпох batch-ей в prefetch queues. Для val `prefetch_epochs` не применяется: val loader работает из RAM cache.
+Train DataLoader получает effective `prefetch_factor`, рассчитанный от размера train split, `batch_size`, числа workers, `prefetch_epochs` и optional `max_batches_per_epoch`. Если consumer ограничивает train-эпоху, расчет использует `min(full_batches_per_epoch, max_batches_per_epoch)`, чтобы prefetch в эпохах соответствовал фактически читаемым batch-ам. Например, для 163 batches/epoch, `num_workers=16` и `prefetch_epochs=2` effective factor будет `21`; если эпоха ограничена 72 batch-ами, factor будет `9`. Для val `prefetch_epochs` не применяется: val loader работает из RAM cache.
 
 ## Алгоритм работы и его особенности
 

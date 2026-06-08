@@ -211,6 +211,19 @@ def test_effective_prefetch_factor_uses_requested_epochs_only() -> None:
     )
 
 
+def test_effective_prefetch_factor_respects_epoch_batch_limit() -> None:
+    assert (
+        _effective_prefetch_factor(
+            prefetch_epochs=2.0,
+            dataset_size=4549,
+            batch_size=4,
+            num_workers=16,
+            max_batches_per_epoch=128,
+        )
+        == 16
+    )
+
+
 def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "multiclass.tif"
