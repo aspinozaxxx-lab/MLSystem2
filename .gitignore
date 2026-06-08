@@ -18,6 +18,7 @@ uv.lock
 build/
 dist/
 *.egg-info/
+.gradle/
 
 # Local IDE and OS files
 .idea/
