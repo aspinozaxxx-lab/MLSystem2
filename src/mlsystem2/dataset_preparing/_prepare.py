@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import random
-from dataclasses import dataclass
 from pathlib import Path
 
 from ._object_counts import (
@@ -29,16 +27,6 @@ from .contracts import (
     DatasetSceneReport,
     PreparedDataset,
 )
-
-SPLIT_SEED = 42
-
-
-@dataclass(frozen=True)
-class _SceneSelection:
-    rows: list[SceneObjectCount]
-    positive_count: int
-    negative_count: int
-
 
 def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
     if request.classes:
@@ -113,20 +101,13 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
 
     rows = _count_objects_or_collect_error(scenes, scene_to_image, annotation_file, errors)
     found_rows = [row for row in rows if row.scene_name in scene_to_image]
-    selection = _select_scene_rows(
-        found_rows,
-        negative_scene_limit=request.negative_scene_limit,
-        seed=SPLIT_SEED,
-    )
-    pool_scene_ids = [row.scene_name for row in selection.rows]
+    pool_scene_ids = [row.scene_name for row in found_rows]
     train_names: set[str] = set()
     val_names: set[str] = set()
     pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
-    elif not selection.rows:
-        errors.append("После отбора сцен датасет пуст.")
 
     selected_scene_to_image = {
         scene: scene_to_image[scene]
@@ -163,9 +144,6 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
-        negative_scene_limit=request.negative_scene_limit,
-        selected_positive_scenes_count=selection.positive_count,
-        selected_negative_scenes_count=selection.negative_count,
     )
     if errors:
         dataset = None
@@ -270,20 +248,13 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         errors,
     )
     found_rows = [row for row in rows if row.scene_name in scene_to_image]
-    selection = _select_scene_rows(
-        found_rows,
-        negative_scene_limit=request.negative_scene_limit,
-        seed=SPLIT_SEED,
-    )
-    pool_scene_ids = [row.scene_name for row in selection.rows]
+    pool_scene_ids = [row.scene_name for row in found_rows]
     train_names: set[str] = set()
     val_names: set[str] = set()
     pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
-    elif not selection.rows:
-        errors.append("После отбора сцен датасет пуст.")
 
     selected_scene_to_image = {
         scene: scene_to_image[scene]
@@ -330,9 +301,6 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
-        negative_scene_limit=request.negative_scene_limit,
-        selected_positive_scenes_count=selection.positive_count,
-        selected_negative_scenes_count=selection.negative_count,
     )
     if errors:
         dataset = None
@@ -481,38 +449,6 @@ def _unique_preserving_order(values) -> list[str]:
     return result
 
 
-def _select_scene_rows(
-    rows: list[SceneObjectCount],
-    *,
-    negative_scene_limit: int | None,
-    seed: int,
-) -> _SceneSelection:
-    if negative_scene_limit is None:
-        selected_rows = list(rows)
-    else:
-        positives = [row for row in rows if row.object_count > 0]
-        negatives = [row for row in rows if row.object_count <= 0]
-        rng = random.Random(seed)
-        tie_break = {row.scene_name: rng.random() for row in negatives}
-        selected_negative_names = {
-            row.scene_name
-            for row in sorted(
-                negatives,
-                key=lambda item: (tie_break[item.scene_name], item.scene_name),
-            )[:negative_scene_limit]
-        }
-        selected_names = {
-            row.scene_name for row in positives
-        } | selected_negative_names
-        selected_rows = [row for row in rows if row.scene_name in selected_names]
-
-    return _SceneSelection(
-        rows=selected_rows,
-        positive_count=sum(1 for row in selected_rows if row.object_count > 0),
-        negative_count=sum(1 for row in selected_rows if row.object_count <= 0),
-    )
-
-
 def _build_report(
     *,
     scenes: list[str],
@@ -523,9 +459,6 @@ def _build_report(
     missing_files: list[str],
     errors: list[str],
     pool_names: set[str] | None = None,
-    negative_scene_limit: int | None = None,
-    selected_positive_scenes_count: int = 0,
-    selected_negative_scenes_count: int = 0,
 ) -> DatasetPreparationReport:
     count_by_scene = {row.scene_name: row.object_count for row in rows}
     pool_names = pool_names or set()
@@ -542,9 +475,6 @@ def _build_report(
     val_objects = sum(item.object_count for item in scene_reports if item.split == "val")
     return DatasetPreparationReport(
         status="error" if errors else "ok",
-        negative_scene_limit=negative_scene_limit,
-        selected_positive_scenes_count=selected_positive_scenes_count,
-        selected_negative_scenes_count=selected_negative_scenes_count,
         scenes_total=len(scenes),
         scenes_found=len(scene_to_image),
         objects_total=sum(item.object_count for item in scene_reports),

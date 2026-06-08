@@ -177,28 +177,25 @@ def run_train_pipeline(
         train_loader = _CountingLoader(
             train_loader,
             "train",
-            sampling_mode=_sampling_mode(settings, settings.tile_preparation.smart_tiling),
+            sampling_mode=_sampling_mode(settings, _uses_weighted_sampler(train_loader)),
             positive_factor_used=(
                 settings.tile_preparation.positive_factor
-                if settings.tile_preparation.smart_tiling
+                if _uses_weighted_sampler(train_loader)
                 else None
             ),
             is_diagnostic_sampling=False,
         )
-        val_diagnostic_sampling = (
-            settings.tile_preparation.smart_tiling
-            and settings.tile_preparation.val_positive_factor is not None
-        )
+        val_uses_weighted_sampler = _uses_weighted_sampler(val_loader)
         val_loader = _CountingLoader(
             val_loader,
             "val",
-            sampling_mode=_sampling_mode(settings, val_diagnostic_sampling),
+            sampling_mode=_sampling_mode(settings, val_uses_weighted_sampler),
             positive_factor_used=(
                 settings.tile_preparation.val_positive_factor
-                if val_diagnostic_sampling
+                if val_uses_weighted_sampler
                 else None
             ),
-            is_diagnostic_sampling=val_diagnostic_sampling,
+            is_diagnostic_sampling=False,
         )
 
         model = _load_or_create_model(settings, deps)
@@ -308,14 +305,12 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in settings.dataset.classes
             ],
             val_fraction=settings.dataset.val_fraction,
-            negative_scene_limit=settings.dataset.negative_scene_limit,
         )
     return DatasetPreparationRequest(
         images_dir=settings.dataset.images_dir,
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
         val_fraction=settings.dataset.val_fraction,
-        negative_scene_limit=settings.dataset.negative_scene_limit,
     )
 
 
@@ -517,15 +512,12 @@ def _tile_preparation_report(
     val_loader: _CountingLoader,
 ) -> dict[str, object]:
     return {
-        "negative_scene_limit": settings.dataset.negative_scene_limit,
         "tile_size": settings.tile_preparation.tile_size,
         "stride": settings.tile_preparation.stride,
         "batch_size": settings.train.batch_size,
         "num_workers": settings.tile_preparation.num_workers,
-        "prefetch_factor": settings.tile_preparation.prefetch_factor,
         "prefetch_epochs": settings.tile_preparation.prefetch_epochs,
         "augmentation_level": settings.tile_preparation.augmentation_level,
-        "smart_tiling_enabled": settings.tile_preparation.smart_tiling,
         "positive_factor": settings.tile_preparation.positive_factor,
         "val_positive_factor": settings.tile_preparation.val_positive_factor,
         "class_balance": settings.tile_preparation.class_balance,
@@ -536,12 +528,17 @@ def _tile_preparation_report(
     }
 
 
-def _sampling_mode(settings: SystemSettings, enabled: bool) -> str:
-    if not enabled:
+def _sampling_mode(settings: SystemSettings, uses_weighted_sampler: bool) -> str:
+    if not uses_weighted_sampler:
         return "sequential"
     if settings.dataset.classes and settings.tile_preparation.class_balance:
         return "weighted_class_balance"
     return "weighted_positive_factor"
+
+
+def _uses_weighted_sampler(loader: object) -> bool:
+    sampler = getattr(loader, "sampler", None)
+    return sampler is not None and sampler.__class__.__name__ == "WeightedRandomSampler"
 
 
 def _safe_len(value: object) -> int | None:

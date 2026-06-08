@@ -112,7 +112,7 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
     _assert_vrt_reads(result.dataset.val_vrt_xml)
 
 
-def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
+def test_prepare_dataset_tile_mode_keeps_all_binary_scenes(
     tmp_path: Path,
 ) -> None:
     images = tmp_path / "images"
@@ -129,7 +129,6 @@ def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
         scenes_file=str(scenes_file),
         annotation_file=str(annotation_file),
         val_fraction=0.5,
-        negative_scene_limit=1,
     )
     first = prepare_dataset(request)
     second = prepare_dataset(request)
@@ -139,15 +138,12 @@ def test_prepare_dataset_tile_mode_limits_binary_negative_scenes(
     assert first.dataset.pool_vrt_xml is not None
     assert first.dataset.train_vrt_xml == first.dataset.pool_vrt_xml
     assert first.dataset.val_vrt_xml == first.dataset.pool_vrt_xml
-    assert first.report.negative_scene_limit == 1
-    assert first.report.selected_positive_scenes_count == 2
-    assert first.report.selected_negative_scenes_count == 1
     assert _scene_ids_with_split(first, "pool") == _scene_ids_with_split(second, "pool")
-    assert set(_scene_ids_with_split(first, "pool")) >= {"scene_a", "scene_c"}
-    assert len(_scene_ids_with_split(first, "excluded")) == 1
+    assert set(_scene_ids_with_split(first, "pool")) == {"scene_a", "scene_b", "scene_c", "scene_d"}
+    assert _scene_ids_with_split(first, "excluded") == []
 
 
-def test_prepare_dataset_tile_mode_limits_multiclass_negative_scenes(
+def test_prepare_dataset_tile_mode_keeps_all_multiclass_scenes(
     tmp_path: Path,
 ) -> None:
     images = tmp_path / "images"
@@ -181,17 +177,14 @@ def test_prepare_dataset_tile_mode_limits_multiclass_negative_scenes(
                 ),
             ],
             val_fraction=0.5,
-            negative_scene_limit=1,
         )
     )
 
     assert result.report.status == "ok"
     assert result.dataset is not None
     assert [item.slug for item in result.dataset.class_annotations] == ["class_a", "class_b"]
-    assert result.report.selected_positive_scenes_count == 1
-    assert result.report.selected_negative_scenes_count == 1
     assert set(_scene_ids_with_split(result, "pool")) >= {"scene_a"}
-    assert len(_scene_ids_with_split(result, "pool")) == 2
+    assert len(_scene_ids_with_split(result, "pool")) == 3
 
 
 def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(

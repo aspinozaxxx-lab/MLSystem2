@@ -29,7 +29,6 @@ class DatasetPreparationRequest(BaseModel):
     annotation_file: str | None = None
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
-    negative_scene_limit: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
@@ -84,9 +83,6 @@ class DatasetPreparationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["ok", "error"]
-    negative_scene_limit: int | None = None
-    selected_positive_scenes_count: int = Field(default=0, ge=0)
-    selected_negative_scenes_count: int = Field(default=0, ge=0)
     scenes_total: int = Field(ge=0)
     scenes_found: int = Field(ge=0)
     objects_total: int = Field(ge=0)

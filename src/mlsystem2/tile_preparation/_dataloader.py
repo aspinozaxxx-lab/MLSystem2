@@ -40,7 +40,6 @@ def create_tile_dataloader(
             mode=request.mode,
             seed=tile_settings.seed,
             augmentation_level=tile_settings.augmentation_level,
-            smart_tiling=tile_settings.smart_tiling,
             positive_factor=tile_settings.positive_factor,
             class_balance=tile_settings.class_balance,
             tile_split=request.tile_split,
@@ -54,25 +53,20 @@ def create_tile_dataloader(
     generator.manual_seed(tile_settings.seed)
 
     sampler = None
-    sampler_positive_factor = None
-    if request.mode == "train" and tile_settings.smart_tiling:
-        sampler_positive_factor = tile_settings.positive_factor
-    elif (
-        request.mode == "val"
-        and tile_settings.smart_tiling
-        and tile_settings.val_positive_factor is not None
-    ):
-        sampler_positive_factor = tile_settings.val_positive_factor
+    sampler_positive_factor = (
+        tile_settings.positive_factor
+        if request.mode == "train"
+        else tile_settings.val_positive_factor
+    )
 
-    if sampler_positive_factor is not None:
-        weights = dataset.sampling_weights(sampler_positive_factor)
-        if weights is not None:
-            sampler = WeightedRandomSampler(
-                weights=weights,
-                num_samples=len(dataset),
-                replacement=True,
-                generator=generator,
-            )
+    weights = dataset.sampling_weights(sampler_positive_factor)
+    if weights is not None:
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(dataset),
+            replacement=True,
+            generator=generator,
+        )
 
     dataloader_kwargs = {
         "dataset": dataset,
@@ -87,7 +81,6 @@ def create_tile_dataloader(
         dataloader_kwargs["sampler"] = sampler
     if tile_settings.num_workers > 0:
         dataloader_kwargs["prefetch_factor"] = _effective_prefetch_factor(
-            base_prefetch_factor=tile_settings.prefetch_factor,
             prefetch_epochs=tile_settings.prefetch_epochs,
             dataset_size=len(dataset),
             batch_size=request.batch_size,
@@ -100,18 +93,16 @@ def create_tile_dataloader(
 
 def _effective_prefetch_factor(
     *,
-    base_prefetch_factor: int,
-    prefetch_epochs: float | None,
+    prefetch_epochs: float,
     dataset_size: int,
     batch_size: int,
     num_workers: int,
 ) -> int:
-    if prefetch_epochs is None or num_workers <= 0 or dataset_size <= 0:
-        return base_prefetch_factor
+    if num_workers <= 0 or dataset_size <= 0:
+        return 1
     batches_per_epoch = math.ceil(dataset_size / batch_size)
     target_prefetch_batches = math.ceil(batches_per_epoch * prefetch_epochs)
-    target_prefetch_factor = max(1, math.ceil(target_prefetch_batches / num_workers))
-    return max(base_prefetch_factor, target_prefetch_factor)
+    return max(1, math.ceil(target_prefetch_batches / num_workers))
 
 
 def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, object]]]):

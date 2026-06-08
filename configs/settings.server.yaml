@@ -6,15 +6,12 @@ runtime:
 
 dataset:
   images_dir: /data/mlsystem2/prepared_images/
-  negative_scene_limit: null
 
 tile_preparation:
   num_workers: 16
-  prefetch_factor: 2
-  prefetch_epochs: null
+  prefetch_epochs: 2
   seed: 42
-  smart_tiling: true
-  val_positive_factor: null
+  val_positive_factor: 0.5
   class_balance: false
 
 train:

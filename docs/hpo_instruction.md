@@ -294,7 +294,6 @@ train:
 
 Стартовые принципы:
 
-- `smart_tiling: true`;
 - `positive_factor` использовать как параметр HPO;
 - `augmentation_level` использовать как параметр HPO;
 - loss candidates: `focal_tversky`, `bce_dice`, `focal_dice`;

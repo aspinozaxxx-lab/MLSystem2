@@ -30,7 +30,6 @@ class TileDataset:
         mode: str,
         seed: int,
         augmentation_level: int,
-        smart_tiling: bool,
         positive_factor: float = 0.5,
         class_balance: bool = False,
         tile_split: TileSplitRequest | None = None,
@@ -45,7 +44,6 @@ class TileDataset:
         self._mode = mode
         self._seed = seed
         self._augmentation_level = augmentation_level
-        self._smart_tiling = smart_tiling
         self._positive_factor = positive_factor
         self._class_balance = class_balance
         self._tile_split = tile_split
@@ -86,9 +84,7 @@ class TileDataset:
             self._valid_footprint_stride = valid_diagnostics.valid_footprint_stride
             self._valid_footprint_valid_cells = valid_diagnostics.valid_footprint_valid_cells
             self._valid_footprint_total_cells = valid_diagnostics.valid_footprint_total_cells
-            should_build_hints = (
-                self._smart_tiling and self._mode in {"train", "val"}
-            ) or self._tile_split is not None
+            should_build_hints = self._mode in {"train", "val"} or self._tile_split is not None
             if should_build_hints:
                 if self._class_annotations:
                     self._class_hints_by_index = self._build_class_hints(dataset)
@@ -118,7 +114,7 @@ class TileDataset:
         positive_before_augmentation = bool(np.count_nonzero(mask) > 0)
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
-        if should_augment and (not self._smart_tiling or positive_before_augmentation):
+        if should_augment and positive_before_augmentation:
             image, mask, augmented = apply_augmentations(
                 image,
                 mask,
@@ -183,10 +179,6 @@ class TileDataset:
         return list(self._tile_split_warnings)
 
     @property
-    def smart_tiling_enabled(self) -> bool:
-        return self._smart_tiling
-
-    @property
     def estimated_positive_tiles(self) -> int | None:
         if self._positive_hint_by_index is None:
             return None
@@ -213,7 +205,7 @@ class TileDataset:
 
     @property
     def class_balance_enabled(self) -> bool:
-        return bool(self._smart_tiling and self._class_balance and self._class_annotations)
+        return bool(self._class_balance and self._class_annotations)
 
     @property
     def class_balance_warnings(self) -> list[str]:

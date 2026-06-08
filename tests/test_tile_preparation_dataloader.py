@@ -71,19 +71,18 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     images, masks, batch_meta = batch
     assert images.shape == (4, 3, 4, 4)
     assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {
-        "augmented_tile_count": 0,
-        "positive_tile_count": 1,
-        "class_positive_tile_counts": {},
-        "class_pixel_counts": {},
-        "tile_augmented": [False, False, False, False],
-        "tile_positive": [True, False, False, False],
-    }
+    assert batch_meta["augmented_tile_count"] == 0
+    assert batch_meta["class_positive_tile_counts"] == {}
+    assert batch_meta["class_pixel_counts"] == {}
+    assert batch_meta["tile_augmented"] == [False, False, False, False]
+    assert len(batch_meta["tile_positive"]) == 4
+    assert batch_meta["positive_tile_count"] == sum(batch_meta["tile_positive"])
+    assert 0 < batch_meta["positive_tile_count"] <= 4
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
-    assert masks[0].sum() > 0
-    assert masks[1:].sum() == 0
+    positive_by_mask = torch.count_nonzero(masks.flatten(1).sum(dim=1) > 0).item()
+    assert positive_by_mask == batch_meta["positive_tile_count"]
 
     loader.dataset.close()
 
@@ -136,8 +135,8 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
-    annotation_file = tmp_path / "empty.geojson"
-    _write_empty_annotation(annotation_file)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
     load_settings(
         _write_config(
             tmp_path,
@@ -164,11 +163,11 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     assert float(images.max().item()) <= 255.0
     assert batch_meta == {
         "augmented_tile_count": 1,
-        "positive_tile_count": 0,
+        "positive_tile_count": 1,
         "class_positive_tile_counts": {},
         "class_pixel_counts": {},
         "tile_augmented": [True],
-        "tile_positive": [False],
+        "tile_positive": [True],
     }
 
     loader.dataset.close()
@@ -190,7 +189,6 @@ def test_multiclass_geometric_augmentation_keeps_labels() -> None:
 def test_effective_prefetch_factor_targets_requested_epochs() -> None:
     assert (
         _effective_prefetch_factor(
-            base_prefetch_factor=2,
             prefetch_epochs=2.0,
             dataset_size=1301,
             batch_size=8,
@@ -200,16 +198,15 @@ def test_effective_prefetch_factor_targets_requested_epochs() -> None:
     )
 
 
-def test_effective_prefetch_factor_keeps_base_when_target_is_smaller() -> None:
+def test_effective_prefetch_factor_uses_requested_epochs_only() -> None:
     assert (
         _effective_prefetch_factor(
-            base_prefetch_factor=4,
             prefetch_epochs=0.25,
             dataset_size=32,
             batch_size=8,
             num_workers=16,
         )
-        == 4
+        == 1
     )
 
 
@@ -472,7 +469,6 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
         mode="val",
         seed=42,
         augmentation_level=0,
-        smart_tiling=False,
     )
 
     assert len(dataset) == 4
@@ -566,7 +562,7 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
     assert batch_meta["augmented_tile_count"] == 0
 
 
-def test_smart_tiling_augments_only_positive_tiles(tmp_path: Path) -> None:
+def test_train_augmentation_applies_only_to_positive_tiles(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "smart_aug.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
@@ -583,7 +579,6 @@ def test_smart_tiling_augments_only_positive_tiles(tmp_path: Path) -> None:
         mode="train",
         seed=42,
         augmentation_level=2,
-        smart_tiling=True,
     )
 
     _positive_image, _positive_mask, positive_meta = dataset[0]
@@ -594,7 +589,7 @@ def test_smart_tiling_augments_only_positive_tiles(tmp_path: Path) -> None:
     dataset.close()
 
 
-def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> None:
+def test_weighted_sampler_is_used_for_train_and_val(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "smart_sampler.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
@@ -609,7 +604,6 @@ def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> No
             stride=4,
             batch_size=1,
             input_channels=1,
-            smart_tiling=True,
         )
     )
 
@@ -631,7 +625,7 @@ def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> No
     )
 
     assert isinstance(train_loader.sampler, torch.utils.data.WeightedRandomSampler)
-    assert not isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
+    assert isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
     assert train_loader.dataset.estimated_positive_tiles == 1
     assert train_loader.dataset.estimated_negative_tiles == 1
     assert val_loader.dataset.estimated_positive_tiles == 1
@@ -641,7 +635,7 @@ def test_smart_tiling_uses_weighted_sampler_only_for_train(tmp_path: Path) -> No
     val_loader.dataset.close()
 
 
-def test_smart_tiling_can_use_weighted_sampler_for_diagnostic_val(tmp_path: Path) -> None:
+def test_val_weighted_sampler_uses_val_positive_factor(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "smart_val_sampler.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
@@ -656,7 +650,6 @@ def test_smart_tiling_can_use_weighted_sampler_for_diagnostic_val(tmp_path: Path
             stride=4,
             batch_size=1,
             input_channels=1,
-            smart_tiling=True,
             val_positive_factor=0.5,
         )
     )
@@ -779,12 +772,11 @@ def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> No
     val_loader.dataset.close()
 
 
-def test_smart_tiling_sampling_weights_follow_positive_factor() -> None:
+def test_sampling_weights_follow_positive_factor() -> None:
     dataset = TileDataset.__new__(TileDataset)
     dataset._positive_hint_by_index = [True, True, *([False] * 8)]
     dataset._positive_factor = 0.8
     dataset._class_balance = False
-    dataset._smart_tiling = True
     dataset._class_annotations = []
     dataset._class_hints_by_index = None
 
@@ -807,7 +799,6 @@ def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
     ]
     dataset._positive_factor = 0.8
     dataset._class_balance = True
-    dataset._smart_tiling = True
     dataset._class_annotations = [
         TileClassAnnotation(class_id=1, slug="common", name="Common", annotation_file="a.geojson"),
         TileClassAnnotation(class_id=2, slug="rare", name="Rare", annotation_file="b.geojson"),
@@ -944,8 +935,7 @@ def _write_config(
     num_workers: int = 0,
     input_channels: int = 3,
     augmentation_level: int = 0,
-    smart_tiling: bool = False,
-    val_positive_factor: float | None = None,
+    val_positive_factor: float = 0.5,
 ) -> Path:
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -966,12 +956,11 @@ tile_preparation:
   tile_size: {tile_size}
   stride: {stride}
   num_workers: {num_workers}
-  prefetch_factor: 2
+  prefetch_epochs: 2
   seed: 42
   augmentation_level: {augmentation_level}
-  smart_tiling: {str(smart_tiling).lower()}
   positive_factor: 0.5
-  val_positive_factor: {_yaml_nullable_float(val_positive_factor)}
+  val_positive_factor: {val_positive_factor}
 
 train:
   model_name: segformer_b2
@@ -1006,13 +995,6 @@ mlflow:
         encoding="utf-8",
     )
     return settings_path
-
-
-def _yaml_nullable_float(value: float | None) -> str:
-    if value is None:
-        return "null"
-    return str(value)
-
 
 class _DeterministicRng:
     def random(self) -> float:

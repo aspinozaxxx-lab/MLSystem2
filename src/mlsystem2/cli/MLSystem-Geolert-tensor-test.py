@@ -279,7 +279,7 @@ tile_preparation:
   tile_size: {tile_size}
   stride: {stride}
   num_workers: 0
-  prefetch_factor: 2
+  prefetch_epochs: 2
   seed: 42
   augmentation_level: 0
 

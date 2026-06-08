@@ -244,7 +244,7 @@ train:
   max_training_time_sec: 1800
 ```
 
-Воркеры, prefetch, seed, smart tiling, device, binary task и каналы модели задаются defaults модулей.
+Воркеры, prefetch, seed, device, binary task и каналы модели задаются defaults модулей.
 `max_train_batches_per_epoch`, `max_val_batches_per_epoch` и `max_training_time_sec` остаются параметрами запуска,
 потому что они управляют длительностью конкретного обучения.
 

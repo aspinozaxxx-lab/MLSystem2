@@ -25,12 +25,12 @@ Batch DataLoader:
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`, `class_balance`.
+- `settings.api` - получить `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, `positive_factor`, `val_positive_factor`, `class_balance`.
 - `rasterio` - открыть VRT и лениво читать image windows с `boundless=True`.
 - `shapely` и `rasterio.features` - загрузить GeoJSON и rasterize mask в окно tile.
-- `torch.utils.data` - создать Dataset/DataLoader и обеспечить prefetch через `num_workers`, `prefetch_factor` и optional `prefetch_epochs`.
+- `torch.utils.data` - создать Dataset/DataLoader и обеспечить prefetch через `num_workers` и `prefetch_epochs`.
 
-Если `prefetch_epochs` задан, DataLoader получает effective `prefetch_factor`, рассчитанный от размера split, `batch_size` и числа workers. Например, для 163 batches/epoch, `num_workers=16` и `prefetch_epochs=2` effective factor будет `21`, то есть PyTorch будет стремиться держать около двух эпох batch-ей в prefetch queues. Raster read и rasterize остаются ленивыми в `__getitem__`; заранее готовятся только элементы, запрошенные DataLoader workers.
+DataLoader получает effective `prefetch_factor`, рассчитанный от размера split, `batch_size`, числа workers и `prefetch_epochs`. Например, для 163 batches/epoch, `num_workers=16` и `prefetch_epochs=2` effective factor будет `21`, то есть PyTorch будет стремиться держать около двух эпох batch-ей в prefetch queues. Raster read и rasterize остаются ленивыми в `__getitem__`; заранее готовятся только элементы, запрошенные DataLoader workers.
 
 ## Алгоритм работы и его особенности
 
@@ -55,6 +55,6 @@ Binary mask rasterize выполняется в том же окне, возвр
 
 Аугментация сохраняет raw Geoalert tensor ABI подготовленных снимков: после photometric значения image зажимаются в диапазон `0..255`. Geometric flips/rotations применяются к image и mask, photometric применяется только к image. Модуль не зануляет прямоугольные patch-и в image или mask. Sample возвращает `{"augmented": bool, "positive": bool}` и для multiclass дополнительно `class_positive` и `class_pixels`; collate собирает batch `(images, masks, batch_meta)` с aggregate-счетчиками и per-tile flags для диагностики.
 
-При `smart_tiling=true` или при наличии `tile_split` Dataset строит cheap-index для `train` и `val`: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Для multiclass positive hint означает пересечение с геометрией любого класса. Если задан `tile_split`, positive и negative hints отдельно делятся на train/val по `val_fraction` и `seed`; пересечения между subsets запрещены, редкие positive windows не дублируются, а предупреждения доступны в tile report. Поля `estimated_positive_tiles`, `estimated_negative_tiles` и `estimated_class_positive_tiles` являются geometry-intersection hint, а не точным rasterized mask count. Для `train`, если есть positive/negative hints и включен `smart_tiling`, DataLoader использует `WeightedRandomSampler`. Для `val` shuffle и augmentation выключены; если `val_positive_factor` задан, используется deterministic weighted sampler только для диагностической validation выборки.
+Dataset всегда строит cheap-index для `train` и `val`: по bounds окна проверяет пересечение с GeoJSON geometry без чтения raster data и без rasterize. Для multiclass positive hint означает пересечение с геометрией любого класса. Если задан `tile_split`, positive и negative hints отдельно делятся на train/val по `val_fraction` и `seed`; пересечения между subsets запрещены, редкие positive windows не дублируются, а предупреждения доступны в tile report. Поля `estimated_positive_tiles`, `estimated_negative_tiles` и `estimated_class_positive_tiles` являются geometry-intersection hint, а не точным rasterized mask count. Для `train`, если есть positive/negative hints, DataLoader использует `WeightedRandomSampler` с `positive_factor`. Для `val`, если есть positive/negative hints, используется `WeightedRandomSampler` с `val_positive_factor`. Shuffle и augmentation для val выключены.
 
 Полностью black/nodata-only tiles фильтруются заранее через coarse valid-data footprint или через sparse-проверку candidate windows для больших VRT и не попадают в DataLoader. Диагностика Dataset доступна как внутренние attributes: `candidate_window_count_before_valid_filter`, `black_filtered_window_count`, `valid_footprint_stride`, `valid_footprint_valid_cells`, `valid_footprint_total_cells`.

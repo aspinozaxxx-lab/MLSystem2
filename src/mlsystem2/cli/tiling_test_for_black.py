@@ -209,14 +209,12 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in dataset.classes
             ],
             val_fraction=dataset.val_fraction,
-            negative_scene_limit=dataset.negative_scene_limit,
         )
     return DatasetPreparationRequest(
         images_dir=dataset.images_dir,
         scenes_file=dataset.scenes_file,
         annotation_file=dataset.annotation_file,
         val_fraction=dataset.val_fraction,
-        negative_scene_limit=dataset.negative_scene_limit,
     )
 
 
@@ -357,9 +355,7 @@ def _write_scan_settings(
     num_workers: int | None,
 ) -> None:
     payload = settings.model_dump(mode="json")
-    payload["tile_preparation"]["smart_tiling"] = False
     payload["tile_preparation"]["augmentation_level"] = 0
-    payload["tile_preparation"]["val_positive_factor"] = None
     if num_workers is not None:
         payload["tile_preparation"]["num_workers"] = num_workers
     if batch_size is not None:

@@ -227,13 +227,6 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
 
 def test_train_pipeline_builds_tile_split_requests() -> None:
     settings = _settings(initial_checkpoint_uri=None)
-    settings = settings.model_copy(
-        update={
-            "dataset": settings.dataset.model_copy(
-                update={"negative_scene_limit": 2}
-            )
-        }
-    )
     prepared = PreparedDataset(
         train_vrt_xml="TRAIN",
         val_vrt_xml="VAL",
@@ -258,7 +251,7 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
         tile_split,
     )
 
-    assert dataset_request.negative_scene_limit == 2
+    assert not hasattr(dataset_request, "negative_scene_limit")
     assert not hasattr(dataset_request, "split_granularity")
     assert tile_split is not None
     assert tile_split.val_fraction == settings.dataset.val_fraction

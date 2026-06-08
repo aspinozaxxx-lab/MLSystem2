@@ -121,15 +121,12 @@ runtime:
 
 dataset:
   images_dir: /data/mlsystem2/prepared_images/
-  negative_scene_limit: null
 
 tile_preparation:
   num_workers: 8
-  prefetch_factor: 2
-  prefetch_epochs: null
+  prefetch_epochs: 2
   seed: 42
-  smart_tiling: true
-  val_positive_factor: null
+  val_positive_factor: 0.5
   class_balance: false
 
 train:
@@ -293,15 +290,13 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.max_train_batches_per_epoch is None
     assert settings.train.max_val_batches_per_epoch is None
     assert settings.train.max_training_time_sec is None
-    assert settings.tile_preparation.smart_tiling is True
     assert settings.tile_preparation.positive_factor == 0.5
-    assert settings.tile_preparation.val_positive_factor is None
+    assert settings.tile_preparation.val_positive_factor == 0.5
     assert settings.tile_preparation.class_balance is False
-    assert settings.tile_preparation.prefetch_epochs is None
-    assert settings.dataset.negative_scene_limit is None
+    assert settings.tile_preparation.prefetch_epochs == 2.0
 
 
-def test_load_settings_accepts_negative_limit_default_module_parameter(tmp_path: Path) -> None:
+def test_load_settings_rejects_negative_scene_limit_field(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -312,9 +307,8 @@ def test_load_settings_accepts_negative_limit_default_module_parameter(tmp_path:
         encoding="utf-8",
     )
 
-    settings = api.load_settings(settings_path)
-
-    assert settings.dataset.negative_scene_limit == 3
+    with pytest.raises(SettingsError):
+        api.load_settings(settings_path)
 
 
 def test_load_settings_rejects_old_split_granularity_field(tmp_path: Path) -> None:

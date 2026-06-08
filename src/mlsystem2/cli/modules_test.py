@@ -29,10 +29,9 @@ VAL_FRACTION = 0.2
 TILE_SIZE = 1024
 STRIDE = 512
 NUM_WORKERS = 4
-PREFETCH_FACTOR = 2
+PREFETCH_EPOCHS = 2
 SEED = 42
 AUGMENTATION_LEVEL = 3
-SMART_TILING = True
 POSITIVE_FACTOR = 0.8
 VAL_POSITIVE_FACTOR = 0.5
 BATCH_SIZE = 4
@@ -202,10 +201,9 @@ tile_preparation:
   tile_size: {TILE_SIZE}
   stride: {STRIDE}
   num_workers: {NUM_WORKERS}
-  prefetch_factor: {PREFETCH_FACTOR}
+  prefetch_epochs: {PREFETCH_EPOCHS}
   seed: {SEED}
   augmentation_level: {AUGMENTATION_LEVEL}
-  smart_tiling: {str(SMART_TILING).lower()}
   positive_factor: {POSITIVE_FACTOR}
   val_positive_factor: {VAL_POSITIVE_FACTOR}
 
@@ -370,7 +368,6 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "dataset_len": _safe_len(dataset),
         "loader_len": _safe_len(loader),
         "augmentation_level": AUGMENTATION_LEVEL,
-        "smart_tiling": SMART_TILING,
         "positive_factor": POSITIVE_FACTOR,
         "val_positive_factor": VAL_POSITIVE_FACTOR,
         "tensor_integrity": None,
@@ -948,10 +945,9 @@ def _params(*, saved_batches: int) -> dict[str, Any]:
         "tile_size": TILE_SIZE,
         "stride": STRIDE,
         "num_workers": NUM_WORKERS,
-        "prefetch_factor": PREFETCH_FACTOR,
+        "prefetch_epochs": PREFETCH_EPOCHS,
         "seed": SEED,
         "augmentation_level": AUGMENTATION_LEVEL,
-        "smart_tiling": SMART_TILING,
         "positive_factor": POSITIVE_FACTOR,
         "val_positive_factor": VAL_POSITIVE_FACTOR,
         "batch_size": BATCH_SIZE,

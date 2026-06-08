@@ -125,7 +125,7 @@ Frontend не обращается к Postgres. Сервис не импорти
 Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует `run.yml`
 из сохраненных параметров задания и запускает публичный CLI
 `python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...` отдельным процессом.
-Стабильные параметры приложения, такие как workers/prefetch/seed/smart_tiling/device, берутся из `settings.yml`
+Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
 и не записываются в `run.yml`. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`

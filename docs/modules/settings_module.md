@@ -15,8 +15,8 @@
 - `SettingsError` - ошибка загрузки или валидации.
 - `RuntimeSettings` - поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
 - `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, `priority`.
-- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`, `negative_scene_limit`; свойство `is_multiclass`.
-- `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `augmentation_level`, `smart_tiling`, `positive_factor`, `val_positive_factor`, `class_balance`.
+- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
+- `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, `positive_factor`, `val_positive_factor`, `class_balance`.
 - `TrainSettings` - поля `task`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
 - `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
 - `SystemSettings` - корневой DTO настроек.
@@ -29,21 +29,21 @@
 
 `load_settings` проверяет, что путь настроек существует и является файлом, читает YAML, ожидает корневой словарь и валидирует его через `SystemSettings`. В режиме `settings.yml + run.yml` словари объединяются рекурсивно: `run.yml` переопределяет только поля конкретного запуска, а стабильные параметры приложения остаются в `settings.yml`. Результат и абсолютный путь YAML сохраняются в module-level current object; если передан `run_path`, `get_settings_path` возвращает именно путь к `run.yml`. Лишние секции и поля отклоняются после объединения.
 
-`settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `dataset.negative_scene_limit`, `tile_preparation.num_workers`, `prefetch_factor`, `prefetch_epochs`, `seed`, `smart_tiling`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
+`settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `tile_preparation.num_workers`, `prefetch_epochs`, `seed`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
 
 `run.yml` хранит задание конкретного обучения: пути разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, positive sampling, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. Параметры inference задаются отдельно при создании задания псевдоразметки.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 
-`smart_tiling=false` оставляет обычную регулярную сетку и стандартный DataLoader. `smart_tiling=true` включает positive-aware train sampling и запрещает аугментацию negative/background tiles; val loader остается без augmentation. `positive_factor` используется только при `smart_tiling=true` и `mode=train`: значение `0.8` означает примерно 80% positive и 20% negative samples в training epoch. В multiclass режиме `positive_factor` остается балансом foreground/background. Если дополнительно задано `class_balance=true`, positive-доля распределяется между классами с найденными positive windows примерно равномерно; классы без positive windows попадают в warnings. `val_positive_factor` по умолчанию `null`; если оно задано, то только при `smart_tiling=true` и `mode=val` включается deterministic weighted sampler с заданной долей positive tiles. Это диагностическая validation выборка, а не честная финальная метрика: для финальной оценки нужно `val_positive_factor: null` и полный или последовательный val loader. Эти поля не меняют masks и labels.
+Positive-aware tile sampling является единственным штатным режимом. `positive_factor` используется для `mode=train`: значение `0.8` означает примерно 80% positive и 20% negative samples в training epoch. `val_positive_factor` используется для `mode=val`; серверный default `0.5` дает примерно равные positive и negative validation samples. В multiclass режиме `positive_factor` остается балансом foreground/background. Если дополнительно задано `class_balance=true`, positive-доля распределяется между классами с найденными positive windows примерно равномерно; классы без positive windows попадают в warnings. Аугментация применяется только к positive train tiles. Эти поля не меняют masks и labels.
 
-`prefetch_factor` задает базовый PyTorch DataLoader prefetch на worker. Если задан `prefetch_epochs`, `tile_preparation` вычисляет effective `prefetch_factor` как минимум `ceil(ceil(dataset_size / batch_size) * prefetch_epochs / num_workers)`. Это заставляет DataLoader стремиться держать в worker queues запас уже прочитанных и rasterized batch-ей на указанное число эпох, но не сохраняет tiles на диск и не меняет ленивый `Dataset.__getitem__`.
+`prefetch_epochs` задает целевой запас PyTorch DataLoader prefetch в эпохах. `tile_preparation` вычисляет effective `prefetch_factor` как `ceil(ceil(dataset_size / batch_size) * prefetch_epochs / num_workers)`. Это заставляет DataLoader стремиться держать в worker queues запас уже прочитанных и rasterized batch-ей на указанное число эпох, но не сохраняет tiles на диск и не меняет ленивый `Dataset.__getitem__`.
 
 `max_train_batches_per_epoch` и `max_val_batches_per_epoch` добавлены только для диагностических коротких запусков. В полном обучении они могут оставаться `null`. `max_training_time_sec` - optional wall-clock лимит train loop; он проверяется после завершения эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
 
 Проверяется: `stride <= tile_size`, `augmentation_level` в диапазоне `0..3`, positive train-размеры, `learning_rate > 0`, `weight_decay >= 0`, threshold/focal диапазоны, tversky/pos_weight > 0, batch limits либо `null`, либо больше `0`.
 
-`dataset` поддерживает два взаимоисключающих режима разметки: binary через `scenes_file` + `annotation_file` и multiclass через `classes`. Разбиение train/val всегда выполняется по тайлам: `dataset_preparing` строит общий пул выбранных сцен, а `tile_preparation` делит уже тайлы. `negative_scene_limit` ограничивает число zero-object сцен; все сцены с объектами сохраняются.
+`dataset` поддерживает два взаимоисключающих режима разметки: binary через `scenes_file` + `annotation_file` и multiclass через `classes`. Разбиение train/val всегда выполняется по тайлам: `dataset_preparing` строит общий пул найденных снимков, а `tile_preparation` делит уже тайлы.
 
 Binary mode:
 
