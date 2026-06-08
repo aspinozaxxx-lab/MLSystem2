@@ -327,6 +327,9 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "sampling_mode": "sequential",
         "positive_factor_used": None,
         "target_positive_factor": None,
+        "cache_mode": None,
+        "cached_batches": None,
+        "cached_tiles": None,
         "class_balance_enabled": False,
         "is_diagnostic_sampling": False,
         "observed_batches": 2,
@@ -392,6 +395,59 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
     assert snapshot["pool_window_count"] is None
     assert snapshot["split_window_count"] is None
     assert snapshot["tile_split_enabled"] is None
+
+
+def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
+    class Dataset:
+        source_rect_count = 1
+        candidate_window_count = 4
+        candidate_window_count_before_valid_filter = 4
+        black_filtered_window_count = 0
+        valid_footprint_stride = 64
+        valid_footprint_valid_cells = 4
+        valid_footprint_total_cells = 4
+        uses_vrt_source_rects = True
+        estimated_positive_tiles = 2
+        estimated_negative_tiles = 2
+        estimated_class_positive_tiles = None
+        class_balance_enabled = False
+        class_balance_warnings: list[str] = []
+
+        def __len__(self) -> int:
+            return 4
+
+    class Images:
+        shape = (4, 1, 4, 4)
+
+    class Loader:
+        dataset = Dataset()
+        cache_mode = "memory"
+        cached_batches = 1
+        cached_tiles = 4
+        sampler = None
+
+        def __iter__(self):
+            yield Images(), object(), {"positive_tile_count": 2}
+
+        def __len__(self) -> int:
+            return 1
+
+    raw_loader = Loader()
+    loader = _runner._CountingLoader(
+        raw_loader,
+        "val",
+        sampling_mode=_runner._sampling_mode(_settings(initial_checkpoint_uri=None), raw_loader),
+        positive_factor_used=0.5,
+    )
+
+    list(loader)
+    snapshot = loader.snapshot()
+
+    assert snapshot["sampling_mode"] == "cached_balanced"
+    assert snapshot["cache_mode"] == "memory"
+    assert snapshot["cached_batches"] == 1
+    assert snapshot["cached_tiles"] == 4
+    assert snapshot["observed_positive_ratio"] == 0.5
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:

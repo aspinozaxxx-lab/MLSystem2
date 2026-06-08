@@ -177,7 +177,7 @@ def run_train_pipeline(
         train_loader = _CountingLoader(
             train_loader,
             "train",
-            sampling_mode=_sampling_mode(settings, _uses_weighted_sampler(train_loader)),
+            sampling_mode=_sampling_mode(settings, train_loader),
             positive_factor_used=(
                 settings.tile_preparation.positive_factor
                 if _uses_weighted_sampler(train_loader)
@@ -186,15 +186,18 @@ def run_train_pipeline(
             is_diagnostic_sampling=False,
         )
         val_uses_weighted_sampler = _uses_weighted_sampler(val_loader)
+        val_sampling_mode = _sampling_mode(settings, val_loader)
+        if val_sampling_mode == "cached_balanced":
+            val_positive_factor_used = 0.5
+        elif val_uses_weighted_sampler:
+            val_positive_factor_used = settings.tile_preparation.val_positive_factor
+        else:
+            val_positive_factor_used = None
         val_loader = _CountingLoader(
             val_loader,
             "val",
-            sampling_mode=_sampling_mode(settings, val_uses_weighted_sampler),
-            positive_factor_used=(
-                settings.tile_preparation.val_positive_factor
-                if val_uses_weighted_sampler
-                else None
-            ),
+            sampling_mode=val_sampling_mode,
+            positive_factor_used=val_positive_factor_used,
             is_diagnostic_sampling=False,
         )
 
@@ -490,6 +493,9 @@ class _CountingLoader:
             "sampling_mode": self.sampling_mode,
             "positive_factor_used": self.positive_factor_used,
             "target_positive_factor": self.positive_factor_used,
+            "cache_mode": _loader_attr(self.loader, "cache_mode"),
+            "cached_batches": _loader_attr(self.loader, "cached_batches"),
+            "cached_tiles": _loader_attr(self.loader, "cached_tiles"),
             "class_balance_enabled": _dataset_attr(self.dataset, "class_balance_enabled"),
             "is_diagnostic_sampling": self.is_diagnostic_sampling,
             "observed_batches": self.observed_batches,
@@ -528,7 +534,10 @@ def _tile_preparation_report(
     }
 
 
-def _sampling_mode(settings: SystemSettings, uses_weighted_sampler: bool) -> str:
+def _sampling_mode(settings: SystemSettings, loader: object) -> str:
+    if _loader_attr(loader, "cache_mode") == "memory":
+        return "cached_balanced"
+    uses_weighted_sampler = _uses_weighted_sampler(loader)
     if not uses_weighted_sampler:
         return "sequential"
     if settings.dataset.classes and settings.tile_preparation.class_balance:
@@ -558,6 +567,12 @@ def _dataset_attr(dataset: object, name: str) -> object:
     if dataset is None:
         return None
     return getattr(dataset, name, None)
+
+
+def _loader_attr(loader: object, name: str) -> object:
+    if loader is None:
+        return None
+    return getattr(loader, name, None)
 
 
 def _train_request(

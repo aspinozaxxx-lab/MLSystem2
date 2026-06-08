@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 from typing import TYPE_CHECKING
 
@@ -17,9 +18,13 @@ if TYPE_CHECKING:
     import torch
 
 
+VAL_CACHE_AVAILABLE_MEMORY_FRACTION = 0.5
+VAL_CACHE_ESTIMATE_OVERHEAD = 1.25
+
+
 def create_tile_dataloader(
     request: TileDataloaderRequest,
-) -> "torch.utils.data.DataLoader":
+) -> object:
     try:
         import torch
         from torch.utils.data import DataLoader
@@ -49,17 +54,19 @@ def create_tile_dataloader(
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
+    if request.mode == "val":
+        return _create_cached_val_loader(
+            torch=torch,
+            dataset=dataset,
+            batch_size=request.batch_size,
+            seed=tile_settings.seed,
+        )
+
     generator = torch.Generator()
     generator.manual_seed(tile_settings.seed)
 
     sampler = None
-    sampler_positive_factor = (
-        tile_settings.positive_factor
-        if request.mode == "train"
-        else tile_settings.val_positive_factor
-    )
-
-    weights = dataset.sampling_weights(sampler_positive_factor)
+    weights = dataset.sampling_weights(tile_settings.positive_factor)
     if weights is not None:
         sampler = WeightedRandomSampler(
             weights=weights,
@@ -89,6 +96,162 @@ def create_tile_dataloader(
         dataloader_kwargs["persistent_workers"] = True
 
     return DataLoader(**dataloader_kwargs)
+
+
+class _CachedValLoader:
+    def __init__(
+        self,
+        *,
+        torch,
+        dataset: TileDataset,
+        batch_size: int,
+        indices: list[int],
+    ) -> None:
+        self.dataset = dataset
+        self.sampler = None
+        self.batch_size = batch_size
+        self.cache_mode = "memory"
+        self.cached_tiles = len(indices)
+        self._indices = list(indices)
+        try:
+            self._batches = self._build_batches(torch)
+            self.cached_batches = len(self._batches)
+        finally:
+            self.dataset.close()
+
+    def __iter__(self):
+        return iter(self._batches)
+
+    def __len__(self) -> int:
+        return len(self._batches)
+
+    def _build_batches(self, torch) -> list[tuple[object, object, dict[str, object]]]:
+        del torch
+        batches: list[tuple[object, object, dict[str, object]]] = []
+        samples: list[tuple[np.ndarray, np.ndarray, dict[str, object]]] = []
+        try:
+            for index in self._indices:
+                samples.append(self.dataset[index])
+                if len(samples) == self.batch_size:
+                    batches.append(_collate_tile_batch(samples))
+                    samples = []
+            if samples:
+                batches.append(_collate_tile_batch(samples))
+        except MemoryError as exc:
+            raise TilePreparationError("Val tile cache не поместился в RAM.") from exc
+        return batches
+
+
+def _create_cached_val_loader(
+    *,
+    torch,
+    dataset: TileDataset,
+    batch_size: int,
+    seed: int,
+) -> _CachedValLoader:
+    indices = _balanced_val_indices(dataset, seed=seed)
+    _ensure_val_cache_fits_memory(dataset, tile_count=len(indices))
+    return _CachedValLoader(
+        torch=torch,
+        dataset=dataset,
+        batch_size=batch_size,
+        indices=indices,
+    )
+
+
+def _balanced_val_indices(dataset: TileDataset, *, seed: int) -> list[int]:
+    hints = dataset.positive_hints
+    if hints is None:
+        raise TilePreparationError("Val balanced cache требует positive/negative hints.")
+    positive_indices = [index for index, positive in enumerate(hints) if positive]
+    negative_indices = [index for index, positive in enumerate(hints) if not positive]
+    if not positive_indices or not negative_indices:
+        raise TilePreparationError(
+            "Val balanced cache требует и positive, и negative tiles "
+            f"после tile_split: positive={len(positive_indices)}, negative={len(negative_indices)}."
+        )
+
+    rng = random.Random(seed)
+    rng.shuffle(positive_indices)
+    rng.shuffle(negative_indices)
+    group_size = min(len(positive_indices), len(negative_indices))
+    balanced_indices: list[int] = []
+    for positive_index, negative_index in zip(
+        positive_indices[:group_size],
+        negative_indices[:group_size],
+    ):
+        balanced_indices.append(positive_index)
+        balanced_indices.append(negative_index)
+    return balanced_indices
+
+
+def _ensure_val_cache_fits_memory(dataset: TileDataset, *, tile_count: int) -> None:
+    required_bytes = _estimate_val_cache_bytes(dataset, tile_count=tile_count)
+    available_bytes = _available_memory_bytes()
+    if available_bytes is None:
+        return
+    allowed_bytes = int(available_bytes * VAL_CACHE_AVAILABLE_MEMORY_FRACTION)
+    if required_bytes > allowed_bytes:
+        raise TilePreparationError(
+            "Val tile cache не помещается в RAM: "
+            f"требуется около {_format_bytes(required_bytes)}, "
+            f"доступный безопасный лимит {_format_bytes(allowed_bytes)}."
+        )
+
+
+def _estimate_val_cache_bytes(dataset: TileDataset, *, tile_count: int) -> int:
+    tile_pixels = dataset.tile_size * dataset.tile_size
+    image_bytes = tile_count * dataset.channel_count * tile_pixels * np.dtype(np.float32).itemsize
+    mask_dtype = np.dtype(np.int64) if dataset.uses_multiclass_masks else np.dtype(np.float32)
+    mask_bytes = tile_count * tile_pixels * mask_dtype.itemsize
+    return int((image_bytes + mask_bytes) * VAL_CACHE_ESTIMATE_OVERHEAD)
+
+
+def _available_memory_bytes() -> int | None:
+    if os.name == "nt":
+        return _windows_available_memory_bytes()
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        available_pages = os.sysconf("SC_AVPHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+    return int(page_size * available_pages)
+
+
+def _windows_available_memory_bytes() -> int | None:
+    try:
+        import ctypes
+    except ImportError:
+        return None
+
+    class _MemoryStatus(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    status = _MemoryStatus()
+    status.dwLength = ctypes.sizeof(_MemoryStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    return int(status.ullAvailPhys)
+
+
+def _format_bytes(value: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    amount = float(value)
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TiB"
 
 
 def _effective_prefetch_factor(

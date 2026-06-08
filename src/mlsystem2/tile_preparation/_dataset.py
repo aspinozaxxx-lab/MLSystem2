@@ -131,6 +131,24 @@ class TileDataset:
         )
 
     @property
+    def channel_count(self) -> int:
+        return self._count
+
+    @property
+    def tile_size(self) -> int:
+        return self._tile_size
+
+    @property
+    def positive_hints(self) -> list[bool] | None:
+        if self._positive_hint_by_index is None:
+            return None
+        return list(self._positive_hint_by_index)
+
+    @property
+    def uses_multiclass_masks(self) -> bool:
+        return bool(self._class_annotations)
+
+    @property
     def source_rect_count(self) -> int:
         return self._source_rect_count
 

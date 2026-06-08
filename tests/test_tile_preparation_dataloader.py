@@ -50,17 +50,18 @@ def test_create_tile_dataloader_reports_missing_torch(monkeypatch: pytest.Monkey
 def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "image.tif"
-    _write_raster(raster_path)
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
-    _write_annotation(annotation_file)
-    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=4))
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
             vrt_xml=vrt_xml,
             annotation_file=annotation_file,
-            batch_size=4,
+            batch_size=2,
             mode="val",
         )
     )
@@ -69,15 +70,15 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     assert isinstance(batch, tuple)
     assert len(batch) == 3
     images, masks, batch_meta = batch
-    assert images.shape == (4, 3, 4, 4)
-    assert masks.shape == (4, 1, 4, 4)
+    assert images.shape == (2, 1, 4, 4)
+    assert masks.shape == (2, 1, 4, 4)
     assert batch_meta["augmented_tile_count"] == 0
     assert batch_meta["class_positive_tile_counts"] == {}
     assert batch_meta["class_pixel_counts"] == {}
-    assert batch_meta["tile_augmented"] == [False, False, False, False]
-    assert len(batch_meta["tile_positive"]) == 4
+    assert batch_meta["tile_augmented"] == [False, False]
+    assert len(batch_meta["tile_positive"]) == 2
     assert batch_meta["positive_tile_count"] == sum(batch_meta["tile_positive"])
-    assert 0 < batch_meta["positive_tile_count"] <= 4
+    assert batch_meta["positive_tile_count"] == 1
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
@@ -107,7 +108,7 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
             vrt_xml=vrt_xml,
             annotation_file=annotation_file,
             batch_size=1,
-            mode="val",
+            mode="train",
         )
     )
 
@@ -240,7 +241,7 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
                 ),
             ],
             batch_size=1,
-            mode="val",
+            mode="train",
         )
     )
 
@@ -288,7 +289,7 @@ def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path
                 ),
             ],
             batch_size=1,
-            mode="val",
+            mode="train",
         )
     )
 
@@ -309,31 +310,29 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=4, input_channels=1))
 
-    loader = create_tile_dataloader(
-        TileDataloaderRequest(
-            vrt_xml=vrt_xml,
-            annotation_file=annotation_file,
-            batch_size=4,
-            mode="val",
-        )
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
     )
 
-    images, masks, batch_meta = next(iter(loader))
-    edge_tile = images[1, 0]
-    assert images.shape == (4, 1, 4, 4)
-    assert masks.shape == (4, 1, 4, 4)
-    assert batch_meta == {
-        "augmented_tile_count": 0,
-        "positive_tile_count": 0,
-        "class_positive_tile_counts": {},
-        "class_pixel_counts": {},
-        "tile_augmented": [False, False, False, False],
-        "tile_positive": [False, False, False, False],
-    }
-    assert torch.equal(edge_tile[:, 0], torch.as_tensor(data[0, 0:4, 4].astype(np.float32)))
-    assert torch.all(edge_tile[:, 1:] == -1.0)
+    image, mask, sample_meta = dataset[1]
+    edge_tile = image[0]
+    assert len(dataset) == 4
+    assert image.shape == (1, 4, 4)
+    assert mask.shape == (1, 4, 4)
+    assert sample_meta == {"augmented": False, "positive": False}
+    assert torch.equal(
+        torch.as_tensor(edge_tile[:, 0]),
+        torch.as_tensor(data[0, 0:4, 4].astype(np.float32)),
+    )
+    assert torch.all(torch.as_tensor(edge_tile[:, 1:]) == -1.0)
 
-    loader.dataset.close()
+    dataset.close()
 
 
 def test_create_tile_dataloader_filters_fully_nodata_tiles(tmp_path: Path) -> None:
@@ -342,26 +341,25 @@ def test_create_tile_dataloader_filters_fully_nodata_tiles(tmp_path: Path) -> No
     data = np.zeros((1, 4, 4), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
-    annotation_file = tmp_path / "empty.geojson"
-    _write_empty_annotation(annotation_file)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
 
-    loader = create_tile_dataloader(
-        TileDataloaderRequest(
-            vrt_xml=vrt_xml,
-            annotation_file=annotation_file,
-            batch_size=1,
-            mode="val",
-        )
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
     )
 
-    assert len(loader.dataset) == 0
-    assert loader.dataset.candidate_window_count_before_valid_filter == 1
-    assert loader.dataset.black_filtered_window_count == 1
-    with pytest.raises(StopIteration):
-        next(iter(loader))
+    assert len(dataset) == 0
+    assert dataset.candidate_window_count_before_valid_filter == 1
+    assert dataset.black_filtered_window_count == 1
 
-    loader.dataset.close()
+    dataset.close()
 
 
 def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
@@ -377,28 +375,28 @@ def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=64, stride=64, batch_size=2, input_channels=1))
 
-    loader = create_tile_dataloader(
-        TileDataloaderRequest(
-            vrt_xml=vrt_xml,
-            annotation_file=annotation_file,
-            batch_size=2,
-            mode="val",
-        )
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=64,
+        stride=64,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
     )
 
-    assert len(loader.dataset) == 1
-    assert loader.dataset.candidate_window_count_before_valid_filter == 2
-    assert loader.dataset.candidate_window_count == 1
-    assert loader.dataset.black_filtered_window_count == 1
-    assert loader.dataset.valid_footprint_stride == 64
-    images, masks, batch_meta = next(iter(loader))
-    assert images.shape == (1, 1, 64, 64)
-    assert torch.all(images == 1000.0)
-    assert torch.all(masks == 0.0)
-    assert batch_meta["tile_augmented"] == [False]
-    assert batch_meta["tile_positive"] == [False]
+    assert len(dataset) == 1
+    assert dataset.candidate_window_count_before_valid_filter == 2
+    assert dataset.candidate_window_count == 1
+    assert dataset.black_filtered_window_count == 1
+    assert dataset.valid_footprint_stride == 64
+    image, mask, sample_meta = dataset[0]
+    assert image.shape == (1, 64, 64)
+    assert torch.all(torch.as_tensor(image) == 1000.0)
+    assert torch.all(torch.as_tensor(mask) == 0.0)
+    assert sample_meta == {"augmented": False, "positive": False}
 
-    loader.dataset.close()
+    dataset.close()
 
 
 def test_large_vrt_valid_filter_skips_full_footprint_read(
@@ -424,22 +422,23 @@ def test_large_vrt_valid_filter_skips_full_footprint_read(
 
     monkeypatch.setattr(valid_footprint, "_read_valid_footprint", fail_full_footprint)
 
-    loader = create_tile_dataloader(
-        TileDataloaderRequest(
-            vrt_xml=vrt_xml,
-            annotation_file=annotation_file,
-            batch_size=2,
-            mode="val",
-        )
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=64,
+        stride=64,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
     )
 
-    assert len(loader.dataset) == 1
-    assert loader.dataset.candidate_window_count_before_valid_filter == 2
-    assert loader.dataset.candidate_window_count == 1
-    images, _masks, _batch_meta = next(iter(loader))
-    assert torch.all(images == 1000.0)
+    assert len(dataset) == 1
+    assert dataset.candidate_window_count_before_valid_filter == 2
+    assert dataset.candidate_window_count == 1
+    image, _mask, _sample_meta = dataset[0]
+    assert torch.all(torch.as_tensor(image) == 1000.0)
 
-    loader.dataset.close()
+    dataset.close()
 
 
 def test_tile_dataset_does_not_read_windows_during_initialization(
@@ -487,8 +486,8 @@ def test_create_tile_dataloader_is_fast_on_synthetic_data(tmp_path: Path) -> Non
     data = np.ones((1, 16, 16), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
-    annotation_file = tmp_path / "empty.geojson"
-    _write_empty_annotation(annotation_file)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
 
     started = perf_counter()
@@ -503,6 +502,8 @@ def test_create_tile_dataloader_is_fast_on_synthetic_data(tmp_path: Path) -> Non
 
     assert perf_counter() - started < 2.0
     assert len(loader.dataset) == 16
+    assert loader.cache_mode == "memory"
+    assert loader.cached_tiles == 2
     loader.dataset.close()
 
 
@@ -589,7 +590,7 @@ def test_train_augmentation_applies_only_to_positive_tiles(tmp_path: Path) -> No
     dataset.close()
 
 
-def test_weighted_sampler_is_used_for_train_and_val(tmp_path: Path) -> None:
+def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "smart_sampler.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
@@ -625,7 +626,10 @@ def test_weighted_sampler_is_used_for_train_and_val(tmp_path: Path) -> None:
     )
 
     assert isinstance(train_loader.sampler, torch.utils.data.WeightedRandomSampler)
-    assert isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
+    assert val_loader.sampler is None
+    assert val_loader.cache_mode == "memory"
+    assert val_loader.cached_tiles == 2
+    assert val_loader.cached_batches == 2
     assert train_loader.dataset.estimated_positive_tiles == 1
     assert train_loader.dataset.estimated_negative_tiles == 1
     assert val_loader.dataset.estimated_positive_tiles == 1
@@ -635,9 +639,9 @@ def test_weighted_sampler_is_used_for_train_and_val(tmp_path: Path) -> None:
     val_loader.dataset.close()
 
 
-def test_val_weighted_sampler_uses_val_positive_factor(tmp_path: Path) -> None:
+def test_val_cached_loader_returns_same_batches_on_each_iteration(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
-    raster_path = tmp_path / "smart_val_sampler.tif"
+    raster_path = tmp_path / "cached_val_stable.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
@@ -648,11 +652,64 @@ def test_val_weighted_sampler_uses_val_positive_factor(tmp_path: Path) -> None:
             tmp_path,
             tile_size=4,
             stride=4,
-            batch_size=1,
+            batch_size=2,
             input_channels=1,
             val_positive_factor=0.5,
         )
     )
+
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+        )
+    )
+
+    first_batches = list(val_loader)
+    second_batches = list(val_loader)
+
+    assert len(first_batches) == len(second_batches) == 1
+    first_images, first_masks, first_meta = first_batches[0]
+    second_images, second_masks, second_meta = second_batches[0]
+    assert torch.equal(first_images, second_images)
+    assert torch.equal(first_masks, second_masks)
+    assert first_meta == second_meta
+    assert first_meta["positive_tile_count"] == 1
+    val_loader.dataset.close()
+
+
+def test_val_cached_loader_reads_tiles_only_during_cache_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "cached_val_reads.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    read_calls = 0
+    mask_calls = 0
+    original_read = TileDataset._read_image_raw
+    original_mask = TileDataset._read_annotation_mask
+
+    def counted_read(self, dataset, window):
+        nonlocal read_calls
+        read_calls += 1
+        return original_read(self, dataset, window)
+
+    def counted_mask(self, dataset, window, nodata_pixels):
+        nonlocal mask_calls
+        mask_calls += 1
+        return original_mask(self, dataset, window, nodata_pixels)
+
+    monkeypatch.setattr(TileDataset, "_read_image_raw", counted_read)
+    monkeypatch.setattr(TileDataset, "_read_annotation_mask", counted_mask)
 
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
@@ -663,10 +720,70 @@ def test_val_weighted_sampler_uses_val_positive_factor(tmp_path: Path) -> None:
         )
     )
 
-    assert isinstance(val_loader.sampler, torch.utils.data.WeightedRandomSampler)
-    assert val_loader.dataset.estimated_positive_tiles == 1
-    assert val_loader.dataset.estimated_negative_tiles == 1
+    assert val_loader.cached_tiles == 2
+    assert read_calls == 2
+    assert mask_calls == 2
+    list(val_loader)
+    list(val_loader)
+    assert read_calls == 2
+    assert mask_calls == 2
     val_loader.dataset.close()
+
+
+def test_val_cached_loader_uses_min_group_without_replacement(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "cached_val_imbalance.tif"
+    data = np.full((1, 4, 52), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [11.5, 2.5], [11.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
+
+    val_loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+        )
+    )
+
+    assert val_loader.dataset.estimated_positive_tiles == 3
+    assert val_loader.dataset.estimated_negative_tiles == 10
+    assert val_loader.cached_tiles == 6
+    positive_tiles = 0
+    total_tiles = 0
+    for _images, _masks, batch_meta in val_loader:
+        positive_tiles += batch_meta["positive_tile_count"]
+        total_tiles += len(batch_meta["tile_positive"])
+    assert positive_tiles == 3
+    assert total_tiles == 6
+    val_loader.dataset.close()
+
+
+def test_val_cached_loader_requires_positive_and_negative_tiles(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "cached_val_empty_positive.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    with pytest.raises(TilePreparationError, match="positive=0"):
+        create_tile_dataloader(
+            TileDataloaderRequest(
+                vrt_xml=vrt_xml,
+                annotation_file=annotation_file,
+                batch_size=1,
+                mode="val",
+            )
+        )
 
 
 def test_tile_split_divides_common_pool_without_overlap(tmp_path: Path) -> None:
@@ -756,20 +873,21 @@ def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> No
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
 
-    val_loader = create_tile_dataloader(
-        TileDataloaderRequest(
-            vrt_xml=vrt_xml,
-            annotation_file=annotation_file,
-            batch_size=1,
-            mode="val",
-            tile_split=TileSplitRequest(val_fraction=0.5, seed=42),
-        )
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+        tile_split=TileSplitRequest(val_fraction=0.5, seed=42),
     )
 
-    assert len(val_loader.dataset) == 0
-    assert any("positive windows меньше 2" in item for item in val_loader.dataset.tile_split_warnings)
-    assert any("subset val пуст" in item for item in val_loader.dataset.tile_split_warnings)
-    val_loader.dataset.close()
+    assert len(dataset) == 0
+    assert any("positive windows меньше 2" in item for item in dataset.tile_split_warnings)
+    assert any("subset val пуст" in item for item in dataset.tile_split_warnings)
+    dataset.close()
 
 
 def test_sampling_weights_follow_positive_factor() -> None:
