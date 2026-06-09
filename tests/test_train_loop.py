@@ -43,6 +43,7 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
                 early_stopping_patience=1,
             ),
             checkpoint_dir=str(tmp_path / "checkpoints"),
+            sample_size=16,
         )
     )
 
@@ -53,6 +54,8 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert result.history[0].train_loss >= 0.0
     assert result.history[0].val_loss >= 0.0
     assert 0.0 <= result.history[0].val_best_threshold_pixel_f1 <= 1.0
+    checkpoint = torch.load(result.best_checkpoint_path, map_location="cpu")
+    assert checkpoint["metadata"]["sample_size"] == 16
 
 
 def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:

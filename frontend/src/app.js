@@ -314,12 +314,6 @@ function renderModelExportPage() {
           <label>Checkpoint .pt
             <input name="checkpoint" type="file" accept=".pt" required>
           </label>
-          <label>sample_size
-            <input name="sample_size" type="number" min="32" step="32" value="768" required>
-          </label>
-          <label>threshold
-            <input name="threshold" type="number" min="0" max="1" step="0.01" placeholder="из checkpoint metadata">
-          </label>
         </div>
       </section>
       <div class="inline-row">
@@ -338,33 +332,23 @@ async function submitModelExportForm(event) {
   const status = document.getElementById("model-export-status");
   const data = new FormData(form);
   const modelName = String(data.get("model_name") || "").trim();
-  const sampleSize = Number.parseInt(String(data.get("sample_size") || ""), 10);
-  const thresholdRaw = String(data.get("threshold") || "").trim();
   const checkpoint = data.get("checkpoint");
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(modelName)) {
     showModal("Ошибка", "Имя модели должно содержать только a-z, 0-9 и дефис.", "Понятно");
-    return;
-  }
-  if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) {
-    showModal("Ошибка", "sample_size должен быть положительным числом, кратным 32.", "Понятно");
     return;
   }
   if (!(checkpoint instanceof File) || !checkpoint.name || !checkpoint.name.toLowerCase().endsWith(".pt")) {
     showModal("Ошибка", "Выберите MLSystem2 checkpoint .pt.", "Понятно");
     return;
   }
-  if (thresholdRaw) {
-    const threshold = Number.parseFloat(thresholdRaw);
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-      showModal("Ошибка", "threshold должен быть числом от 0 до 1.", "Понятно");
-      return;
-    }
-  }
+  await exportModelArchive(modelName, checkpoint, null, button, status);
+}
+
+async function exportModelArchive(modelName, checkpoint, sampleSize, button, status) {
   const request = new FormData();
   request.set("model_name", modelName);
   request.set("checkpoint", checkpoint);
-  request.set("sample_size", String(sampleSize));
-  if (thresholdRaw) request.set("threshold", thresholdRaw);
+  if (sampleSize !== null && sampleSize !== undefined) request.set("sample_size", String(sampleSize));
 
   button.disabled = true;
   status.textContent = "Идет экспорт...";
@@ -382,6 +366,11 @@ async function submitModelExportForm(event) {
     }
     if (!response.ok) {
       const message = await errorMessage(response);
+      if (message.includes("metadata.sample_size")) {
+        status.textContent = "Нужен sample_size.";
+        showModelExportSampleSizeModal(modelName, checkpoint, button, status);
+        return;
+      }
       showModal("Ошибка", message, "Понятно");
       throw new Error(message);
     }
@@ -391,6 +380,39 @@ async function submitModelExportForm(event) {
   } finally {
     button.disabled = false;
   }
+}
+
+function showModelExportSampleSizeModal(modelName, checkpoint, button, status) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Укажите sample_size</h2>
+        <p>В checkpoint нет metadata.sample_size. Это старый checkpoint, поэтому размер тайла надо задать вручную.</p>
+        <form id="model-export-sample-size-form" class="form-stack">
+          <label>sample_size
+            <input name="sample_size" type="number" min="32" step="32" value="768" required>
+          </label>
+          <div class="inline-row">
+            <button class="primary" type="submit">Продолжить экспорт</button>
+            <button class="secondary" type="button" id="modal-close">Отмена</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("model-export-sample-size-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const sampleSize = Number.parseInt(String(data.get("sample_size") || ""), 10);
+    if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) {
+      showModal("Ошибка", "sample_size должен быть положительным числом, кратным 32.", "Понятно");
+      return;
+    }
+    closeModal();
+    await exportModelArchive(modelName, checkpoint, sampleSize, button, status);
+  });
 }
 
 async function submitStartForm(event) {

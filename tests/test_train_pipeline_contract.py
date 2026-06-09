@@ -65,6 +65,17 @@ def test_train_pipeline_sets_mlflow_dataset_from_multiclass_annotation_stems() -
     assert request.dataset == "class_a+class_b"
 
 
+def test_train_request_uses_tile_size_as_sample_size() -> None:
+    settings = _settings(initial_checkpoint_uri=None)
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=1),
+        model=object(),
+    )
+    train_request = _runner._train_request(settings, model, object(), object())
+
+    assert train_request.sample_size == settings.tile_preparation.tile_size
+
+
 def test_train_pipeline_uses_load_checkpoint_branch() -> None:
     calls: list[str] = []
     model = ModelHandle(

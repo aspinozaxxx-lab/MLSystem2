@@ -16,7 +16,7 @@
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
-- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`.
+- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`, `sample_size`.
 - `TrainResult` - поля `history`, `epochs_total`, `training_time_sec`, `best_checkpoint_path`, `final_checkpoint_path`, `artifacts`.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -35,7 +35,7 @@ Binary loss поддерживает `bce_dice`, `focal_dice`, `focal_tversky`. 
 
 Multiclass режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`. Logits имеют форму `[B,num_classes,H,W]`, mask - `[B,H,W] long`. `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. Validation не формирует multiclass/per-class метрики. Для совместимого выбора checkpoint она считает foreground F1 по признаку `class_id > 0` и записывает его в универсальные поля `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall` с `val_best_threshold=0.0`.
 
-Best checkpoint и early stopping используют `val_best_threshold_pixel_f1`. Metadata checkpoint сохраняет `val_best_threshold`, `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall`, `val_loss`, `train_loss` и `train_config`.
+Best checkpoint и early stopping используют `val_best_threshold_pixel_f1`. Metadata checkpoint сохраняет `val_best_threshold`, `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall`, `val_loss`, `train_loss`, `sample_size` и `train_config`.
 
 `max_train_batches_per_epoch` и `max_val_batches_per_epoch` ограничивают число batch в эпохе только для smoke/debug запусков. `max_training_time_sec` проверяется после каждой эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
 

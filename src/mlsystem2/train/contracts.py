@@ -85,6 +85,7 @@ class TrainRequest(BaseModel):
     val_loader: object
     config: TrainConfig
     checkpoint_dir: str
+    sample_size: int | None = Field(default=None, gt=0)
 
 
 class TrainResult(BaseModel):

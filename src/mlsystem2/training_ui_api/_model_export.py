@@ -17,7 +17,6 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 from .contracts import TrainingUIAPIError
 
 MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
-DEFAULT_THRESHOLD = 0.5
 ONNX_OPSET = 18
 
 
@@ -38,25 +37,23 @@ def build_triton_model_export_zip(
     model_name: str,
     checkpoint_filename: str,
     checkpoint_bytes: bytes,
-    sample_size: int,
-    threshold: float | None,
+    sample_size: int | None,
 ) -> ModelExportArchive:
     """Собрать zip модели для загрузчика models-serving-service."""
 
     parsed_model_name = _validate_model_name(model_name)
     _validate_checkpoint_filename(checkpoint_filename)
-    parsed_sample_size = _validate_sample_size(sample_size)
-    parsed_threshold = _validate_optional_threshold(threshold)
+    request_sample_size = _validate_optional_sample_size(sample_size)
 
     temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-model-export-"))
     try:
         checkpoint_path = temp_root / "checkpoint.pt"
         checkpoint_path.write_bytes(checkpoint_bytes)
         loaded = _load_binary_checkpoint(checkpoint_path)
-        effective_threshold = (
-            parsed_threshold
-            if parsed_threshold is not None
-            else _threshold_from_metadata(loaded.artifact.metadata)
+        effective_threshold = _threshold_from_metadata(loaded.artifact.metadata)
+        parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
+            loaded.artifact.metadata,
+            request_sample_size,
         )
         input_channels = int(loaded.model.spec.input_channels)
 
@@ -96,8 +93,9 @@ def build_triton_model_export_zip(
                 "triton_instance_kind": "KIND_CPU",
                 "input_channels": input_channels,
                 "sample_size": parsed_sample_size,
+                "sample_size_source": sample_size_source,
                 "threshold": effective_threshold,
-                "threshold_source": "request" if parsed_threshold is not None else "checkpoint_metadata",
+                "threshold_source": "checkpoint_metadata",
                 "onnx_opset": ONNX_OPSET,
                 "checkpoint_filename": checkpoint_filename,
                 "checkpoint_metadata": loaded.artifact.metadata,
@@ -131,26 +129,20 @@ def _validate_checkpoint_filename(value: str) -> None:
         raise TrainingUIAPIError("Нужен checkpoint MLSystem2 в формате .pt.")
 
 
-def _validate_sample_size(value: int) -> int:
+def _validate_sample_size(value: int, *, field_name: str = "sample_size") -> int:
     try:
         sample_size = int(value)
     except (TypeError, ValueError) as exc:
-        raise TrainingUIAPIError("sample_size должен быть целым числом.") from exc
+        raise TrainingUIAPIError(f"{field_name} должен быть целым числом.") from exc
     if sample_size <= 0 or sample_size % 32 != 0:
-        raise TrainingUIAPIError("sample_size должен быть положительным числом, кратным 32.")
+        raise TrainingUIAPIError(f"{field_name} должен быть положительным числом, кратным 32.")
     return sample_size
 
 
-def _validate_optional_threshold(value: float | None) -> float | None:
+def _validate_optional_sample_size(value: int | None) -> int | None:
     if value is None:
         return None
-    try:
-        threshold = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TrainingUIAPIError("threshold должен быть числом от 0 до 1.") from exc
-    if threshold < 0.0 or threshold > 1.0:
-        raise TrainingUIAPIError("threshold должен быть числом от 0 до 1.")
-    return threshold
+    return _validate_sample_size(value)
 
 
 def _load_binary_checkpoint(checkpoint_path: Path) -> Any:
@@ -171,7 +163,12 @@ def _load_binary_checkpoint(checkpoint_path: Path) -> Any:
 
 
 def _threshold_from_metadata(metadata: dict[str, object]) -> float:
-    raw_threshold = metadata.get("val_best_threshold", DEFAULT_THRESHOLD)
+    if "val_best_threshold" not in metadata:
+        raise TrainingUIAPIError(
+            "Checkpoint не содержит metadata.val_best_threshold. "
+            "Автоматический экспорт невозможен: выберите checkpoint, сохраненный после validation с best threshold."
+        )
+    raw_threshold = metadata["val_best_threshold"]
     try:
         threshold = float(raw_threshold)
     except (TypeError, ValueError) as exc:
@@ -179,6 +176,17 @@ def _threshold_from_metadata(metadata: dict[str, object]) -> float:
     if threshold < 0.0 or threshold > 1.0:
         raise TrainingUIAPIError("metadata.val_best_threshold должен быть числом от 0 до 1.")
     return threshold
+
+
+def _sample_size_from_metadata_or_request(metadata: dict[str, object], request_sample_size: int | None) -> tuple[int, str]:
+    raw_sample_size = metadata.get("sample_size")
+    if raw_sample_size is not None:
+        return _validate_sample_size(raw_sample_size, field_name="metadata.sample_size"), "checkpoint_metadata"
+    if request_sample_size is not None:
+        return request_sample_size, "request"
+    raise TrainingUIAPIError(
+        "Checkpoint не содержит metadata.sample_size. Для старого checkpoint задайте sample_size вручную."
+    )
 
 
 def _export_binary_mask_onnx(

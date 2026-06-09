@@ -57,9 +57,9 @@ process и помечает известный MLflow run как `KILLED`; по�
 Шаблоны обучения в `training_ui_api` бывают базовыми для сети и привязанными к конкретному варианту
 датасета. При создании job сервис сначала ищет шаблон `(architecture, dataset_key)`, затем использует
 базовый `(architecture, null)`, поэтому frontend не дублирует эту бизнес-логику.
-Страница экспорта модели в `training_ui_api` принимает локальный MLSystem2 checkpoint `.pt`, собирает
-временный zip-архив для `models-serving-service` и Triton CPU, отдает его пользователю и не пишет данные в
-Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
+Страница экспорта модели в `training_ui_api` принимает локальный MLSystem2 checkpoint `.pt`, берет threshold и
+sample_size из metadata checkpoint, собирает временный zip-архив для `models-serving-service` и Triton CPU,
+отдает его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
 
 Каноническое место хранения результатов работы — MLflow. Локальные директории используются только
 как временная рабочая область: в них могут лежать временные файлы, кэши, журналы и промежуточные
@@ -74,7 +74,7 @@ Postgres, MLflow, S3 или рабочий каталог сервиса инф�
    завершает конвейер с ошибкой.
 5. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для train и val. Оба loader получают общий VRT и одинаковый `tile_split`, а `tile_preparation` детерминированно делит список окон на непересекающиеся train/val subsets. Train loader читает raster и rasterize лениво в `Dataset.__getitem__`, использует weighted sampling по positive/negative hints и применяет `tile_preparation.prefetch_epochs` как расчетный PyTorch `prefetch_factor`; если задан `train.max_train_batches_per_epoch`, расчет prefetch использует ограниченную длину train-эпохи. Val loader выбирает фиксированный balanced subset без replacement, positive и negative берет поровну по меньшей группе, один раз собирает CPU batch tensors в RAM cache и переиспользует их на каждой эпохе; к val `prefetch_epochs` не применяется. Image tensors уже соответствуют Geoalert ABI: raw `float32`, `C,H,W` на sample и `B,C,H,W` в batch. В binary режиме mask имеет `torch.float32 [B,1,H,W]`, в multiclass режиме mask имеет `torch.long [B,H,W]`, где `0` - background, `1..N` - class id по порядку `dataset.classes`.
 6. `train_pipeline` создает поддерживаемую segmentation-модель (`segformer_b0`, `segformer_b2`, диагностический SMP-совместимый `smp_segformer_b0`/`smp_segformer_b2`/`smp_segformer_b3` или `smp_deeplabv3plus_resnet50`) через `models.create_model` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Для multiclass `train.output_channels` должен быть равен `len(dataset.classes) + 1`.
-7. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy, validation metrics, early stopping и best/final checkpoints.
+7. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy, validation metrics, early stopping и best/final checkpoints. Checkpoint metadata содержит validation threshold и `sample_size`, необходимый для экспорта в Triton.
 8. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.
 9. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет tile preparation, отчет времени и итоговый
    отчет.

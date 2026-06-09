@@ -279,6 +279,7 @@ def _run_case(
                 val_loader=eval_loader,
                 config=train_config,
                 checkpoint_dir=str(report_dir / "overfit_checkpoints" / case_name),
+                sample_size=settings.tile_preparation.tile_size,
             )
         )
         final = result.history[-1]

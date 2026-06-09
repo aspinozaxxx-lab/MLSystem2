@@ -57,7 +57,7 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
                 spec=SimpleNamespace(input_channels=4, output_channels=1),
                 model=object(),
             ),
-            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73}),
+            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73, "sample_size": 768}),
         )
 
     def fake_export_onnx(**kwargs: object) -> None:
@@ -76,8 +76,7 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         model_name="deforestation-b2",
         checkpoint_filename="best.pt",
         checkpoint_bytes=b"checkpoint",
-        sample_size=768,
-        threshold=None,
+        sample_size=None,
     )
     try:
         extract_dir = tmp_path / "extract"
@@ -110,14 +109,16 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         metadata = json.loads((extract_dir / "export_metadata.json").read_text(encoding="utf-8"))
         assert metadata["threshold"] == 0.73
         assert metadata["threshold_source"] == "checkpoint_metadata"
+        assert metadata["sample_size"] == 768
+        assert metadata["sample_size_source"] == "checkpoint_metadata"
         assert metadata["model_archive"] == "models-serving-service/deforestation-b2.zip"
         assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
     finally:
         archive.cleanup()
 
 
-def test_model_export_manual_threshold_overrides_metadata(monkeypatch) -> None:
-    captured_thresholds: list[float] = []
+def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch) -> None:
+    captured: list[tuple[float, int]] = []
 
     def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
         return SimpleNamespace(
@@ -129,7 +130,7 @@ def test_model_export_manual_threshold_overrides_metadata(monkeypatch) -> None:
         )
 
     def fake_export_onnx(**kwargs: object) -> None:
-        captured_thresholds.append(kwargs["threshold"])
+        captured.append((kwargs["threshold"], kwargs["sample_size"]))
         onnx_path = kwargs["onnx_path"]
         assert isinstance(onnx_path, Path)
         onnx_path.write_bytes(b"onnx")
@@ -142,16 +143,59 @@ def test_model_export_manual_threshold_overrides_metadata(monkeypatch) -> None:
         checkpoint_filename="best.pt",
         checkpoint_bytes=b"checkpoint",
         sample_size=768,
-        threshold=0.41,
     )
     try:
-        assert captured_thresholds == [0.41]
+        assert captured == [(0.73, 768)]
         with zipfile.ZipFile(archive.zip_path) as zip_file:
             metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
-        assert metadata["threshold"] == 0.41
-        assert metadata["threshold_source"] == "request"
+        assert metadata["threshold"] == 0.73
+        assert metadata["threshold_source"] == "checkpoint_metadata"
+        assert metadata["sample_size"] == 768
+        assert metadata["sample_size_source"] == "request"
     finally:
         archive.cleanup()
+
+
+def test_model_export_requires_threshold_metadata(monkeypatch) -> None:
+    def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            model=SimpleNamespace(
+                spec=SimpleNamespace(input_channels=4, output_channels=1),
+                model=object(),
+            ),
+            artifact=SimpleNamespace(metadata={"sample_size": 768}),
+        )
+
+    monkeypatch.setattr(_model_export, "_load_binary_checkpoint", fake_load_binary_checkpoint)
+
+    with pytest.raises(TrainingUIAPIError, match="metadata.val_best_threshold"):
+        _model_export.build_triton_model_export_zip(
+            model_name="erosion-b2",
+            checkpoint_filename="best.pt",
+            checkpoint_bytes=b"checkpoint",
+            sample_size=None,
+        )
+
+
+def test_model_export_requires_sample_size_metadata_or_request(monkeypatch) -> None:
+    def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            model=SimpleNamespace(
+                spec=SimpleNamespace(input_channels=4, output_channels=1),
+                model=object(),
+            ),
+            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73}),
+        )
+
+    monkeypatch.setattr(_model_export, "_load_binary_checkpoint", fake_load_binary_checkpoint)
+
+    with pytest.raises(TrainingUIAPIError, match="metadata.sample_size"):
+        _model_export.build_triton_model_export_zip(
+            model_name="erosion-b2",
+            checkpoint_filename="best.pt",
+            checkpoint_bytes=b"checkpoint",
+            sample_size=None,
+        )
 
 
 def test_model_export_rejects_invalid_model_name() -> None:
@@ -161,7 +205,6 @@ def test_model_export_rejects_invalid_model_name() -> None:
             checkpoint_filename="best.pt",
             checkpoint_bytes=b"checkpoint",
             sample_size=768,
-            threshold=None,
         )
 
 
@@ -189,8 +232,7 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
         assert kwargs["model_name"] == "deforestation-b2"
         assert kwargs["checkpoint_filename"] == "best.pt"
         assert kwargs["checkpoint_bytes"] == b"checkpoint"
-        assert kwargs["sample_size"] == 768
-        assert kwargs["threshold"] is None
+        assert kwargs["sample_size"] is None
         zip_path = tmp_path / "deforestation-b2.zip"
         with zipfile.ZipFile(zip_path, "w") as zip_file:
             zip_file.writestr("deforestation-b2/config.pbtxt", "name")
@@ -208,7 +250,7 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
         assert login.status_code == 200
         response = client.post(
             "/api/v1/model-export/triton-zip",
-            data={"model_name": "deforestation-b2", "sample_size": "768"},
+            data={"model_name": "deforestation-b2"},
             files={"checkpoint": ("best.pt", b"checkpoint", "application/octet-stream")},
         )
     assert response.status_code == 200
@@ -221,6 +263,8 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert 'route[0] === "model-export"' in app_js
     assert 'href="#/model-export">Экспорт модели</a>' in app_js
     assert "/model-export/triton-zip" in app_js
+    assert 'name="threshold"' not in app_js
+    assert "metadata.sample_size" in app_js
     assert 'downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`)' in app_js
 
 

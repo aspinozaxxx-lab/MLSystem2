@@ -517,6 +517,7 @@ def _save_training_checkpoint(
                 "val_best_threshold_recall": metrics.val_best_threshold_recall,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
+                "sample_size": request.sample_size,
                 "train_config": request.config.model_dump(mode="json"),
             },
         )

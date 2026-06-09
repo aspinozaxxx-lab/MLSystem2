@@ -220,8 +220,7 @@ def create_app() -> FastAPI:
     async def post_model_export_triton_zip(
         _: str = Depends(authenticated),
         model_name: str = Form(default=""),
-        sample_size: int = Form(default=768),
-        threshold: float | None = Form(default=None),
+        sample_size: int | None = Form(default=None),
         checkpoint: UploadFile | None = File(default=None),
     ) -> FileResponse:
         if checkpoint is None:
@@ -231,7 +230,6 @@ def create_app() -> FastAPI:
             checkpoint_filename=checkpoint.filename or "",
             checkpoint_bytes=await checkpoint.read(),
             sample_size=sample_size,
-            threshold=threshold,
         )
         return FileResponse(
             archive.zip_path,

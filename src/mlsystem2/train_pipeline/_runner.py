@@ -609,6 +609,7 @@ def _train_request(
             class_slugs=[item.slug for item in settings.dataset.classes],
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
+        sample_size=settings.tile_preparation.tile_size,
     )
 
 
