@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import BigInteger
 from sqlalchemy import select
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment
@@ -37,6 +38,12 @@ def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 0}) is False
     assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
+
+
+def test_stored_file_size_uses_bigint() -> None:
+    from mlsystem2.training_ui_api._models import StoredFileRow
+
+    assert isinstance(StoredFileRow.__table__.columns["size_bytes"].type, BigInteger)
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -876,6 +883,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         completed_pseudo = session.get(JobRow, pseudo_job.id)
         assert completed_pseudo is not None
         assert completed_pseudo.status == JobStatus.COMPLETED.value
+        assert not (pseudo_run_dir / "scratch").exists()
         refreshed_results = _service.class_results(session, "Вырубки\\main", config)
         pseudo_results = refreshed_results.results[0].pseudo_markup_results
         assert pseudo_results[0].status == ResultStatus.OK

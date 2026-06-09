@@ -572,6 +572,7 @@ def _finish_inference_job(
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
     session.flush()
+    _cleanup_inference_scratch(row)
     LOGGER.info(
         "Finished pseudo-markup job %s with status %s report=%s",
         row.id,
@@ -622,7 +623,14 @@ def _store_generated_geojson(
     target_dir = config.stored_files_root / StoredFileKind.PSEUDO_MARKUP_GEOJSON.value
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{file_id}.geojson"
-    shutil.copy2(source_path, target_path)
+    tmp_path = target_dir / f".{file_id}.geojson.tmp"
+    try:
+        shutil.copy2(source_path, tmp_path)
+        tmp_path.replace(target_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        target_path.unlink(missing_ok=True)
+        raise
     row = StoredFileRow(
         id=file_id,
         kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
@@ -632,8 +640,18 @@ def _store_generated_geojson(
         size_bytes=target_path.stat().st_size,
     )
     session.add(row)
-    session.flush()
+    try:
+        session.flush()
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        raise
     return row
+
+
+def _cleanup_inference_scratch(row: JobRow) -> None:
+    if row.tmp_path is None:
+        return
+    shutil.rmtree(Path(row.tmp_path) / "scratch", ignore_errors=True)
 
 
 def _pseudo_geojson_download_name(
