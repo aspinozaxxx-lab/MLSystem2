@@ -34,6 +34,7 @@ async function render() {
   if (route[0] === "queue") return renderQueuePage();
   if (route[0] === "templates") return renderTemplatesPage();
   if (route[0] === "automation") return renderAutomationPage();
+  if (route[0] === "model-export") return renderModelExportPage();
   if (route[0] === "results" && route[1]) return renderClassResultPage(decodeURIComponent(route[1]));
   if (route[0] === "results") return renderResultsPage();
   if (route[0] === "jobs" && route[1]) return renderJobPage(route[1]);
@@ -96,6 +97,7 @@ function renderShell(content) {
         <a href="#/queue">В процессе</a>
         <a href="#/templates">Шаблоны обучения</a>
         <a href="#/automation">Автоматизация</a>
+        <a href="#/model-export">Экспорт модели</a>
         <a href="#/results">Результаты</a>
         <button class="link-button" id="logout-button" type="button">Выйти</button>
       </nav>
@@ -188,6 +190,7 @@ function renderHomePage() {
       ${homeTrainingCard("В процессе", "Очереди обучения и инференса.", "#/queue")}
       ${homeTrainingCard("Шаблоны обучения", "Defaults по архитектурам.", "#/templates")}
       ${homeTrainingCard("Автоматизация", "Автозапуск обучения и псевдоразметки по версиям датасетов.", "#/automation")}
+      ${homeTrainingCard("Экспорт модели", "Архив для регистрации модели в Triton CPU service.", "#/model-export")}
       ${homeTrainingCard("Результаты", "Классы, метрики и псевдоразметка.", "#/results")}
     </section>
   `);
@@ -288,6 +291,106 @@ async function renderStartPage() {
     await renderStartPage();
   });
   document.getElementById("start-form").addEventListener("submit", submitStartForm);
+}
+
+function renderModelExportPage() {
+  renderShell(`
+    <section class="hero compact-hero">
+      <h1>Экспорт модели</h1>
+      <p>Сборка zip-архива для models-serving-service и Triton CPU</p>
+    </section>
+    <form id="model-export-form" class="form-stack">
+      <section class="panel">
+        <div class="form-grid">
+          <label>Имя модели
+            <input
+              name="model_name"
+              required
+              pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+              placeholder="deforestation-b2"
+              autocomplete="off"
+            >
+          </label>
+          <label>Checkpoint .pt
+            <input name="checkpoint" type="file" accept=".pt" required>
+          </label>
+          <label>sample_size
+            <input name="sample_size" type="number" min="32" step="32" value="768" required>
+          </label>
+          <label>threshold
+            <input name="threshold" type="number" min="0" max="1" step="0.01" placeholder="из checkpoint metadata">
+          </label>
+        </div>
+      </section>
+      <div class="inline-row">
+        <button class="primary" type="submit" id="model-export-submit">Собрать zip</button>
+        <span class="info-box hidden" id="model-export-status"></span>
+      </div>
+    </form>
+  `);
+  document.getElementById("model-export-form").addEventListener("submit", submitModelExportForm);
+}
+
+async function submitModelExportForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = document.getElementById("model-export-submit");
+  const status = document.getElementById("model-export-status");
+  const data = new FormData(form);
+  const modelName = String(data.get("model_name") || "").trim();
+  const sampleSize = Number.parseInt(String(data.get("sample_size") || ""), 10);
+  const thresholdRaw = String(data.get("threshold") || "").trim();
+  const checkpoint = data.get("checkpoint");
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(modelName)) {
+    showModal("Ошибка", "Имя модели должно содержать только a-z, 0-9 и дефис.", "Понятно");
+    return;
+  }
+  if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) {
+    showModal("Ошибка", "sample_size должен быть положительным числом, кратным 32.", "Понятно");
+    return;
+  }
+  if (!(checkpoint instanceof File) || !checkpoint.name || !checkpoint.name.toLowerCase().endsWith(".pt")) {
+    showModal("Ошибка", "Выберите MLSystem2 checkpoint .pt.", "Понятно");
+    return;
+  }
+  if (thresholdRaw) {
+    const threshold = Number.parseFloat(thresholdRaw);
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      showModal("Ошибка", "threshold должен быть числом от 0 до 1.", "Понятно");
+      return;
+    }
+  }
+  const request = new FormData();
+  request.set("model_name", modelName);
+  request.set("checkpoint", checkpoint);
+  request.set("sample_size", String(sampleSize));
+  if (thresholdRaw) request.set("threshold", thresholdRaw);
+
+  button.disabled = true;
+  status.textContent = "Идет экспорт...";
+  status.classList.remove("hidden");
+  try {
+    const response = await fetch(`${API}/model-export/triton-zip`, {
+      method: "POST",
+      credentials: "same-origin",
+      body: request,
+    });
+    if (response.status === 401) {
+      state.user = null;
+      renderLogin();
+      throw new Error("auth");
+    }
+    if (!response.ok) {
+      const message = await errorMessage(response);
+      showModal("Ошибка", message, "Понятно");
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, `${modelName}.zip`);
+    status.textContent = "Архив скачан.";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function submitStartForm(event) {
@@ -1246,6 +1349,17 @@ async function apiForm(path, form) {
     throw new Error(message);
   }
   return response.json();
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function errorMessage(response) {

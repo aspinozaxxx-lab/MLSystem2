@@ -8,7 +8,6 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,11 +15,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from ._auth import current_user, login_response, logout_response, require_user, verify_credentials
 from ._config import get_config
 from ._database import Base, configure_schema, create_session_factory, session_scope
 from ._models import StoredFileRow
+from ._model_export import build_triton_model_export_zip
 from ._service import (
     apply_training_template_field_to_all,
     app_links,
@@ -193,9 +194,9 @@ def create_app() -> FastAPI:
     async def post_custom_dataset(
         db: Session = Depends(get_db),
         _: str = Depends(authenticated),
-        name: Annotated[str, Form()] = "Custom",
-        scenes_txt: Annotated[UploadFile | None, File()] = None,
-        annotation_geojson: Annotated[UploadFile | None, File()] = None,
+        name: str = Form(default="Custom"),
+        scenes_txt: UploadFile | None = File(default=None),
+        annotation_geojson: UploadFile | None = File(default=None),
     ) -> CustomDatasetInfo:
         if scenes_txt is None or annotation_geojson is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нужны txt и geojson")
@@ -214,6 +215,30 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/models", response_model=ModelListResponse)
     def get_models(_: str = Depends(authenticated)) -> ModelListResponse:
         return models()
+
+    @app.post("/api/v1/model-export/triton-zip")
+    async def post_model_export_triton_zip(
+        _: str = Depends(authenticated),
+        model_name: str = Form(default=""),
+        sample_size: int = Form(default=768),
+        threshold: float | None = Form(default=None),
+        checkpoint: UploadFile | None = File(default=None),
+    ) -> FileResponse:
+        if checkpoint is None:
+            raise TrainingUIAPIError("Нужен checkpoint MLSystem2 в формате .pt.")
+        archive = build_triton_model_export_zip(
+            model_name=model_name,
+            checkpoint_filename=checkpoint.filename or "",
+            checkpoint_bytes=await checkpoint.read(),
+            sample_size=sample_size,
+            threshold=threshold,
+        )
+        return FileResponse(
+            archive.zip_path,
+            filename=archive.filename,
+            media_type="application/zip",
+            background=BackgroundTask(archive.cleanup),
+        )
 
     @app.get("/api/v1/automation", response_model=AutomationSnapshot)
     def get_automation(
@@ -383,9 +408,9 @@ def create_app() -> FastAPI:
         class_key: str,
         db: Session = Depends(get_db),
         _: str = Depends(authenticated),
-        dataset_key: Annotated[str | None, Form()] = None,
-        training_result_id: Annotated[str | None, Form()] = None,
-        scenes_txt: Annotated[UploadFile | None, File()] = None,
+        dataset_key: str | None = Form(default=None),
+        training_result_id: str | None = Form(default=None),
+        scenes_txt: UploadFile | None = File(default=None),
     ) -> JobDetail:
         parsed_training_result_id = uuid.UUID(training_result_id) if training_result_id else None
         scenes_name = scenes_txt.filename if scenes_txt is not None and scenes_txt.filename else None

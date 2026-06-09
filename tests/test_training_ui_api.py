@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -12,7 +14,8 @@ from sqlalchemy import BigInteger
 from sqlalchemy import select
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment
-from mlsystem2.training_ui_api import _automation, _service, _worker
+from mlsystem2.models.contracts import ModelsError
+from mlsystem2.training_ui_api import _app, _automation, _model_export, _service, _worker
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
@@ -46,6 +49,169 @@ def test_stored_file_size_uses_bigint() -> None:
     assert isinstance(StoredFileRow.__table__.columns["size_bytes"].type, BigInteger)
 
 
+def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch) -> None:
+    def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
+        assert path.name == "checkpoint.pt"
+        return SimpleNamespace(
+            model=SimpleNamespace(
+                spec=SimpleNamespace(input_channels=4, output_channels=1),
+                model=object(),
+            ),
+            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73}),
+        )
+
+    def fake_export_onnx(**kwargs: object) -> None:
+        assert kwargs["input_channels"] == 4
+        assert kwargs["sample_size"] == 768
+        assert kwargs["threshold"] == 0.73
+        onnx_path = kwargs["onnx_path"]
+        assert isinstance(onnx_path, Path)
+        onnx_path.write_bytes(b"onnx")
+        (onnx_path.parent / "model.onnx.data").write_bytes(b"weights")
+
+    monkeypatch.setattr(_model_export, "_load_binary_checkpoint", fake_load_binary_checkpoint)
+    monkeypatch.setattr(_model_export, "_export_binary_mask_onnx", fake_export_onnx)
+
+    archive = _model_export.build_triton_model_export_zip(
+        model_name="deforestation-b2",
+        checkpoint_filename="best.pt",
+        checkpoint_bytes=b"checkpoint",
+        sample_size=768,
+        threshold=None,
+    )
+    try:
+        extract_dir = tmp_path / "extract"
+        with zipfile.ZipFile(archive.zip_path) as zip_file:
+            names = set(zip_file.namelist())
+            zip_file.extractall(extract_dir)
+        assert "deforestation-b2/config.pbtxt" in names
+        assert "deforestation-b2/1/model.onnx" in names
+        assert "deforestation-b2/1/model.onnx.data" in names
+        assert "deforestation-b2/export_metadata.json" in names
+        assert "pipelines/deforestation-b2_triton.yaml" in names
+        assert (extract_dir / "deforestation-b2").exists()
+        config = (extract_dir / "deforestation-b2" / "config.pbtxt").read_text(encoding="utf-8")
+        assert 'name: "deforestation-b2"' in config
+        assert "KIND_CPU" in config
+        assert "KIND_GPU" not in config
+        pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(encoding="utf-8")
+        assert 'name: "deforestation-b2"' in pipeline
+        assert "sample_size:\n        - 768\n        - 768" in pipeline
+        metadata = json.loads((extract_dir / "deforestation-b2" / "export_metadata.json").read_text(encoding="utf-8"))
+        assert metadata["threshold"] == 0.73
+        assert metadata["threshold_source"] == "checkpoint_metadata"
+    finally:
+        archive.cleanup()
+
+
+def test_model_export_manual_threshold_overrides_metadata(monkeypatch) -> None:
+    captured_thresholds: list[float] = []
+
+    def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            model=SimpleNamespace(
+                spec=SimpleNamespace(input_channels=4, output_channels=1),
+                model=object(),
+            ),
+            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73}),
+        )
+
+    def fake_export_onnx(**kwargs: object) -> None:
+        captured_thresholds.append(kwargs["threshold"])
+        onnx_path = kwargs["onnx_path"]
+        assert isinstance(onnx_path, Path)
+        onnx_path.write_bytes(b"onnx")
+
+    monkeypatch.setattr(_model_export, "_load_binary_checkpoint", fake_load_binary_checkpoint)
+    monkeypatch.setattr(_model_export, "_export_binary_mask_onnx", fake_export_onnx)
+
+    archive = _model_export.build_triton_model_export_zip(
+        model_name="erosion-b2",
+        checkpoint_filename="best.pt",
+        checkpoint_bytes=b"checkpoint",
+        sample_size=768,
+        threshold=0.41,
+    )
+    try:
+        assert captured_thresholds == [0.41]
+        with zipfile.ZipFile(archive.zip_path) as zip_file:
+            metadata = json.loads(zip_file.read("erosion-b2/export_metadata.json").decode("utf-8"))
+        assert metadata["threshold"] == 0.41
+        assert metadata["threshold_source"] == "request"
+    finally:
+        archive.cleanup()
+
+
+def test_model_export_rejects_invalid_model_name() -> None:
+    with pytest.raises(TrainingUIAPIError, match="Имя модели"):
+        _model_export.build_triton_model_export_zip(
+            model_name="Вырубки_b2",
+            checkpoint_filename="best.pt",
+            checkpoint_bytes=b"checkpoint",
+            sample_size=768,
+            threshold=None,
+        )
+
+
+def test_model_export_checkpoint_without_model_spec_is_reported(monkeypatch) -> None:
+    from mlsystem2.models import api as models_api
+
+    def fake_load_checkpoint(request) -> None:
+        raise ModelsError("Checkpoint не содержит model_spec, а request.model_spec не задан.")
+
+    monkeypatch.setattr(models_api, "load_checkpoint", fake_load_checkpoint)
+
+    with pytest.raises(TrainingUIAPIError, match="Checkpoint не содержит model_spec"):
+        _model_export._load_binary_checkpoint(Path("checkpoint.pt"))
+
+
+def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER", "mluser")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_PASSWORD", "secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    def fake_build_zip(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["model_name"] == "deforestation-b2"
+        assert kwargs["checkpoint_filename"] == "best.pt"
+        assert kwargs["checkpoint_bytes"] == b"checkpoint"
+        assert kwargs["sample_size"] == 768
+        assert kwargs["threshold"] is None
+        zip_path = tmp_path / "deforestation-b2.zip"
+        with zipfile.ZipFile(zip_path, "w") as zip_file:
+            zip_file.writestr("deforestation-b2/config.pbtxt", "name")
+        return SimpleNamespace(
+            zip_path=zip_path,
+            filename="deforestation-b2.zip",
+            cleanup=lambda: None,
+        )
+
+    monkeypatch.setattr(_app, "build_triton_model_export_zip", fake_build_zip)
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/v1/model-export/triton-zip").status_code == 401
+        login = client.post("/api/v1/auth/login", json={"username": "mluser", "password": "secret"})
+        assert login.status_code == 200
+        response = client.post(
+            "/api/v1/model-export/triton-zip",
+            data={"model_name": "deforestation-b2", "sample_size": "768"},
+            files={"checkpoint": ("best.pt", b"checkpoint", "application/octet-stream")},
+        )
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].endswith('filename="deforestation-b2.zip"')
+    assert response.content.startswith(b"PK")
+
+
+def test_training_ui_frontend_has_model_export_page() -> None:
+    app_js = Path("frontend/src/app.js").read_text(encoding="utf-8")
+    assert 'route[0] === "model-export"' in app_js
+    assert 'href="#/model-export">Экспорт модели</a>' in app_js
+    assert "/model-export/triton-zip" in app_js
+    assert 'downloadBlob(blob, `${modelName}.zip`)' in app_js
+
+
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
@@ -73,7 +239,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert client.get("/").text.startswith("<!doctype html>")
         app_js = client.get("/app.js")
         assert app_js.text == "console.log('MLSystem2')"
-        assert app_js.headers["content-type"].startswith("text/javascript")
+        assert app_js.headers["content-type"].split(";")[0] in {"text/javascript", "application/javascript"}
         assert client.get("/assets/app.css").text == "body{margin:0}"
         unauthorized = client.get("/api/v1/datasets")
         assert unauthorized.status_code == 401
