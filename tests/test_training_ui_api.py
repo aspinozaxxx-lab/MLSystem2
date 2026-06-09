@@ -84,22 +84,34 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         with zipfile.ZipFile(archive.zip_path) as zip_file:
             names = set(zip_file.namelist())
             zip_file.extractall(extract_dir)
-        assert "deforestation-b2/config.pbtxt" in names
-        assert "deforestation-b2/1/model.onnx" in names
-        assert "deforestation-b2/1/model.onnx.data" in names
-        assert "deforestation-b2/export_metadata.json" in names
+        assert "export_metadata.json" in names
         assert "pipelines/deforestation-b2_triton.yaml" in names
-        assert (extract_dir / "deforestation-b2").exists()
-        config = (extract_dir / "deforestation-b2" / "config.pbtxt").read_text(encoding="utf-8")
+        assert "models-serving-service/deforestation-b2.zip" in names
+        assert "deforestation-b2/config.pbtxt" not in names
+        assert "deforestation-b2/export_metadata.json" not in names
+        service_zip_path = extract_dir / "models-serving-service" / "deforestation-b2.zip"
+        service_extract_dir = tmp_path / "service"
+        with zipfile.ZipFile(service_zip_path) as service_zip:
+            service_names = set(service_zip.namelist())
+            service_zip.extractall(service_extract_dir)
+        assert service_names == {
+            "deforestation-b2/config.pbtxt",
+            "deforestation-b2/1/model.onnx",
+            "deforestation-b2/1/model.onnx.data",
+        }
+        assert (service_extract_dir / "deforestation-b2").exists()
+        config = (service_extract_dir / "deforestation-b2" / "config.pbtxt").read_text(encoding="utf-8")
         assert 'name: "deforestation-b2"' in config
         assert "KIND_CPU" in config
         assert "KIND_GPU" not in config
         pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(encoding="utf-8")
         assert 'name: "deforestation-b2"' in pipeline
         assert "sample_size:\n        - 768\n        - 768" in pipeline
-        metadata = json.loads((extract_dir / "deforestation-b2" / "export_metadata.json").read_text(encoding="utf-8"))
+        metadata = json.loads((extract_dir / "export_metadata.json").read_text(encoding="utf-8"))
         assert metadata["threshold"] == 0.73
         assert metadata["threshold_source"] == "checkpoint_metadata"
+        assert metadata["model_archive"] == "models-serving-service/deforestation-b2.zip"
+        assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
     finally:
         archive.cleanup()
 
@@ -135,7 +147,7 @@ def test_model_export_manual_threshold_overrides_metadata(monkeypatch) -> None:
     try:
         assert captured_thresholds == [0.41]
         with zipfile.ZipFile(archive.zip_path) as zip_file:
-            metadata = json.loads(zip_file.read("erosion-b2/export_metadata.json").decode("utf-8"))
+            metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
         assert metadata["threshold"] == 0.41
         assert metadata["threshold_source"] == "request"
     finally:
@@ -184,7 +196,7 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
             zip_file.writestr("deforestation-b2/config.pbtxt", "name")
         return SimpleNamespace(
             zip_path=zip_path,
-            filename="deforestation-b2.zip",
+            filename="deforestation-b2_export.zip",
             cleanup=lambda: None,
         )
 
@@ -200,7 +212,7 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
             files={"checkpoint": ("best.pt", b"checkpoint", "application/octet-stream")},
         )
     assert response.status_code == 200
-    assert response.headers["content-disposition"].endswith('filename="deforestation-b2.zip"')
+    assert response.headers["content-disposition"].endswith('filename="deforestation-b2_export.zip"')
     assert response.content.startswith(b"PK")
 
 
@@ -209,7 +221,7 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert 'route[0] === "model-export"' in app_js
     assert 'href="#/model-export">Экспорт модели</a>' in app_js
     assert "/model-export/triton-zip" in app_js
-    assert 'downloadBlob(blob, `${modelName}.zip`)' in app_js
+    assert 'downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`)' in app_js
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:

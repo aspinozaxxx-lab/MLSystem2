@@ -386,7 +386,7 @@ async function submitModelExportForm(event) {
       throw new Error(message);
     }
     const blob = await response.blob();
-    downloadBlob(blob, `${modelName}.zip`);
+    downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`);
     status.textContent = "Архив скачан.";
   } finally {
     button.disabled = false;
@@ -1360,6 +1360,20 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadFilename(response) {
+  const header = response.headers.get("content-disposition") || "";
+  const utfMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+  const match = header.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : "";
 }
 
 async function errorMessage(response) {

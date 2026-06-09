@@ -61,6 +61,9 @@ auto jobs: queued rows уходят из очередей, running process по�
 Страница `Экспорт модели` отправляет `.pt` checkpoint, имя модели, `sample_size` и optional threshold в
 `POST /api/v1/model-export/triton-zip`. Backend загружает checkpoint через `models.api.load_checkpoint`,
 экспортирует binary segmentation модель в ONNX с uint8 mask output, создает `config.pbtxt` с
-`instance_group KIND_CPU` и кладет pipeline YAML в `pipelines/<model_name>_triton.yaml`. В корне zip всегда
-есть каталог `<model_name>`, поэтому после распаковки проходит проверка `models-serving-service` по наличию
-каталога модели. Threshold берется из `metadata.val_best_threshold`, если пользователь не передал явное значение.
+`instance_group KIND_CPU` и возвращает внешний архив `<model_name>_export.zip`. В корне внешнего архива лежит
+`export_metadata.json`, pipeline YAML лежит в `pipelines/<model_name>_triton.yaml`, а чистый архив для
+`models-serving-service` лежит в `models-serving-service/<model_name>.zip`. Внутренний архив содержит только
+каталог `<model_name>` с Triton model repository файлами, поэтому после распаковки проходит проверка
+`models-serving-service` по наличию каталога модели и туда не попадают pipeline или metadata. Threshold берется
+из `metadata.val_best_threshold`, если пользователь не передал явное значение.

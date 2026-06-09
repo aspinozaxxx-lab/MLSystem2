@@ -61,11 +61,14 @@ def build_triton_model_export_zip(
         input_channels = int(loaded.model.spec.input_channels)
 
         export_root = temp_root / "export"
-        model_dir = export_root / parsed_model_name
+        service_root = temp_root / "models-serving-service"
+        model_dir = service_root / parsed_model_name
         version_dir = model_dir / "1"
         pipeline_dir = export_root / "pipelines"
+        service_zip_dir = export_root / "models-serving-service"
         version_dir.mkdir(parents=True)
         pipeline_dir.mkdir(parents=True)
+        service_zip_dir.mkdir(parents=True)
 
         onnx_path = version_dir / "model.onnx"
         _export_binary_mask_onnx(
@@ -80,10 +83,14 @@ def build_triton_model_export_zip(
             pipeline_dir / f"{parsed_model_name}_triton.yaml",
             _pipeline_yaml(parsed_model_name, parsed_sample_size),
         )
+        service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
+        _zip_directory(service_root, service_zip_path)
         _write_json(
-            model_dir / "export_metadata.json",
+            export_root / "export_metadata.json",
             {
                 "model_name": parsed_model_name,
+                "model_archive": f"models-serving-service/{parsed_model_name}.zip",
+                "pipeline": f"pipelines/{parsed_model_name}_triton.yaml",
                 "format": "onnx",
                 "triton_platform": "onnxruntime_onnx",
                 "triton_instance_kind": "KIND_CPU",
@@ -97,11 +104,11 @@ def build_triton_model_export_zip(
             },
         )
 
-        zip_path = temp_root / f"{parsed_model_name}.zip"
+        zip_path = temp_root / f"{parsed_model_name}_export.zip"
         _zip_directory(export_root, zip_path)
         return ModelExportArchive(
             zip_path=zip_path,
-            filename=f"{parsed_model_name}.zip",
+            filename=f"{parsed_model_name}_export.zip",
             cleanup_root=temp_root,
         )
     except Exception:
