@@ -5,6 +5,7 @@ from pathlib import Path
 from mlsystem2.mlflow_adapter.api import (
     download_run_artifact,
     get_best_training_checkpoint,
+    get_training_epoch_progress,
     log_dataset_artifacts,
     log_run_config,
     log_tile_preparation,
@@ -187,6 +188,37 @@ def test_get_best_training_checkpoint_uses_metric_history(monkeypatch) -> None:
     assert checkpoint.artifact_uri == "s3://mlflow-artifacts/45/run-1/artifacts/checkpoints/best.pt"
     assert calls["tracking_uri"] == "http://mlflow:5000"
     assert calls["run_id"] == "run-1"
+
+
+def test_get_training_epoch_progress_uses_epoch_time_history(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class Metric:
+        def __init__(self, step: int) -> None:
+            self.step = step
+
+    class Client:
+        def get_metric_history(self, run_id: str, metric_name: str):
+            calls["metric"] = (run_id, metric_name)
+            return [Metric(1), Metric(3), Metric(2)]
+
+    class MLflow:
+        class tracking:
+            @staticmethod
+            def MlflowClient():
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            calls["tracking_uri"] = uri
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    progress = get_training_epoch_progress("http://mlflow:5000", "run-1")
+
+    assert progress.completed_epochs == 3
+    assert calls["tracking_uri"] == "http://mlflow:5000"
+    assert calls["metric"] == ("run-1", "train/epoch_time_sec")
 
 
 def test_download_run_artifact_uses_mlflow_client(monkeypatch, tmp_path: Path) -> None:

@@ -261,6 +261,14 @@ class QueueControlInfo(BaseModel):
     updated_at: datetime
 
 
+class RuntimeProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current: int | None = None
+    total: int | None = None
+    elapsed_minutes: int | None = None
+
+
 class JobSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,6 +287,7 @@ class JobSummary(BaseModel):
     tile_size: int | None = None
     created_at: datetime
     started_at: datetime | None = None
+    progress: RuntimeProgress | None = None
     actions: list[str] = Field(default_factory=list)
 
 
@@ -315,6 +324,7 @@ class JobDetail(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    progress: RuntimeProgress | None = None
 
 
 class PseudoMarkupResultInfo(BaseModel):
@@ -329,6 +339,7 @@ class PseudoMarkupResultInfo(BaseModel):
     geojson_file: StoredFileInfo | None = None
     status: ResultStatus
     created_at: datetime
+    progress: RuntimeProgress | None = None
 
 
 class TrainingResultInfo(BaseModel):
@@ -345,6 +356,7 @@ class TrainingResultInfo(BaseModel):
     trained_at: datetime | None = None
     mlflow_run_url: str | None = None
     status: ResultStatus
+    progress: RuntimeProgress | None = None
     pseudo_markup_results: list[PseudoMarkupResultInfo] = Field(default_factory=list)
 
 
@@ -428,6 +440,7 @@ __all__ = [
     "QueueEnabledUpdate",
     "QueueSnapshot",
     "ResultStatus",
+    "RuntimeProgress",
     "StoredFileInfo",
     "StoredFileKind",
     "TemplateSource",

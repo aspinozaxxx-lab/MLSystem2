@@ -22,11 +22,13 @@ from .contracts import (
     MLflowRunRef,
     MLflowRunStatus,
     MLflowStartRunRequest,
+    MLflowTrainingProgress,
 )
 
 
 BEST_CHECKPOINT_METRIC = "val/best_threshold_pixel_f1"
 BEST_THRESHOLD_METRIC = "val/best_threshold"
+TRAIN_EPOCH_TIME_METRIC = "train/epoch_time_sec"
 BEST_CHECKPOINT_ARTIFACT_PATH = "checkpoints/best.pt"
 
 
@@ -98,6 +100,21 @@ def get_best_training_checkpoint(
         artifact_path=BEST_CHECKPOINT_ARTIFACT_PATH,
         artifact_uri=artifact_uri,
     )
+
+
+def get_training_epoch_progress(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowTrainingProgress:
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        history = client.get_metric_history(run_id, TRAIN_EPOCH_TIME_METRIC)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось прочитать прогресс training run из MLflow") from exc
+    completed_epochs = max((int(item.step) for item in history), default=0)
+    return MLflowTrainingProgress(completed_epochs=max(0, completed_epochs))
 
 
 def download_run_artifact(

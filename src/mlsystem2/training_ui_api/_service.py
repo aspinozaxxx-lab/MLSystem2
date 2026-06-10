@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from mlsystem2.mlflow_adapter.api import (
     create_experiment,
     get_best_training_checkpoint,
+    get_training_epoch_progress,
     list_experiments,
     mark_run_killed,
 )
@@ -72,6 +74,7 @@ from .contracts import (
     ResultStatus,
     ResultChangeInfo,
     ResultChangesResponse,
+    RuntimeProgress,
     StoredFileInfo,
     StoredFileKind,
     TemplateSource,
@@ -427,7 +430,7 @@ def create_training_job(
         )
     )
     session.flush()
-    return _job_detail(row)
+    return _job_detail(session, row)
 
 
 def queues(session: Session) -> QueueSnapshot:
@@ -472,7 +475,7 @@ def job_detail(session: Session, job_id: uuid.UUID) -> JobDetail:
     row = session.get(JobRow, job_id)
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
-    return _job_detail(row)
+    return _job_detail(session, row)
 
 
 def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
@@ -481,7 +484,7 @@ def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     if row.source == JobSource.AUTOMATION.value:
         raise TrainingUIAPIError("Автоматические задания отменяются только через форму автоматизации")
-    detail = _job_detail(row).model_copy(update={"status": JobStatus.CANCELLED})
+    detail = _job_detail(session, row).model_copy(update={"status": JobStatus.CANCELLED})
     mlflow_run_id = _job_mlflow_run_id(session, row)
     if row.status == JobStatus.RUNNING.value:
         _stop_process_and_cleanup(row)
@@ -504,14 +507,14 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
     queued = _queue_rows(session, manual_only=True, queued_only=True)
     index = next((i for i, item in enumerate(queued) if item.id == row.id), None)
     if index is None:
-        return _job_detail(row)
+        return _job_detail(session, row)
     target_index = index + direction
     if target_index < 0 or target_index >= len(queued):
-        return _job_detail(row)
+        return _job_detail(session, row)
     target = queued[target_index]
     row.queue_position, target.queue_position = target.queue_position, row.queue_position
     session.flush()
-    return _job_detail(row)
+    return _job_detail(session, row)
 
 
 def class_results(
@@ -667,7 +670,7 @@ def create_pseudo_markup_job(
         )
     )
     session.flush()
-    return _job_detail(row)
+    return _job_detail(session, row)
 
 
 def _resolve_training_result(
@@ -836,7 +839,7 @@ def _next_queue_position(
 
 def _queue_jobs(session: Session, queue_name: JobType | None = None) -> list[JobSummary]:
     rows = _queue_rows(session, job_type=queue_name)
-    return [_job_summary(row) for row in rows]
+    return [_job_summary(session, row) for row in rows]
 
 
 def _queue_rows(
@@ -940,7 +943,7 @@ def _job_mlflow_run_id(session: Session, row: JobRow) -> str | None:
         )
         .order_by(TrainingResultRow.updated_at.desc())
     )
-    return str(result_run_id) if result_run_id else None
+    return str(result_run_id) if result_run_id else _runtime_mlflow_run_id(row)
 
 
 def _mark_mlflow_run_killed(run_id: str) -> None:
@@ -993,7 +996,7 @@ def _stored_file_info(row: StoredFileRow | None) -> StoredFileInfo | None:
     )
 
 
-def _job_summary(row: JobRow) -> JobSummary:
+def _job_summary(session: Session, row: JobRow) -> JobSummary:
     return JobSummary(
         id=row.id,
         type=JobType(row.type),
@@ -1010,11 +1013,12 @@ def _job_summary(row: JobRow) -> JobSummary:
         tile_size=row.tile_size,
         created_at=row.created_at,
         started_at=row.started_at,
+        progress=_job_progress(session, row),
         actions=_job_actions(row),
     )
 
 
-def _job_detail(row: JobRow) -> JobDetail:
+def _job_detail(session: Session, row: JobRow) -> JobDetail:
     return JobDetail(
         id=row.id,
         type=JobType(row.type),
@@ -1035,6 +1039,7 @@ def _job_detail(row: JobRow) -> JobDetail:
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
+        progress=_job_progress(session, row),
     )
 
 
@@ -1056,11 +1061,12 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
         trained_at=row.trained_at,
         mlflow_run_url=row.mlflow_run_url,
         status=ResultStatus(row.status),
-        pseudo_markup_results=[_pseudo_markup_info(item) for item in pseudo_rows],
+        progress=_training_result_progress(session, row),
+        pseudo_markup_results=[_pseudo_markup_info(session, item) for item in pseudo_rows],
     )
 
 
-def _pseudo_markup_info(row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
+def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
     return PseudoMarkupResultInfo(
         id=row.id,
         source=JobSource(row.source),
@@ -1071,7 +1077,110 @@ def _pseudo_markup_info(row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
         geojson_file=_stored_file_info(row.geojson_file),
         status=ResultStatus(row.status),
         created_at=row.created_at,
+        progress=_pseudo_result_progress(session, row),
     )
+
+
+def _job_progress(session: Session, row: JobRow) -> RuntimeProgress | None:
+    if row.status != JobStatus.RUNNING.value:
+        return None
+    if row.type == JobType.TRAINING.value:
+        return _training_job_progress(session, row)
+    if row.type == JobType.INFERENCE.value:
+        return _pseudo_job_progress(row)
+    return None
+
+
+def _training_job_progress(session: Session, row: JobRow) -> RuntimeProgress:
+    run_id = _job_mlflow_run_id(session, row)
+    return RuntimeProgress(
+        current=_completed_training_epochs(run_id),
+        total=_int_or_none((row.config or {}).get("train.epochs")),
+        elapsed_minutes=_elapsed_minutes(row.started_at),
+    )
+
+
+def _training_result_progress(session: Session, row: TrainingResultRow) -> RuntimeProgress | None:
+    if row.status != ResultStatus.RUNNING.value:
+        return None
+    job = session.get(JobRow, row.job_id) if row.job_id is not None else None
+    run_id = row.mlflow_run_id or (_job_mlflow_run_id(session, job) if job is not None else None)
+    return RuntimeProgress(
+        current=_completed_training_epochs(run_id),
+        total=_int_or_none((job.config or {}).get("train.epochs")) if job is not None else None,
+        elapsed_minutes=_elapsed_minutes(job.started_at) if job is not None else None,
+    )
+
+
+def _completed_training_epochs(run_id: str | None) -> int:
+    if not run_id:
+        return 0
+    try:
+        progress = get_training_epoch_progress(get_config().mlflow_tracking_uri, run_id)
+    except Exception:
+        return 0
+    return max(0, int(progress.completed_epochs))
+
+
+def _pseudo_result_progress(session: Session, row: PseudoMarkupResultRow) -> RuntimeProgress | None:
+    if row.status != ResultStatus.RUNNING.value or row.job_id is None:
+        return None
+    job = session.get(JobRow, row.job_id)
+    if job is None:
+        return None
+    return _pseudo_job_progress(job)
+
+
+def _pseudo_job_progress(row: JobRow) -> RuntimeProgress | None:
+    payload = _pseudo_progress_payload(row)
+    if payload is None:
+        return None
+    current = _int_or_none(payload.get("current"))
+    total = _int_or_none(payload.get("total"))
+    if current is None and total is None:
+        return None
+    if current is not None and total is not None:
+        current = min(current, total)
+    return RuntimeProgress(
+        current=current,
+        total=total,
+        elapsed_minutes=_elapsed_minutes(row.started_at),
+    )
+
+
+def _pseudo_progress_payload(row: JobRow) -> dict[str, Any] | None:
+    if row.tmp_path is None:
+        return None
+    path = Path(row.tmp_path) / "scratch" / "progress.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _runtime_mlflow_run_id(row: JobRow) -> str | None:
+    if row.tmp_path is None:
+        return None
+    run_id_path = Path(row.tmp_path) / "mlflow_run_id"
+    if not run_id_path.is_file():
+        return None
+    try:
+        run_id = run_id_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return run_id or None
+
+
+def _elapsed_minutes(started_at: datetime | None) -> int | None:
+    if started_at is None:
+        return None
+    current = _now()
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return max(0, int((current - started_at).total_seconds() // 60))
 
 
 def _job_actions(row: JobRow) -> list[str]:

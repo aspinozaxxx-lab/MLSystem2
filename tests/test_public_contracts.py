@@ -14,6 +14,7 @@ EXPECTED_API = {
         "list_experiments",
         "create_experiment",
         "get_best_training_checkpoint",
+        "get_training_epoch_progress",
         "download_run_artifact",
         "start_run",
         "log_dataset_preparation",

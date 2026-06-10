@@ -80,6 +80,12 @@ class MLflowDownloadedArtifact(BaseModel):
     local_path: str
 
 
+class MLflowTrainingProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completed_epochs: int
+
+
 __all__ = [
     "MLflowAdapterError",
     "MLflowArtifactRef",
@@ -90,4 +96,5 @@ __all__ = [
     "MLflowRunRef",
     "MLflowRunStatus",
     "MLflowStartRunRequest",
+    "MLflowTrainingProgress",
 ]

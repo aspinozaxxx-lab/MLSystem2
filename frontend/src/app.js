@@ -1,5 +1,7 @@
 const API = "/api/v1";
 const root = document.getElementById("app");
+const PROGRESS_REFRESH_MS = 10000;
+let progressRefreshTimer = null;
 
 const state = {
   user: null,
@@ -14,7 +16,10 @@ const state = {
   modal: null,
 };
 
-window.addEventListener("hashchange", () => render());
+window.addEventListener("hashchange", () => {
+  clearProgressRefreshTimer();
+  render();
+});
 init();
 
 async function init() {
@@ -24,6 +29,7 @@ async function init() {
 }
 
 async function render() {
+  clearProgressRefreshTimer();
   if (!state.user) {
     renderLogin();
     return;
@@ -48,6 +54,22 @@ function currentRoute() {
 
 function navigate(path) {
   window.location.hash = path;
+}
+
+function clearProgressRefreshTimer() {
+  if (progressRefreshTimer !== null) {
+    window.clearTimeout(progressRefreshTimer);
+    progressRefreshTimer = null;
+  }
+}
+
+function scheduleProgressRefresh(callback, enabled) {
+  clearProgressRefreshTimer();
+  if (!enabled) return;
+  progressRefreshTimer = window.setTimeout(() => {
+    progressRefreshTimer = null;
+    callback();
+  }, PROGRESS_REFRESH_MS);
 }
 
 async function ensureSharedData() {
@@ -770,6 +792,7 @@ async function renderAutomationPage() {
 
 async function renderQueuePage() {
   const snapshot = await apiJson("/queues");
+  const jobs = snapshot.jobs || mergedQueueJobs(snapshot);
   renderShell(`
     <section class="hero compact-hero">
       <h1>В процессе</h1>
@@ -788,13 +811,14 @@ async function renderQueuePage() {
     </section>
     <section class="panel">
       <h2>Очередь заданий</h2>
-      ${renderJobQueue(snapshot.jobs || mergedQueueJobs(snapshot))}
+      ${renderJobQueue(jobs)}
     </section>
   `);
   document.getElementById("training-toggle").addEventListener("change", (event) => updateQueueEnabled("training", event.currentTarget.checked));
   document.getElementById("inference-toggle").addEventListener("change", (event) => updateQueueEnabled("inference", event.currentTarget.checked));
   document.getElementById("refresh-queues").addEventListener("click", renderQueuePage);
   bindQueueActions();
+  scheduleProgressRefresh(renderQueuePage, hasRunningJobs(jobs));
 }
 
 function mergedQueueJobs(snapshot) {
@@ -814,6 +838,17 @@ function queuePriority(job) {
   return 0;
 }
 
+function hasRunningJobs(jobs) {
+  return (jobs || []).some((job) => job.status === "running");
+}
+
+function hasRunningClassResults(payload) {
+  return (payload.results || []).some((result) => {
+    if (result.status === "running") return true;
+    return (result.pseudo_markup_results || []).some((item) => item.status === "running");
+  });
+}
+
 function renderJobQueue(jobs) {
   return renderTable(
     ["№", "Датасет", "Модель", "Действие", "Создано", "Начало", "Управление"],
@@ -826,7 +861,7 @@ function renderJobQueue(jobs) {
           <span class="result-status-badges">
             ${jobTypeBadge(job.type)}
             ${sourceBadge(job.source)}
-            ${statusBadge(job.status)}
+            ${statusBadge(job.status, job.type, job.progress)}
           </span>
         </td>
         <td>${formatDateTime(job.created_at)}</td>
@@ -1017,6 +1052,7 @@ async function renderClassResultPage(classKey) {
   for (const button of document.querySelectorAll(".pseudo-button")) {
     button.addEventListener("click", () => showPseudoModal(payload.class_key, button.dataset.result || ""));
   }
+  scheduleProgressRefresh(() => renderClassResultPage(classKey), hasRunningClassResults(payload));
 }
 
 function renderResultsTable(payload) {
@@ -1039,7 +1075,7 @@ function renderResultsTable(payload) {
         <td>${item.epoch ?? ""}</td>
         <td>${formatDate(item.trained_at)}</td>
         <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
-        <td>${resultStatusView(item.status, item.source)}</td>
+        <td>${resultStatusView(item.status, item.source, "training", item.progress)}</td>
         <td>
           <button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>
         </td>
@@ -1073,7 +1109,7 @@ function renderPseudoTable(result) {
     <tr>
       <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}"> ${escapeHtml(item.source_dataset_name)}</a>` : escapeHtml(item.source_dataset_name)}</td>
       <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">скачать geojson</a>` : ""}</td>
-      <td>${resultStatusView(item.status, item.source)}</td>
+      <td>${resultStatusView(item.status, item.source, "inference", item.progress)}</td>
       <td>${formatDateTime(item.created_at)}</td>
     </tr>
   `).join("");
@@ -1305,11 +1341,11 @@ function statusView(status) {
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
 }
 
-function resultStatusView(status, source) {
+function resultStatusView(status, source, type, progress) {
   return `
     <span class="result-status-badges">
       ${sourceBadge(source)}
-      ${statusBadge(status)}
+      ${statusBadge(status, type, progress)}
     </span>
   `;
 }
@@ -1319,13 +1355,32 @@ function sourceBadge(source) {
   return `<span class="badge manual">manual</span>`;
 }
 
-function statusBadge(status) {
-  if (status === "running") return `<span class="badge warning"><span class="spinner">↻</span> в процессе</span>`;
+function statusBadge(status, type, progress) {
+  if (status === "running") return `<span class="badge warning"><span class="spinner">↻</span> ${runningProgressLabel(type, progress)}</span>`;
   if (status === "ok") return `<span class="badge ok">✓ ОК</span>`;
   if (status === "error") return `<span class="badge error">× ошибка</span>`;
   if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
   if (status === "queued") return `<span class="badge neutral">в очереди</span>`;
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
+}
+
+function runningProgressLabel(type, progress) {
+  if (!progress) return "в процессе";
+  const current = integerOrNull(progress.current);
+  const total = integerOrNull(progress.total);
+  const elapsed = integerOrNull(progress.elapsed_minutes);
+  if (type === "inference" && current !== null && total !== null) {
+    return `${current}/${total}`;
+  }
+  if (type === "training" && current !== null) {
+    return elapsed !== null ? `${current} (${elapsed}м)` : `${current}`;
+  }
+  return "в процессе";
+}
+
+function integerOrNull(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
 }
 
 function automationRuleKey(datasetKey, architecture) {

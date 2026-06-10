@@ -49,6 +49,7 @@ class _SceneInput:
     image_path: Path
     scene_id: str
     request_scenes: tuple[str, ...]
+    request_scene_count: int
 
 
 _POSTPROCESS_NONE = _PostprocessProfile(level=1, name="none")
@@ -99,6 +100,17 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     image_index = _image_index(Path(config["images_root"]))
     scene_inputs, missing = _collect_scene_inputs(scenes, image_index)
     postprocess_profile = _select_postprocess_profile(len(scene_inputs))
+    progress_path = run_root / "progress.json"
+    all_features: list[dict[str, Any]] = []
+    scene_reports: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    _write_pseudo_progress(
+        progress_path,
+        total=len(scenes),
+        started=started,
+        scene_reports=scene_reports,
+        failures=failures,
+    )
     checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
     threshold = float(config.get("threshold") or 0.5)
     tile_size = int(config.get("tile_size") or 768)
@@ -115,6 +127,14 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         model.to(torch.device(device))
         model.eval()
     except Exception as exc:  # noqa: BLE001
+        failures = [{"stage": "load_checkpoint", "error": repr(exc)}]
+        _write_pseudo_progress(
+            progress_path,
+            total=len(scenes),
+            started=started,
+            scene_reports=scene_reports,
+            failures=failures,
+        )
         _write_feature_collection(output_geojson, [])
         return _summary(
             config,
@@ -123,17 +143,13 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             output_geojson=output_geojson,
             started=started,
             scene_reports=[],
-            failures=[{"stage": "load_checkpoint", "error": repr(exc)}],
+            failures=failures,
             missing=missing,
             feature_count=0,
             feature_count_before_merge=0,
             unique_image_count=len(scene_inputs),
             postprocess_profile=postprocess_profile,
         )
-
-    all_features: list[dict[str, Any]] = []
-    scene_reports: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
 
     for scene in missing:
         scene_reports.append(
@@ -144,6 +160,13 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 "feature_count": 0,
             }
         )
+    _write_pseudo_progress(
+        progress_path,
+        total=len(scenes),
+        started=started,
+        scene_reports=scene_reports,
+        failures=failures,
+    )
 
     for scene_input in scene_inputs:
         scene_started = time.time()
@@ -171,6 +194,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                     "scene_id": scene_input.scene_id,
                     "request_scene": scene_input.request_scenes[0],
                     "request_scenes": list(scene_input.request_scenes),
+                    "request_scene_count": scene_input.request_scene_count,
                     "number": len(scene_reports) + 1,
                     "status": "ok",
                     "image": str(scene_input.image_path),
@@ -191,6 +215,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                     "scene_id": scene_input.scene_id,
                     "request_scene": scene_input.request_scenes[0],
                     "request_scenes": list(scene_input.request_scenes),
+                    "request_scene_count": scene_input.request_scene_count,
                     "number": len(scene_reports) + 1,
                     "status": "failed",
                     "image": str(scene_input.image_path),
@@ -198,6 +223,13 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                     "error": repr(exc),
                 }
             )
+        _write_pseudo_progress(
+            progress_path,
+            total=len(scenes),
+            started=started,
+            scene_reports=scene_reports,
+            failures=failures,
+        )
 
     feature_count_before_merge = len(all_features)
     merged_features = _merge_overlapping_features(all_features)
@@ -443,7 +475,7 @@ def _collect_scene_inputs(
     scenes: list[str],
     image_index: dict[str, list[Path]],
 ) -> tuple[list[_SceneInput], list[str]]:
-    by_path: dict[Path, list[str]] = {}
+    by_path: dict[Path, dict[str, int]] = {}
     missing: list[str] = []
     for scene in scenes:
         image_paths = _find_images(scene, image_index)
@@ -451,17 +483,17 @@ def _collect_scene_inputs(
             missing.append(scene)
             continue
         for image_path in image_paths:
-            request_scenes = by_path.setdefault(image_path, [])
-            if scene not in request_scenes:
-                request_scenes.append(scene)
+            request_scene_counts = by_path.setdefault(image_path, {})
+            request_scene_counts[scene] = request_scene_counts.get(scene, 0) + 1
     return (
         [
             _SceneInput(
                 image_path=image_path,
                 scene_id=image_path.stem,
-                request_scenes=tuple(request_scenes),
+                request_scenes=tuple(request_scene_counts.keys()),
+                request_scene_count=sum(request_scene_counts.values()),
             )
-            for image_path, request_scenes in by_path.items()
+            for image_path, request_scene_counts in by_path.items()
         ],
         missing,
     )
@@ -794,6 +826,50 @@ def _write_feature_collection(path: Path, features: list[dict[str, Any]]) -> Non
         json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def _write_pseudo_progress(
+    path: Path,
+    *,
+    total: int,
+    started: float,
+    scene_reports: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+) -> None:
+    current = min(total, _completed_request_scene_count(scene_reports))
+    payload = {
+        "current": current,
+        "total": total,
+        "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),
+        "failed": len(failures),
+        "missing": sum(1 for item in scene_reports if item.get("status") == "missing_image"),
+        "elapsed_sec": round(time.time() - started, 3),
+    }
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _completed_request_scene_count(scene_reports: list[dict[str, Any]]) -> int:
+    total = 0
+    for report in scene_reports:
+        count = report.get("request_scene_count")
+        if count is not None:
+            try:
+                total += max(1, int(count))
+                continue
+            except (TypeError, ValueError):
+                pass
+        request_scenes = report.get("request_scenes")
+        if isinstance(request_scenes, list):
+            total += max(1, len(request_scenes))
+        else:
+            total += 1
+    return total
 
 
 def _summary(

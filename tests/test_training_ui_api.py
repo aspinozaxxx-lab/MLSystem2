@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import BigInteger
 from sqlalchemy import select
 
-from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment
+from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment, MLflowTrainingProgress
 from mlsystem2.models.contracts import ModelsError
 from mlsystem2.training_ui_api import _app, _automation, _model_export, _service, _worker
 from mlsystem2.training_ui_api.api import create_app
@@ -90,6 +90,173 @@ def test_training_ui_queue_snapshot_returns_unified_priority_order(
         (JobType.TRAINING, JobSource.MANUAL),
         (JobType.INFERENCE, JobSource.MANUAL),
     ]
+
+
+def test_training_ui_running_training_progress_is_returned_for_queue_and_class_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 6, 10, 17, 0, tzinfo=timezone.utc)
+    started_at = datetime(2026, 6, 10, 17, 24, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 10, 17, 40, tzinfo=timezone.utc)
+
+    def fake_epoch_progress(tracking_uri: str, run_id: str) -> MLflowTrainingProgress:
+        assert tracking_uri == config.mlflow_tracking_uri
+        assert run_id == "run-123"
+        return MLflowTrainingProgress(completed_epochs=23)
+
+    monkeypatch.setattr(_service, "_now", lambda: now)
+    monkeypatch.setattr(_service, "get_training_epoch_progress", fake_epoch_progress)
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        job.status = JobStatus.RUNNING.value
+        job.started_at = started_at
+        job.dataset_key = "class-key"
+        job.config = {"train.epochs": 64}
+        job.tmp_path = str(tmp_path / "run")
+        Path(job.tmp_path).mkdir(parents=True)
+        (Path(job.tmp_path) / "mlflow_run_id").write_text("run-123\n", encoding="utf-8")
+        session.add(job)
+        session.flush()
+        session.add(
+            TrainingResultRow(
+                source=JobSource.MANUAL.value,
+                dataset_key="class-key",
+                class_key="class-key",
+                class_display_name="class",
+                architecture="smp_segformer_b2",
+                model_name="segformer b2",
+                status=ResultStatus.RUNNING.value,
+                job_id=job.id,
+            )
+        )
+        session.flush()
+
+        queue_progress = _service.queues(session).jobs[0].progress
+        class_progress = _service.class_results(session, "class-key", config).results[0].progress
+
+    assert queue_progress is not None
+    assert queue_progress.current == 23
+    assert queue_progress.total == 64
+    assert queue_progress.elapsed_minutes == 16
+    assert class_progress is not None
+    assert class_progress.current == 23
+    assert class_progress.elapsed_minutes == 16
+
+
+def test_training_ui_running_training_progress_falls_back_without_mlflow_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    def failing_epoch_progress(tracking_uri: str, run_id: str) -> MLflowTrainingProgress:
+        del tracking_uri, run_id
+        raise RuntimeError("mlflow unavailable")
+
+    monkeypatch.setattr(_service, "get_training_epoch_progress", failing_epoch_progress)
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job.status = JobStatus.RUNNING.value
+        job.started_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
+        job.config = {"train.epochs": 8}
+        job.tmp_path = str(tmp_path / "run")
+        Path(job.tmp_path).mkdir(parents=True)
+        (Path(job.tmp_path) / "mlflow_run_id").write_text("run-err\n", encoding="utf-8")
+        session.add(job)
+        session.flush()
+
+        progress = _service.queues(session).jobs[0].progress
+
+    assert progress is not None
+    assert progress.current == 0
+    assert progress.total == 8
+
+
+def test_training_ui_pseudo_progress_is_returned_for_queue_and_class_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        training_result = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="class-key",
+            class_key="class-key",
+            class_display_name="class",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+        )
+        session.add(training_result)
+        session.flush()
+
+        job = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at)
+        job.status = JobStatus.RUNNING.value
+        job.started_at = created_at
+        job.dataset_key = "class-key"
+        job.tmp_path = str(tmp_path / "pseudo-run")
+        progress_dir = Path(job.tmp_path) / "scratch"
+        progress_dir.mkdir(parents=True)
+        (progress_dir / "progress.json").write_text(
+            json.dumps({"current": 13, "total": 64, "elapsed_sec": 17.5}),
+            encoding="utf-8",
+        )
+        session.add(job)
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                source=JobSource.MANUAL.value,
+                dataset_key="class-key",
+                training_result_id=training_result.id,
+                class_key="class-key",
+                source_dataset_name="source",
+                status=ResultStatus.RUNNING.value,
+                job_id=job.id,
+            )
+        )
+        session.flush()
+
+        queue_progress = _service.queues(session).jobs[0].progress
+        pseudo_progress = (
+            _service.class_results(session, "class-key", config)
+            .results[0]
+            .pseudo_markup_results[0]
+            .progress
+        )
+
+    assert queue_progress is not None
+    assert queue_progress.current == 13
+    assert queue_progress.total == 64
+    assert pseudo_progress is not None
+    assert pseudo_progress.current == 13
+    assert pseudo_progress.total == 64
 
 
 def test_training_ui_worker_dispatches_inference_before_training(

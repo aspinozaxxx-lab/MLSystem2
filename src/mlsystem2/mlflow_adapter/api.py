@@ -12,6 +12,7 @@ from ._client import end_run as _end_run
 from ._client import create_experiment as _create_experiment
 from ._client import download_run_artifact as _download_run_artifact
 from ._client import get_best_training_checkpoint as _get_best_training_checkpoint
+from ._client import get_training_epoch_progress as _get_training_epoch_progress
 from ._client import list_experiments as _list_experiments
 from ._client import log_dataset_artifacts as _log_dataset_artifacts
 from ._client import log_dataset_preparation as _log_dataset_preparation
@@ -32,6 +33,7 @@ from .contracts import (
     MLflowRunRef,
     MLflowRunStatus,
     MLflowStartRunRequest,
+    MLflowTrainingProgress,
 )
 
 
@@ -48,6 +50,13 @@ def get_best_training_checkpoint(
     run_id: str,
 ) -> MLflowBestCheckpoint | None:
     return _get_best_training_checkpoint(tracking_uri, run_id)
+
+
+def get_training_epoch_progress(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowTrainingProgress:
+    return _get_training_epoch_progress(tracking_uri, run_id)
 
 
 def download_run_artifact(
@@ -117,6 +126,7 @@ __all__ = [
     "list_experiments",
     "create_experiment",
     "get_best_training_checkpoint",
+    "get_training_epoch_progress",
     "download_run_artifact",
     "start_run",
     "log_dataset_preparation",

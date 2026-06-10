@@ -6,6 +6,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, shape
 
 from mlsystem2.training_ui_api._pseudo_runner import (
+    _completed_request_scene_count,
     _collect_scene_inputs,
     _final_status,
     _features_from_mask,
@@ -82,8 +83,20 @@ def test_collect_scene_inputs_deduplicates_found_rasters(tmp_path) -> None:
 
     assert [item.image_path for item in inputs] == [first, second]
     assert inputs[0].request_scenes == ("irkutsk", "KV3_100.L2.PMS.SCN01.tif")
+    assert inputs[0].request_scene_count == 2
     assert inputs[1].request_scenes == ("irkutsk",)
+    assert inputs[1].request_scene_count == 1
     assert missing == ["lost"]
+
+
+def test_completed_request_scene_count_uses_original_txt_rows() -> None:
+    assert _completed_request_scene_count(
+        [
+            {"status": "missing_image"},
+            {"status": "ok", "request_scenes": ["a", "b"], "request_scene_count": 3},
+            {"status": "failed", "request_scenes": ["c"]},
+        ]
+    ) == 5
 
 
 def test_detail_v2_filters_small_polygons_and_holes_in_metric_crs() -> None:
