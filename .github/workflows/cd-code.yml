@@ -87,4 +87,4 @@ jobs:
             ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl disable --now '${OLD_FRONTEND_SERVICE}' || true"
           fi
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl restart '${TRAINING_UI_API_SERVICE}'"
-          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}'"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "for attempt in \$(seq 1 30); do curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}' && exit 0; sleep 2; done; exit 1"
