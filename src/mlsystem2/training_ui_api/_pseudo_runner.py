@@ -3,22 +3,72 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
+import math
 import shutil
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import rasterio
+from pyproj import CRS as PyprojCRS
+from pyproj import Transformer
 from rasterio import features as rasterio_features
 from rasterio.warp import transform_geom
 from rasterio.windows import Window
+from scipy import ndimage
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, mapping, shape
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import transform as shapely_transform
+from shapely.validation import make_valid as shapely_make_valid
 import yaml
 
 from mlsystem2.mlflow_adapter.api import download_run_artifact
 from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
+
+
+@dataclass(frozen=True)
+class _PostprocessProfile:
+    level: int
+    name: str
+    mask_min_object_pixels: int | None = None
+    mask_min_hole_pixels: int | None = None
+    binary_closing_radius: int | None = None
+    min_area_m2: float | None = None
+    min_hole_area_m2: float | None = None
+    simplify_m: float | None = None
+
+
+@dataclass(frozen=True)
+class _SceneInput:
+    image_path: Path
+    scene_id: str
+    request_scenes: tuple[str, ...]
+
+
+_POSTPROCESS_NONE = _PostprocessProfile(level=1, name="none")
+_POSTPROCESS_DETAIL_V2 = _PostprocessProfile(
+    level=2,
+    name="detail_v2",
+    mask_min_object_pixels=32,
+    mask_min_hole_pixels=32,
+    min_area_m2=3000.0,
+    min_hole_area_m2=3000.0,
+    simplify_m=10.0,
+)
+_POSTPROCESS_STRONG = _PostprocessProfile(
+    level=3,
+    name="strong",
+    mask_min_object_pixels=64,
+    mask_min_hole_pixels=64,
+    binary_closing_radius=2,
+    min_area_m2=10000.0,
+    min_hole_area_m2=10000.0,
+    simplify_m=30.0,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +94,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
 
     scenes = _read_scenes(Path(config["scenes_file"]))
     image_index = _image_index(Path(config["images_root"]))
+    scene_inputs, missing = _collect_scene_inputs(scenes, image_index)
+    postprocess_profile = _select_postprocess_profile(len(scene_inputs))
     checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
     threshold = float(config.get("threshold") or 0.5)
     tile_size = int(config.get("tile_size") or 768)
@@ -69,66 +121,79 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             started=started,
             scene_reports=[],
             failures=[{"stage": "load_checkpoint", "error": repr(exc)}],
-            missing=[],
+            missing=missing,
             feature_count=0,
+            unique_image_count=len(scene_inputs),
+            postprocess_profile=postprocess_profile,
         )
 
     all_features: list[dict[str, Any]] = []
     scene_reports: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    missing: list[str] = []
 
-    for scene in scenes:
-        image_paths = _find_images(scene, image_index)
-        if not image_paths:
-            missing.append(scene)
-            scene_reports.append({"scene_id": scene, "status": "missing_image", "feature_count": 0})
-            continue
-        for image_path in image_paths:
-            scene_id = image_path.stem
-            scene_started = time.time()
-            try:
-                scene_features = _infer_scene(
-                    torch=torch,
-                    model=model,
-                    image_path=image_path,
-                    scene=scene_id,
-                    config=config,
-                    tile_size=tile_size,
-                    stride=stride,
-                    batch_size=batch_size,
-                    threshold=threshold,
-                    device=device,
-                )
-                all_features.extend(scene_features)
-                _write_feature_collection(
-                    run_root / "per_scene" / _safe_dir_name(scene_id) / "pseudo_markup.geojson",
-                    scene_features,
-                )
-                scene_reports.append(
-                    {
-                        "scene_id": scene_id,
-                        "request_scene": scene,
-                        "number": len(scene_reports) + 1,
-                        "status": "ok",
-                        "image": str(image_path),
-                        "feature_count": len(scene_features),
-                        "elapsed_sec": round(time.time() - scene_started, 3),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                failures.append({"scene_id": scene_id, "image": str(image_path), "error": repr(exc)})
-                scene_reports.append(
-                    {
-                        "scene_id": scene_id,
-                        "request_scene": scene,
-                        "number": len(scene_reports) + 1,
-                        "status": "failed",
-                        "image": str(image_path),
-                        "feature_count": 0,
-                        "error": repr(exc),
-                    }
-                )
+    for scene in missing:
+        scene_reports.append(
+            {
+                "scene_id": scene,
+                "number": len(scene_reports) + 1,
+                "status": "missing_image",
+                "feature_count": 0,
+            }
+        )
+
+    for scene_input in scene_inputs:
+        scene_started = time.time()
+        try:
+            scene_features = _infer_scene(
+                torch=torch,
+                model=model,
+                image_path=scene_input.image_path,
+                scene=scene_input.scene_id,
+                config=config,
+                tile_size=tile_size,
+                stride=stride,
+                batch_size=batch_size,
+                threshold=threshold,
+                device=device,
+                postprocess_profile=postprocess_profile,
+            )
+            all_features.extend(scene_features)
+            _write_feature_collection(
+                run_root / "per_scene" / _safe_dir_name(scene_input.scene_id) / "pseudo_markup.geojson",
+                scene_features,
+            )
+            scene_reports.append(
+                {
+                    "scene_id": scene_input.scene_id,
+                    "request_scene": scene_input.request_scenes[0],
+                    "request_scenes": list(scene_input.request_scenes),
+                    "number": len(scene_reports) + 1,
+                    "status": "ok",
+                    "image": str(scene_input.image_path),
+                    "feature_count": len(scene_features),
+                    "elapsed_sec": round(time.time() - scene_started, 3),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                {
+                    "scene_id": scene_input.scene_id,
+                    "image": str(scene_input.image_path),
+                    "error": repr(exc),
+                }
+            )
+            scene_reports.append(
+                {
+                    "scene_id": scene_input.scene_id,
+                    "request_scene": scene_input.request_scenes[0],
+                    "request_scenes": list(scene_input.request_scenes),
+                    "number": len(scene_reports) + 1,
+                    "status": "failed",
+                    "image": str(scene_input.image_path),
+                    "feature_count": 0,
+                    "error": repr(exc),
+                }
+            )
 
     _write_feature_collection(output_geojson, all_features)
     status = _final_status(scene_reports, failures, missing)
@@ -142,6 +207,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         failures=failures,
         missing=missing,
         feature_count=len(all_features),
+        unique_image_count=len(scene_inputs),
+        postprocess_profile=postprocess_profile,
     )
 
 
@@ -157,6 +224,7 @@ def _infer_scene(
     batch_size: int,
     threshold: float,
     device: str,
+    postprocess_profile: _PostprocessProfile,
 ) -> list[dict[str, Any]]:
     del batch_size
     with rasterio.open(image_path) as dataset:
@@ -191,7 +259,16 @@ def _infer_scene(
                 mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
                 tile_mask[:crop_h, :crop_w],
             )
-        return _features_from_mask(mask, dataset.transform, dataset.crs, dataset.res, scene, config)
+        mask = _postprocess_mask(mask, postprocess_profile)
+        return _features_from_mask(
+            mask,
+            dataset.transform,
+            dataset.crs,
+            dataset.res,
+            scene,
+            config,
+            postprocess_profile=postprocess_profile,
+        )
 
 
 def _predict_tile(torch, model, image: np.ndarray, *, threshold: float, device: str) -> np.ndarray:
@@ -218,12 +295,23 @@ def _features_from_mask(
     resolution: tuple[float, float],
     scene: str,
     config: dict[str, Any],
+    postprocess_profile: _PostprocessProfile = _POSTPROCESS_NONE,
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
+    source_crs = str(crs) if crs is not None else None
     for geometry, value in rasterio_features.shapes(mask, mask=mask > 0, transform=transform):
         if int(value) != 1:
             continue
-        source_crs = str(crs) if crs is not None else None
+        if _has_vector_postprocess(postprocess_profile):
+            if crs is None:
+                raise RuntimeError(
+                    "Для профильной постобработки нужен CRS снимка, "
+                    "иначе нельзя применить пороги площади в м²."
+                )
+            processed_geometry = _postprocess_geometry(shape(geometry), crs, postprocess_profile)
+            if processed_geometry.is_empty:
+                continue
+            geometry = mapping(processed_geometry)
         if source_crs:
             geometry = transform_geom(source_crs, "EPSG:4326", geometry)
         output.append(
@@ -243,10 +331,218 @@ def _features_from_mask(
                     "source_threshold": config.get("threshold"),
                     "source_f1_score": config.get("checkpoint_f1_score"),
                     "source_epoch": config.get("checkpoint_epoch"),
+                    "postprocess_profile": postprocess_profile.name,
+                    "postprocess_level": postprocess_profile.level,
                 },
             }
         )
     return output
+
+
+def _collect_scene_inputs(
+    scenes: list[str],
+    image_index: dict[str, list[Path]],
+) -> tuple[list[_SceneInput], list[str]]:
+    by_path: dict[Path, list[str]] = {}
+    missing: list[str] = []
+    for scene in scenes:
+        image_paths = _find_images(scene, image_index)
+        if not image_paths:
+            missing.append(scene)
+            continue
+        for image_path in image_paths:
+            request_scenes = by_path.setdefault(image_path, [])
+            if scene not in request_scenes:
+                request_scenes.append(scene)
+    return (
+        [
+            _SceneInput(
+                image_path=image_path,
+                scene_id=image_path.stem,
+                request_scenes=tuple(request_scenes),
+            )
+            for image_path, request_scenes in by_path.items()
+        ],
+        missing,
+    )
+
+
+def _select_postprocess_profile(unique_image_count: int) -> _PostprocessProfile:
+    if unique_image_count <= 5:
+        return _POSTPROCESS_NONE
+    if unique_image_count <= 50:
+        return _POSTPROCESS_DETAIL_V2
+    return _POSTPROCESS_STRONG
+
+
+def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float | int]:
+    params: dict[str, float | int] = {}
+    for field in (
+        "mask_min_object_pixels",
+        "mask_min_hole_pixels",
+        "binary_closing_radius",
+        "min_area_m2",
+        "min_hole_area_m2",
+        "simplify_m",
+    ):
+        value = getattr(profile, field)
+        if value is not None:
+            params[field] = value
+    return params
+
+
+def _postprocess_mask(mask: np.ndarray, profile: _PostprocessProfile) -> np.ndarray:
+    processed = mask > 0
+    if profile.mask_min_object_pixels is not None:
+        processed = _remove_small_mask_objects(processed, profile.mask_min_object_pixels)
+    if profile.mask_min_hole_pixels is not None:
+        processed = _remove_small_mask_holes(processed, profile.mask_min_hole_pixels)
+    if profile.binary_closing_radius is not None:
+        processed = ndimage.binary_closing(
+            processed,
+            structure=_disk_structure(profile.binary_closing_radius),
+        )
+    return processed.astype(np.uint8)
+
+
+def _remove_small_mask_objects(mask: np.ndarray, min_size: int) -> np.ndarray:
+    labels, count = ndimage.label(mask, structure=_label_structure())
+    if count == 0:
+        return mask
+    sizes = np.bincount(labels.ravel())
+    keep = sizes >= min_size
+    keep[0] = False
+    return keep[labels]
+
+
+def _remove_small_mask_holes(mask: np.ndarray, area_threshold: int) -> np.ndarray:
+    labels, count = ndimage.label(~mask, structure=_label_structure())
+    if count == 0:
+        return mask
+    sizes = np.bincount(labels.ravel())
+    fill = sizes < area_threshold
+    fill[0] = False
+    fill[_border_labels(labels)] = False
+    result = mask.copy()
+    result[fill[labels]] = True
+    return result
+
+
+def _label_structure() -> np.ndarray:
+    return ndimage.generate_binary_structure(2, 1)
+
+
+def _border_labels(labels: np.ndarray) -> np.ndarray:
+    return np.unique(
+        np.concatenate(
+            [
+                labels[0, :],
+                labels[-1, :],
+                labels[:, 0],
+                labels[:, -1],
+            ]
+        )
+    )
+
+
+def _disk_structure(radius: int) -> np.ndarray:
+    yy, xx = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return (xx * xx + yy * yy) <= radius * radius
+
+
+def _has_vector_postprocess(profile: _PostprocessProfile) -> bool:
+    return any(
+        value is not None
+        for value in (profile.min_area_m2, profile.min_hole_area_m2, profile.simplify_m)
+    )
+
+
+def _postprocess_geometry(
+    geometry: BaseGeometry,
+    crs,
+    profile: _PostprocessProfile,
+) -> BaseGeometry:
+    metric_geometry, metric_to_source = _geometry_to_metric(geometry, crs)
+    metric_geometry = _make_valid(metric_geometry)
+    if profile.min_area_m2 is not None:
+        metric_geometry = _filter_small_polygons(metric_geometry, profile.min_area_m2)
+    if metric_geometry.is_empty:
+        return metric_geometry
+    if profile.min_hole_area_m2 is not None:
+        metric_geometry = _remove_small_geometry_holes(metric_geometry, profile.min_hole_area_m2)
+        metric_geometry = _make_valid(metric_geometry)
+    if profile.simplify_m is not None and profile.simplify_m > 0:
+        metric_geometry = metric_geometry.simplify(profile.simplify_m, preserve_topology=True)
+        metric_geometry = _make_valid(metric_geometry)
+    if metric_to_source is not None and not metric_geometry.is_empty:
+        return shapely_transform(metric_to_source, metric_geometry)
+    return metric_geometry
+
+
+def _geometry_to_metric(
+    geometry: BaseGeometry,
+    crs,
+) -> tuple[BaseGeometry, Callable[..., Any] | None]:
+    source_crs = PyprojCRS.from_user_input(str(crs))
+    if source_crs.is_projected:
+        return geometry, None
+    if not source_crs.is_geographic:
+        raise RuntimeError(f"CRS снимка не является ни метрической, ни географической: {source_crs}.")
+    representative = geometry.representative_point()
+    to_lonlat = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
+    lon, lat = to_lonlat.transform(representative.x, representative.y)
+    metric_crs = _utm_crs_for_lonlat(float(lon), float(lat))
+    to_metric = Transformer.from_crs(source_crs, metric_crs, always_xy=True)
+    to_source = Transformer.from_crs(metric_crs, source_crs, always_xy=True)
+    return shapely_transform(to_metric.transform, geometry), to_source.transform
+
+
+def _utm_crs_for_lonlat(lon: float, lat: float) -> PyprojCRS:
+    if not math.isfinite(lon) or not math.isfinite(lat):
+        raise RuntimeError("Не удалось определить UTM-зону для геометрии снимка.")
+    zone = min(60, max(1, int(math.floor((lon + 180.0) / 6.0)) + 1))
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    return PyprojCRS.from_epsg(epsg)
+
+
+def _make_valid(geometry: BaseGeometry) -> BaseGeometry:
+    if geometry.is_empty or geometry.is_valid:
+        return geometry
+    return shapely_make_valid(geometry)
+
+
+def _filter_small_polygons(geometry: BaseGeometry, min_area_m2: float) -> BaseGeometry:
+    return _polygons_to_geometry(
+        [polygon for polygon in _iter_polygons(geometry) if polygon.area >= min_area_m2]
+    )
+
+
+def _remove_small_geometry_holes(geometry: BaseGeometry, min_hole_area_m2: float) -> BaseGeometry:
+    return _polygons_to_geometry(
+        [_remove_small_polygon_holes(polygon, min_hole_area_m2) for polygon in _iter_polygons(geometry)]
+    )
+
+
+def _remove_small_polygon_holes(polygon: Polygon, min_hole_area_m2: float) -> Polygon:
+    holes = [ring for ring in polygon.interiors if Polygon(ring).area >= min_hole_area_m2]
+    return Polygon(polygon.exterior, holes)
+
+
+def _iter_polygons(geometry: BaseGeometry):
+    if isinstance(geometry, Polygon):
+        yield geometry
+    elif isinstance(geometry, (MultiPolygon, GeometryCollection)):
+        for item in geometry.geoms:
+            yield from _iter_polygons(item)
+
+
+def _polygons_to_geometry(polygons: list[Polygon]) -> BaseGeometry:
+    polygons = [polygon for polygon in polygons if not polygon.is_empty]
+    if not polygons:
+        return GeometryCollection()
+    if len(polygons) == 1:
+        return polygons[0]
+    return MultiPolygon(polygons)
 
 
 def _resolve_checkpoint(config: dict[str, Any], dst_dir: Path) -> Path:
@@ -411,12 +707,15 @@ def _summary(
     failures: list[dict[str, Any]],
     missing: list[str],
     feature_count: int,
+    unique_image_count: int,
+    postprocess_profile: _PostprocessProfile,
 ) -> dict[str, Any]:
     return {
         "status": status,
         "class_key": config.get("class_key"),
         "class_name": config.get("class_name"),
         "input_scene_count": len(scenes),
+        "unique_image_count": unique_image_count,
         "scene_count": len(scene_reports),
         "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),
         "failed": len(failures),
@@ -424,6 +723,9 @@ def _summary(
         "feature_count": feature_count,
         "output_geojson": str(output_geojson),
         "elapsed_sec": round(time.time() - started, 3),
+        "postprocess_profile": postprocess_profile.name,
+        "postprocess_level": postprocess_profile.level,
+        "postprocess_params": _postprocess_profile_params(postprocess_profile),
         "source": {
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),

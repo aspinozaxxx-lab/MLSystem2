@@ -13,6 +13,7 @@ dependencies = [
   "PyYAML",
   "mlflow",
   "numpy",
+  "scipy",
   "boto3",
   "rasterio",
   "shapely",
