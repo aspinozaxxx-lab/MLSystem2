@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import os
 import random
-from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -13,9 +12,6 @@ from mlsystem2.settings.api import get_settings
 
 from ._dataset import TileDataset
 from .contracts import TileDataloaderRequest, TilePreparationError
-
-if TYPE_CHECKING:
-    import torch
 
 
 VAL_CACHE_AVAILABLE_MEMORY_FRACTION = 0.5
@@ -211,6 +207,28 @@ def _estimate_val_cache_bytes(dataset: TileDataset, *, tile_count: int) -> int:
 def _available_memory_bytes() -> int | None:
     if os.name == "nt":
         return _windows_available_memory_bytes()
+    mem_available_bytes = _linux_mem_available_bytes()
+    if mem_available_bytes is not None:
+        return mem_available_bytes
+    return _sysconf_available_memory_bytes()
+
+
+def _linux_mem_available_bytes(meminfo_path: str = "/proc/meminfo") -> int | None:
+    try:
+        with open(meminfo_path, encoding="utf-8") as meminfo:
+            for line in meminfo:
+                if not line.startswith("MemAvailable:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    return None
+                return int(parts[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _sysconf_available_memory_bytes() -> int | None:
     try:
         page_size = os.sysconf("SC_PAGE_SIZE")
         available_pages = os.sysconf("SC_AVPHYS_PAGES")

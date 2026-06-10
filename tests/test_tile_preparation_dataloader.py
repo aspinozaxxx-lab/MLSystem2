@@ -16,7 +16,13 @@ from rasterio.transform import from_origin
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation._augmentations import _geometric
-from mlsystem2.tile_preparation._dataloader import _effective_prefetch_factor
+from mlsystem2.tile_preparation import _dataloader as dataloader_impl
+from mlsystem2.tile_preparation._dataloader import (
+    _available_memory_bytes,
+    _effective_prefetch_factor,
+    _ensure_val_cache_fits_memory,
+    _linux_mem_available_bytes,
+)
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
@@ -24,6 +30,55 @@ from mlsystem2.tile_preparation.contracts import (
     TilePreparationError,
     TileSplitRequest,
 )
+
+
+def test_linux_mem_available_bytes_reads_memavailable(tmp_path: Path) -> None:
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "\n".join(
+            [
+                "MemTotal:       129414060 kB",
+                "MemFree:          9700572 kB",
+                "MemAvailable:   104127980 kB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert _linux_mem_available_bytes(str(meminfo)) == 104127980 * 1024
+
+
+def test_available_memory_bytes_prefers_linux_memavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dataloader_impl.os, "name", "posix", raising=False)
+    monkeypatch.setattr(dataloader_impl, "_linux_mem_available_bytes", lambda: 99)
+    monkeypatch.setattr(dataloader_impl, "_sysconf_available_memory_bytes", lambda: 9)
+
+    assert _available_memory_bytes() == 99
+
+
+def test_available_memory_bytes_falls_back_to_sysconf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dataloader_impl.os, "name", "posix", raising=False)
+    monkeypatch.setattr(dataloader_impl, "_linux_mem_available_bytes", lambda: None)
+    monkeypatch.setattr(dataloader_impl, "_sysconf_available_memory_bytes", lambda: 9)
+
+    assert _available_memory_bytes() == 9
+
+
+def test_val_cache_memory_check_uses_memavailable_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Dataset:
+        tile_size = 768
+        channel_count = 4
+        uses_multiclass_masks = False
+
+    monkeypatch.setattr(dataloader_impl, "_available_memory_bytes", lambda: 99 * 1024**3)
+
+    _ensure_val_cache_fits_memory(Dataset(), tile_count=1004)
 
 
 def test_create_tile_dataloader_reports_missing_torch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -697,7 +752,7 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     raster_path = tmp_path / "cached_val_reads.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
