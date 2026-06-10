@@ -14,6 +14,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 from mlsystem2.mlflow_adapter.api import (
     end_run,
+    log_dataset_artifacts,
     log_dataset_preparation,
     log_pipeline_report,
     log_run_config,
@@ -69,6 +70,7 @@ class _PipelineDependencies:
     log_timing_report: object
     log_pipeline_report: object
     end_run: object
+    log_dataset_artifacts: object | None = None
 
 
 def _default_dependencies() -> _PipelineDependencies:
@@ -90,6 +92,7 @@ def _default_dependencies() -> _PipelineDependencies:
         log_timing_report=log_timing_report,
         log_pipeline_report=log_pipeline_report,
         end_run=end_run,
+        log_dataset_artifacts=log_dataset_artifacts,
     )
 
 
@@ -148,6 +151,9 @@ def run_train_pipeline(
                 timings=_timing_report(total_started, timings, mlflow_elapsed),
                 report=report,
             )
+
+        if deps.log_dataset_artifacts is not None:
+            measure_mlflow(lambda: deps.log_dataset_artifacts(run, _dataset_artifact_files(settings)))
 
         loaders, timing = timed_call(
             "tile_preparation",
@@ -316,6 +322,21 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         annotation_file=settings.dataset.annotation_file,
         val_fraction=settings.dataset.val_fraction,
     )
+
+
+def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
+    if settings.dataset.classes:
+        files: dict[str, str] = {}
+        for item in settings.dataset.classes:
+            files[f"{item.slug}_scenes{Path(item.scenes_file).suffix}"] = item.scenes_file
+            files[f"{item.slug}_annotation{Path(item.annotation_file).suffix}"] = item.annotation_file
+        return files
+    files = {}
+    if settings.dataset.scenes_file is not None:
+        files[Path(settings.dataset.scenes_file).name] = settings.dataset.scenes_file
+    if settings.dataset.annotation_file is not None:
+        files[Path(settings.dataset.annotation_file).name] = settings.dataset.annotation_file
+    return files
 
 
 def _dataset_vrt_xml(dataset: PreparedDataset) -> str:

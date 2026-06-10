@@ -13,6 +13,7 @@ from ._client import create_experiment as _create_experiment
 from ._client import download_run_artifact as _download_run_artifact
 from ._client import get_best_training_checkpoint as _get_best_training_checkpoint
 from ._client import list_experiments as _list_experiments
+from ._client import log_dataset_artifacts as _log_dataset_artifacts
 from ._client import log_dataset_preparation as _log_dataset_preparation
 from ._client import log_pipeline_report as _log_pipeline_report
 from ._client import log_run_config as _log_run_config
@@ -72,6 +73,10 @@ def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport)
     _log_dataset_preparation(run, report)
 
 
+def log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> None:
+    _log_dataset_artifacts(run, files)
+
+
 def log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None:
     _log_tile_preparation(run, report)
 
@@ -115,6 +120,7 @@ __all__ = [
     "download_run_artifact",
     "start_run",
     "log_dataset_preparation",
+    "log_dataset_artifacts",
     "log_tile_preparation",
     "log_run_config",
     "log_training_epoch",

@@ -9,7 +9,7 @@ dataset:
 
 tile_preparation:
   num_workers: 16
-  prefetch_epochs: 2
+  prefetch_epochs: 1
   seed: 42
   val_positive_factor: 0.5
   class_balance: false

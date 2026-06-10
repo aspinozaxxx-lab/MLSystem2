@@ -17,6 +17,7 @@ EXPECTED_API = {
         "download_run_artifact",
         "start_run",
         "log_dataset_preparation",
+        "log_dataset_artifacts",
         "log_tile_preparation",
         "log_run_config",
         "log_training_epoch",

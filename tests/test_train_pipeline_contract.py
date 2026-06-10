@@ -78,6 +78,7 @@ def test_train_request_uses_tile_size_as_sample_size() -> None:
 
 def test_train_pipeline_uses_load_checkpoint_branch() -> None:
     calls: list[str] = []
+    dataset_artifacts: list[dict[str, str]] = []
     model = ModelHandle(
         spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=1),
         model=object(),
@@ -101,6 +102,7 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
         ),
         train_model=lambda request, progress_sink=None: _train_result(),
         log_dataset_preparation=lambda run, report: None,
+        log_dataset_artifacts=lambda run, files: dataset_artifacts.append(files),
         log_tile_preparation=lambda run, report: None,
         log_run_config=lambda run, config_path: None,
         log_training_epoch=lambda run, metrics: None,
@@ -115,6 +117,16 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
 
     assert result.status.value == "succeeded"
     assert calls == ["load_checkpoint"]
+    assert dataset_artifacts == [{"scenes.txt": "./scenes.txt", "annotations.geojson": "./annotations.geojson"}]
+
+
+def test_dataset_artifact_files_prefix_multiclass_sources() -> None:
+    assert _runner._dataset_artifact_files(_multiclass_settings()) == {
+        "class_a_scenes.txt": "./class_a.txt",
+        "class_a_annotation.geojson": "./class_a.geojson",
+        "class_b_scenes.txt": "./class_b.txt",
+        "class_b_annotation.geojson": "./class_b.geojson",
+    }
 
 
 def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from mlsystem2.mlflow_adapter.api import (
     download_run_artifact,
     get_best_training_checkpoint,
+    log_dataset_artifacts,
     log_run_config,
     log_tile_preparation,
     mark_run_killed,
@@ -286,6 +287,35 @@ def test_log_tile_preparation_uses_report_artifact_path(monkeypatch) -> None:
     log_tile_preparation(run, {"tile_size": 1024})
 
     assert logged == [({"tile_size": 1024}, "reports/tile_preparation.json")]
+
+
+def test_log_dataset_artifacts_writes_files_under_dataset(tmp_path: Path, monkeypatch) -> None:
+    scenes = tmp_path / "source-scenes.txt"
+    scenes.write_text("scene-1\n", encoding="utf-8")
+    annotation = tmp_path / "source-annotation.geojson"
+    annotation.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    logged: list[tuple[str, str, str]] = []
+
+    class MLflow:
+        @staticmethod
+        def log_artifact(path: str | Path, artifact_path: str) -> None:
+            logged.append((Path(path).name, Path(path).read_text(encoding="utf-8"), artifact_path))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+
+    log_dataset_artifacts(
+        run,
+        {
+            "scenes.txt": scenes,
+            "annotation.geojson": annotation,
+        },
+    )
+
+    assert logged == [
+        ("scenes.txt", "scene-1\n", "dataset"),
+        ("annotation.geojson", '{"type":"FeatureCollection","features":[]}', "dataset"),
+    ]
 
 
 def test_log_training_epoch_reactivates_run_by_id(monkeypatch) -> None:

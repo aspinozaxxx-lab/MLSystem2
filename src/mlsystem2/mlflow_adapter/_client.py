@@ -6,6 +6,8 @@ from datetime import datetime
 from hashlib import sha1
 import os
 from pathlib import Path
+import shutil
+import tempfile
 
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationReport
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
@@ -234,6 +236,28 @@ def log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport)
     _log_dict(_model_dump(report), "reports/dataset_preparation.json")
 
 
+def log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> None:
+    if not run.active:
+        return
+    _ensure_run_active(run)
+    with tempfile.TemporaryDirectory(prefix="mlsystem2-mlflow-dataset-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for artifact_name, source in files.items():
+            target_name = _safe_dataset_artifact_name(artifact_name)
+            source_path = Path(source)
+            if not source_path.is_file():
+                raise MLflowAdapterError(f"Файл датасета для MLflow не найден: {source_path}")
+            temp_path = temp_root / target_name
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(source_path, temp_path)
+            except OSError as exc:
+                raise MLflowAdapterError(f"Не удалось подготовить файл датасета для MLflow: {source_path}") from exc
+            artifact_parent = temp_path.relative_to(temp_root).parent
+            artifact_path = "dataset" if artifact_parent == Path(".") else f"dataset/{artifact_parent.as_posix()}"
+            _log_artifact(temp_path, artifact_path)
+
+
 def log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None:
     if not run.active:
         return
@@ -450,7 +474,7 @@ def _log_text(content: str, artifact_file: str) -> None:
         ) from exc
 
 
-def _log_artifact(path: str, artifact_path: str) -> None:
+def _log_artifact(path: str | Path, artifact_path: str) -> None:
     mlflow = _mlflow()
     try:
         mlflow.log_artifact(path, artifact_path=artifact_path)
@@ -458,6 +482,16 @@ def _log_artifact(path: str, artifact_path: str) -> None:
         raise MLflowAdapterError(
             f"Не удалось записать файл артефакта MLflow: {path}"
         ) from exc
+
+
+def _safe_dataset_artifact_name(value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise MLflowAdapterError(f"Некорректное имя артефакта датасета: {value}")
+    suffix = path.suffix.lower()
+    if suffix not in {".txt", ".geojson"}:
+        raise MLflowAdapterError(f"Файл датасета должен быть .txt или .geojson: {value}")
+    return path
 
 
 def _model_dump(value: object) -> dict[str, object]:

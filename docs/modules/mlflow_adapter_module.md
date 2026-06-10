@@ -12,6 +12,7 @@
 - `download_run_artifact(tracking_uri: str, run_id: str, artifact_path: str, dst_dir: str | Path) -> MLflowDownloadedArtifact` - скачивает артефакт запуска в локальную рабочую папку вызывающего модуля.
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
+- `log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> None` - пишет исходные txt/geojson файлы датасета в папку `dataset` артефактов MLflow.
 - `log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None` - пишет отчет подготовки тайлов.
 - `log_run_config(run: MLflowRunRef, config_path: str | Path) -> None` - пишет YAML-конфиг запуска.
 - `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет метрики одной эпохи сразу после ее завершения: `train/loss`, `val/loss`, `val/best_threshold`, `val/best_threshold_pixel_f1`, `val/best_threshold_precision`, `val/best_threshold_recall`, `train/epoch_time_sec`.
@@ -64,7 +65,7 @@
 
 `start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.dataset` задан, адаптер сначала проверяет наличие одноименного MLflow dataset в experiment и создает его при отсутствии, затем добавляет MLflow tag `dataset` и логирует MLflow input dataset через `mlflow.log_input`; имя, source и tag dataset равны переданному значению. Адаптер не вычисляет имя датасета и не ходит в папки датасета; вызывающий модуль должен передать готовое имя без расширения `.geojson`. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
 
-`log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
+`log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_dataset_artifacts` сохраняет исходные файлы разметки в `dataset/`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
 
 `log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует только метрики, перечисленные в разделе "Публикуемые MLflow-метрики". Это обеспечивает появление HPO-сигналов в MLflow во время долгого обучения без диагностического шума.
 
