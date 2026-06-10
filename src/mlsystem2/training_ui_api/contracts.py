@@ -287,6 +287,7 @@ class QueueSnapshot(BaseModel):
 
     training_enabled: bool
     inference_enabled: bool
+    jobs: list[JobSummary] = Field(default_factory=list)
     training_jobs: list[JobSummary]
     inference_jobs: list[JobSummary]
 

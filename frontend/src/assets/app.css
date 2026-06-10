@@ -623,6 +623,8 @@ th {
 .badge.neutral { background: var(--blue-2); color: var(--muted); }
 .badge.manual { border-color: #b9d8ff; background: #eef6ff; color: var(--blue); }
 .badge.automation { border-color: #fedf89; background: #fffaeb; color: var(--warning); }
+.badge.training { border-color: #b9d8ff; background: #eef6ff; color: var(--blue); }
+.badge.inference { border-color: #ffb5ad; background: #fff1f0; color: var(--error); }
 
 .result-status-badges {
   display: inline-flex;
@@ -748,8 +750,31 @@ th {
   cursor: pointer;
 }
 
-.job-row:hover {
-  background: #f8fbff;
+.job-row td strong,
+.job-row td small {
+  display: block;
+}
+
+.job-row td small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.job-row-training td {
+  background: #f4f9ff;
+}
+
+.job-row-inference td {
+  background: #fff6f5;
+}
+
+.job-row-training:hover td {
+  background: #e9f4ff;
+}
+
+.job-row-inference:hover td {
+  background: #ffebe8;
 }
 
 .hidden { display: none !important; }

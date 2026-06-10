@@ -35,6 +35,7 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
+from ._queueing import next_queue_position
 from ._templates import sanitize_template_config
 from .contracts import (
     AutomationEnabledUpdate,
@@ -678,14 +679,7 @@ def _store_existing_file(session: Session, *, kind: StoredFileKind, path: Path) 
 
 
 def _next_queue_position(session: Session, queue_name: JobType, source: JobSource) -> int:
-    rows = session.scalars(
-        select(JobRow.queue_position).where(
-            JobRow.type == queue_name.value,
-            JobRow.source == source.value,
-            JobRow.status.in_(ACTIVE_JOB_STATUSES),
-        )
-    ).all()
-    return (max(rows) if rows else 0) + 1
+    return next_queue_position(session, queue_name, source)
 
 
 def _automation_run_name(dataset: DatasetInfo, architecture: str) -> str:

@@ -37,6 +37,7 @@ from ._models import (
     StoredFileRow,
     TrainingResultRow,
 )
+from ._queueing import dispatch_sort_key, ensure_queue_positions
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
 
@@ -61,14 +62,33 @@ async def run_queue_worker(
         try:
             with session_factory() as session:
                 sync_automation_once(session, config)
-                dispatch_training_queue_once(session, config)
-                dispatch_inference_queue_once(session, config)
+                dispatch_queue_once(session, config)
                 session.commit()
         except asyncio.CancelledError:
             raise
         except Exception:
             LOGGER.exception("Training UI worker tick failed")
         await asyncio.sleep(interval)
+
+
+def dispatch_queue_once(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    *,
+    popen_factory: ProcessLauncher = subprocess.Popen,
+) -> None:
+    _reconcile_running_training_jobs(session, config)
+    _reconcile_running_inference_jobs(session, config)
+    ensure_queue_positions(session)
+    if _has_running_job(session):
+        return
+    job = _next_dispatch_job(session)
+    if job is None:
+        return
+    if job.type == JobType.INFERENCE.value:
+        _start_inference_job(session, job, config, popen_factory=popen_factory)
+        return
+    _start_training_job(session, job, config, popen_factory=popen_factory)
 
 
 def dispatch_training_queue_once(
@@ -78,7 +98,12 @@ def dispatch_training_queue_once(
     popen_factory: ProcessLauncher = subprocess.Popen,
 ) -> None:
     _reconcile_running_training_jobs(session, config)
-    if _has_running_training_job(session):
+    _reconcile_running_inference_jobs(session, config)
+    ensure_queue_positions(session)
+    if _has_running_job(session):
+        return
+    next_job = _next_dispatch_job(session)
+    if next_job is not None and next_job.type != JobType.TRAINING.value:
         return
     control = session.get(QueueControlRow, JobType.TRAINING.value)
     if control is not None and not control.enabled:
@@ -95,8 +120,13 @@ def dispatch_inference_queue_once(
     *,
     popen_factory: ProcessLauncher = subprocess.Popen,
 ) -> None:
+    _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
-    if _has_running_inference_job(session):
+    ensure_queue_positions(session)
+    if _has_running_job(session):
+        return
+    next_job = _next_dispatch_job(session)
+    if next_job is not None and next_job.type != JobType.INFERENCE.value:
         return
     control = session.get(QueueControlRow, JobType.INFERENCE.value)
     if control is not None and not control.enabled:
@@ -107,27 +137,30 @@ def dispatch_inference_queue_once(
     _start_inference_job(session, job, config, popen_factory=popen_factory)
 
 
-def _next_dispatch_job(session: Session, job_type: JobType) -> JobRow | None:
+def _next_dispatch_job(session: Session, job_type: JobType | None = None) -> JobRow | None:
+    conditions = [JobRow.status == JobStatus.QUEUED.value]
+    if job_type is not None:
+        conditions.append(JobRow.type == job_type.value)
     rows = session.scalars(
-        select(JobRow).where(
-            JobRow.type == job_type.value,
-            JobRow.status == JobStatus.QUEUED.value,
-        )
+        select(JobRow).where(*conditions)
     ).all()
     automation_enabled = _automation_enabled(session)
     candidates = [
         row
         for row in rows
-        if row.source != JobSource.AUTOMATION.value or automation_enabled
+        if _dispatch_allowed(session, row, automation_enabled)
     ]
-    candidates.sort(
-        key=lambda row: (
-            0 if row.source == JobSource.MANUAL.value else 1,
-            row.queue_position,
-            row.created_at,
-        )
-    )
+    candidates.sort(key=dispatch_sort_key)
     return candidates[0] if candidates else None
+
+
+def _dispatch_allowed(session: Session, row: JobRow, automation_enabled: bool) -> bool:
+    if row.source == JobSource.AUTOMATION.value and not automation_enabled:
+        return False
+    control = session.get(QueueControlRow, row.type)
+    if control is not None and not control.enabled:
+        return False
+    return True
 
 
 def _automation_enabled(session: Session) -> bool:
@@ -179,6 +212,15 @@ def _has_running_training_job(session: Session) -> bool:
                 JobRow.type == JobType.TRAINING.value,
                 JobRow.status == JobStatus.RUNNING.value,
             )
+        )
+        is not None
+    )
+
+
+def _has_running_job(session: Session) -> bool:
+    return (
+        session.scalar(
+            select(JobRow.id).where(JobRow.status == JobStatus.RUNNING.value)
         )
         is not None
     )

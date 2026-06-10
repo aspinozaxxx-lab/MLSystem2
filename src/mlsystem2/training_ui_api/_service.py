@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mlsystem2.mlflow_adapter.api import (
@@ -43,6 +43,7 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
+from ._queueing import ensure_queue_positions, next_queue_position, queue_sort_key
 from ._templates import initial_templates, sanitize_template_config
 from .contracts import (
     AppLink,
@@ -432,11 +433,13 @@ def create_training_job(
 def queues(session: Session) -> QueueSnapshot:
     ensure_seed_templates(session)
     _delete_cancelled_manual_jobs(session)
+    ensure_queue_positions(session)
     training_control = _ensure_queue_control(session, JobType.TRAINING)
     inference_control = _ensure_queue_control(session, JobType.INFERENCE)
     return QueueSnapshot(
         training_enabled=training_control.enabled,
         inference_enabled=inference_control.enabled,
+        jobs=_queue_jobs(session),
         training_jobs=_queue_jobs(session, JobType.TRAINING),
         inference_jobs=_queue_jobs(session, JobType.INFERENCE),
     )
@@ -497,15 +500,8 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
         raise TrainingUIAPIError("Автоматические задания нельзя двигать вручную")
     if row.status != JobStatus.QUEUED.value:
         raise TrainingUIAPIError("Можно двигать только queued задания")
-    queued = session.scalars(
-        select(JobRow)
-        .where(
-            JobRow.type == row.type,
-            JobRow.source == JobSource.MANUAL.value,
-            JobRow.status == JobStatus.QUEUED.value,
-        )
-        .order_by(JobRow.queue_position, JobRow.created_at)
-    ).all()
+    ensure_queue_positions(session)
+    queued = _queue_rows(session, manual_only=True, queued_only=True)
     index = next((i for i, item in enumerate(queued) if item.id == row.id), None)
     if index is None:
         return _job_detail(row)
@@ -835,30 +831,33 @@ def _next_queue_position(
     queue_name: JobType,
     source: JobSource = JobSource.MANUAL,
 ) -> int:
-    value = session.scalar(
-        select(func.max(JobRow.queue_position)).where(
-            JobRow.type == queue_name.value,
-            JobRow.source == source.value,
-            JobRow.status.in_(ACTIVE_JOB_STATUSES),
-        )
-    )
-    return int(value or 0) + 1
+    return next_queue_position(session, queue_name, source)
 
 
-def _queue_jobs(session: Session, queue_name: JobType) -> list[JobSummary]:
-    rows = session.scalars(
-        select(JobRow)
-        .where(JobRow.type == queue_name.value, JobRow.status.in_(ACTIVE_JOB_STATUSES))
-        .order_by(JobRow.queue_position, JobRow.created_at)
-    ).all()
-    rows.sort(key=_queue_sort_key)
+def _queue_jobs(session: Session, queue_name: JobType | None = None) -> list[JobSummary]:
+    rows = _queue_rows(session, job_type=queue_name)
     return [_job_summary(row) for row in rows]
 
 
-def _queue_sort_key(row: JobRow) -> tuple[int, int, int, datetime]:
-    status_rank = 0 if row.status == JobStatus.RUNNING.value else 1
-    source_rank = 0 if row.source == JobSource.MANUAL.value else 1
-    return status_rank, source_rank, row.queue_position, row.created_at
+def _queue_rows(
+    session: Session,
+    *,
+    job_type: JobType | None = None,
+    manual_only: bool = False,
+    queued_only: bool = False,
+) -> list[JobRow]:
+    conditions = [JobRow.status == JobStatus.QUEUED.value] if queued_only else [JobRow.status.in_(ACTIVE_JOB_STATUSES)]
+    if job_type is not None:
+        conditions.append(JobRow.type == job_type.value)
+    if manual_only:
+        conditions.append(JobRow.source == JobSource.MANUAL.value)
+    rows = session.scalars(
+        select(JobRow)
+        .where(*conditions)
+        .order_by(JobRow.queue_position, JobRow.created_at)
+    ).all()
+    rows.sort(key=queue_sort_key)
+    return rows
 
 
 def _ensure_queue_control(session: Session, queue_name: JobType) -> QueueControlRow:

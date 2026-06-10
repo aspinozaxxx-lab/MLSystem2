@@ -122,9 +122,10 @@ Frontend не обращается к Postgres. Сервис не импорти
 `training_ui_api` не открывает training runs и не пишет MLflow-метрики: запись метрик, отчетов и артефактов
 запуска выполняет только `train_pipeline`.
 
-Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` training job, формирует `run.yml`
-из сохраненных параметров задания и запускает публичный CLI
-`python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...` отдельным процессом.
+Фоновый worker работает внутри FastAPI-сервиса. Он берет первый `queued` job из единой очереди и запускает
+обучение или псевдоразметку отдельным процессом. Для training job worker формирует `run.yml` из сохраненных
+параметров задания и запускает публичный CLI
+`python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...`.
 Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
 и не записываются в `run.yml`. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
@@ -135,10 +136,10 @@ MLflow run со статусом `KILLED`.
 Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
 После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job по txt того же датасета.
-Manual jobs всегда запускаются раньше automation jobs. При выключенной автоматизации новые auto jobs не создаются и
-queued auto jobs не стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает
-все active auto jobs. Failed auto attempt не ретраится до новой версии датасета или снятия и повторной установки
-галочки.
+Jobs запускаются из единой очереди с внутренним приоритетом: ручная псевдоразметка, ручное обучение, auto
+псевдоразметка, auto обучение. При выключенной автоматизации новые auto jobs не создаются и queued auto jobs не
+стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает все active auto
+jobs. Failed auto attempt не ретраится до новой версии датасета или снятия и повторной установки галочки.
 
 `GET /api/v1/results/changes` возвращает последние 20 успешных изменений из `training_results` и
 `pseudo_markup_results`, отсортированные по времени изменения. Каждая строка содержит `class_key`, имя модели,
@@ -150,8 +151,7 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt` и, когда
 MLflow доступен, полный `checkpoint_uri`.
 
-Inference-очередь обрабатывается тем же worker независимо от training-очереди. Для job типа `pseudo-markup`
-worker берет txt список снимков из выбранного датасета или загруженного файла, скачивает `checkpoints/best.pt`
+Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета или загруженного файла, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
 строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
 `/api/v1/files/{file_id}/download`.

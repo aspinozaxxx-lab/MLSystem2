@@ -773,7 +773,7 @@ async function renderQueuePage() {
   renderShell(`
     <section class="hero compact-hero">
       <h1>В процессе</h1>
-      <p>Очереди training и inference</p>
+      <p>Единая очередь обучения и инференса</p>
     </section>
     <section class="switch-row">
       <label class="switch">
@@ -787,12 +787,8 @@ async function renderQueuePage() {
       <button class="secondary" id="refresh-queues" type="button">Обновить</button>
     </section>
     <section class="panel">
-      <h2>Очередь обучений</h2>
-      ${renderTrainingQueue(snapshot.training_jobs)}
-    </section>
-    <section class="panel">
-      <h2>Очередь инференса</h2>
-      ${renderInferenceQueue(snapshot.inference_jobs)}
+      <h2>Очередь заданий</h2>
+      ${renderJobQueue(snapshot.jobs || mergedQueueJobs(snapshot))}
     </section>
   `);
   document.getElementById("training-toggle").addEventListener("change", (event) => updateQueueEnabled("training", event.currentTarget.checked));
@@ -801,15 +797,38 @@ async function renderQueuePage() {
   bindQueueActions();
 }
 
-function renderTrainingQueue(jobs) {
+function mergedQueueJobs(snapshot) {
+  return [...(snapshot.inference_jobs || []), ...(snapshot.training_jobs || [])].sort((left, right) => {
+    if (left.status !== right.status) return left.status === "running" ? -1 : 1;
+    return queuePriority(right) - queuePriority(left)
+      || (left.queue_position || 0) - (right.queue_position || 0)
+      || String(left.created_at || "").localeCompare(String(right.created_at || ""));
+  });
+}
+
+function queuePriority(job) {
+  if (job.type === "inference" && job.source === "manual") return 40;
+  if (job.type === "training" && job.source === "manual") return 30;
+  if (job.type === "inference" && job.source === "automation") return 20;
+  if (job.type === "training" && job.source === "automation") return 10;
+  return 0;
+}
+
+function renderJobQueue(jobs) {
   return renderTable(
-    ["№", "Датасет", "Модель", "Размер тайла", "Создано", "Начало", "Действия"],
+    ["№", "Датасет", "Модель", "Действие", "Создано", "Начало", "Управление"],
     jobs.map((job, index) => `
-      <tr class="job-row" data-job="${job.id}">
+      <tr class="job-row ${job.type === "inference" ? "job-row-inference" : "job-row-training"}" data-job="${job.id}">
         <td>${index + 1}</td>
-        <td>${escapeHtml(job.dataset_name)}</td>
-        <td>${escapeHtml(job.model_name)}</td>
-        <td>${job.tile_size || ""}</td>
+        <td>${queueDatasetCell(job)}</td>
+        <td>${queueModelCell(job)}</td>
+        <td>
+          <span class="result-status-badges">
+            ${jobTypeBadge(job.type)}
+            ${sourceBadge(job.source)}
+            ${statusBadge(job.status)}
+          </span>
+        </td>
         <td>${formatDateTime(job.created_at)}</td>
         <td>${formatDateTime(job.started_at)}</td>
         <td>${queueButtons(job)}</td>
@@ -818,21 +837,28 @@ function renderTrainingQueue(jobs) {
   );
 }
 
-function renderInferenceQueue(jobs) {
-  return renderTable(
-    ["№", "Датасет обучения", "Модель", "Датасет инференса", "Создано", "Начало", "Действия"],
-    jobs.map((job, index) => `
-      <tr class="job-row" data-job="${job.id}">
-        <td>${index + 1}</td>
-        <td>${escapeHtml(job.training_dataset_name || "")}</td>
-        <td>${escapeHtml(job.model_name)}</td>
-        <td>${escapeHtml(job.inference_dataset_name || "")}</td>
-        <td>${formatDateTime(job.created_at)}</td>
-        <td>${formatDateTime(job.started_at)}</td>
-        <td>${queueButtons(job)}</td>
-      </tr>
-    `)
-  );
+function queueDatasetCell(job) {
+  if (job.type === "inference") {
+    const inferenceDataset = job.inference_dataset_name || job.dataset_name || "";
+    const trainingDataset = job.training_dataset_name || "";
+    return `
+      <strong>${escapeHtml(inferenceDataset)}</strong>
+      ${trainingDataset ? `<small>по обучению: ${escapeHtml(trainingDataset)}</small>` : ""}
+    `;
+  }
+  return `<strong>${escapeHtml(job.dataset_name)}</strong>`;
+}
+
+function queueModelCell(job) {
+  return `
+    <strong>${escapeHtml(job.model_name)}</strong>
+    ${job.type === "training" && job.tile_size ? `<small>тайл ${escapeHtml(job.tile_size)}</small>` : ""}
+  `;
+}
+
+function jobTypeBadge(type) {
+  if (type === "inference") return `<span class="badge inference">инференс</span>`;
+  return `<span class="badge training">обучение</span>`;
 }
 
 function queueButtons(job) {
@@ -1298,6 +1324,7 @@ function statusBadge(status) {
   if (status === "ok") return `<span class="badge ok">✓ ОК</span>`;
   if (status === "error") return `<span class="badge error">× ошибка</span>`;
   if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
+  if (status === "queued") return `<span class="badge neutral">в очереди</span>`;
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
 }
 

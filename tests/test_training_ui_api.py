@@ -4,6 +4,7 @@ import json
 import os
 import re
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -21,7 +22,11 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, TrainingResultRow
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
-from mlsystem2.training_ui_api._worker import dispatch_inference_queue_once, dispatch_training_queue_once
+from mlsystem2.training_ui_api._worker import (
+    dispatch_inference_queue_once,
+    dispatch_queue_once,
+    dispatch_training_queue_once,
+)
 from mlsystem2.training_ui_api.contracts import (
     AutomationEnabledUpdate,
     AutomationRuleUpdate,
@@ -41,6 +46,114 @@ def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 0}) is False
     assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
+
+
+def test_training_ui_queue_snapshot_returns_unified_priority_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        manual_training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        session.add_all(
+            [
+                _queue_test_job(JobType.TRAINING, JobSource.AUTOMATION, 1, created_at),
+                _queue_test_job(JobType.INFERENCE, JobSource.AUTOMATION, 1, created_at),
+                manual_training,
+                _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at),
+            ]
+        )
+        session.flush()
+
+        snapshot = _service.queues(session)
+        _service.move_job(session, manual_training.id, direction=-1)
+        moved_snapshot = _service.queues(session)
+
+    assert [(item.type, item.source) for item in snapshot.jobs] == [
+        (JobType.INFERENCE, JobSource.MANUAL),
+        (JobType.TRAINING, JobSource.MANUAL),
+        (JobType.INFERENCE, JobSource.AUTOMATION),
+        (JobType.TRAINING, JobSource.AUTOMATION),
+    ]
+    assert [item.type for item in snapshot.training_jobs] == [JobType.TRAINING, JobType.TRAINING]
+    assert [item.type for item in snapshot.inference_jobs] == [JobType.INFERENCE, JobType.INFERENCE]
+    assert [(item.type, item.source) for item in moved_snapshot.jobs[:2]] == [
+        (JobType.TRAINING, JobSource.MANUAL),
+        (JobType.INFERENCE, JobSource.MANUAL),
+    ]
+
+
+def test_training_ui_worker_dispatches_inference_before_training(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[str] = []
+
+    def fake_start_training(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.type)
+        row.status = JobStatus.RUNNING.value
+
+    def fake_start_inference(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.type)
+        row.status = JobStatus.RUNNING.value
+
+    monkeypatch.setattr(_worker, "_start_training_job", fake_start_training)
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start_inference)
+    created_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        inference = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at)
+        session.add_all([training, inference])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        session.flush()
+
+        assert started == [JobType.INFERENCE.value]
+        assert session.get(JobRow, inference.id).status == JobStatus.RUNNING.value
+        assert session.get(JobRow, training.id).status == JobStatus.QUEUED.value
+
+
+def _queue_test_job(
+    job_type: JobType,
+    source: JobSource,
+    position: int,
+    created_at: datetime,
+) -> JobRow:
+    dataset_name = f"{job_type.value}-{source.value}"
+    return JobRow(
+        type=job_type.value,
+        source=source.value,
+        status=JobStatus.QUEUED.value,
+        queue_position=position,
+        dataset_name=dataset_name,
+        training_dataset_name=dataset_name if job_type == JobType.TRAINING else "training-source",
+        inference_dataset_name=dataset_name if job_type == JobType.INFERENCE else None,
+        model_name="segformer b2" if job_type == JobType.TRAINING else "pseudo-markup",
+        architecture="smp_segformer_b2" if job_type == JobType.TRAINING else "pseudo-markup",
+        config={},
+        created_at=created_at,
+    )
 
 
 def test_stored_file_size_uses_bigint() -> None:
