@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
-from shapely.geometry import shape
+from shapely.geometry import box, shape
 
 from mlsystem2.training_ui_api._pseudo_runner import (
     _collect_scene_inputs,
@@ -11,6 +11,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _features_from_mask,
     _find_images,
     _image_index,
+    _merge_overlapping_features,
     _postprocess_mask,
     _select_postprocess_profile,
     _summary,
@@ -123,6 +124,52 @@ def test_strong_profile_applies_binary_closing() -> None:
     assert processed_mask[20, 23] == 1
 
 
+def test_merge_overlapping_features_dissolves_intersections() -> None:
+    features = [
+        _geojson_feature(box(0, 0, 2, 2), "scene-1"),
+        _geojson_feature(box(1, 1, 3, 3), "scene-2"),
+    ]
+
+    merged = _merge_overlapping_features(features)
+
+    assert len(merged) == 1
+    geometry = shape(merged[0]["geometry"])
+    assert round(geometry.area, 6) == 7.0
+    assert merged[0]["properties"]["scene_id"] == "scene-1"
+    assert merged[0]["properties"]["source_scene_ids"] == ["scene-1", "scene-2"]
+    assert merged[0]["properties"]["merged_feature_count"] == 2
+
+
+def test_merge_overlapping_features_dissolves_touching_polygons() -> None:
+    features = [
+        _geojson_feature(box(0, 0, 1, 1), "scene-1"),
+        _geojson_feature(box(1, 0, 2, 1), "scene-2"),
+    ]
+
+    merged = _merge_overlapping_features(features)
+
+    assert len(merged) == 1
+    geometry = shape(merged[0]["geometry"])
+    assert geometry.geom_type == "Polygon"
+    assert round(geometry.area, 6) == 2.0
+
+
+def test_merge_overlapping_features_keeps_disjoint_polygons_separate() -> None:
+    features = [
+        _geojson_feature(box(0, 0, 1, 1), "scene-1"),
+        _geojson_feature(box(3, 0, 4, 1), "scene-2"),
+    ]
+
+    merged = _merge_overlapping_features(features)
+
+    assert len(merged) == 2
+    assert [item["properties"]["source_scene_ids"] for item in merged] == [
+        ["scene-1"],
+        ["scene-2"],
+    ]
+    assert [item["properties"]["merged_feature_count"] for item in merged] == [1, 1]
+
+
 def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) -> None:
     profile = _select_postprocess_profile(51)
 
@@ -135,16 +182,21 @@ def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) ->
         scene_reports=[{"status": "ok"}],
         failures=[],
         missing=[],
-        feature_count=3,
+        feature_count=2,
+        feature_count_before_merge=3,
         unique_image_count=51,
         postprocess_profile=profile,
     )
 
     assert summary["input_scene_count"] == 2
     assert summary["unique_image_count"] == 51
+    assert summary["feature_count_before_merge"] == 3
+    assert summary["feature_count"] == 2
     assert summary["postprocess_profile"] == "strong"
     assert summary["postprocess_level"] == 3
     assert summary["postprocess_params"]["simplify_m"] == 30.0
+    assert summary["postprocess_merge_overlaps"] is True
+    assert summary["postprocess_merge_policy"] == "overlap_or_touch"
 
 
 def test_final_status_errors_when_no_scenes_processed() -> None:
@@ -153,3 +205,21 @@ def test_final_status_errors_when_no_scenes_processed() -> None:
     assert _final_status(reports, failures=[], missing=["irkutsk"]) == "error"
     assert _final_status([{"status": "ok"}], failures=[], missing=["lost"]) == "partial"
     assert _final_status([{"status": "ok"}], failures=[], missing=[]) == "ok"
+
+
+def _geojson_feature(geometry, scene_id: str) -> dict:
+    return {
+        "type": "Feature",
+        "geometry": geometry.__geo_interface__,
+        "properties": {
+            "_crs": "EPSG:4326",
+            "_x_res": 1.0,
+            "_y_res": 1.0,
+            "scene_id": scene_id,
+            "class_key": "deforestation",
+            "class_name": "Вырубки",
+            "source_model": "model",
+            "postprocess_profile": "none",
+            "postprocess_level": 1,
+        },
+    }

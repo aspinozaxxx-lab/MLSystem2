@@ -22,6 +22,8 @@ from scipy import ndimage
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+from shapely.ops import unary_union
+from shapely.strtree import STRtree
 from shapely.validation import make_valid as shapely_make_valid
 import yaml
 
@@ -69,6 +71,7 @@ _POSTPROCESS_STRONG = _PostprocessProfile(
     min_hole_area_m2=10000.0,
     simplify_m=30.0,
 )
+_POSTPROCESS_MERGE_POLICY = "overlap_or_touch"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,6 +126,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             failures=[{"stage": "load_checkpoint", "error": repr(exc)}],
             missing=missing,
             feature_count=0,
+            feature_count_before_merge=0,
             unique_image_count=len(scene_inputs),
             postprocess_profile=postprocess_profile,
         )
@@ -195,7 +199,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    _write_feature_collection(output_geojson, all_features)
+    feature_count_before_merge = len(all_features)
+    merged_features = _merge_overlapping_features(all_features)
+    _write_feature_collection(output_geojson, merged_features)
     status = _final_status(scene_reports, failures, missing)
     return _summary(
         config,
@@ -206,7 +212,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         scene_reports=scene_reports,
         failures=failures,
         missing=missing,
-        feature_count=len(all_features),
+        feature_count=len(merged_features),
+        feature_count_before_merge=feature_count_before_merge,
         unique_image_count=len(scene_inputs),
         postprocess_profile=postprocess_profile,
     )
@@ -337,6 +344,99 @@ def _features_from_mask(
             }
         )
     return output
+
+
+def _merge_overlapping_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    indexed_features: list[dict[str, Any]] = []
+    geometries: list[BaseGeometry] = []
+    for feature in features:
+        geometry_data = feature.get("geometry")
+        if geometry_data is None:
+            continue
+        geometry = _make_valid(shape(geometry_data))
+        polygon_geometry = _polygons_to_geometry(
+            [polygon for polygon in _iter_polygons(geometry) if not polygon.is_empty]
+        )
+        if polygon_geometry.is_empty:
+            continue
+        indexed_features.append(feature)
+        geometries.append(polygon_geometry)
+
+    if not geometries:
+        return []
+
+    merged_geometry = _make_valid(unary_union(geometries))
+    merged_polygons = [polygon for polygon in _iter_polygons(merged_geometry) if not polygon.is_empty]
+    if not merged_polygons:
+        return []
+
+    tree = STRtree(geometries)
+    index_by_id = {id(geometry): index for index, geometry in enumerate(geometries)}
+    output: list[dict[str, Any]] = []
+    for polygon in merged_polygons:
+        contributor_indexes = _intersecting_geometry_indexes(
+            tree,
+            geometries,
+            index_by_id,
+            polygon,
+        )
+        if not contributor_indexes:
+            continue
+        contributors = [indexed_features[index] for index in contributor_indexes]
+        output.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(polygon),
+                "properties": _merged_feature_properties(contributors),
+            }
+        )
+    return output
+
+
+def _intersecting_geometry_indexes(
+    tree: STRtree,
+    geometries: list[BaseGeometry],
+    index_by_id: dict[int, int],
+    geometry: BaseGeometry,
+) -> list[int]:
+    indexes: list[int] = []
+    for candidate in tree.query(geometry):
+        if isinstance(candidate, (int, np.integer)):
+            index = int(candidate)
+        else:
+            index = index_by_id.get(id(candidate))
+            if index is None:
+                continue
+        if geometries[index].intersects(geometry):
+            indexes.append(index)
+    return sorted(set(indexes))
+
+
+def _merged_feature_properties(features: list[dict[str, Any]]) -> dict[str, Any]:
+    properties = dict(features[0].get("properties") or {})
+    source_scene_ids: list[str] = []
+    for feature in features:
+        source_properties = feature.get("properties") or {}
+        existing_scene_ids = source_properties.get("source_scene_ids")
+        if isinstance(existing_scene_ids, list):
+            for scene_id in existing_scene_ids:
+                _append_unique_string(source_scene_ids, scene_id)
+        else:
+            _append_unique_string(source_scene_ids, source_properties.get("scene_id"))
+
+    if source_scene_ids:
+        properties["scene_id"] = source_scene_ids[0]
+    properties["source_scene_ids"] = source_scene_ids
+    properties["merged_feature_count"] = len(features)
+    return properties
+
+
+def _append_unique_string(values: list[str], value: object) -> None:
+    if value is None:
+        return
+    text = str(value)
+    if text not in values:
+        values.append(text)
 
 
 def _collect_scene_inputs(
@@ -709,6 +809,7 @@ def _summary(
     feature_count: int,
     unique_image_count: int,
     postprocess_profile: _PostprocessProfile,
+    feature_count_before_merge: int | None = None,
 ) -> dict[str, Any]:
     return {
         "status": status,
@@ -720,12 +821,17 @@ def _summary(
         "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),
         "failed": len(failures),
         "missing_images": len(missing),
+        "feature_count_before_merge": (
+            feature_count if feature_count_before_merge is None else feature_count_before_merge
+        ),
         "feature_count": feature_count,
         "output_geojson": str(output_geojson),
         "elapsed_sec": round(time.time() - started, 3),
         "postprocess_profile": postprocess_profile.name,
         "postprocess_level": postprocess_profile.level,
         "postprocess_params": _postprocess_profile_params(postprocess_profile),
+        "postprocess_merge_overlaps": True,
+        "postprocess_merge_policy": _POSTPROCESS_MERGE_POLICY,
         "source": {
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),
