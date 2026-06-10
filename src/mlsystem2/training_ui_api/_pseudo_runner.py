@@ -65,12 +65,11 @@ _POSTPROCESS_DETAIL_V2 = _PostprocessProfile(
 _POSTPROCESS_STRONG = _PostprocessProfile(
     level=3,
     name="strong",
-    mask_min_object_pixels=64,
-    mask_min_hole_pixels=64,
-    binary_closing_radius=2,
-    min_area_m2=10000.0,
-    min_hole_area_m2=10000.0,
-    simplify_m=30.0,
+    mask_min_object_pixels=48,
+    mask_min_hole_pixels=48,
+    min_area_m2=3000.0,
+    min_hole_area_m2=5000.0,
+    simplify_m=15.0,
 )
 _POSTPROCESS_MERGE_POLICY = "overlap_or_touch"
 

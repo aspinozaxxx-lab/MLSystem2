@@ -125,7 +125,7 @@ def test_detail_v2_filters_small_polygons_and_holes_in_metric_crs() -> None:
     assert features[0]["properties"]["postprocess_level"] == 2
 
 
-def test_strong_profile_applies_binary_closing() -> None:
+def test_strong_profile_does_not_apply_binary_closing() -> None:
     profile = _select_postprocess_profile(51)
     mask = np.zeros((50, 50), dtype=np.uint8)
     mask[10:40, 10:22] = 1
@@ -133,8 +133,8 @@ def test_strong_profile_applies_binary_closing() -> None:
 
     processed_mask = _postprocess_mask(mask, profile)
 
-    assert processed_mask[20, 22] == 1
-    assert processed_mask[20, 23] == 1
+    assert processed_mask[20, 22] == 0
+    assert processed_mask[20, 23] == 0
 
 
 def test_merge_overlapping_features_dissolves_intersections() -> None:
@@ -207,7 +207,12 @@ def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) ->
     assert summary["feature_count"] == 2
     assert summary["postprocess_profile"] == "strong"
     assert summary["postprocess_level"] == 3
-    assert summary["postprocess_params"]["simplify_m"] == 30.0
+    assert summary["postprocess_params"]["mask_min_object_pixels"] == 48
+    assert summary["postprocess_params"]["mask_min_hole_pixels"] == 48
+    assert summary["postprocess_params"]["min_area_m2"] == 3000.0
+    assert summary["postprocess_params"]["min_hole_area_m2"] == 5000.0
+    assert summary["postprocess_params"]["simplify_m"] == 15.0
+    assert "binary_closing_radius" not in summary["postprocess_params"]
     assert summary["postprocess_merge_overlaps"] is True
     assert summary["postprocess_merge_policy"] == "overlap_or_touch"
 
