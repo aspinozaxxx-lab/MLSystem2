@@ -23,20 +23,25 @@ from ._database import Base, configure_schema, create_session_factory, session_s
 from ._models import StoredFileRow
 from ._model_export import build_triton_model_export_zip
 from ._service import (
+    apply_inference_template_field_to_all,
     apply_training_template_field_to_all,
     app_links,
     automation,
     class_results,
     classes,
     create_custom_dataset,
+    create_inference_template,
     create_mlflow_experiment,
     create_pseudo_markup_job,
     create_training_template,
     create_training_job,
+    delete_inference_template,
     datasets,
     delete_training_template,
     delete_job,
     ensure_seed_templates,
+    inference_template,
+    inference_templates,
     job_detail,
     mlflow_experiments,
     models,
@@ -48,6 +53,8 @@ from ._service import (
     stored_file,
     training_template,
     training_templates,
+    update_inference_template,
+    update_inference_template_by_id,
     update_training_template_by_id,
     update_training_template,
     update_automation,
@@ -63,6 +70,11 @@ from .contracts import (
     ClassResultsResponse,
     CustomDatasetInfo,
     DatasetListResponse,
+    InferenceTemplate,
+    InferenceTemplateApplyField,
+    InferenceTemplateCreate,
+    InferenceTemplateListResponse,
+    InferenceTemplateUpdate,
     JobDetail,
     JobType,
     MLflowExperimentCreate,
@@ -318,6 +330,64 @@ def create_app() -> FastAPI:
         _: str = Depends(authenticated),
     ) -> TrainingTemplate:
         return update_training_template(db, architecture, request)
+
+    @app.get("/api/v1/inference-templates", response_model=InferenceTemplateListResponse)
+    def get_inference_templates(
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplateListResponse:
+        return inference_templates(db)
+
+    @app.post("/api/v1/inference-templates", response_model=InferenceTemplate)
+    def post_inference_template(
+        request: InferenceTemplateCreate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplate:
+        return create_inference_template(db, request, config)
+
+    @app.put("/api/v1/inference-templates/by-id/{template_id}", response_model=InferenceTemplate)
+    def put_inference_template_by_id(
+        template_id: uuid.UUID,
+        request: InferenceTemplateUpdate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplate:
+        return update_inference_template_by_id(db, template_id, request)
+
+    @app.delete("/api/v1/inference-templates/by-id/{template_id}", response_model=InferenceTemplate)
+    def delete_inference_template_by_id(
+        template_id: uuid.UUID,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplate:
+        return delete_inference_template(db, template_id)
+
+    @app.put("/api/v1/inference-templates/by-id/{template_id}/apply-field-to-all", response_model=InferenceTemplateListResponse)
+    def put_inference_template_field_to_all(
+        template_id: uuid.UUID,
+        request: InferenceTemplateApplyField,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplateListResponse:
+        return apply_inference_template_field_to_all(db, template_id, request)
+
+    @app.get("/api/v1/inference-templates/{architecture}", response_model=InferenceTemplate)
+    def get_inference_template(
+        architecture: str,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplate:
+        return inference_template(db, architecture)
+
+    @app.put("/api/v1/inference-templates/{architecture}", response_model=InferenceTemplate)
+    def put_inference_template(
+        architecture: str,
+        request: InferenceTemplateUpdate,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> InferenceTemplate:
+        return update_inference_template(db, architecture, request)
 
     @app.post("/api/v1/training-jobs", response_model=JobDetail)
     def post_training_job(

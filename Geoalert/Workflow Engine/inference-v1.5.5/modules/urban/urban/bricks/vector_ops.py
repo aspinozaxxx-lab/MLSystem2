@@ -1,6 +1,6 @@
 import os
 import datetime as dt
-from math import pi
+from math import hypot, pi
 from loguru import logger
 from gpdadapter import FeatureCollection
 from ..functional.rasterize import rasterize
@@ -175,6 +175,79 @@ class FilterNarrowObjects(PolygonProcessingBrick):
                                      4 * pi)), inplace=True)
         logger.trace(f'{length - len(fc)} polygons deleted')
         return fc
+
+
+class FilterCompactObjects(PolygonProcessingBrick):
+    """
+    Удаляет компактные полигоны, которые больше похожи на пруды или озера, чем на вытянутые реки.
+
+    Аргументы:
+        input: имя входной feature collection
+        output: имя выходной feature collection; если не задано, перезаписывается input
+        min_isoperimetric_quotient: нижний порог компактности. Для круга значение равно 1,
+            для вытянутых объектов ближе к 0.
+        max_bbox_ratio: верхний порог отношения сторон minimum rotated rectangle.
+    """
+    min_isoperimetric_quotient: float = Field(
+        0.25,
+        ge=0,
+        le=1,
+        description='Минимальный isoperimetric quotient, при котором объект считается компактным',
+    )
+    max_bbox_ratio: float = Field(
+        3.5,
+        ge=1,
+        description='Максимальное отношение сторон minimum rotated rectangle, при котором объект считается компактным',
+    )
+
+    def process(self, fc: FeatureCollection) -> FeatureCollection:
+        length = len(fc)
+        fc.filter(lambda x: not self._is_compact(x.geometry), inplace=True)
+        logger.trace(f'{length - len(fc)} polygons deleted')
+        return fc
+
+    def _is_compact(self, geometry) -> bool:
+        return (
+            self._isoperimetric_quotient(geometry) >= self.min_isoperimetric_quotient
+            and self._minimum_rectangle_ratio(geometry) < self.max_bbox_ratio
+        )
+
+    @staticmethod
+    def _isoperimetric_quotient(geometry) -> float:
+        if geometry.length <= 0:
+            return 0.0
+        return float(4.0 * pi * geometry.area / (geometry.length ** 2))
+
+    @classmethod
+    def _minimum_rectangle_ratio(cls, geometry) -> float:
+        rectangle = geometry.minimum_rotated_rectangle
+        exterior = getattr(rectangle, 'exterior', None)
+        if exterior is None:
+            return cls._bounds_ratio(geometry)
+        coords = list(exterior.coords)
+        if len(coords) < 4:
+            return cls._bounds_ratio(geometry)
+        lengths = [
+            hypot(coords[index + 1][0] - coords[index][0], coords[index + 1][1] - coords[index][1])
+            for index in range(min(4, len(coords) - 1))
+        ]
+        positive = [value for value in lengths if value > 0]
+        if not positive:
+            return 0.0
+        shortest = min(positive)
+        if shortest <= 0:
+            return float('inf')
+        return max(positive) / shortest
+
+    @staticmethod
+    def _bounds_ratio(geometry) -> float:
+        min_x, min_y, max_x, max_y = geometry.bounds
+        width = abs(max_x - min_x)
+        height = abs(max_y - min_y)
+        shortest = min(width, height)
+        if shortest <= 0:
+            return float('inf') if max(width, height) > 0 else 0.0
+        return max(width, height) / shortest
 
 
 class RemoveOverlappingObjects(PolygonProcessingBrick):

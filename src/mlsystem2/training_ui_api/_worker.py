@@ -413,6 +413,7 @@ def _build_pseudo_markup_config(
         "checkpoint_artifact_path": row.config.get("checkpoint_artifact_path") or "checkpoints/best.pt",
         "checkpoint_f1_score": row.config.get("checkpoint_f1_score"),
         "checkpoint_epoch": row.config.get("checkpoint_epoch"),
+        "postprocess_config": row.config.get("inference_template_config") or {},
         "threshold": threshold,
         "tile_size": tile_size,
         "stride": _int_value(flat, "tile_preparation.stride", tile_size),

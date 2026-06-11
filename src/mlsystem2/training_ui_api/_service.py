@@ -37,6 +37,7 @@ from ._config import TrainingUIAPIConfig, get_config
 from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_dataset, list_classes, list_datasets
 from ._models import (
     CustomDatasetRow,
+    InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
     QueueControlRow,
@@ -46,7 +47,12 @@ from ._models import (
 )
 from ._processes import terminate_job_process
 from ._queueing import ensure_queue_positions, next_queue_position, queue_sort_key
-from ._templates import initial_templates, sanitize_template_config
+from ._templates import (
+    initial_inference_templates,
+    initial_templates,
+    sanitize_inference_template_config,
+    sanitize_template_config,
+)
 from .contracts import (
     AppLink,
     AppLinksResponse,
@@ -60,6 +66,11 @@ from .contracts import (
     CustomDatasetInfo,
     DatasetInfo,
     DatasetListResponse,
+    InferenceTemplate,
+    InferenceTemplateApplyField,
+    InferenceTemplateCreate,
+    InferenceTemplateListResponse,
+    InferenceTemplateUpdate,
     JobDetail,
     JobSource,
     JobStatus,
@@ -198,9 +209,68 @@ def ensure_seed_templates(session: Session) -> None:
             row.baseline_default_config,
             fallback=baseline["baseline_default_config"],
         )
+    _ensure_seed_inference_templates(session)
     _ensure_queue_control(session, JobType.TRAINING)
     _ensure_queue_control(session, JobType.INFERENCE)
     ensure_automation_control(session)
+
+
+def _ensure_seed_inference_templates(session: Session) -> None:
+    existing = {
+        (row.architecture, row.dataset_key): row
+        for row in session.scalars(select(InferenceTemplateRow)).all()
+    }
+    seed_payloads = initial_inference_templates()
+    base_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is None]
+    dataset_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is not None]
+    for payload in base_payloads:
+        row = existing.get((payload["architecture"], None))
+        if row is None:
+            session.add(InferenceTemplateRow(**payload))
+            continue
+        row.dataset_key = None
+        row.dataset_name = None
+        row.parent_template_id = None
+        row.display_name = payload["display_name"]
+        row.config_schema = payload["config_schema"]
+        row.default_config = sanitize_inference_template_config(
+            row.default_config,
+            fallback=payload["default_config"],
+        )
+        row.baseline_default_config = sanitize_inference_template_config(
+            row.baseline_default_config,
+            fallback=payload["baseline_default_config"],
+        )
+    session.flush()
+
+    base_rows = {
+        row.architecture: row
+        for row in session.scalars(
+            select(InferenceTemplateRow).where(InferenceTemplateRow.dataset_key.is_(None))
+        ).all()
+    }
+    for payload in dataset_payloads:
+        parent = base_rows.get(payload["architecture"])
+        if parent is None:
+            continue
+        row = existing.get((payload["architecture"], payload["dataset_key"]))
+        if row is None:
+            row = InferenceTemplateRow(**payload)
+            row.parent_template_id = parent.id
+            session.add(row)
+            continue
+        row.parent_template_id = parent.id
+        row.display_name = payload["display_name"]
+        row.dataset_name = payload["dataset_name"]
+        row.config_schema = parent.config_schema
+        row.default_config = sanitize_inference_template_config(
+            row.default_config,
+            fallback=payload["default_config"],
+        )
+        row.baseline_default_config = sanitize_inference_template_config(
+            row.baseline_default_config,
+            fallback=payload["baseline_default_config"],
+        )
 
 
 def training_templates(session: Session) -> TrainingTemplateListResponse:
@@ -340,6 +410,148 @@ def apply_training_template_field_to_all(
         template.updated_at = _now()
     session.flush()
     return training_templates(session)
+
+
+def inference_templates(session: Session) -> InferenceTemplateListResponse:
+    ensure_seed_templates(session)
+    rows = session.scalars(
+        select(InferenceTemplateRow).order_by(
+            InferenceTemplateRow.display_name,
+            InferenceTemplateRow.dataset_name,
+        )
+    ).all()
+    return InferenceTemplateListResponse(templates=[_inference_template_info(row) for row in rows])
+
+
+def inference_template(session: Session, architecture: str) -> InferenceTemplate:
+    ensure_seed_templates(session)
+    row = _base_inference_template_row(session, architecture)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон инференса не найден: {architecture}")
+    return _inference_template_info(row)
+
+
+def update_inference_template(
+    session: Session,
+    architecture: str,
+    request: InferenceTemplateUpdate,
+) -> InferenceTemplate:
+    ensure_seed_templates(session)
+    row = _base_inference_template_row(session, architecture)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон инференса не найден: {architecture}")
+    return update_inference_template_by_id(session, row.id, request)
+
+
+def create_inference_template(
+    session: Session,
+    request: InferenceTemplateCreate,
+    config: TrainingUIAPIConfig,
+) -> InferenceTemplate:
+    ensure_seed_templates(session)
+    parent = _base_inference_template_row(session, request.architecture)
+    if parent is None:
+        raise TrainingUIAPIError(f"Шаблон инференса сети не найден: {request.architecture}")
+    dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
+    if dataset is None or dataset.is_custom:
+        raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
+    existing = _dataset_inference_template_row(session, request.architecture, dataset.key)
+    if existing is not None:
+        raise TrainingUIAPIError(f"Шаблон инференса для датасета уже существует: {dataset.name}")
+    now = _now()
+    row = InferenceTemplateRow(
+        architecture=parent.architecture,
+        dataset_key=dataset.key,
+        dataset_name=dataset.name,
+        parent_template_id=parent.id,
+        display_name=f"{parent.display_name} / {dataset.name}",
+        config_schema=parent.config_schema,
+        default_config=sanitize_inference_template_config(parent.default_config),
+        baseline_default_config=sanitize_inference_template_config(parent.default_config),
+        source=parent.source,
+        baseline_source=parent.source,
+        source_mlflow_run_id=parent.source_mlflow_run_id,
+        baseline_source_mlflow_run_id=parent.source_mlflow_run_id,
+        is_active=True,
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.flush()
+    return _inference_template_info(row)
+
+
+def update_inference_template_by_id(
+    session: Session,
+    template_id: uuid.UUID,
+    request: InferenceTemplateUpdate,
+) -> InferenceTemplate:
+    ensure_seed_templates(session)
+    row = session.get(InferenceTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон инференса не найден: {template_id}")
+    if request.reset_to_baseline:
+        row.default_config = row.baseline_default_config
+        row.source = row.baseline_source
+        row.source_mlflow_run_id = row.baseline_source_mlflow_run_id
+        row.version += 1
+    else:
+        if request.default_config is not None:
+            row.default_config = sanitize_inference_template_config(
+                request.default_config,
+                fallback=row.default_config,
+            )
+            row.source = TemplateSource.MANUAL.value
+            row.source_mlflow_run_id = None
+            row.version += 1
+        if request.is_active is not None:
+            row.is_active = request.is_active
+    row.updated_at = _now()
+    session.flush()
+    return _inference_template_info(row)
+
+
+def delete_inference_template(
+    session: Session,
+    template_id: uuid.UUID,
+) -> InferenceTemplate:
+    ensure_seed_templates(session)
+    row = session.get(InferenceTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон инференса не найден: {template_id}")
+    if row.dataset_key is None:
+        raise TrainingUIAPIError("Базовый шаблон инференса сети удалить нельзя")
+    info = _inference_template_info(row)
+    session.delete(row)
+    session.flush()
+    return info
+
+
+def apply_inference_template_field_to_all(
+    session: Session,
+    template_id: uuid.UUID,
+    request: InferenceTemplateApplyField,
+) -> InferenceTemplateListResponse:
+    ensure_seed_templates(session)
+    row = session.get(InferenceTemplateRow, template_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Шаблон инференса не найден: {template_id}")
+    if request.key not in {str(field["key"]) for field in row.config_schema.get("fields", [])}:
+        raise TrainingUIAPIError(f"Параметр шаблона инференса не найден: {request.key}")
+    for template in session.scalars(select(InferenceTemplateRow)).all():
+        current = dict(template.default_config)
+        current[request.key] = request.value
+        template.default_config = sanitize_inference_template_config(
+            current,
+            fallback=template.default_config,
+        )
+        template.source = TemplateSource.MANUAL.value
+        template.source_mlflow_run_id = None
+        template.version += 1
+        template.updated_at = _now()
+    session.flush()
+    return inference_templates(session)
 
 
 def create_custom_dataset(
@@ -603,10 +815,21 @@ def create_pseudo_markup_job(
     scenes_bytes: bytes | None,
     config: TrainingUIAPIConfig,
 ) -> JobDetail:
+    ensure_seed_templates(session)
     dataset_key = (dataset_key or "").strip() or None
     class_dataset = find_dataset(config.mlmarkup_root, class_key)
     class_name = class_dataset.name if class_dataset else class_key
     training_result = _resolve_training_result(session, training_result_id)
+    inference_template = (
+        inference_template_row_for_dataset(session, training_result.architecture, dataset_key)
+        if training_result is not None
+        else None
+    )
+    inference_template_config = (
+        sanitize_inference_template_config(inference_template.default_config)
+        if inference_template is not None
+        else {}
+    )
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
     inference_dataset_version: str | None = None
@@ -651,6 +874,8 @@ def create_pseudo_markup_job(
             "class_key": class_key,
             "dataset_key": dataset_key or CUSTOM_KEY,
             "training_result_id": str(training_result_id) if training_result_id else None,
+            "inference_template_id": str(inference_template.id) if inference_template is not None else None,
+            "inference_template_config": inference_template_config,
             **_checkpoint_config(training_result, config),
         },
     )
@@ -759,11 +984,32 @@ def training_template_row_for_dataset(
     return _base_template_row(session, architecture)
 
 
+def inference_template_row_for_dataset(
+    session: Session,
+    architecture: str,
+    dataset_key: str | None,
+) -> InferenceTemplateRow | None:
+    if dataset_key:
+        row = _dataset_inference_template_row(session, architecture, dataset_key)
+        if row is not None and row.is_active:
+            return row
+    return _base_inference_template_row(session, architecture)
+
+
 def _base_template_row(session: Session, architecture: str) -> TrainingTemplateRow | None:
     return session.scalar(
         select(TrainingTemplateRow).where(
             TrainingTemplateRow.architecture == architecture,
             TrainingTemplateRow.dataset_key.is_(None),
+        )
+    )
+
+
+def _base_inference_template_row(session: Session, architecture: str) -> InferenceTemplateRow | None:
+    return session.scalar(
+        select(InferenceTemplateRow).where(
+            InferenceTemplateRow.architecture == architecture,
+            InferenceTemplateRow.dataset_key.is_(None),
         )
     )
 
@@ -956,6 +1202,38 @@ def _mark_mlflow_run_killed(run_id: str) -> None:
 
 def _template_info(row: TrainingTemplateRow) -> TrainingTemplate:
     return TrainingTemplate(
+        id=row.id,
+        architecture=row.architecture,
+        dataset_key=row.dataset_key,
+        dataset_name=row.dataset_name,
+        parent_template_id=row.parent_template_id,
+        display_name=row.display_name,
+        config_schema=ConfigSchema.model_validate(row.config_schema),
+        default_config=row.default_config,
+        source=TemplateSource(row.source),
+        source_mlflow_run_id=row.source_mlflow_run_id,
+        is_active=row.is_active,
+        version=row.version,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _dataset_inference_template_row(
+    session: Session,
+    architecture: str,
+    dataset_key: str,
+) -> InferenceTemplateRow | None:
+    return session.scalar(
+        select(InferenceTemplateRow).where(
+            InferenceTemplateRow.architecture == architecture,
+            InferenceTemplateRow.dataset_key == dataset_key,
+        )
+    )
+
+
+def _inference_template_info(row: InferenceTemplateRow) -> InferenceTemplate:
+    return InferenceTemplate(
         id=row.id,
         architecture=row.architecture,
         dataset_key=row.dataset_key,

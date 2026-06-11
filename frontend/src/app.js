@@ -10,9 +10,11 @@ const state = {
   classes: [],
   models: [],
   templates: [],
+  inferenceTemplates: [],
   experiments: [],
   selectedArchitecture: "",
   selectedTemplateId: "",
+  selectedInferenceTemplateId: "",
   modal: null,
 };
 
@@ -73,18 +75,20 @@ function scheduleProgressRefresh(callback, enabled) {
 }
 
 async function ensureSharedData() {
-  const [links, datasets, classes, models, templates] = await Promise.all([
+  const [links, datasets, classes, models, templates, inferenceTemplates] = await Promise.all([
     apiJson("/app-links"),
     apiJson("/datasets"),
     apiJson("/classes"),
     apiJson("/models"),
     apiJson("/training-templates"),
+    apiJson("/inference-templates"),
   ]);
   state.links = links.links || [];
   state.datasets = datasets.datasets || [];
   state.classes = classes.classes || [];
   state.models = models.models || [];
   state.templates = templates.templates || [];
+  state.inferenceTemplates = inferenceTemplates.templates || [];
   if (!state.selectedArchitecture && state.models.length) {
     state.selectedArchitecture = state.models[0].architecture;
   }
@@ -93,6 +97,15 @@ async function ensureSharedData() {
   }
   if (!state.selectedTemplateId && state.templates.length) {
     state.selectedTemplateId = selectedTemplate()?.id || state.templates[0].id;
+  }
+  if (
+    state.selectedInferenceTemplateId
+    && !state.inferenceTemplates.some((item) => item.id === state.selectedInferenceTemplateId)
+  ) {
+    state.selectedInferenceTemplateId = "";
+  }
+  if (!state.selectedInferenceTemplateId && state.inferenceTemplates.length) {
+    state.selectedInferenceTemplateId = selectedInferenceTemplate()?.id || state.inferenceTemplates[0].id;
   }
 }
 
@@ -117,7 +130,7 @@ function renderShell(content) {
       <nav class="nav">
         <a href="#/start">Запуск обучения</a>
         <a href="#/queue">В процессе</a>
-        <a href="#/templates">Шаблоны обучения</a>
+        <a href="#/templates">Шаблоны</a>
         <a href="#/automation">Автоматизация</a>
         <a href="#/model-export">Экспорт модели</a>
         <a href="#/results">Результаты</a>
@@ -210,7 +223,7 @@ function renderHomePage() {
     <section class="grid">
       ${homeTrainingCard("Запуск обучения", "Форма создания training job.", "#/start")}
       ${homeTrainingCard("В процессе", "Очереди обучения и инференса.", "#/queue")}
-      ${homeTrainingCard("Шаблоны обучения", "Defaults по архитектурам.", "#/templates")}
+      ${homeTrainingCard("Шаблоны", "Параметры по умолчанию для обучения и инференса.", "#/templates")}
       ${homeTrainingCard("Автоматизация", "Автозапуск обучения и псевдоразметки по версиям датасетов.", "#/automation")}
       ${homeTrainingCard("Экспорт модели", "Архив для регистрации модели в Triton CPU service.", "#/model-export")}
       ${homeTrainingCard("Результаты", "Классы, метрики и псевдоразметка.", "#/results")}
@@ -488,18 +501,22 @@ async function submitStartForm(event) {
 
 function renderTemplatesPage() {
   const template = selectedTemplate();
+  const inferenceTemplate = selectedInferenceTemplate();
   const deleteButton = template.dataset_key
     ? `<button class="danger" type="button" id="template-delete">Удалить</button>`
     : "";
+  const inferenceDeleteButton = inferenceTemplate.dataset_key
+    ? `<button class="danger" type="button" id="inference-template-delete">Удалить</button>`
+    : "";
   renderShell(`
     <section class="hero compact-hero">
-      <h1>Шаблоны обучения</h1>
+      <h1>Шаблоны</h1>
       <p>Базовые defaults сети и переопределения для конкретных датасетов</p>
     </section>
     <section class="templates-layout">
       <aside class="panel template-tree-panel">
         <div class="panel-header">
-          <h2>Список шаблонов</h2>
+          <h2>Шаблоны обучения</h2>
           <button class="secondary compact-action" type="button" id="template-add">Добавить шаблон</button>
         </div>
         <div class="template-tree">${renderTemplateTree()}</div>
@@ -521,6 +538,35 @@ function renderTemplatesPage() {
             <button class="primary" type="submit">Сохранить</button>
             <button class="secondary" type="button" id="template-reset">Сбросить</button>
             ${deleteButton}
+          </div>
+        </form>
+      </section>
+    </section>
+    <section class="templates-layout">
+      <aside class="panel template-tree-panel">
+        <div class="panel-header">
+          <h2>Шаблоны инференса</h2>
+          <button class="secondary compact-action" type="button" id="inference-template-add">Добавить шаблон</button>
+        </div>
+        <div class="template-tree">${renderInferenceTemplateTree()}</div>
+      </aside>
+      <section class="panel template-editor-panel">
+        <div class="panel-header">
+          <div>
+            <h2>${escapeHtml(templateTitle(inferenceTemplate))}</h2>
+            <p class="muted">${inferenceTemplate.dataset_key ? "Шаблон датасета" : "Базовый шаблон сети"}</p>
+          </div>
+          <div class="inline-row template-meta">
+            <span class="badge ${inferenceTemplate.source === "manual" ? "warning" : "ok"}">source=${inferenceTemplate.source}</span>
+            <span class="badge neutral">version=${inferenceTemplate.version}</span>
+          </div>
+        </div>
+        <form id="inference-template-form" class="form-stack">
+          <div class="form-grid">${renderConfigFields(inferenceTemplate.config_schema, inferenceTemplate.default_config, false, { applyAll: true })}</div>
+          <div class="inline-row">
+            <button class="primary" type="submit">Сохранить</button>
+            <button class="secondary" type="button" id="inference-template-reset">Сбросить</button>
+            ${inferenceDeleteButton}
           </div>
         </form>
       </section>
@@ -566,6 +612,48 @@ function renderTemplatesPage() {
   if (template.dataset_key) {
     document.getElementById("template-delete").addEventListener("click", () => showTemplateDeleteModal(template));
   }
+  for (const button of document.querySelectorAll(".inference-template-tree-button")) {
+    button.addEventListener("click", () => {
+      state.selectedInferenceTemplateId = button.dataset.templateId;
+      state.selectedArchitecture = button.dataset.architecture;
+      renderTemplatesPage();
+    });
+  }
+  document.getElementById("inference-template-add").addEventListener("click", showInferenceTemplateCreateModal);
+  document.getElementById("inference-template-form").addEventListener("click", async (event) => {
+    const button = event.target.closest(".field-apply-all");
+    if (!button) return;
+    event.preventDefault();
+    const config = collectConfig(document.getElementById("inference-template-form"));
+    await apiJson(`/inference-templates/by-id/${encodeURIComponent(inferenceTemplate.id)}/apply-field-to-all`, {
+      method: "PUT",
+      body: { key: button.dataset.applyKey, value: config[button.dataset.applyKey] },
+    });
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+  document.getElementById("inference-template-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await apiJson(`/inference-templates/by-id/${encodeURIComponent(inferenceTemplate.id)}`, {
+      method: "PUT",
+      body: { default_config: collectConfig(event.currentTarget) },
+    });
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+  document.getElementById("inference-template-reset").addEventListener("click", async () => {
+    await apiJson(`/inference-templates/by-id/${encodeURIComponent(inferenceTemplate.id)}`, {
+      method: "PUT",
+      body: { reset_to_baseline: true },
+    });
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+  if (inferenceTemplate.dataset_key) {
+    document
+      .getElementById("inference-template-delete")
+      .addEventListener("click", () => showInferenceTemplateDeleteModal(inferenceTemplate));
+  }
 }
 
 function renderTemplateTree() {
@@ -589,6 +677,38 @@ function renderTemplateTreeButton(template, level) {
   return `
     <button
       class="template-tree-button ${level} ${active}"
+      type="button"
+      data-template-id="${escapeAttr(template.id)}"
+      data-architecture="${escapeAttr(template.architecture)}"
+    >
+      <span>${escapeHtml(templateTitle(template))}</span>
+      <small>${template.dataset_key ? "датасет" : "сеть"}</small>
+    </button>
+  `;
+}
+
+function renderInferenceTemplateTree() {
+  return baseInferenceTemplates().map((parent) => {
+    const children = datasetInferenceTemplates(parent.architecture);
+    return `
+      <div class="template-tree-group">
+        ${renderInferenceTemplateTreeButton(parent, "parent")}
+        <div class="template-tree-children">
+          ${children.length
+            ? children.map((child) => renderInferenceTemplateTreeButton(child, "child")).join("")
+            : `<span class="template-empty-child">датасетных шаблонов нет</span>`}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderInferenceTemplateTreeButton(template, level) {
+  const selected = selectedInferenceTemplate();
+  const active = selected && template.id === selected.id ? "active" : "";
+  return `
+    <button
+      class="template-tree-button inference-template-tree-button ${level} ${active}"
       type="button"
       data-template-id="${escapeAttr(template.id)}"
       data-architecture="${escapeAttr(template.architecture)}"
@@ -650,6 +770,57 @@ function showTemplateCreateModal() {
   });
 }
 
+function showInferenceTemplateCreateModal() {
+  const selected = selectedInferenceTemplate();
+  const parentOptions = baseInferenceTemplates()
+    .map((item) => option(item.architecture, item.display_name, item.architecture === selected.architecture))
+    .join("");
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Добавить шаблон инференса</h2>
+        <form id="inference-template-create-form" class="form-stack">
+          <label>Архитектура
+            <select name="architecture" id="inference-template-create-architecture">${parentOptions}</select>
+          </label>
+          <label>Датасет
+            <select name="dataset_key" id="inference-template-create-dataset"></select>
+          </label>
+          <div class="inline-row">
+            <button class="primary" type="submit">Создать</button>
+            <button class="secondary" type="button" id="modal-close">Отмена</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+  paintModal();
+  const architectureSelect = document.getElementById("inference-template-create-architecture");
+  const datasetSelect = document.getElementById("inference-template-create-dataset");
+  const syncDatasets = () => {
+    datasetSelect.innerHTML = availableInferenceDatasetTemplateOptions(architectureSelect.value);
+  };
+  architectureSelect.addEventListener("change", syncDatasets);
+  syncDatasets();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("inference-template-create-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const created = await apiJson("/inference-templates", {
+      method: "POST",
+      body: {
+        architecture: String(form.get("architecture") || ""),
+        dataset_key: String(form.get("dataset_key") || ""),
+      },
+    });
+    state.selectedInferenceTemplateId = created.id;
+    state.selectedArchitecture = created.architecture;
+    closeModal();
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+}
+
 function showTemplateDeleteModal(template) {
   state.modal = `
     <div class="modal-backdrop">
@@ -676,8 +847,43 @@ function showTemplateDeleteModal(template) {
   });
 }
 
+function showInferenceTemplateDeleteModal(template) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Удалить шаблон инференса?</h2>
+        <p>Будет удалён только шаблон датасета «${escapeHtml(template.dataset_name || template.display_name)}». Базовый шаблон сети сохранится и снова станет fallback.</p>
+        <div class="inline-row">
+          <button class="danger" type="button" id="inference-template-delete-confirm">Удалить</button>
+          <button class="secondary" type="button" id="modal-close">Отмена</button>
+        </div>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("inference-template-delete-confirm").addEventListener("click", async () => {
+    await apiJson(`/inference-templates/by-id/${encodeURIComponent(template.id)}`, { method: "DELETE" });
+    const parent = baseInferenceTemplates().find((item) => item.architecture === template.architecture)
+      || state.inferenceTemplates[0];
+    state.selectedInferenceTemplateId = parent?.id || "";
+    state.selectedArchitecture = parent?.architecture || state.selectedArchitecture;
+    closeModal();
+    await ensureSharedData();
+    renderTemplatesPage();
+  });
+}
+
 function availableDatasetTemplateOptions(architecture) {
   const existing = new Set(datasetTemplates(architecture).map((item) => item.dataset_key));
+  const options = state.datasets
+    .filter((item) => item.key !== "custom" && !existing.has(item.key))
+    .map((item) => option(item.key, item.name, false));
+  return options.length ? options.join("") : `<option value="">Нет доступных датасетов</option>`;
+}
+
+function availableInferenceDatasetTemplateOptions(architecture) {
+  const existing = new Set(datasetInferenceTemplates(architecture).map((item) => item.dataset_key));
   const options = state.datasets
     .filter((item) => item.key !== "custom" && !existing.has(item.key))
     .map((item) => option(item.key, item.name, false));
@@ -1290,11 +1496,27 @@ function selectedTemplate() {
   return baseTemplates().find((item) => item.architecture === state.selectedArchitecture) || state.templates[0];
 }
 
+function selectedInferenceTemplate() {
+  const byId = state.inferenceTemplates.find((item) => item.id === state.selectedInferenceTemplateId);
+  if (byId) return byId;
+  return baseInferenceTemplates().find((item) => item.architecture === state.selectedArchitecture)
+    || state.inferenceTemplates[0];
+}
+
 function templateFor(architecture, datasetKey = null) {
   const datasetTemplate = datasetKey && datasetKey !== "custom"
     ? state.templates.find((item) => item.architecture === architecture && item.dataset_key === datasetKey && item.is_active)
     : null;
   return datasetTemplate || baseTemplates().find((item) => item.architecture === architecture) || state.templates[0];
+}
+
+function inferenceTemplateFor(architecture, datasetKey = null) {
+  const datasetTemplate = datasetKey && datasetKey !== "custom"
+    ? state.inferenceTemplates.find((item) => item.architecture === architecture && item.dataset_key === datasetKey && item.is_active)
+    : null;
+  return datasetTemplate
+    || baseInferenceTemplates().find((item) => item.architecture === architecture)
+    || state.inferenceTemplates[0];
 }
 
 function baseTemplates() {
@@ -1303,8 +1525,20 @@ function baseTemplates() {
     .sort((left, right) => left.display_name.localeCompare(right.display_name, "ru"));
 }
 
+function baseInferenceTemplates() {
+  return state.inferenceTemplates
+    .filter((item) => !item.dataset_key)
+    .sort((left, right) => left.display_name.localeCompare(right.display_name, "ru"));
+}
+
 function datasetTemplates(architecture) {
   return state.templates
+    .filter((item) => item.dataset_key && item.architecture === architecture)
+    .sort((left, right) => templateTitle(left).localeCompare(templateTitle(right), "ru"));
+}
+
+function datasetInferenceTemplates(architecture) {
+  return state.inferenceTemplates
     .filter((item) => item.dataset_key && item.architecture === architecture)
     .sort((left, right) => templateTitle(left).localeCompare(templateTitle(right), "ru"));
 }

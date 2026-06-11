@@ -11,9 +11,11 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _final_status,
     _features_from_mask,
     _find_images,
+    _filter_compact_features,
     _image_index,
     _merge_overlapping_features,
     _postprocess_mask,
+    _postprocess_profile_from_config,
     _select_postprocess_profile,
     _summary,
 )
@@ -50,6 +52,27 @@ def test_select_postprocess_profile_uses_unique_image_count_boundaries() -> None
     assert _select_postprocess_profile(6).name == "detail_v2"
     assert _select_postprocess_profile(50).name == "detail_v2"
     assert _select_postprocess_profile(51).name == "strong"
+
+
+def test_postprocess_profile_accepts_template_overrides() -> None:
+    profile = _postprocess_profile_from_config(
+        _select_postprocess_profile(51),
+        {
+            "postprocess.min_area_m2": 10000.0,
+            "postprocess.min_hole_area_m2": 5000.0,
+            "postprocess.simplify_m": 15.0,
+            "postprocess.filter_compact_objects.enabled": True,
+            "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+            "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+        },
+    )
+
+    assert profile.name == "strong"
+    assert profile.min_area_m2 == 10000.0
+    assert profile.min_hole_area_m2 == 5000.0
+    assert profile.simplify_m == 15.0
+    assert profile.filter_compact_min_isoperimetric_quotient == 0.25
+    assert profile.filter_compact_max_bbox_ratio == 3.5
 
 
 def test_find_images_accepts_txt_scene_forms_and_dataset_folders(tmp_path) -> None:
@@ -181,6 +204,25 @@ def test_merge_overlapping_features_keeps_disjoint_polygons_separate() -> None:
         ["scene-2"],
     ]
     assert [item["properties"]["merged_feature_count"] for item in merged] == [1, 1]
+
+
+def test_filter_compact_features_removes_lake_like_objects() -> None:
+    profile = _postprocess_profile_from_config(
+        _select_postprocess_profile(51),
+        {
+            "postprocess.filter_compact_objects.enabled": True,
+            "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+            "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+        },
+    )
+    features = [
+        _geojson_feature(box(30.00, 50.00, 30.01, 50.01), "lake"),
+        _geojson_feature(box(30.00, 50.02, 30.12, 50.025), "river"),
+    ]
+
+    filtered = _filter_compact_features(features, profile)
+
+    assert [item["properties"]["scene_id"] for item in filtered] == ["river"]
 
 
 def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) -> None:

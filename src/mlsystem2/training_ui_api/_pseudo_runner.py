@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 import shutil
@@ -42,6 +42,8 @@ class _PostprocessProfile:
     min_area_m2: float | None = None
     min_hole_area_m2: float | None = None
     simplify_m: float | None = None
+    filter_compact_min_isoperimetric_quotient: float | None = None
+    filter_compact_max_bbox_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,10 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     scenes = _read_scenes(Path(config["scenes_file"]))
     image_index = _image_index(Path(config["images_root"]))
     scene_inputs, missing = _collect_scene_inputs(scenes, image_index)
-    postprocess_profile = _select_postprocess_profile(len(scene_inputs))
+    postprocess_profile = _postprocess_profile_from_config(
+        _select_postprocess_profile(len(scene_inputs)),
+        config.get("postprocess_config"),
+    )
     progress_path = run_root / "progress.json"
     all_features: list[dict[str, Any]] = []
     scene_reports: list[dict[str, Any]] = []
@@ -232,6 +237,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
 
     feature_count_before_merge = len(all_features)
     merged_features = _merge_overlapping_features(all_features)
+    merged_features = _filter_compact_features(merged_features, postprocess_profile)
     _write_feature_collection(output_geojson, merged_features)
     status = _final_status(scene_reports, failures, missing)
     return _summary(
@@ -506,8 +512,41 @@ def _select_postprocess_profile(unique_image_count: int) -> _PostprocessProfile:
     return _POSTPROCESS_STRONG
 
 
-def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float | int]:
-    params: dict[str, float | int] = {}
+def _postprocess_profile_from_config(
+    base: _PostprocessProfile,
+    config: object,
+) -> _PostprocessProfile:
+    if not isinstance(config, dict):
+        return base
+    updates: dict[str, object] = {}
+    field_map = {
+        "postprocess.mask_min_object_pixels": "mask_min_object_pixels",
+        "postprocess.mask_min_hole_pixels": "mask_min_hole_pixels",
+        "postprocess.binary_closing_radius": "binary_closing_radius",
+        "postprocess.min_area_m2": "min_area_m2",
+        "postprocess.min_hole_area_m2": "min_hole_area_m2",
+        "postprocess.simplify_m": "simplify_m",
+    }
+    for config_key, profile_field in field_map.items():
+        value = config.get(config_key)
+        if value is not None:
+            updates[profile_field] = value
+    if bool(config.get("postprocess.filter_compact_objects.enabled")):
+        min_iso = config.get("postprocess.filter_compact_objects.min_isoperimetric_quotient")
+        max_ratio = config.get("postprocess.filter_compact_objects.max_bbox_ratio")
+        if min_iso is not None and max_ratio is not None:
+            updates["filter_compact_min_isoperimetric_quotient"] = float(min_iso)
+            updates["filter_compact_max_bbox_ratio"] = float(max_ratio)
+    else:
+        updates["filter_compact_min_isoperimetric_quotient"] = None
+        updates["filter_compact_max_bbox_ratio"] = None
+    if not updates:
+        return base
+    return replace(base, **updates)
+
+
+def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float | int | bool]:
+    params: dict[str, float | int | bool] = {}
     for field in (
         "mask_min_object_pixels",
         "mask_min_hole_pixels",
@@ -515,6 +554,8 @@ def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float
         "min_area_m2",
         "min_hole_area_m2",
         "simplify_m",
+        "filter_compact_min_isoperimetric_quotient",
+        "filter_compact_max_bbox_ratio",
     ):
         value = getattr(profile, field)
         if value is not None:
@@ -584,7 +625,13 @@ def _disk_structure(radius: int) -> np.ndarray:
 def _has_vector_postprocess(profile: _PostprocessProfile) -> bool:
     return any(
         value is not None
-        for value in (profile.min_area_m2, profile.min_hole_area_m2, profile.simplify_m)
+        for value in (
+            profile.min_area_m2,
+            profile.min_hole_area_m2,
+            profile.simplify_m,
+            profile.filter_compact_min_isoperimetric_quotient,
+            profile.filter_compact_max_bbox_ratio,
+        )
     )
 
 
@@ -605,9 +652,111 @@ def _postprocess_geometry(
     if profile.simplify_m is not None and profile.simplify_m > 0:
         metric_geometry = metric_geometry.simplify(profile.simplify_m, preserve_topology=True)
         metric_geometry = _make_valid(metric_geometry)
+    metric_geometry = _filter_compact_geometry(metric_geometry, profile)
     if metric_to_source is not None and not metric_geometry.is_empty:
         return shapely_transform(metric_to_source, metric_geometry)
     return metric_geometry
+
+
+def _filter_compact_features(
+    features: list[dict[str, Any]],
+    profile: _PostprocessProfile,
+) -> list[dict[str, Any]]:
+    if (
+        profile.filter_compact_min_isoperimetric_quotient is None
+        or profile.filter_compact_max_bbox_ratio is None
+    ):
+        return features
+    output: list[dict[str, Any]] = []
+    for feature in features:
+        geometry_data = feature.get("geometry")
+        if geometry_data is None:
+            continue
+        try:
+            metric_geometry, metric_to_source = _geometry_to_metric(shape(geometry_data), "EPSG:4326")
+            metric_geometry = _filter_compact_geometry(_make_valid(metric_geometry), profile)
+        except Exception:  # noqa: BLE001
+            output.append(feature)
+            continue
+        if metric_geometry.is_empty:
+            continue
+        geometry = shapely_transform(metric_to_source, metric_geometry) if metric_to_source is not None else metric_geometry
+        updated = dict(feature)
+        updated["geometry"] = mapping(geometry)
+        output.append(updated)
+    return output
+
+
+def _filter_compact_geometry(
+    geometry: BaseGeometry,
+    profile: _PostprocessProfile,
+) -> BaseGeometry:
+    if (
+        profile.filter_compact_min_isoperimetric_quotient is None
+        or profile.filter_compact_max_bbox_ratio is None
+        or geometry.is_empty
+    ):
+        return geometry
+    return _polygons_to_geometry(
+        [
+            polygon
+            for polygon in _iter_polygons(geometry)
+            if not _is_compact_polygon(
+                polygon,
+                min_isoperimetric_quotient=profile.filter_compact_min_isoperimetric_quotient,
+                max_bbox_ratio=profile.filter_compact_max_bbox_ratio,
+            )
+        ]
+    )
+
+
+def _is_compact_polygon(
+    polygon: Polygon,
+    *,
+    min_isoperimetric_quotient: float,
+    max_bbox_ratio: float,
+) -> bool:
+    return (
+        _isoperimetric_quotient(polygon) >= min_isoperimetric_quotient
+        and _minimum_rectangle_ratio(polygon) < max_bbox_ratio
+    )
+
+
+def _isoperimetric_quotient(geometry: BaseGeometry) -> float:
+    if geometry.length <= 0:
+        return 0.0
+    return float(4.0 * math.pi * geometry.area / (geometry.length * geometry.length))
+
+
+def _minimum_rectangle_ratio(geometry: BaseGeometry) -> float:
+    rectangle = geometry.minimum_rotated_rectangle
+    exterior = getattr(rectangle, "exterior", None)
+    if exterior is None:
+        return _bounds_ratio(geometry)
+    coords = list(exterior.coords)
+    if len(coords) < 4:
+        return _bounds_ratio(geometry)
+    lengths = [
+        math.hypot(coords[index + 1][0] - coords[index][0], coords[index + 1][1] - coords[index][1])
+        for index in range(min(4, len(coords) - 1))
+    ]
+    positive = [value for value in lengths if value > 0]
+    if not positive:
+        return 0.0
+    shortest = min(positive)
+    if shortest <= 0:
+        return math.inf
+    return max(positive) / shortest
+
+
+def _bounds_ratio(geometry: BaseGeometry) -> float:
+    min_x, min_y, max_x, max_y = geometry.bounds
+    width = abs(max_x - min_x)
+    height = abs(max_y - min_y)
+    shortest = min(width, height)
+    if shortest <= 0:
+        return math.inf if max(width, height) > 0 else 0.0
+    return max(width, height) / shortest
 
 
 def _geometry_to_metric(

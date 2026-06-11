@@ -1,4 +1,4 @@
-"""Исходные шаблоны обучения для миграций и reset."""
+"""Исходные шаблоны обучения и инференса для миграций и reset."""
 
 from __future__ import annotations
 
@@ -180,6 +180,101 @@ CONFIG_KEYS = {str(field["key"]) for field in CONFIG_SCHEMA["fields"]}
 CONFIG_FIELDS = {str(field["key"]): field for field in CONFIG_SCHEMA["fields"]}
 
 
+INFERENCE_CONFIG_SCHEMA: dict[str, Any] = {
+    "fields": [
+        {
+            "key": "postprocess.mask_min_object_pixels",
+            "label": "Удалять объекты маски меньше, px",
+            "value_type": "integer-null",
+            "tooltip": "Аналог MaskMorphology remove_small_objects. Пусто сохраняет автоматический профиль.",
+            "min_value": 1,
+        },
+        {
+            "key": "postprocess.mask_min_hole_pixels",
+            "label": "Заливать дырки маски меньше, px",
+            "value_type": "integer-null",
+            "tooltip": "Аналог MaskMorphology remove_small_holes. Пусто сохраняет автоматический профиль.",
+            "min_value": 1,
+        },
+        {
+            "key": "postprocess.binary_closing_radius",
+            "label": "Радиус binary closing, px",
+            "value_type": "integer-null",
+            "tooltip": "Аналог MaskMorphology binary_closing disk. Пусто не меняет автоматический профиль.",
+            "min_value": 1,
+        },
+        {
+            "key": "postprocess.min_area_m2",
+            "label": "Мин. площадь полигона, м²",
+            "value_type": "number-null",
+            "tooltip": "Аналог FilterSmallObjects min_area. Пусто сохраняет автоматический профиль.",
+            "min_value": 0,
+        },
+        {
+            "key": "postprocess.min_hole_area_m2",
+            "label": "Мин. площадь дырки, м²",
+            "value_type": "number-null",
+            "tooltip": "Аналог RemoveSmallHoles min_hole_area. Пусто сохраняет автоматический профиль.",
+            "min_value": 0,
+        },
+        {
+            "key": "postprocess.simplify_m",
+            "label": "Упрощение контура, м",
+            "value_type": "number-null",
+            "tooltip": "Аналог Simplify rate. Пусто сохраняет автоматический профиль.",
+            "min_value": 0,
+        },
+        {
+            "key": "postprocess.filter_compact_objects.enabled",
+            "label": "Удалять компактные объекты",
+            "value_type": "boolean",
+            "tooltip": "Включает FilterCompactObjects для удаления объектов, похожих на озера/пруды.",
+        },
+        {
+            "key": "postprocess.filter_compact_objects.min_isoperimetric_quotient",
+            "label": "Порог компактности ISO",
+            "value_type": "number",
+            "tooltip": "Объект считается компактным при isoperimetric quotient не ниже этого значения.",
+            "min_value": 0,
+            "max_value": 1,
+        },
+        {
+            "key": "postprocess.filter_compact_objects.max_bbox_ratio",
+            "label": "Порог вытянутости bbox",
+            "value_type": "number",
+            "tooltip": "Компактный объект удаляется, если отношение сторон minimum rotated rectangle ниже этого значения.",
+            "min_value": 1,
+        },
+    ]
+}
+
+INFERENCE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
+    "postprocess.mask_min_object_pixels": None,
+    "postprocess.mask_min_hole_pixels": None,
+    "postprocess.binary_closing_radius": None,
+    "postprocess.min_area_m2": None,
+    "postprocess.min_hole_area_m2": None,
+    "postprocess.simplify_m": None,
+    "postprocess.filter_compact_objects.enabled": False,
+    "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+    "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+}
+
+RIVERS_INFERENCE_CONFIG: dict[str, Any] = {
+    "postprocess.min_area_m2": 10000.0,
+    "postprocess.min_hole_area_m2": 5000.0,
+    "postprocess.simplify_m": 15.0,
+    "postprocess.filter_compact_objects.enabled": True,
+    "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+    "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+}
+
+INFERENCE_CONFIG_KEYS = {str(field["key"]) for field in INFERENCE_CONFIG_SCHEMA["fields"]}
+INFERENCE_CONFIG_FIELDS = {
+    str(field["key"]): field for field in INFERENCE_CONFIG_SCHEMA["fields"]
+}
+
+
 def sanitize_template_config(
     config: dict[str, Any] | None,
     *,
@@ -196,6 +291,27 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
+    return result
+
+
+def sanitize_inference_template_config(
+    config: dict[str, Any] | None,
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = {
+        key: value
+        for key, value in (fallback or INFERENCE_BASE_DEFAULT_CONFIG).items()
+        if key in INFERENCE_CONFIG_KEYS
+    }
+    for key, value in (config or {}).items():
+        if key not in INFERENCE_CONFIG_KEYS:
+            continue
+        field = INFERENCE_CONFIG_FIELDS[key]
+        options = field.get("options")
+        if options is not None and value not in options:
+            continue
+        result[key] = value
     return result
 
 
@@ -253,6 +369,55 @@ def initial_templates() -> list[dict[str, Any]]:
     return rows
 
 
+def initial_inference_templates() -> list[dict[str, Any]]:
+    rows = [
+        _inference_template(
+            "smp_deeplabv3plus_resnet50",
+            "deeplabV3+",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_segformer_b2",
+            "segformer b2",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_segformer_b3",
+            "segformer b3",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_unet_resnet34",
+            "unet + resnet34",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_unet_resnet50",
+            "unet + resnet50",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_unet_resnet101",
+            "unet + resnet101",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_unet_resnet152",
+            "unet + resnet152",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_segformer_b2",
+            "segformer b2 / Реки\\main",
+            source="analogy",
+            dataset_key="Реки\\main",
+            dataset_name="Реки\\main",
+            overrides=RIVERS_INFERENCE_CONFIG,
+        ),
+    ]
+    return rows
+
+
 def _template(
     architecture: str,
     display_name: str,
@@ -274,6 +439,36 @@ def _template(
         "baseline_source": source,
         "source_mlflow_run_id": source_mlflow_run_id,
         "baseline_source_mlflow_run_id": source_mlflow_run_id,
+        "is_active": True,
+        "version": 1,
+    }
+
+
+def _inference_template(
+    architecture: str,
+    display_name: str,
+    *,
+    source: str,
+    dataset_key: str | None = None,
+    dataset_name: str | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    default_config = deepcopy(INFERENCE_BASE_DEFAULT_CONFIG)
+    if overrides:
+        default_config.update(overrides)
+    return {
+        "architecture": architecture,
+        "dataset_key": dataset_key,
+        "dataset_name": dataset_name,
+        "parent_template_id": None,
+        "display_name": display_name,
+        "config_schema": deepcopy(INFERENCE_CONFIG_SCHEMA),
+        "default_config": default_config,
+        "baseline_default_config": deepcopy(default_config),
+        "source": source,
+        "baseline_source": source,
+        "source_mlflow_run_id": None,
+        "baseline_source_mlflow_run_id": None,
         "is_active": True,
         "version": 1,
     }

@@ -28,6 +28,7 @@ from ._datasets import CUSTOM_KEY, list_datasets
 from ._models import (
     AutomationControlRow,
     AutomationRuleRow,
+    InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
@@ -36,7 +37,7 @@ from ._models import (
 )
 from ._processes import terminate_job_process
 from ._queueing import next_queue_position
-from ._templates import sanitize_template_config
+from ._templates import sanitize_inference_template_config, sanitize_template_config
 from .contracts import (
     AutomationEnabledUpdate,
     AutomationRuleInfo,
@@ -316,6 +317,16 @@ def _ensure_pseudo_markup_for_rule(
         return
     if not dataset.scenes_file:
         return
+    inference_template = _inference_template_row_for_dataset(
+        session,
+        training_result.architecture,
+        dataset.key,
+    )
+    inference_template_config = (
+        sanitize_inference_template_config(inference_template.default_config)
+        if inference_template is not None
+        else {}
+    )
     scenes_row = _store_existing_file(session, kind=StoredFileKind.SCENES_TXT, path=Path(dataset.scenes_file))
     row = JobRow(
         type=JobType.INFERENCE.value,
@@ -334,6 +345,8 @@ def _ensure_pseudo_markup_for_rule(
             "class_key": dataset.key,
             "dataset_key": dataset.key,
             "training_result_id": str(training_result.id),
+            "inference_template_id": str(inference_template.id) if inference_template is not None else None,
+            "inference_template_config": inference_template_config,
             **_checkpoint_config(training_result, config),
         },
     )
@@ -394,6 +407,27 @@ def _training_template_row_for_dataset(
         select(TrainingTemplateRow).where(
             TrainingTemplateRow.architecture == architecture,
             TrainingTemplateRow.dataset_key.is_(None),
+        )
+    )
+
+
+def _inference_template_row_for_dataset(
+    session: Session,
+    architecture: str,
+    dataset_key: str,
+) -> InferenceTemplateRow | None:
+    dataset_template = session.scalar(
+        select(InferenceTemplateRow).where(
+            InferenceTemplateRow.architecture == architecture,
+            InferenceTemplateRow.dataset_key == dataset_key,
+        )
+    )
+    if dataset_template is not None and dataset_template.is_active:
+        return dataset_template
+    return session.scalar(
+        select(InferenceTemplateRow).where(
+            InferenceTemplateRow.architecture == architecture,
+            InferenceTemplateRow.dataset_key.is_(None),
         )
     )
 

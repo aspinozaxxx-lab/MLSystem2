@@ -682,6 +682,37 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()["templates"]
         assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
+        inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
+        assert len(inference_templates) == 8
+        inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
+        inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
+        assert "postprocess.min_area_m2" in inference_keys
+        assert "postprocess.filter_compact_objects.enabled" in inference_keys
+        assert "train.batch_size" not in inference_keys
+        river_inference_template = next(
+            item for item in inference_templates if item.get("dataset_key") == "Реки\\main"
+        )
+        assert river_inference_template["default_config"]["postprocess.min_area_m2"] == 10000.0
+        assert river_inference_template["default_config"]["postprocess.min_hole_area_m2"] == 5000.0
+        assert river_inference_template["default_config"]["postprocess.simplify_m"] == 15.0
+        assert river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"] is True
+        inference_dataset_template = client.post(
+            "/api/v1/inference-templates",
+            json={"architecture": "smp_segformer_b2", "dataset_key": "Вырубки\\main"},
+        ).json()
+        assert inference_dataset_template["parent_template_id"] == inference_template["id"]
+        updated_inference_dataset_template = client.put(
+            f"/api/v1/inference-templates/by-id/{inference_dataset_template['id']}",
+            json={
+                "default_config": {
+                    **inference_dataset_template["default_config"],
+                    "postprocess.min_area_m2": 2222.0,
+                }
+            },
+        ).json()
+        assert updated_inference_dataset_template["source"] == "manual"
+        assert updated_inference_dataset_template["default_config"]["postprocess.min_area_m2"] == 2222.0
+
         custom = client.post(
             "/api/v1/custom-datasets",
             data={"name": "Custom"},
@@ -730,6 +761,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
         ).json()
         assert pseudo["type"] == "inference"
+        assert pseudo["config"]["inference_template_id"] == updated_inference_dataset_template["id"]
+        assert pseudo["config"]["inference_template_config"]["postprocess.min_area_m2"] == 2222.0
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
         assert len(inference_queue) == 1
         pseudo_with_empty_upload = client.post(
@@ -761,6 +794,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert client.get("/api/v1/results/classes/custom").json()["results"] == []
         deleted_template = client.delete(f"/api/v1/training-templates/by-id/{dataset_template['id']}").json()
         assert deleted_template["dataset_key"] == "Вырубки\\main"
+        deleted_inference_template = client.delete(
+            f"/api/v1/inference-templates/by-id/{inference_dataset_template['id']}"
+        ).json()
+        assert deleted_inference_template["dataset_key"] == "Вырубки\\main"
 
 
 def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, monkeypatch) -> None:

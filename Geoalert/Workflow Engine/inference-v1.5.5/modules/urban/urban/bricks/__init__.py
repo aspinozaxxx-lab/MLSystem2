@@ -19,6 +19,7 @@ from .raster_ops import (
 from .vector_ops import (
     Simplify,
     Smooth,
+    FilterCompactObjects,
     FilterSmallObjects,
     RemoveSmallHoles,
     FilterOutput,

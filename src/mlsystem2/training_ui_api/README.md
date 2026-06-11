@@ -47,6 +47,13 @@
 - `PUT /api/v1/training-templates/by-id/{template_id}/apply-field-to-all`
 - `GET /api/v1/training-templates/{architecture}`
 - `PUT /api/v1/training-templates/{architecture}`
+- `GET /api/v1/inference-templates`
+- `POST /api/v1/inference-templates`
+- `PUT /api/v1/inference-templates/by-id/{template_id}`
+- `DELETE /api/v1/inference-templates/by-id/{template_id}`
+- `PUT /api/v1/inference-templates/by-id/{template_id}/apply-field-to-all`
+- `GET /api/v1/inference-templates/{architecture}`
+- `PUT /api/v1/inference-templates/{architecture}`
 - `POST /api/v1/training-jobs`
 - `GET /api/v1/queues`
 - `PUT /api/v1/queues/training/enabled`
@@ -86,6 +93,7 @@ process получает SIGTERM, а известный MLflow run помеча�
 Основные таблицы Postgres:
 
 - `training_templates`
+- `inference_templates`
 - `stored_files`
 - `custom_datasets`
 - `jobs`
@@ -109,6 +117,15 @@ dataset_key)`, а если его нет, использует базовый ш
 датасетный шаблон удаляется через `DELETE /api/v1/training-templates/by-id/{template_id}`. Endpoint
 `PUT /api/v1/training-templates/by-id/{template_id}/apply-field-to-all` устанавливает одно поле во всех
 существующих шаблонах и помечает их `source=manual`.
+
+`inference_templates` устроены аналогично, но содержат только параметры Geoalert-совместимой
+постобработки: `postprocess.mask_min_object_pixels`, `postprocess.mask_min_hole_pixels`,
+`postprocess.binary_closing_radius`, `postprocess.min_area_m2`, `postprocess.min_hole_area_m2`,
+`postprocess.simplify_m` и параметры `postprocess.filter_compact_objects.*`. При ручном и автоматическом
+создании псевдоразметки сервис ищет активный шаблон инференса `(architecture, dataset_key)`, а если его нет,
+использует базовый `(architecture, null)`. Для `Реки\main` и `smp_segformer_b2` начальный шаблон включает
+вариант 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и фильтр компактных объектов
+`min_isoperimetric_quotient=0.25`, `max_bbox_ratio=3.5`.
 
 `jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
 `dataset_version`. Для auto rows дополнительно заполнен `automation_rule_id`. Auto jobs нельзя удалить или двигать
@@ -148,8 +165,8 @@ jobs. Failed auto attempt не ретраится до новой версии �
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший
 F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo-markup job, созданный от результата
-обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt` и, когда
-MLflow доступен, полный `checkpoint_uri`.
+обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt`,
+`inference_template_id`, `inference_template_config` и, когда MLflow доступен, полный `checkpoint_uri`.
 
 Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета или загруженного файла, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
@@ -160,6 +177,10 @@ MLflow доступен, полный `checkpoint_uri`.
 постобработки по числу уникальных снимков. Для `<=5` снимков используется прежний режим без постобработки, для
 `6..50` — `detail_v2` с легкой чисткой маски и `Simplify=10 м`, для `>=51` — `strong` без `binary_closing`,
 с чисткой маски `48 px`, `min_area=3000 м²`, `min_hole_area=5000 м²` и `Simplify=15 м`.
+После выбора автоматического профиля раннер применяет непустые поля из `inference_template_config`, поэтому
+шаблон может ужесточить или ослабить только нужные параметры. Включенный `filter_compact_objects` удаляет
+компактные полигоны по isoperimetric quotient и отношению сторон minimum rotated rectangle; для рек это
+используется для отсечения озер и прудов.
 Перед записью итогового скачиваемого GeoJSON раннер сливает
 пересекающиеся и касающиеся полигоны через `unary_union`; per-scene GeoJSON остаются диагностическими файлами
 без глобального слияния. Отчет псевдоразметки содержит выбранный профиль, число уникальных снимков, параметры

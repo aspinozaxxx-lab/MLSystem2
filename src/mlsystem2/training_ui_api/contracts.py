@@ -177,6 +177,31 @@ class TrainingTemplateListResponse(BaseModel):
     templates: list[TrainingTemplate]
 
 
+class InferenceTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    architecture: str
+    dataset_key: str | None = None
+    dataset_name: str | None = None
+    parent_template_id: UUID | None = None
+    display_name: str
+    config_schema: ConfigSchema
+    default_config: dict[str, Any]
+    source: TemplateSource
+    source_mlflow_run_id: str | None = None
+    is_active: bool
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class InferenceTemplateListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    templates: list[InferenceTemplate]
+
+
 class TrainingTemplateUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -197,6 +222,11 @@ class TrainingTemplateApplyField(BaseModel):
 
     key: str
     value: Any
+
+
+InferenceTemplateUpdate = TrainingTemplateUpdate
+InferenceTemplateCreate = TrainingTemplateCreate
+InferenceTemplateApplyField = TrainingTemplateApplyField
 
 
 class StoredFileInfo(BaseModel):
@@ -431,6 +461,11 @@ __all__ = [
     "JobStatus",
     "JobSummary",
     "JobType",
+    "InferenceTemplate",
+    "InferenceTemplateApplyField",
+    "InferenceTemplateCreate",
+    "InferenceTemplateListResponse",
+    "InferenceTemplateUpdate",
     "MLflowExperimentCreate",
     "MLflowExperimentInfo",
     "ModelInfo",

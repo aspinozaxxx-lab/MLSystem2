@@ -58,6 +58,46 @@ class TrainingTemplateRow(Base):
     parent_template: Mapped["TrainingTemplateRow | None"] = relationship(remote_side=[id])
 
 
+class InferenceTemplateRow(Base):
+    __tablename__ = "inference_templates"
+    __table_args__ = (
+        UniqueConstraint("architecture", "dataset_key", name="uq_inference_templates_architecture_dataset"),
+        Index("ix_inference_templates_architecture", "architecture"),
+        Index("ix_inference_templates_dataset_key", "dataset_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    architecture: Mapped[str] = mapped_column(String(96))
+    dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    dataset_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    parent_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("inference_templates.id"),
+        nullable=True,
+    )
+    display_name: Mapped[str] = mapped_column(String(160))
+    config_schema: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    default_config: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    baseline_default_config: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    source: Mapped[str] = mapped_column(String(32))
+    baseline_source: Mapped[str] = mapped_column(String(32))
+    source_mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    baseline_source_mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    parent_template: Mapped["InferenceTemplateRow | None"] = relationship(remote_side=[id])
+
+
 class StoredFileRow(Base):
     __tablename__ = "stored_files"
 
