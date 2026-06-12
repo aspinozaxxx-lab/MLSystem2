@@ -217,6 +217,13 @@ function renderHomePage() {
         </div>
         <span class="secondary">Открыть</span>
       </a>
+      <a class="card active" href="${escapeAttr(linkMap.open_webui || "#")}" target="_blank" rel="noreferrer">
+        <div>
+          <h2>Open WebUI</h2>
+          <p>Веб-интерфейс LLM-стека Ollama.</p>
+        </div>
+        <span class="secondary">Открыть</span>
+      </a>
     </section>
 
     <h2 class="section-title">Обучение моделей</h2>
