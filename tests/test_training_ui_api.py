@@ -550,6 +550,10 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert 'name="image_folder_key"' in app_js
     assert "imageFolderOptionLabel" in app_js
     assert "formatFileSize" in app_js
+    assert 'action="javascript:void(0)" method="post"' in app_js
+    assert "if (state.modal)" in app_js
+    assert "scheduleProgressRefresh(callback, true)" in app_js
+    assert "await renderClassResultPage(classKey)" in app_js
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -612,6 +616,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
                 "image_count": 2,
             }
         ]
+        second_image_folder = images_root / "kanopus" / "toguchinsk"
+        second_image_folder.mkdir(parents=True)
+        (second_image_folder / "scene-3.tif").touch()
 
         new_dir = mlmarkup_root / "Пожары" / "main"
         new_dir.mkdir(parents=True)
@@ -799,8 +806,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()
         assert folder_pseudo["type"] == "inference"
         assert folder_pseudo["config"]["image_folder_key"] == "kanopus/irkutsk"
+        second_folder_pseudo = client.post(
+            "/api/v1/results/classes/custom/pseudo-markup",
+            data={"image_folder_key": "kanopus/toguchinsk", "training_result_id": training_result_id},
+        ).json()
+        assert second_folder_pseudo["type"] == "inference"
+        assert second_folder_pseudo["config"]["image_folder_key"] == "kanopus/toguchinsk"
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
-        assert len(inference_queue) == 2
+        assert len(inference_queue) == 3
         pseudo_with_empty_upload = client.post(
             "/api/v1/results/classes/custom/pseudo-markup",
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
@@ -821,6 +834,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             if item["source_dataset_name"] == "kanopus/irkutsk"
         )
         assert client.get(folder_scenes["download_url"]).text.splitlines() == ["kanopus/irkutsk"]
+        second_folder_scenes = next(
+            item["scenes_file"]
+            for item in pseudo_results
+            if item["source_dataset_name"] == "kanopus/toguchinsk"
+        )
+        assert client.get(second_folder_scenes["download_url"]).text.splitlines() == ["kanopus/toguchinsk"]
         result_id = class_results["results"][0]["id"]
         session_factory = create_session_factory(get_config())
         with session_factory() as session:

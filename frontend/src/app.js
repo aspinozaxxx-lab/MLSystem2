@@ -71,6 +71,10 @@ function scheduleProgressRefresh(callback, enabled) {
   if (!enabled) return;
   progressRefreshTimer = window.setTimeout(() => {
     progressRefreshTimer = null;
+    if (state.modal) {
+      scheduleProgressRefresh(callback, true);
+      return;
+    }
     callback();
   }, PROGRESS_REFRESH_MS);
 }
@@ -1401,7 +1405,7 @@ function showPseudoModal(classKey, resultId) {
     <div class="modal-backdrop">
       <section class="modal-card">
         <h2>Сделать псевдоразметку</h2>
-        <form id="pseudo-form" class="form-stack">
+        <form id="pseudo-form" class="form-stack" action="javascript:void(0)" method="post">
           <label>Список снимков из датасета
             <input name="dataset_key" list="pseudo-datasets" autocomplete="off">
             <datalist id="pseudo-datasets">${datasetOptions}</datalist>
@@ -1450,7 +1454,7 @@ function showPseudoModal(classKey, resultId) {
     }
     await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request);
     closeModal();
-    renderClassResultPage(classKey);
+    await renderClassResultPage(classKey);
   });
 }
 
