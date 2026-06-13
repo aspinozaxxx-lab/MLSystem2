@@ -17,6 +17,7 @@
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
 - `DatasetInfo`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - датасеты и классы MLMarkup.
+- `ImageFolderInfo`, `ImageFolderListResponse` - папки подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT` с количеством TIFF.
 - `ModelInfo`, `ModelListResponse` - публичные модели из `models`.
 - `ConfigField`, `ConfigSchema`, `TrainingTemplate`, `TrainingTemplateListResponse`, `TrainingTemplateCreate`, `TrainingTemplateUpdate`, `TrainingTemplateApplyField`, `InferenceTemplate`, `InferenceTemplateListResponse`, `InferenceTemplateCreate`, `InferenceTemplateUpdate`, `InferenceTemplateApplyField` - шаблоны обучения и инференса.
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.

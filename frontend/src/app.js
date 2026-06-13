@@ -7,6 +7,7 @@ const state = {
   user: null,
   links: [],
   datasets: [],
+  imageFolders: [],
   classes: [],
   models: [],
   templates: [],
@@ -75,9 +76,10 @@ function scheduleProgressRefresh(callback, enabled) {
 }
 
 async function ensureSharedData() {
-  const [links, datasets, classes, models, templates, inferenceTemplates] = await Promise.all([
+  const [links, datasets, imageFolders, classes, models, templates, inferenceTemplates] = await Promise.all([
     apiJson("/app-links"),
     apiJson("/datasets"),
+    apiJson("/image-folders"),
     apiJson("/classes"),
     apiJson("/models"),
     apiJson("/training-templates"),
@@ -85,6 +87,7 @@ async function ensureSharedData() {
   ]);
   state.links = links.links || [];
   state.datasets = datasets.datasets || [];
+  state.imageFolders = imageFolders.folders || [];
   state.classes = classes.classes || [];
   state.models = models.models || [];
   state.templates = templates.templates || [];
@@ -1320,8 +1323,8 @@ function renderResultsTable(payload) {
 function renderPseudoTable(result) {
   const rows = result.pseudo_markup_results.map((item) => `
     <tr>
-      <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}"> ${escapeHtml(item.source_dataset_name)}</a>` : escapeHtml(item.source_dataset_name)}</td>
-      <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">скачать geojson</a>` : ""}</td>
+      <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}">${escapeHtml(imageSourceLabel(item))}</a>` : escapeHtml(imageSourceLabel(item))}</td>
+      <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">${escapeHtml(geojsonDownloadLabel(item.geojson_file))}</a>` : ""}</td>
       <td>${resultStatusView(item.status, item.source, "inference", item.progress)}</td>
       <td>${formatDateTime(item.created_at)}</td>
     </tr>
@@ -1343,8 +1346,57 @@ function renderPseudoTable(result) {
   `;
 }
 
+function datasetOptionLabel(item) {
+  const count = integerOrNull(item.image_count);
+  return count === null ? item.name : `${item.name} (${count} снимков)`;
+}
+
+function imageFolderOptionLabel(item) {
+  const count = integerOrNull(item.image_count);
+  return count === null ? item.name : `${item.name} (${count} снимков)`;
+}
+
+function imageSourceLabel(item) {
+  const count = imageSourceCount(item);
+  return count === null ? item.source_dataset_name : `${item.source_dataset_name} (${count})`;
+}
+
+function imageSourceCount(item) {
+  if (item.dataset_key && item.dataset_key !== "custom") {
+    const dataset = state.datasets.find((candidate) => candidate.key === item.dataset_key);
+    const count = integerOrNull(dataset?.image_count);
+    if (count !== null) return count;
+  }
+  const folder = state.imageFolders.find((candidate) => candidate.key === item.source_dataset_name);
+  return integerOrNull(folder?.image_count);
+}
+
+function geojsonDownloadLabel(file) {
+  const size = formatFileSize(file.size_bytes);
+  return size ? `скачать geojson (${size})` : "скачать geojson";
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${Math.round(bytes)} Б`;
+  if (bytes < 1024 * 1024) return `${formatDecimal(bytes / 1024)} КБ`;
+  return `${formatDecimal(bytes / (1024 * 1024))} МБ`;
+}
+
+function formatDecimal(value) {
+  const rounded = Math.round(value * 10) / 10;
+  return rounded.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+}
+
 function showPseudoModal(classKey, resultId) {
-  const options = state.datasets.filter((item) => item.key !== "custom").map((item) => `<option value="${escapeAttr(item.key)}">${escapeHtml(item.name)}</option>`).join("");
+  const datasetOptions = state.datasets
+    .filter((item) => item.key !== "custom")
+    .map((item) => `<option value="${escapeAttr(item.key)}">${escapeHtml(datasetOptionLabel(item))}</option>`)
+    .join("");
+  const folderOptions = state.imageFolders
+    .map((item) => `<option value="${escapeAttr(item.key)}">${escapeHtml(imageFolderOptionLabel(item))}</option>`)
+    .join("");
   state.modal = `
     <div class="modal-backdrop">
       <section class="modal-card">
@@ -1352,7 +1404,11 @@ function showPseudoModal(classKey, resultId) {
         <form id="pseudo-form" class="form-stack">
           <label>Список снимков из датасета
             <input name="dataset_key" list="pseudo-datasets" autocomplete="off">
-            <datalist id="pseudo-datasets">${options}</datalist>
+            <datalist id="pseudo-datasets">${datasetOptions}</datalist>
+          </label>
+          <label>Папка со снимками
+            <input name="image_folder_key" list="pseudo-image-folders" autocomplete="off">
+            <datalist id="pseudo-image-folders">${folderOptions}</datalist>
           </label>
           <label>Или свой TXT
             <input name="scenes_txt" type="file" accept=".txt,text/plain">
@@ -1372,15 +1428,24 @@ function showPseudoModal(classKey, resultId) {
     const form = new FormData(event.currentTarget);
     const file = form.get("scenes_txt");
     const datasetKey = String(form.get("dataset_key") || "").trim();
-    if ((!file || !(file instanceof File) || !file.name) && !datasetKey) {
-      showModal("Ошибка", "Выберите датасет или загрузите txt.", "Понятно");
+    const imageFolderKey = String(form.get("image_folder_key") || "").trim();
+    const hasFile = file instanceof File && Boolean(file.name);
+    const sourceCount = [Boolean(datasetKey), Boolean(imageFolderKey), hasFile].filter(Boolean).length;
+    if (sourceCount === 0) {
+      showModal("Ошибка", "Выберите датасет, папку снимков или загрузите txt.", "Понятно");
+      return;
+    }
+    if (sourceCount > 1) {
+      showModal("Ошибка", "Выберите только один источник снимков.", "Понятно");
       return;
     }
     const request = new FormData();
     if (resultId) request.set("training_result_id", resultId);
     if (datasetKey) {
       request.set("dataset_key", datasetKey);
-    } else if (file instanceof File && file.name) {
+    } else if (imageFolderKey) {
+      request.set("image_folder_key", imageFolderKey);
+    } else if (hasFile) {
       request.set("scenes_txt", file);
     }
     await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request);

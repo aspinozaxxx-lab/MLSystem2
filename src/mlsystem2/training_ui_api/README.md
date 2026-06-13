@@ -35,6 +35,7 @@
 - `GET /api/v1/mlflow/experiments`
 - `POST /api/v1/mlflow/experiments`
 - `GET /api/v1/datasets`
+- `GET /api/v1/image-folders`
 - `GET /api/v1/classes`
 - `POST /api/v1/custom-datasets`
 - `GET /api/v1/models`
@@ -77,7 +78,12 @@ OpenAPI доступен стандартно по `/openapi.json`.
 вариант. `updated_at` у варианта заполняется по последнему git-коммиту, затронувшему папку варианта в
 `MLSYSTEM2_MLMARKUP_ROOT`. Если `MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem
 mtime как fallback. `version` у варианта равен `git:{commit_sha}` или `fs:{mtime_ns}` и используется автоматизацией
-для дедупликации jobs по конкретной версии датасета.
+для дедупликации jobs по конкретной версии датасета. `image_count` у варианта считается по txt-списку сцен через
+индекс подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT`: строки-папки разворачиваются в фактические TIFF, повторы
+удаляются.
+
+`GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
+имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.
 
 `GET /api/v1/automation` возвращает глобальный выключатель, непустые MLMarkup-датасеты без `Custom`, UI-модели и
 матрицу правил `(dataset_key, architecture)`. `PUT /api/v1/automation/enabled` включает автоматику или полностью
@@ -169,10 +175,12 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt`,
 `inference_template_id`, `inference_template_config` и, когда MLflow доступен, полный `checkpoint_uri`.
 
-Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета или загруженного файла, скачивает `checkpoints/best.pt`
+Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
+загруженного файла, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
 строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
-`/api/v1/files/{file_id}/download`.
+`/api/v1/files/{file_id}/download`. При выборе папки сервис создает stored txt с одной строкой-относительным путем
+папки. `StoredFileInfo.size_bytes` используется frontend для отображения размера скачиваемого GeoJSON.
 
 Перед инференсом раннер ищет реальные TIFF по строкам txt, удаляет повторные совпадения и выбирает профиль
 постобработки по числу уникальных снимков. Для `<=5` снимков используется прежний режим без постобработки, для

@@ -42,6 +42,7 @@ from ._service import (
     ensure_seed_templates,
     inference_template,
     inference_templates,
+    image_folders,
     job_detail,
     mlflow_experiments,
     models,
@@ -75,6 +76,7 @@ from .contracts import (
     InferenceTemplateCreate,
     InferenceTemplateListResponse,
     InferenceTemplateUpdate,
+    ImageFolderListResponse,
     JobDetail,
     JobType,
     MLflowExperimentCreate,
@@ -197,6 +199,10 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/datasets", response_model=DatasetListResponse)
     def get_datasets(_: str = Depends(authenticated)) -> DatasetListResponse:
         return datasets(config)
+
+    @app.get("/api/v1/image-folders", response_model=ImageFolderListResponse)
+    def get_image_folders(_: str = Depends(authenticated)) -> ImageFolderListResponse:
+        return image_folders(config)
 
     @app.get("/api/v1/classes", response_model=ClassListResponse)
     def get_classes(_: str = Depends(authenticated)) -> ClassListResponse:
@@ -477,6 +483,7 @@ def create_app() -> FastAPI:
         db: Session = Depends(get_db),
         _: str = Depends(authenticated),
         dataset_key: str | None = Form(default=None),
+        image_folder_key: str | None = Form(default=None),
         training_result_id: str | None = Form(default=None),
         scenes_txt: UploadFile | None = File(default=None),
     ) -> JobDetail:
@@ -487,6 +494,7 @@ def create_app() -> FastAPI:
             db,
             class_key=class_key,
             dataset_key=dataset_key,
+            image_folder_key=image_folder_key,
             training_result_id=parsed_training_result_id,
             scenes_name=scenes_name,
             scenes_content_type=scenes_txt.content_type if scenes_name is not None else None,

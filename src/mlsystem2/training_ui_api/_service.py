@@ -34,7 +34,15 @@ from ._automation import (
 )
 from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
-from ._datasets import CUSTOM_KEY, CUSTOM_NAME, find_dataset, list_classes, list_datasets
+from ._datasets import (
+    CUSTOM_KEY,
+    CUSTOM_NAME,
+    find_dataset,
+    find_image_folder,
+    list_classes,
+    list_datasets,
+    list_image_folders,
+)
 from ._models import (
     CustomDatasetRow,
     InferenceTemplateRow,
@@ -66,6 +74,7 @@ from .contracts import (
     CustomDatasetInfo,
     DatasetInfo,
     DatasetListResponse,
+    ImageFolderListResponse,
     InferenceTemplate,
     InferenceTemplateApplyField,
     InferenceTemplateCreate,
@@ -133,11 +142,15 @@ def create_mlflow_experiment(
 
 
 def datasets(config: TrainingUIAPIConfig) -> DatasetListResponse:
-    return DatasetListResponse(datasets=list_datasets(config.mlmarkup_root))
+    return DatasetListResponse(datasets=list_datasets(config.mlmarkup_root, config.images_root))
 
 
 def classes(config: TrainingUIAPIConfig) -> ClassListResponse:
-    return ClassListResponse(classes=list_classes(config.mlmarkup_root))
+    return ClassListResponse(classes=list_classes(config.mlmarkup_root, config.images_root))
+
+
+def image_folders(config: TrainingUIAPIConfig) -> ImageFolderListResponse:
+    return ImageFolderListResponse(folders=list_image_folders(config.images_root))
 
 
 def models() -> ModelListResponse:
@@ -810,6 +823,7 @@ def create_pseudo_markup_job(
     *,
     class_key: str,
     dataset_key: str | None,
+    image_folder_key: str | None,
     training_result_id: uuid.UUID | None,
     scenes_name: str | None,
     scenes_content_type: str | None,
@@ -818,6 +832,13 @@ def create_pseudo_markup_job(
 ) -> JobDetail:
     ensure_seed_templates(session)
     dataset_key = (dataset_key or "").strip() or None
+    image_folder_key = (image_folder_key or "").strip().strip("/").replace("\\", "/") or None
+    has_uploaded_scenes = scenes_bytes is not None and scenes_name is not None
+    source_count = sum(1 for value in (has_uploaded_scenes, bool(dataset_key), bool(image_folder_key)) if value)
+    if source_count != 1:
+        if source_count == 0:
+            raise TrainingUIAPIError("Выберите датасет, папку снимков или загрузите txt со снимками")
+        raise TrainingUIAPIError("Выберите только один источник снимков")
     class_dataset = find_dataset(config.mlmarkup_root, class_key)
     class_name = class_dataset.name if class_dataset else class_key
     training_result = _resolve_training_result(session, training_result_id)
@@ -834,7 +855,7 @@ def create_pseudo_markup_job(
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
     inference_dataset_version: str | None = None
-    if scenes_bytes is not None and scenes_name is not None:
+    if has_uploaded_scenes:
         _validate_upload_name(scenes_name, ".txt")
         scenes_row = _store_file(
             session,
@@ -857,8 +878,22 @@ def create_pseudo_markup_job(
                 path=Path(dataset.scenes_file),
             )
             scenes_file_id = scenes_row.id
+    elif image_folder_key:
+        folder = find_image_folder(config.images_root, image_folder_key)
+        if folder is None:
+            raise TrainingUIAPIError(f"Папка снимков не найдена: {image_folder_key}")
+        scenes_row = _store_file(
+            session,
+            kind=StoredFileKind.SCENES_TXT,
+            original_name=f"{Path(image_folder_key).name or 'images'}.txt",
+            content_type="text/plain",
+            content=f"{image_folder_key}\n".encode("utf-8"),
+            config=config,
+        )
+        scenes_file_id = scenes_row.id
+        dataset_name = folder.name
     else:
-        raise TrainingUIAPIError("Выберите датасет или загрузите txt со снимками")
+        raise TrainingUIAPIError("Выберите датасет, папку снимков или загрузите txt со снимками")
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.MANUAL.value,
@@ -874,6 +909,7 @@ def create_pseudo_markup_job(
         config={
             "class_key": class_key,
             "dataset_key": dataset_key or CUSTOM_KEY,
+            "image_folder_key": image_folder_key,
             "training_result_id": str(training_result_id) if training_result_id else None,
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,

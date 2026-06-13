@@ -91,6 +91,7 @@ class DatasetInfo(BaseModel):
     is_custom: bool = False
     scenes_file: str | None = None
     annotation_file: str | None = None
+    image_count: int | None = None
     version: str | None = None
     updated_at: datetime | None = None
 
@@ -99,6 +100,21 @@ class DatasetListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     datasets: list[DatasetInfo]
+
+
+class ImageFolderInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    path: str
+    image_count: int
+
+
+class ImageFolderListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    folders: list[ImageFolderInfo]
 
 
 class ClassInfo(BaseModel):
@@ -456,6 +472,8 @@ __all__ = [
     "CustomDatasetInfo",
     "DatasetInfo",
     "DatasetListResponse",
+    "ImageFolderInfo",
+    "ImageFolderListResponse",
     "JobDetail",
     "JobSource",
     "JobStatus",

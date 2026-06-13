@@ -4,31 +4,34 @@ from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from .contracts import ClassInfo, DatasetInfo
+from .contracts import ClassInfo, DatasetInfo, ImageFolderInfo
 
 
 CUSTOM_KEY = "custom"
 CUSTOM_NAME = "Custom"
 DEFAULT_VARIANT = "main"
+RASTER_SUFFIXES = (".tif", ".tiff")
 
 
-def list_datasets(mlmarkup_root: Path) -> list[DatasetInfo]:
+def list_datasets(mlmarkup_root: Path, images_root: Path | None = None) -> list[DatasetInfo]:
+    image_index = _image_index(images_root) if images_root is not None else None
     datasets = [
         variant
         for class_dir in _class_dirs(mlmarkup_root)
-        for variant in _datasets_from_class_folder(class_dir, mlmarkup_root)
+        for variant in _datasets_from_class_folder(class_dir, mlmarkup_root, image_index)
     ]
     datasets.sort(key=lambda item: item.name.lower())
     datasets.append(DatasetInfo(key=CUSTOM_KEY, name=CUSTOM_NAME, is_custom=True))
     return datasets
 
 
-def list_classes(mlmarkup_root: Path) -> list[ClassInfo]:
+def list_classes(mlmarkup_root: Path, images_root: Path | None = None) -> list[ClassInfo]:
+    image_index = _image_index(images_root) if images_root is not None else None
     classes: list[ClassInfo] = []
     for path in _class_dirs(mlmarkup_root):
-        variants = _datasets_from_class_folder(path, mlmarkup_root)
+        variants = _datasets_from_class_folder(path, mlmarkup_root, image_index)
         if not variants:
             continue
         classes.append(
@@ -53,15 +56,45 @@ def list_classes(mlmarkup_root: Path) -> list[ClassInfo]:
     return classes
 
 
-def find_class(mlmarkup_root: Path, class_key: str) -> ClassInfo | None:
-    for item in list_classes(mlmarkup_root):
+def list_image_folders(images_root: Path) -> list[ImageFolderInfo]:
+    root = Path(images_root)
+    if not root.exists() or not root.is_dir():
+        return []
+    folders: list[ImageFolderInfo] = []
+    for path in sorted((item for item in root.rglob("*") if item.is_dir()), key=lambda item: item.as_posix().lower()):
+        if any(part.startswith(".") for part in path.relative_to(root).parts):
+            continue
+        count = _direct_raster_count(path)
+        if count <= 0:
+            continue
+        key = path.relative_to(root).as_posix()
+        folders.append(
+            ImageFolderInfo(
+                key=key,
+                name=key,
+                path=str(path),
+                image_count=count,
+            )
+        )
+    return folders
+
+
+def find_image_folder(images_root: Path, folder_key: str) -> ImageFolderInfo | None:
+    for item in list_image_folders(images_root):
+        if item.key == folder_key:
+            return item
+    return None
+
+
+def find_class(mlmarkup_root: Path, class_key: str, images_root: Path | None = None) -> ClassInfo | None:
+    for item in list_classes(mlmarkup_root, images_root):
         if item.key == class_key:
             return item
     return None
 
 
-def find_dataset(mlmarkup_root: Path, dataset_key: str) -> DatasetInfo | None:
-    for item in list_datasets(mlmarkup_root):
+def find_dataset(mlmarkup_root: Path, dataset_key: str, images_root: Path | None = None) -> DatasetInfo | None:
+    for item in list_datasets(mlmarkup_root, images_root):
         if item.key == dataset_key:
             return item
     return None
@@ -73,7 +106,11 @@ def _class_dirs(root: Path) -> list[Path]:
     return [path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")]
 
 
-def _datasets_from_class_folder(class_path: Path, repo_root: Path) -> list[DatasetInfo]:
+def _datasets_from_class_folder(
+    class_path: Path,
+    repo_root: Path,
+    image_index: dict[str, list[Path]] | None,
+) -> list[DatasetInfo]:
     variant_paths = [
         path
         for path in class_path.iterdir()
@@ -87,6 +124,7 @@ def _datasets_from_class_folder(class_path: Path, repo_root: Path) -> list[Datas
             class_path=class_path,
             variant_path=variant_path,
             repo_root=repo_root,
+            image_index=image_index,
         )
         for variant_path in variant_paths
     ]
@@ -97,6 +135,7 @@ def _dataset_from_variant_folder(
     class_path: Path,
     variant_path: Path,
     repo_root: Path,
+    image_index: dict[str, list[Path]] | None,
 ) -> DatasetInfo:
     variant_name = variant_path.name if variant_path != class_path else DEFAULT_VARIANT
     dataset_name = _dataset_display_name(class_path.name, variant_name)
@@ -113,6 +152,7 @@ def _dataset_from_variant_folder(
         path=str(variant_path),
         scenes_file=str(scenes_file) if scenes_file else None,
         annotation_file=str(annotation_file) if annotation_file else None,
+        image_count=_dataset_image_count(scenes_file, image_index),
         version=version,
         updated_at=updated_at,
     )
@@ -129,6 +169,97 @@ def _looks_like_dataset_folder(path: Path) -> bool:
 def _first_file(path: Path, suffix: str) -> Path | None:
     files = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() == suffix)
     return files[0] if files else None
+
+
+def _direct_raster_count(path: Path) -> int:
+    return sum(1 for item in path.iterdir() if item.is_file() and item.suffix.lower() in RASTER_SUFFIXES)
+
+
+def _dataset_image_count(scenes_file: Path | None, image_index: dict[str, list[Path]] | None) -> int | None:
+    if scenes_file is None or image_index is None:
+        return None
+    try:
+        scenes = [line.strip() for line in scenes_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return None
+    found: set[Path] = set()
+    for scene in scenes:
+        found.update(_find_images(scene, image_index))
+    return len(found)
+
+
+def _image_index(images_root: Path) -> dict[str, list[Path]]:
+    root = Path(images_root)
+    if not root.exists() or not root.is_dir():
+        return {}
+    files = [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in RASTER_SUFFIXES
+    ]
+    index: dict[str, list[Path]] = {}
+    for path in sorted(files):
+        for key in _scene_lookup_keys(path.name):
+            _add_index_path(index, key, path)
+        for key in _scene_lookup_keys(path.stem):
+            _add_index_path(index, key, path)
+        for parent in path.parents:
+            if parent == root:
+                break
+            for key in _scene_lookup_keys(parent.name):
+                _add_index_path(index, key, path)
+            try:
+                relative_parent = parent.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            for key in _scene_lookup_keys(relative_parent):
+                _add_index_path(index, key, path)
+    return index
+
+
+def _add_index_path(index: dict[str, list[Path]], key: str, path: Path) -> None:
+    paths = index.setdefault(key, [])
+    if path not in paths:
+        paths.append(path)
+
+
+def _find_images(scene: str, index: dict[str, list[Path]]) -> list[Path]:
+    found: list[Path] = []
+    for key in _scene_lookup_keys(scene):
+        for path in index.get(key, []):
+            if path not in found:
+                found.append(path)
+    return sorted(found)
+
+
+def _scene_lookup_keys(value: str) -> set[str]:
+    raw = value.strip().replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    raw = raw.strip("/")
+    if not raw:
+        return set()
+
+    path = PurePosixPath(raw)
+    variants = {raw, path.name, path.stem, _strip_raster_suffix(raw), _strip_raster_suffix(path.name)}
+    keys: set[str] = set()
+    for variant in variants:
+        if not variant:
+            continue
+        keys.add(variant.lower())
+        if variant.endswith("_cog"):
+            keys.add(variant[:-4].lower())
+        else:
+            keys.add(f"{variant}_cog".lower())
+    return keys
+
+
+def _strip_raster_suffix(value: str) -> str:
+    lowered = value.lower()
+    for suffix in (".tiff", ".tif"):
+        if lowered.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
 
 
 def _latest_updated_at(datasets: list[DatasetInfo]) -> datetime | None:

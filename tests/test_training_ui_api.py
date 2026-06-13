@@ -546,6 +546,10 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert 'name="threshold"' not in app_js
     assert "metadata.sample_size" in app_js
     assert 'downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`)' in app_js
+    assert 'apiJson("/image-folders")' in app_js
+    assert 'name="image_folder_key"' in app_js
+    assert "imageFolderOptionLabel" in app_js
+    assert "formatFileSize" in app_js
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -554,6 +558,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     class_dir.mkdir(parents=True)
     (class_dir / "deforestation.txt").write_text("scene-1\n", encoding="utf-8")
     (class_dir / "deforestation.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    images_root = tmp_path / "prepared_images"
+    image_folder = images_root / "kanopus" / "irkutsk"
+    image_folder.mkdir(parents=True)
+    (image_folder / "scene-1.tif").touch()
+    (image_folder / "scene-2.tif").touch()
     frontend_dist = tmp_path / "frontend" / "dist"
     (frontend_dist / "assets").mkdir(parents=True)
     (frontend_dist / "index.html").write_text("<!doctype html><title>MLSystem2</title>", encoding="utf-8")
@@ -565,6 +574,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_FRONTEND_DIST", str(frontend_dist))
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(images_root))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER", "mluser")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_PASSWORD", "secret")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SESSION_SECRET", "test-session-secret")
@@ -592,6 +602,16 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == ["Вырубки\\main", "Custom"]
+        assert datasets[0]["image_count"] == 1
+        image_folders = client.get("/api/v1/image-folders").json()["folders"]
+        assert image_folders == [
+            {
+                "key": "kanopus/irkutsk",
+                "name": "kanopus/irkutsk",
+                "path": str(image_folder),
+                "image_count": 2,
+            }
+        ]
 
         new_dir = mlmarkup_root / "Пожары" / "main"
         new_dir.mkdir(parents=True)
@@ -763,8 +783,24 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert pseudo["type"] == "inference"
         assert pseudo["config"]["inference_template_id"] == updated_inference_dataset_template["id"]
         assert pseudo["config"]["inference_template_config"]["postprocess.min_area_m2"] == 2222.0
+        conflict = client.post(
+            "/api/v1/results/classes/custom/pseudo-markup",
+            data={
+                "dataset_key": "Вырубки\\main",
+                "image_folder_key": "kanopus/irkutsk",
+                "training_result_id": training_result_id,
+            },
+        )
+        assert conflict.status_code == 400
+        assert conflict.json()["detail"] == "Выберите только один источник снимков"
+        folder_pseudo = client.post(
+            "/api/v1/results/classes/custom/pseudo-markup",
+            data={"image_folder_key": "kanopus/irkutsk", "training_result_id": training_result_id},
+        ).json()
+        assert folder_pseudo["type"] == "inference"
+        assert folder_pseudo["config"]["image_folder_key"] == "kanopus/irkutsk"
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
-        assert len(inference_queue) == 1
+        assert len(inference_queue) == 2
         pseudo_with_empty_upload = client.post(
             "/api/v1/results/classes/custom/pseudo-markup",
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
@@ -772,8 +808,19 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()
         assert pseudo_with_empty_upload["type"] == "inference"
         class_results = client.get("/api/v1/results/classes/custom").json()
-        pseudo_scenes = class_results["results"][0]["pseudo_markup_results"][0]["scenes_file"]
+        pseudo_results = class_results["results"][0]["pseudo_markup_results"]
+        pseudo_scenes = next(
+            item["scenes_file"]
+            for item in pseudo_results
+            if item["source_dataset_name"] == "Вырубки\\main"
+        )
         assert client.get(pseudo_scenes["download_url"]).text.splitlines() == ["scene-1"]
+        folder_scenes = next(
+            item["scenes_file"]
+            for item in pseudo_results
+            if item["source_dataset_name"] == "kanopus/irkutsk"
+        )
+        assert client.get(folder_scenes["download_url"]).text.splitlines() == ["kanopus/irkutsk"]
         result_id = class_results["results"][0]["id"]
         session_factory = create_session_factory(get_config())
         with session_factory() as session:
@@ -1379,6 +1426,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
             session,
             class_key="Вырубки\\main",
             dataset_key="Вырубки\\main",
+            image_folder_key=None,
             training_result_id=result.id,
             scenes_name=None,
             scenes_content_type=None,
