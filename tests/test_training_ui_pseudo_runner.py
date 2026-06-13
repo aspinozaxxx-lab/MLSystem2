@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
 
 from mlsystem2.training_ui_api._pseudo_runner import (
-    _completed_request_scene_count,
+    _completed_image_count,
     _collect_scene_inputs,
     _final_status,
     _features_from_mask,
@@ -18,6 +20,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _postprocess_profile_from_config,
     _select_postprocess_profile,
     _summary,
+    _write_pseudo_progress,
 )
 
 
@@ -112,14 +115,75 @@ def test_collect_scene_inputs_deduplicates_found_rasters(tmp_path) -> None:
     assert missing == ["lost"]
 
 
-def test_completed_request_scene_count_uses_original_txt_rows() -> None:
-    assert _completed_request_scene_count(
+def test_completed_image_count_uses_finished_image_reports() -> None:
+    assert _completed_image_count(
         [
             {"status": "missing_image"},
             {"status": "ok", "request_scenes": ["a", "b"], "request_scene_count": 3},
             {"status": "failed", "request_scenes": ["c"]},
+            {"status": "running"},
         ]
-    ) == 5
+    ) == 3
+
+
+def test_pseudo_progress_counts_folder_entry_as_found_images(tmp_path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    _write_pseudo_progress(
+        progress_path,
+        total=2,
+        started=0.0,
+        scene_reports=[
+            {
+                "status": "ok",
+                "request_scenes": ["irkutsk"],
+                "request_scene_count": 1,
+            }
+        ],
+        failures=[],
+    )
+
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert payload["current"] == 1
+    assert payload["total"] == 2
+
+
+def test_pseudo_progress_counts_unique_found_images_plus_missing(tmp_path) -> None:
+    scene_dir = tmp_path / "kanopus" / "irkutsk"
+    scene_dir.mkdir(parents=True)
+    first = scene_dir / "KV3_100.L2.PMS.SCN01_cog.tif"
+    second = scene_dir / "KV3_101.L2.PMS.SCN02.tif"
+    first.touch()
+    second.touch()
+    index = _image_index(tmp_path)
+
+    inputs, missing = _collect_scene_inputs(
+        ["irkutsk", "KV3_100.L2.PMS.SCN01.tif", "lost"],
+        index,
+    )
+    progress_path = tmp_path / "progress.json"
+
+    _write_pseudo_progress(
+        progress_path,
+        total=len(inputs) + len(missing),
+        started=0.0,
+        scene_reports=[
+            {"status": "missing_image"},
+            {
+                "status": "ok",
+                "request_scenes": ["irkutsk", "KV3_100.L2.PMS.SCN01.tif"],
+                "request_scene_count": 2,
+            },
+            {"status": "failed", "request_scenes": ["irkutsk"], "request_scene_count": 1},
+        ],
+        failures=[{"scene_id": "KV3_101.L2.PMS.SCN02", "error": "boom"}],
+    )
+
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert len(inputs) == 2
+    assert missing == ["lost"]
+    assert payload["current"] == 3
+    assert payload["total"] == 3
 
 
 def test_detail_v2_filters_small_polygons_and_holes_in_metric_crs() -> None:

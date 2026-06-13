@@ -100,6 +100,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     scenes = _read_scenes(Path(config["scenes_file"]))
     image_index = _image_index(Path(config["images_root"]))
     scene_inputs, missing = _collect_scene_inputs(scenes, image_index)
+    progress_total = len(scene_inputs) + len(missing)
     postprocess_profile = _postprocess_profile_from_config(
         _select_postprocess_profile(len(scene_inputs)),
         config.get("postprocess_config"),
@@ -110,7 +111,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     failures: list[dict[str, Any]] = []
     _write_pseudo_progress(
         progress_path,
-        total=len(scenes),
+        total=progress_total,
         started=started,
         scene_reports=scene_reports,
         failures=failures,
@@ -134,7 +135,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         failures = [{"stage": "load_checkpoint", "error": repr(exc)}]
         _write_pseudo_progress(
             progress_path,
-            total=len(scenes),
+            total=progress_total,
             started=started,
             scene_reports=scene_reports,
             failures=failures,
@@ -166,7 +167,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         )
     _write_pseudo_progress(
         progress_path,
-        total=len(scenes),
+        total=progress_total,
         started=started,
         scene_reports=scene_reports,
         failures=failures,
@@ -229,7 +230,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             )
         _write_pseudo_progress(
             progress_path,
-            total=len(scenes),
+            total=progress_total,
             started=started,
             scene_reports=scene_reports,
             failures=failures,
@@ -984,7 +985,7 @@ def _write_pseudo_progress(
     scene_reports: list[dict[str, Any]],
     failures: list[dict[str, Any]],
 ) -> None:
-    current = min(total, _completed_request_scene_count(scene_reports))
+    current = min(total, _completed_image_count(scene_reports))
     payload = {
         "current": current,
         "total": total,
@@ -1002,22 +1003,9 @@ def _write_pseudo_progress(
         tmp_path.unlink(missing_ok=True)
 
 
-def _completed_request_scene_count(scene_reports: list[dict[str, Any]]) -> int:
-    total = 0
-    for report in scene_reports:
-        count = report.get("request_scene_count")
-        if count is not None:
-            try:
-                total += max(1, int(count))
-                continue
-            except (TypeError, ValueError):
-                pass
-        request_scenes = report.get("request_scenes")
-        if isinstance(request_scenes, list):
-            total += max(1, len(request_scenes))
-        else:
-            total += 1
-    return total
+def _completed_image_count(scene_reports: list[dict[str, Any]]) -> int:
+    completed_statuses = {"ok", "failed", "missing_image"}
+    return sum(1 for report in scene_reports if report.get("status") in completed_statuses)
 
 
 def _summary(

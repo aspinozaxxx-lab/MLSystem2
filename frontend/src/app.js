@@ -1611,7 +1611,7 @@ function runningProgressLabel(type, progress) {
   const total = integerOrNull(progress.total);
   const elapsed = integerOrNull(progress.elapsed_minutes);
   if (type === "inference" && current !== null && total !== null) {
-    return `${current}/${total}`;
+    return `${current}/${total} снимков`;
   }
   if (type === "training" && current !== null) {
     return elapsed !== null ? `${current} (${elapsed}м)` : `${current}`;
