@@ -840,6 +840,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             if item["source_dataset_name"] == "kanopus/toguchinsk"
         )
         assert client.get(second_folder_scenes["download_url"]).text.splitlines() == ["kanopus/toguchinsk"]
+        deleted_folder_pseudo = client.delete(f"/api/v1/jobs/{second_folder_pseudo['id']}")
+        assert deleted_folder_pseudo.status_code == 200
+        queue_after_delete = client.get("/api/v1/queues").json()["inference_jobs"]
+        assert second_folder_pseudo["id"] not in {item["id"] for item in queue_after_delete}
         result_id = class_results["results"][0]["id"]
         session_factory = create_session_factory(get_config())
         with session_factory() as session:

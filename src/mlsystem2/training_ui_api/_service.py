@@ -1165,15 +1165,23 @@ def _stop_process_and_cleanup(row: JobRow) -> None:
 def _delete_job_rows(session: Session, row: JobRow) -> None:
     training_results = session.scalars(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)).all()
     training_result_ids = [item.id for item in training_results]
-    for result in session.scalars(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)).all():
-        session.delete(result)
+    pseudo_results = {
+        result.id: result
+        for result in session.scalars(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)).all()
+    }
     if training_result_ids:
         for result in session.scalars(
             select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
         ).all():
-            session.delete(result)
+            pseudo_results[result.id] = result
+    for result in pseudo_results.values():
+        session.delete(result)
+    if pseudo_results:
+        session.flush()
     for result in training_results:
         session.delete(result)
+    if training_results:
+        session.flush()
     session.delete(row)
 
 
