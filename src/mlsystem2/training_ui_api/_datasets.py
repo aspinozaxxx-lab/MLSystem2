@@ -86,6 +86,10 @@ def find_image_folder(images_root: Path, folder_key: str) -> ImageFolderInfo | N
     return None
 
 
+def count_scenes_file_images(scenes_file: Path | None, images_root: Path) -> int | None:
+    return _dataset_image_count(scenes_file, _image_index(images_root))
+
+
 def find_class(mlmarkup_root: Path, class_key: str, images_root: Path | None = None) -> ClassInfo | None:
     for item in list_classes(mlmarkup_root, images_root):
         if item.key == class_key:

@@ -383,6 +383,7 @@ class PseudoMarkupResultInfo(BaseModel):
     source_dataset_name: str
     scenes_file: StoredFileInfo | None = None
     geojson_file: StoredFileInfo | None = None
+    image_count: int | None = None
     status: ResultStatus
     created_at: datetime
     progress: RuntimeProgress | None = None

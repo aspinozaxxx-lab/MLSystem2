@@ -37,6 +37,7 @@ from ._config import TrainingUIAPIConfig, get_config
 from ._datasets import (
     CUSTOM_KEY,
     CUSTOM_NAME,
+    count_scenes_file_images,
     find_dataset,
     find_image_folder,
     list_classes,
@@ -935,6 +936,34 @@ def create_pseudo_markup_job(
     return _job_detail(session, row)
 
 
+def delete_pseudo_markup_result(
+    session: Session,
+    result_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+) -> PseudoMarkupResultInfo:
+    row = session.get(PseudoMarkupResultRow, result_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Результат псевдоразметки не найден: {result_id}")
+    detail = _pseudo_markup_info(session, row)
+    job = session.get(JobRow, row.job_id) if row.job_id is not None else None
+    if job is not None and job.status == JobStatus.RUNNING.value:
+        _stop_process_and_cleanup(job)
+    stored_files = [row.scenes_file, row.geojson_file]
+    session.delete(row)
+    session.flush()
+    if job is not None and job.type == JobType.INFERENCE.value:
+        remaining = session.scalar(
+            select(PseudoMarkupResultRow.id).where(PseudoMarkupResultRow.job_id == job.id).limit(1)
+        )
+        if remaining is None:
+            session.delete(job)
+            session.flush()
+    for file_row in stored_files:
+        _delete_owned_stored_file_if_unreferenced(session, file_row, config)
+    session.flush()
+    return detail
+
+
 def _resolve_training_result(
     session: Session,
     training_result_id: uuid.UUID | None,
@@ -1105,6 +1134,49 @@ def _store_existing_file(session: Session, *, kind: StoredFileKind, path: Path) 
     session.add(row)
     session.flush()
     return row
+
+
+def _delete_owned_stored_file_if_unreferenced(
+    session: Session,
+    row: StoredFileRow | None,
+    config: TrainingUIAPIConfig,
+) -> None:
+    if row is None or _stored_file_is_referenced(session, row.id):
+        return
+    if not _is_owned_stored_file(row, config):
+        return
+    Path(row.path).unlink(missing_ok=True)
+    session.delete(row)
+
+
+def _stored_file_is_referenced(session: Session, file_id: uuid.UUID) -> bool:
+    pseudo_reference = session.scalar(
+        select(PseudoMarkupResultRow.id)
+        .where(
+            (PseudoMarkupResultRow.scenes_file_id == file_id)
+            | (PseudoMarkupResultRow.geojson_file_id == file_id)
+        )
+        .limit(1)
+    )
+    if pseudo_reference is not None:
+        return True
+    custom_reference = session.scalar(
+        select(CustomDatasetRow.id)
+        .where(
+            (CustomDatasetRow.scenes_file_id == file_id)
+            | (CustomDatasetRow.annotation_file_id == file_id)
+        )
+        .limit(1)
+    )
+    return custom_reference is not None
+
+
+def _is_owned_stored_file(row: StoredFileRow, config: TrainingUIAPIConfig) -> bool:
+    try:
+        Path(row.path).resolve().relative_to(config.stored_files_root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _validate_upload_name(name: str, suffix: str) -> None:
@@ -1398,10 +1470,17 @@ def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoM
         source_dataset_name=row.source_dataset_name,
         scenes_file=_stored_file_info(row.scenes_file),
         geojson_file=_stored_file_info(row.geojson_file),
+        image_count=_pseudo_markup_image_count(row),
         status=ResultStatus(row.status),
         created_at=row.created_at,
         progress=_pseudo_result_progress(session, row),
     )
+
+
+def _pseudo_markup_image_count(row: PseudoMarkupResultRow) -> int | None:
+    if row.scenes_file is None:
+        return None
+    return count_scenes_file_images(Path(row.scenes_file.path), get_config().images_root)
 
 
 def _job_progress(session: Session, row: JobRow) -> RuntimeProgress | None:

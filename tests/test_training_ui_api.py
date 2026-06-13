@@ -20,7 +20,7 @@ from mlsystem2.training_ui_api import _app, _automation, _model_export, _service
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
-from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
 from mlsystem2.training_ui_api._worker import (
     dispatch_inference_queue_once,
@@ -554,6 +554,9 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "if (state.modal)" in app_js
     assert "scheduleProgressRefresh(callback, true)" in app_js
     assert "await renderClassResultPage(classKey)" in app_js
+    assert 'class="icon-button danger pseudo-delete-button"' in app_js
+    assert "/results/pseudo-markup/" in app_js
+    assert 'item.status === "ok"' in app_js
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -812,8 +815,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()
         assert second_folder_pseudo["type"] == "inference"
         assert second_folder_pseudo["config"]["image_folder_key"] == "kanopus/toguchinsk"
+        uploaded_txt_pseudo = client.post(
+            "/api/v1/results/classes/custom/pseudo-markup",
+            data={"training_result_id": training_result_id},
+            files={"scenes_txt": ("manual.txt", b"kanopus/irkutsk\n", "text/plain")},
+        ).json()
+        assert uploaded_txt_pseudo["type"] == "inference"
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
-        assert len(inference_queue) == 3
+        assert len(inference_queue) == 4
         pseudo_with_empty_upload = client.post(
             "/api/v1/results/classes/custom/pseudo-markup",
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
@@ -834,16 +843,29 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             if item["source_dataset_name"] == "kanopus/irkutsk"
         )
         assert client.get(folder_scenes["download_url"]).text.splitlines() == ["kanopus/irkutsk"]
+        folder_result = next(item for item in pseudo_results if item["source_dataset_name"] == "kanopus/irkutsk")
+        assert folder_result["image_count"] == 2
         second_folder_scenes = next(
             item["scenes_file"]
             for item in pseudo_results
             if item["source_dataset_name"] == "kanopus/toguchinsk"
         )
         assert client.get(second_folder_scenes["download_url"]).text.splitlines() == ["kanopus/toguchinsk"]
+        uploaded_txt_result = next(
+            item
+            for item in pseudo_results
+            if item["source_dataset_name"] == "Custom" and item["scenes_file"]["original_name"] == "manual.txt"
+        )
+        assert uploaded_txt_result["image_count"] == 2
         deleted_folder_pseudo = client.delete(f"/api/v1/jobs/{second_folder_pseudo['id']}")
         assert deleted_folder_pseudo.status_code == 200
         queue_after_delete = client.get("/api/v1/queues").json()["inference_jobs"]
         assert second_folder_pseudo["id"] not in {item["id"] for item in queue_after_delete}
+        deleted_uploaded_pseudo = client.delete(f"/api/v1/results/pseudo-markup/{uploaded_txt_result['id']}")
+        assert deleted_uploaded_pseudo.status_code == 200
+        assert deleted_uploaded_pseudo.json()["id"] == uploaded_txt_result["id"]
+        queue_after_pseudo_delete = client.get("/api/v1/queues").json()["inference_jobs"]
+        assert uploaded_txt_pseudo["id"] not in {item["id"] for item in queue_after_pseudo_delete}
         result_id = class_results["results"][0]["id"]
         session_factory = create_session_factory(get_config())
         with session_factory() as session:
@@ -1504,6 +1526,22 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         )
         geojson_path = config.stored_files_root / "pseudo_markup_geojson"
         assert any(path.suffix == ".geojson" for path in geojson_path.iterdir())
+        pseudo_db_row = session.get(PseudoMarkupResultRow, pseudo_results[0].id)
+        assert pseudo_db_row is not None
+        geojson_file = pseudo_db_row.geojson_file
+        assert geojson_file is not None
+        stored_geojson_path = Path(geojson_file.path)
+        assert stored_geojson_path.is_file()
+        geojson_file_id = geojson_file.id
+
+        deleted = _service.delete_pseudo_markup_result(session, pseudo_results[0].id, config)
+        session.commit()
+
+        assert deleted.id == pseudo_results[0].id
+        assert session.get(PseudoMarkupResultRow, pseudo_results[0].id) is None
+        assert session.get(JobRow, pseudo_job.id) is None
+        assert session.get(StoredFileRow, geojson_file_id) is None
+        assert not stored_geojson_path.exists()
 
 
 def _short_training_config() -> dict[str, object]:

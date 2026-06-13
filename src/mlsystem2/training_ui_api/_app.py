@@ -35,6 +35,7 @@ from ._service import (
     create_pseudo_markup_job,
     create_training_template,
     create_training_job,
+    delete_pseudo_markup_result,
     delete_inference_template,
     datasets,
     delete_training_template,
@@ -82,6 +83,7 @@ from .contracts import (
     MLflowExperimentCreate,
     MLflowExperimentInfo,
     ModelListResponse,
+    PseudoMarkupResultInfo,
     QueueEnabledUpdate,
     QueueSnapshot,
     ResultChangesResponse,
@@ -501,6 +503,14 @@ def create_app() -> FastAPI:
             scenes_bytes=scenes_bytes,
             config=config,
         )
+
+    @app.delete("/api/v1/results/pseudo-markup/{result_id}", response_model=PseudoMarkupResultInfo)
+    def delete_pseudo_markup(
+        result_id: uuid.UUID,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> PseudoMarkupResultInfo:
+        return delete_pseudo_markup_result(db, result_id, config)
 
     @app.get("/api/v1/files/{file_id}/download")
     def download_file(

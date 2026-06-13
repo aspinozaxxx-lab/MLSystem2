@@ -1272,6 +1272,11 @@ async function renderClassResultPage(classKey) {
   for (const button of document.querySelectorAll(".pseudo-button")) {
     button.addEventListener("click", () => showPseudoModal(payload.class_key, button.dataset.result || ""));
   }
+  for (const button of document.querySelectorAll(".pseudo-delete-button")) {
+    button.addEventListener("click", () => {
+      showPseudoDeleteModal(payload.class_key, button.dataset.pseudo || "", button.dataset.label || "");
+    });
+  }
   scheduleProgressRefresh(() => renderClassResultPage(classKey), hasRunningClassResults(payload));
 }
 
@@ -1280,6 +1285,9 @@ function renderResultsTable(payload) {
     return `<div class="info-box">Результатов пока нет.</div>`;
   }
   const groups = payload.results.map((item) => {
+    const pseudoAction = item.status === "ok"
+      ? `<button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>`
+      : "";
     const pseudoTable = item.pseudo_markup_results.length ? `
       <tr class="result-pseudo-row">
         <td colspan="7">
@@ -1297,7 +1305,7 @@ function renderResultsTable(payload) {
         <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
         <td>${resultStatusView(item.status, item.source, "training", item.progress)}</td>
         <td>
-          <button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>
+          ${pseudoAction}
         </td>
       </tr>
       ${pseudoTable}
@@ -1331,6 +1339,9 @@ function renderPseudoTable(result) {
       <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">${escapeHtml(geojsonDownloadLabel(item.geojson_file))}</a>` : ""}</td>
       <td>${resultStatusView(item.status, item.source, "inference", item.progress)}</td>
       <td>${formatDateTime(item.created_at)}</td>
+      <td>
+        <button class="icon-button danger pseudo-delete-button" type="button" data-pseudo="${item.id}" data-label="${escapeAttr(item.source_dataset_name)}" title="Удалить">×</button>
+      </td>
     </tr>
   `).join("");
   return `
@@ -1341,6 +1352,7 @@ function renderPseudoTable(result) {
           <th>псевдоразметка</th>
           <th>статус</th>
           <th>создано</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -1366,6 +1378,8 @@ function imageSourceLabel(item) {
 }
 
 function imageSourceCount(item) {
+  const ownCount = integerOrNull(item.image_count);
+  if (ownCount !== null) return ownCount;
   if (item.dataset_key && item.dataset_key !== "custom") {
     const dataset = state.datasets.find((candidate) => candidate.key === item.dataset_key);
     const count = integerOrNull(dataset?.image_count);
@@ -1453,6 +1467,28 @@ function showPseudoModal(classKey, resultId) {
       request.set("scenes_txt", file);
     }
     await apiForm(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request);
+    closeModal();
+    await renderClassResultPage(classKey);
+  });
+}
+
+function showPseudoDeleteModal(classKey, pseudoId, label) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Удалить псевдоразметку?</h2>
+        <p>Запись и сохраненный GeoJSON будут удалены. ${label ? `Источник снимков: ${escapeHtml(label)}.` : ""}</p>
+        <div class="inline-row">
+          <button class="danger" type="button" id="pseudo-delete-confirm">Удалить</button>
+          <button class="secondary" type="button" id="modal-close">Отмена</button>
+        </div>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("pseudo-delete-confirm").addEventListener("click", async () => {
+    await apiJson(`/results/pseudo-markup/${encodeURIComponent(pseudoId)}`, { method: "DELETE" });
     closeModal();
     await renderClassResultPage(classKey);
   });
