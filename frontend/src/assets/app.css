@@ -471,6 +471,13 @@ th {
   font-weight: 800;
 }
 
+.result-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .result-pseudo-row > td {
   background: #fff;
   padding: 0 10px 10px;

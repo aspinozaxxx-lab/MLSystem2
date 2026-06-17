@@ -68,6 +68,7 @@
 - `GET /api/v1/results/changes`
 - `GET /api/v1/results/classes/{class_key}`
 - `POST /api/v1/results/classes/{class_key}/pseudo-markup`
+- `POST /api/v1/results/training/{result_id}/triton-zip`
 - `DELETE /api/v1/results/pseudo-markup/{result_id}`
 - `GET /api/v1/files/{file_id}/download`
 
@@ -175,6 +176,9 @@ jobs. Failed auto attempt не ретраится до новой версии �
 F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo-markup job, созданный от результата
 обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt`,
 `inference_template_id`, `inference_template_config` и, когда MLflow доступен, полный `checkpoint_uri`.
+Для успешного результата обучения `POST /api/v1/results/training/{result_id}/triton-zip` скачивает тот же
+`checkpoints/best.pt` из MLflow, собирает временный архив Triton CPU тем же кодом, что страница `Экспорт модели`,
+и возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса.
 
 Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
 загруженного файла, скачивает `checkpoints/best.pt`

@@ -16,7 +16,7 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 
 from .contracts import TrainingUIAPIError
 
-MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
+MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$")
 ONNX_OPSET = 18
 
 
@@ -118,7 +118,7 @@ def _validate_model_name(value: str) -> str:
     model_name = value.strip()
     if not MODEL_NAME_RE.fullmatch(model_name):
         raise TrainingUIAPIError(
-            "Имя модели должно содержать только латинские строчные буквы, цифры и дефис, "
+            "Имя модели должно содержать только латинские строчные буквы, цифры, дефис и подчеркивание, "
             "начинаться и заканчиваться буквой или цифрой."
         )
     return model_name

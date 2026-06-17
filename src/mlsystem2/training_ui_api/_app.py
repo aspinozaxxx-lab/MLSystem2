@@ -41,6 +41,7 @@ from ._service import (
     delete_training_template,
     delete_job,
     ensure_seed_templates,
+    export_training_result_triton_zip,
     inference_template,
     inference_templates,
     image_folders,
@@ -250,6 +251,28 @@ def create_app() -> FastAPI:
             checkpoint_filename=checkpoint.filename or "",
             checkpoint_bytes=await checkpoint.read(),
             sample_size=sample_size,
+        )
+        return FileResponse(
+            archive.zip_path,
+            filename=archive.filename,
+            media_type="application/zip",
+            background=BackgroundTask(archive.cleanup),
+        )
+
+    @app.post("/api/v1/results/training/{result_id}/triton-zip")
+    async def post_training_result_triton_zip(
+        result_id: uuid.UUID,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+        model_name: str = Form(default=""),
+        sample_size: int | None = Form(default=None),
+    ) -> FileResponse:
+        archive = export_training_result_triton_zip(
+            db,
+            result_id=result_id,
+            model_name=model_name,
+            sample_size=sample_size,
+            config=config,
         )
         return FileResponse(
             archive.zip_path,

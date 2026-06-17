@@ -355,7 +355,7 @@ function renderModelExportPage() {
             <input
               name="model_name"
               required
-              pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+              pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
               placeholder="deforestation-b2"
               autocomplete="off"
             >
@@ -382,8 +382,8 @@ async function submitModelExportForm(event) {
   const data = new FormData(form);
   const modelName = String(data.get("model_name") || "").trim();
   const checkpoint = data.get("checkpoint");
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(modelName)) {
-    showModal("Ошибка", "Имя модели должно содержать только a-z, 0-9 и дефис.", "Понятно");
+  if (!isValidExportModelName(modelName)) {
+    showModal("Ошибка", "Имя модели должно содержать только a-z, 0-9, дефис и подчеркивание.", "Понятно");
     return;
   }
   if (!(checkpoint instanceof File) || !checkpoint.name || !checkpoint.name.toLowerCase().endsWith(".pt")) {
@@ -461,6 +461,105 @@ function showModelExportSampleSizeModal(modelName, checkpoint, button, status) {
     }
     closeModal();
     await exportModelArchive(modelName, checkpoint, sampleSize, button, status);
+  });
+}
+
+function showTrainingResultZipModal(resultId, defaultModelName) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Скачать zip</h2>
+        <form id="result-zip-form" class="form-stack">
+          <label>Имя сети
+            <input
+              name="model_name"
+              required
+              pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
+              value="${escapeAttr(defaultModelName)}"
+              autocomplete="off"
+            >
+          </label>
+          <div class="inline-row">
+            <button class="primary" type="submit">Скачать zip</button>
+            <button class="secondary" type="button" id="modal-close">Отмена</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("result-zip-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const modelName = String(data.get("model_name") || "").trim();
+    if (!isValidExportModelName(modelName)) {
+      showModal("Ошибка", "Имя модели должно содержать только a-z, 0-9, дефис и подчеркивание.", "Понятно");
+      return;
+    }
+    closeModal();
+    await exportTrainingResultArchive(resultId, modelName, null);
+  });
+}
+
+async function exportTrainingResultArchive(resultId, modelName, sampleSize) {
+  const request = new FormData();
+  request.set("model_name", modelName);
+  if (sampleSize !== null && sampleSize !== undefined) request.set("sample_size", String(sampleSize));
+
+  const response = await fetch(`${API}/results/training/${encodeURIComponent(resultId)}/triton-zip`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: request,
+  });
+  if (response.status === 401) {
+    state.user = null;
+    renderLogin();
+    throw new Error("auth");
+  }
+  if (!response.ok) {
+    const message = await errorMessage(response);
+    if (message.includes("metadata.sample_size")) {
+      showTrainingResultZipSampleSizeModal(resultId, modelName);
+      return;
+    }
+    showModal("Ошибка", message, "Понятно");
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`);
+}
+
+function showTrainingResultZipSampleSizeModal(resultId, modelName) {
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card">
+        <h2>Укажите sample_size</h2>
+        <p>В checkpoint нет metadata.sample_size. Это старый checkpoint, поэтому размер тайла надо задать вручную.</p>
+        <form id="result-zip-sample-size-form" class="form-stack">
+          <label>sample_size
+            <input name="sample_size" type="number" min="32" step="32" value="768" required>
+          </label>
+          <div class="inline-row">
+            <button class="primary" type="submit">Продолжить экспорт</button>
+            <button class="secondary" type="button" id="modal-close">Отмена</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("result-zip-sample-size-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const sampleSize = Number.parseInt(String(data.get("sample_size") || ""), 10);
+    if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) {
+      showModal("Ошибка", "sample_size должен быть положительным числом, кратным 32.", "Понятно");
+      return;
+    }
+    closeModal();
+    await exportTrainingResultArchive(resultId, modelName, sampleSize);
   });
 }
 
@@ -1272,6 +1371,11 @@ async function renderClassResultPage(classKey) {
   for (const button of document.querySelectorAll(".pseudo-button")) {
     button.addEventListener("click", () => showPseudoModal(payload.class_key, button.dataset.result || ""));
   }
+  for (const button of document.querySelectorAll(".result-zip-button")) {
+    button.addEventListener("click", () => {
+      showTrainingResultZipModal(button.dataset.result || "", button.dataset.defaultName || "model_kanopus");
+    });
+  }
   for (const button of document.querySelectorAll(".pseudo-delete-button")) {
     button.addEventListener("click", () => {
       showPseudoDeleteModal(payload.class_key, button.dataset.pseudo || "", button.dataset.label || "");
@@ -1287,6 +1391,9 @@ function renderResultsTable(payload) {
   const groups = payload.results.map((item) => {
     const pseudoAction = item.status === "ok"
       ? `<button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>`
+      : "";
+    const zipAction = item.status === "ok"
+      ? `<button class="secondary result-zip-button compact-action" type="button" data-result="${item.id}" data-default-name="${escapeAttr(defaultTrainingZipModelName(item))}">zip</button>`
       : "";
     const pseudoTable = item.pseudo_markup_results.length ? `
       <tr class="result-pseudo-row">
@@ -1305,7 +1412,10 @@ function renderResultsTable(payload) {
         <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
         <td>${resultStatusView(item.status, item.source, "training", item.progress)}</td>
         <td>
-          ${pseudoAction}
+          <div class="result-actions">
+            ${pseudoAction}
+            ${zipAction}
+          </div>
         </td>
       </tr>
       ${pseudoTable}
@@ -1392,6 +1502,28 @@ function imageSourceCount(item) {
 function geojsonDownloadLabel(file) {
   const size = formatFileSize(file.size_bytes);
   return size ? `скачать geojson (${size})` : "скачать geojson";
+}
+
+function defaultTrainingZipModelName(result) {
+  const dataset = state.datasets.find((item) => item.key === result.dataset_key);
+  const annotationFile = String(dataset?.annotation_file || "");
+  const filename = annotationFile.split(/[\\/]/).pop() || "";
+  const stem = filename.replace(/\.[^.]*$/, "");
+  return `${exportModelNamePart(stem)}_kanopus`;
+}
+
+function exportModelNamePart(value) {
+  const part = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_-]+/g, "")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+  return part || "model";
+}
+
+function isValidExportModelName(value) {
+  return /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(String(value || "").trim());
 }
 
 function formatFileSize(value) {

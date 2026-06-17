@@ -26,6 +26,8 @@
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
+- `POST /api/v1/results/training/{result_id}/triton-zip` - multipart endpoint для сборки такого же zip-архива
+  из `checkpoints/best.pt` успешного результата обучения в MLflow; endpoint возвращает файл и не создает записей в БД.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -74,3 +76,7 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 чистый архив для `models-serving-service` лежит в `models-serving-service/<model_name>.zip`. Внутренний архив
 содержит только каталог `<model_name>` с Triton model repository файлами, поэтому после распаковки проходит
 проверка `models-serving-service` по наличию каталога модели и туда не попадают pipeline или metadata.
+На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
+`{имя geojson-разметки без расширения}_kanopus`, отправляет его в
+`POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через
+`mlflow_adapter.api.download_run_artifact` и использует тот же сборщик архива.

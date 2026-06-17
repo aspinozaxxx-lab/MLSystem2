@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from mlsystem2.mlflow_adapter.api import (
     create_experiment,
+    download_run_artifact,
     get_best_training_checkpoint,
     get_training_epoch_progress,
     list_experiments,
@@ -44,6 +46,7 @@ from ._datasets import (
     list_datasets,
     list_image_folders,
 )
+from ._model_export import ModelExportArchive, build_triton_model_export_zip
 from ._models import (
     CustomDatasetRow,
     InferenceTemplateRow,
@@ -962,6 +965,49 @@ def delete_pseudo_markup_result(
         _delete_owned_stored_file_if_unreferenced(session, file_row, config)
     session.flush()
     return detail
+
+
+def export_training_result_triton_zip(
+    session: Session,
+    *,
+    result_id: uuid.UUID,
+    model_name: str,
+    sample_size: int | None,
+    config: TrainingUIAPIConfig,
+) -> ModelExportArchive:
+    row = session.get(TrainingResultRow, result_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
+    if row.status != ResultStatus.OK.value:
+        raise TrainingUIAPIError("Экспорт доступен только для успешного результата обучения.")
+    if not row.mlflow_run_id:
+        raise TrainingUIAPIError("У результата обучения нет MLflow run id для скачивания best.pt.")
+
+    with tempfile.TemporaryDirectory(prefix="mlsystem2-result-export-") as temp_dir:
+        try:
+            downloaded = download_run_artifact(
+                tracking_uri=config.mlflow_tracking_uri,
+                run_id=row.mlflow_run_id,
+                artifact_path="checkpoints/best.pt",
+                dst_dir=temp_dir,
+            )
+        except MLflowAdapterError as exc:
+            raise TrainingUIAPIError("Не удалось скачать checkpoints/best.pt из MLflow.") from exc
+
+        checkpoint_path = Path(downloaded.local_path)
+        if not checkpoint_path.is_file():
+            raise TrainingUIAPIError("MLflow не вернул файл checkpoints/best.pt.")
+        try:
+            checkpoint_bytes = checkpoint_path.read_bytes()
+        except OSError as exc:
+            raise TrainingUIAPIError("Не удалось прочитать скачанный best.pt.") from exc
+
+        return build_triton_model_export_zip(
+            model_name=model_name,
+            checkpoint_filename=checkpoint_path.name or "best.pt",
+            checkpoint_bytes=checkpoint_bytes,
+            sample_size=sample_size,
+        )
 
 
 def _resolve_training_result(
