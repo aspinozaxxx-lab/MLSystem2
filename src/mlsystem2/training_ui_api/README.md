@@ -119,8 +119,8 @@ process получает SIGTERM, а известный MLflow run помеча�
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
 В этот набор входят `tile_preparation.positive_factor`, `tile_preparation.hard_negative_factor`,
 `tile_preparation.background_factor` и `train.max_training_time_sec`: пустое значение означает обучение без
-wall-clock лимита. Сумма трех tile factors должна быть равна `1`; `hard_negative_factor > 0` разрешен только для
-датасета с `hard_negative.geojson`.
+wall-clock лимита. Сумма трех tile factors должна быть равна `1`; если hard-negative разметки или tiles нет,
+недостающая hard-negative доля используется как positive внутри общего marked-бюджета.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
 
@@ -159,7 +159,7 @@ Frontend не обращается к Postgres. Сервис не импорти
 параметров задания и запускает публичный CLI
 `python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...`.
 Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
-и не записываются в `run.yml`. Worker всегда записывает в `run.yml` все три tile factors и добавляет
+и не записываются в `run.yml`. Worker всегда записывает в `run.yml` нормализованные три tile factors и добавляет
 `hard_negative_annotation_file`, если он найден у встроенного MLMarkup dataset. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`

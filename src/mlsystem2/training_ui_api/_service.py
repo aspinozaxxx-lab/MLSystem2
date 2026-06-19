@@ -624,9 +624,9 @@ def create_training_job(
     job_config = sanitize_template_config(
         request.config,
         fallback=template_row.default_config if template_row is not None else None,
+        normalize_factors=False,
     )
     _validate_tile_factor_config(job_config)
-    _validate_hard_negative_dataset_config(job_config, dataset)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
         type=JobType.TRAINING.value,
@@ -1669,17 +1669,6 @@ def _validate_tile_factor_config(config: dict[str, Any]) -> None:
         )
     if positive_factor == 0.0 and hard_negative_factor == 0.0 and background_factor == 0.0:
         raise TrainingUIAPIError("Хотя бы один tile factor должен быть больше 0")
-
-
-def _validate_hard_negative_dataset_config(
-    config: dict[str, Any],
-    dataset: DatasetInfo,
-) -> None:
-    hard_negative_factor = _float_or_error(config, "tile_preparation.hard_negative_factor")
-    if hard_negative_factor > 0.0 and not dataset.hard_negative_annotation_file:
-        raise TrainingUIAPIError(
-            "hard_negative_factor > 0 требует hard_negative.geojson в выбранном датасете"
-        )
 
 
 def _float_or_error(config: dict[str, Any], key: str) -> float:

@@ -186,17 +186,29 @@ def run_train_pipeline(
             "train",
             sampling_mode=_sampling_mode(settings, train_loader),
             positive_factor_used=(
-                settings.tile_preparation.positive_factor
+                _weighted_factor_used(
+                    train_loader,
+                    "positive_factor_used",
+                    settings.tile_preparation.positive_factor,
+                )
                 if _uses_weighted_sampler(train_loader)
                 else None
             ),
             hard_negative_factor_used=(
-                settings.tile_preparation.hard_negative_factor
+                _weighted_factor_used(
+                    train_loader,
+                    "hard_negative_factor_used",
+                    settings.tile_preparation.hard_negative_factor,
+                )
                 if _uses_weighted_sampler(train_loader)
                 else None
             ),
             background_factor_used=(
-                settings.tile_preparation.background_factor
+                _weighted_factor_used(
+                    train_loader,
+                    "background_factor_used",
+                    settings.tile_preparation.background_factor,
+                )
                 if _uses_weighted_sampler(train_loader)
                 else None
             ),
@@ -498,6 +510,9 @@ class _CountingLoader:
         tile_split_warnings = _dataset_attr(self.dataset, "tile_split_warnings")
         if isinstance(tile_split_warnings, list):
             warnings.extend(str(item) for item in tile_split_warnings)
+        sampling_warnings = _dataset_attr(self.dataset, "sampling_warnings")
+        if isinstance(sampling_warnings, list):
+            warnings.extend(str(item) for item in sampling_warnings)
         observed_positive_ratio = _safe_ratio(self.observed_positive_tiles, self.observed_tiles)
         observed_hard_negative_ratio = _safe_ratio(
             self.observed_hard_negative_tiles,
@@ -631,6 +646,13 @@ def _sampling_mode(settings: SystemSettings, loader: object) -> str:
 def _uses_weighted_sampler(loader: object) -> bool:
     sampler = getattr(loader, "sampler", None)
     return sampler is not None and sampler.__class__.__name__ == "WeightedRandomSampler"
+
+
+def _weighted_factor_used(loader: object, attr: str, default: float) -> float:
+    value = _dataset_attr(getattr(loader, "dataset", None), attr)
+    if value is None:
+        return default
+    return float(value)
 
 
 def _safe_len(value: object) -> int | None:

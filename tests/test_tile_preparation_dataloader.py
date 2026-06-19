@@ -1120,8 +1120,8 @@ def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> No
 
 def test_sampling_weights_distribute_three_category_budgets() -> None:
     dataset = TileDataset.__new__(TileDataset)
-    dataset._positive_hint_by_index = [True, True, False, False, False]
-    dataset._hard_negative_hint_by_index = [False, False, True, True, False]
+    dataset._positive_hint_by_index = [True, True, False, False, False, False]
+    dataset._hard_negative_hint_by_index = [False, False, True, True, False, False]
     dataset._positive_factor = 0.5
     dataset._hard_negative_factor = 0.3
     dataset._background_factor = 0.2
@@ -1134,13 +1134,61 @@ def test_sampling_weights_distribute_three_category_budgets() -> None:
     assert weights is not None
     assert sum(weights[:2]) == pytest.approx(0.5)
     assert sum(weights[2:4]) == pytest.approx(0.3)
-    assert weights[4] == pytest.approx(0.2)
+    assert sum(weights[4:]) == pytest.approx(0.2)
+    assert dataset.positive_factor_used == pytest.approx(0.5)
+    assert dataset.hard_negative_factor_used == pytest.approx(0.3)
+    assert dataset.background_factor_used == pytest.approx(0.2)
+    assert dataset.sampling_warnings == []
+
+
+def test_sampling_weights_move_missing_hard_negative_budget_to_positive() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, True, False, False]
+    dataset._hard_negative_hint_by_index = [False, False, False, False]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    weights = dataset.sampling_weights()
+
+    assert weights is not None
+    assert sum(weights[:2]) == pytest.approx(0.8)
+    assert sum(weights[2:]) == pytest.approx(0.2)
+    assert dataset.positive_factor_used == pytest.approx(0.8)
+    assert dataset.hard_negative_factor_used == pytest.approx(0.0)
+    assert dataset.background_factor_used == pytest.approx(0.2)
+    assert any("hard_negative_factor_used" in item for item in dataset.sampling_warnings)
+
+
+def test_sampling_weights_cap_small_hard_negative_budget_and_fill_positive() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, True, False, False, False]
+    dataset._hard_negative_hint_by_index = [False, False, True, False, False]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    weights = dataset.sampling_weights()
+
+    assert weights is not None
+    assert sum(weights[:2]) == pytest.approx(0.6)
+    assert weights[2] == pytest.approx(0.2)
+    assert sum(weights[3:]) == pytest.approx(0.2)
+    assert dataset.positive_factor_used == pytest.approx(0.6)
+    assert dataset.hard_negative_factor_used == pytest.approx(0.2)
+    assert dataset.background_factor_used == pytest.approx(0.2)
 
 
 def test_sampling_weights_allow_only_one_category_budget() -> None:
     dataset = TileDataset.__new__(TileDataset)
-    dataset._positive_hint_by_index = [True, False, False]
-    dataset._hard_negative_hint_by_index = [False, True, False]
+    dataset._positive_hint_by_index = [False, False, False]
+    dataset._hard_negative_hint_by_index = [True, True, True]
     dataset._positive_factor = 0.0
     dataset._hard_negative_factor = 1.0
     dataset._background_factor = 0.0
@@ -1150,13 +1198,13 @@ def test_sampling_weights_allow_only_one_category_budget() -> None:
 
     weights = dataset.sampling_weights()
 
-    assert weights == [0.0, 1.0, 0.0]
+    assert weights == pytest.approx([1 / 3, 1 / 3, 1 / 3])
 
 
-def test_sampling_weights_reject_missing_hard_negative_factor_category() -> None:
+def test_sampling_weights_reject_missing_background_factor_category() -> None:
     dataset = TileDataset.__new__(TileDataset)
     dataset._positive_hint_by_index = [True, False]
-    dataset._hard_negative_hint_by_index = [False, False]
+    dataset._hard_negative_hint_by_index = [False, True]
     dataset._positive_factor = 0.5
     dataset._hard_negative_factor = 0.2
     dataset._background_factor = 0.3
@@ -1164,7 +1212,22 @@ def test_sampling_weights_reject_missing_hard_negative_factor_category() -> None
     dataset._class_annotations = []
     dataset._class_hints_by_index = None
 
-    with pytest.raises(TilePreparationError, match="hard_negative_factor"):
+    with pytest.raises(TilePreparationError, match="background_factor"):
+        dataset.sampling_weights()
+
+
+def test_sampling_weights_reject_marked_budget_without_positive_fill() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [False, False, False]
+    dataset._hard_negative_hint_by_index = [True, False, False]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    with pytest.raises(TilePreparationError, match="positive tiles"):
         dataset.sampling_weights()
 
 

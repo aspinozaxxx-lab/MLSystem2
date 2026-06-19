@@ -500,6 +500,9 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
         estimated_background_tiles = 1
         class_balance_enabled = True
         class_balance_warnings: list[str] = []
+        sampling_warnings = [
+            "hard_negative_factor_used уменьшен из-за отсутствия или малого числа hard_negative tiles."
+        ]
 
         def __len__(self) -> int:
             return 4
@@ -545,6 +548,7 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
     assert snapshot["positive_ratio_abs_error"] == 0.0
     assert snapshot["hard_negative_ratio_abs_error"] == 0.0
     assert snapshot["background_ratio_abs_error"] == 0.0
+    assert snapshot["warnings"] == Dataset.sampling_warnings
     assert snapshot["pool_window_count"] is None
     assert snapshot["split_window_count"] is None
     assert "target_positive_factor" not in snapshot

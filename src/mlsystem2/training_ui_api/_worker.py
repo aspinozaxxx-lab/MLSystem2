@@ -38,6 +38,7 @@ from ._models import (
     TrainingResultRow,
 )
 from ._queueing import dispatch_sort_key, ensure_queue_positions
+from ._templates import normalize_tile_factors
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
 
@@ -333,6 +334,12 @@ def _build_training_config(
         "tile_preparation.background_factor",
         1.0 - positive_factor - hard_negative_factor,
     )
+    tile_factors = {
+        "tile_preparation.positive_factor": positive_factor,
+        "tile_preparation.hard_negative_factor": hard_negative_factor,
+        "tile_preparation.background_factor": background_factor,
+    }
+    normalize_tile_factors(tile_factors)
     return {
         "runtime": {
             "project_root": str(config.project_root),
@@ -348,9 +355,9 @@ def _build_training_config(
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "augmentation_level": _int_value(flat, "tile_preparation.augmentation_level", 0),
-            "positive_factor": positive_factor,
-            "hard_negative_factor": hard_negative_factor,
-            "background_factor": background_factor,
+            "positive_factor": tile_factors["tile_preparation.positive_factor"],
+            "hard_negative_factor": tile_factors["tile_preparation.hard_negative_factor"],
+            "background_factor": tile_factors["tile_preparation.background_factor"],
         },
         "train": {
             "model_name": row.architecture,

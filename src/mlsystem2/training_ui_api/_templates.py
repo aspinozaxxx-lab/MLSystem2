@@ -42,7 +42,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "tile_preparation.positive_factor",
             "label": "Доля positive тайлов",
             "value_type": "number",
-            "tooltip": "Целевая доля positive samples в train epoch; сумма трех долей должна быть равна 1.",
+            "tooltip": "Доля positive samples внутри train epoch; hard negative дефицит добавляется сюда, сумма трех долей должна быть равна 1.",
             "min_value": 0,
             "max_value": 1,
         },
@@ -50,7 +50,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "tile_preparation.hard_negative_factor",
             "label": "Доля hard negative тайлов",
             "value_type": "number",
-            "tooltip": "Целевая доля hard negative samples в train epoch; сумма трех долей должна быть равна 1.",
+            "tooltip": "Доля hard negative samples внутри marked budget; если их нет или мало, остаток берется из positive, сумма трех долей должна быть равна 1.",
             "min_value": 0,
             "max_value": 1,
         },
@@ -58,7 +58,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "tile_preparation.background_factor",
             "label": "Доля background тайлов",
             "value_type": "number",
-            "tooltip": "Целевая доля обычных background samples в train epoch; сумма трех долей должна быть равна 1.",
+            "tooltip": "Доля обычных background samples в train epoch; не получает дефицит hard negative, сумма трех долей должна быть равна 1.",
             "min_value": 0,
             "max_value": 1,
         },
@@ -302,6 +302,7 @@ def sanitize_template_config(
     config: dict[str, Any] | None,
     *,
     fallback: dict[str, Any] | None = None,
+    normalize_factors: bool = True,
 ) -> dict[str, Any]:
     result = {
         key: value
@@ -315,7 +316,29 @@ def sanitize_template_config(
                 continue
             result[key] = value
     _resolve_legacy_tile_factors(result, config or {})
+    if normalize_factors:
+        normalize_tile_factors(result)
     return result
+
+
+def normalize_tile_factors(config: dict[str, Any]) -> None:
+    positive_factor = _float_or_default(config.get("tile_preparation.positive_factor"), 0.5)
+    hard_negative_factor = _float_or_default(
+        config.get("tile_preparation.hard_negative_factor"),
+        0.0,
+    )
+    background_factor = _float_or_default(config.get("tile_preparation.background_factor"), 0.5)
+    if abs(positive_factor + hard_negative_factor + background_factor - 1.0) <= 1e-6:
+        config["tile_preparation.positive_factor"] = positive_factor
+        config["tile_preparation.hard_negative_factor"] = hard_negative_factor
+        config["tile_preparation.background_factor"] = background_factor
+        return
+    background_factor = min(max(background_factor, 0.0), 1.0)
+    hard_negative_factor = min(max(hard_negative_factor, 0.0), 1.0 - background_factor)
+    positive_factor = max(0.0, round(1.0 - hard_negative_factor - background_factor, 12))
+    config["tile_preparation.positive_factor"] = positive_factor
+    config["tile_preparation.hard_negative_factor"] = hard_negative_factor
+    config["tile_preparation.background_factor"] = background_factor
 
 
 def _resolve_legacy_tile_factors(result: dict[str, Any], config: dict[str, Any]) -> None:

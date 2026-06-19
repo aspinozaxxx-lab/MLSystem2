@@ -176,10 +176,6 @@ class SystemSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_dataset_train_consistency(self) -> Self:
-        if self.tile_preparation.hard_negative_factor > 0.0 and not _has_hard_negative_annotation(self.dataset):
-            raise ValueError(
-                "tile_preparation.hard_negative_factor > 0 требует hard_negative_annotation_file"
-            )
         if self.dataset.is_multiclass:
             if self.train.task != "multiclass":
                 raise ValueError("dataset.classes требует train.task=multiclass")
@@ -204,12 +200,6 @@ def _validate_unique_values(values: list[str], field_name: str) -> None:
     if duplicates:
         joined = ", ".join(sorted(duplicates))
         raise ValueError(f"dataset.classes должен иметь уникальные {field_name}: {joined}")
-
-
-def _has_hard_negative_annotation(dataset: DatasetSettings) -> bool:
-    if dataset.is_multiclass:
-        return any(item.hard_negative_annotation_file for item in dataset.classes)
-    return bool(dataset.hard_negative_annotation_file)
 
 
 __all__ = [

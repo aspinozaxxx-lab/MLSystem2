@@ -22,6 +22,7 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
+from mlsystem2.training_ui_api._templates import sanitize_template_config
 from mlsystem2.training_ui_api._worker import (
     dispatch_inference_queue_once,
     dispatch_queue_once,
@@ -1171,8 +1172,8 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "tile_preparation.stride": 32,
                     "tile_preparation.augmentation_level": 0,
                     "tile_preparation.positive_factor": 0.5,
-                    "tile_preparation.hard_negative_factor": 0.2,
-                    "tile_preparation.background_factor": 0.3,
+                    "tile_preparation.hard_negative_factor": 0.3,
+                    "tile_preparation.background_factor": 0.2,
                     "train.epochs": 1,
                     "train.batch_size": 1,
                     "train.learning_rate": 0.0001,
@@ -1191,6 +1192,13 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
             ),
             config,
         )
+        row = session.get(JobRow, job.id)
+        assert row is not None
+        legacy_config = dict(row.config)
+        legacy_config["tile_preparation.positive_factor"] = 0.8
+        legacy_config["tile_preparation.hard_negative_factor"] = 0.3
+        legacy_config["tile_preparation.background_factor"] = 0.2
+        row.config = legacy_config
         dispatch_training_queue_once(session, config, popen_factory=fake_popen)
         session.commit()
 
@@ -1210,8 +1218,9 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "images_dir" not in config_yaml
         assert "inference:" not in config_yaml
         assert "hard_negative_annotation_file:" in config_yaml
-        assert "hard_negative_factor: 0.2" in config_yaml
-        assert "background_factor: 0.3" in config_yaml
+        assert "positive_factor: 0.5" in config_yaml
+        assert "hard_negative_factor: 0.3" in config_yaml
+        assert "background_factor: 0.2" in config_yaml
         assert "max_train_batches_per_epoch: 72" in config_yaml
         assert "max_val_batches_per_epoch: 1000" in config_yaml
         assert "max_training_time_sec: null" in config_yaml
@@ -1226,7 +1235,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
-def test_training_ui_rejects_hard_negative_factor_without_dataset_file(
+def test_training_ui_accepts_hard_negative_factor_without_dataset_file(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1255,7 +1264,67 @@ def test_training_ui_rejects_hard_negative_factor_without_dataset_file(
 
     with session_factory() as session:
         ensure_seed_templates(session)
-        with pytest.raises(TrainingUIAPIError, match="hard_negative.geojson"):
+        job = create_training_job(
+            session,
+            TrainingJobCreate(
+                mlflow_experiment_id="1",
+                mlflow_experiment_name="ui-test",
+                mlflow_run_name="worker-test",
+                dataset_key="Вырубки\\main",
+                architecture="smp_segformer_b2",
+                config=job_config,
+            ),
+            config,
+        )
+
+    assert job.status == JobStatus.QUEUED
+    assert job.config["tile_preparation.hard_negative_factor"] == 0.2
+
+
+def test_training_ui_sanitizes_invalid_marked_template_factors() -> None:
+    config = sanitize_template_config(
+        {
+            "tile_preparation.positive_factor": 0.8,
+            "tile_preparation.hard_negative_factor": 0.3,
+            "tile_preparation.background_factor": 0.2,
+        }
+    )
+
+    assert config["tile_preparation.positive_factor"] == pytest.approx(0.5)
+    assert config["tile_preparation.hard_negative_factor"] == pytest.approx(0.3)
+    assert config["tile_preparation.background_factor"] == pytest.approx(0.2)
+
+
+def test_training_ui_rejects_invalid_job_factor_sum(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    job_config = _short_training_config()
+    job_config["tile_preparation.positive_factor"] = 0.8
+    job_config["tile_preparation.hard_negative_factor"] = 0.3
+    job_config["tile_preparation.background_factor"] = 0.2
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        with pytest.raises(TrainingUIAPIError, match="Сумма"):
             create_training_job(
                 session,
                 TrainingJobCreate(

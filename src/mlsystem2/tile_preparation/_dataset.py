@@ -60,6 +60,8 @@ class TileDataset:
         self._positive_factor = positive_factor
         self._hard_negative_factor = hard_negative_factor
         self._background_factor = background_factor
+        self._sampling_factor_used: dict[str, float] | None = None
+        self._sampling_warnings: list[str] = []
         self._class_balance = class_balance
         self._tile_split = tile_split
         self._tile_split_warnings: list[str] = []
@@ -249,6 +251,31 @@ class TileDataset:
         return sum(1 for item in categories if item == TILE_CATEGORY_BACKGROUND)
 
     @property
+    def positive_factor_used(self) -> float | None:
+        factors = self._sampling_factor_used
+        if factors is None:
+            return None
+        return factors[TILE_CATEGORY_POSITIVE]
+
+    @property
+    def hard_negative_factor_used(self) -> float | None:
+        factors = self._sampling_factor_used
+        if factors is None:
+            return None
+        return factors[TILE_CATEGORY_HARD_NEGATIVE]
+
+    @property
+    def background_factor_used(self) -> float | None:
+        factors = self._sampling_factor_used
+        if factors is None:
+            return None
+        return factors[TILE_CATEGORY_BACKGROUND]
+
+    @property
+    def sampling_warnings(self) -> list[str]:
+        return list(self._sampling_warnings)
+
+    @property
     def class_balance_enabled(self) -> bool:
         return bool(self._class_balance and self._class_annotations)
 
@@ -294,7 +321,13 @@ class TileDataset:
             ),
         }
         counts = _category_counts(categories)
-        _validate_sampling_categories(factors, counts)
+        factors, warnings = _effective_sampling_factors(
+            factors,
+            counts,
+            dataset_size=len(categories),
+        )
+        self._sampling_factor_used = factors
+        self._sampling_warnings = warnings
         positive_count = counts[TILE_CATEGORY_POSITIVE]
         hard_negative_count = counts[TILE_CATEGORY_HARD_NEGATIVE]
         background_count = counts[TILE_CATEGORY_BACKGROUND]
@@ -676,21 +709,49 @@ def _category_counts(categories: list[str]) -> dict[str, int]:
     }
 
 
-def _validate_sampling_categories(
+def _effective_sampling_factors(
     factors: dict[str, float],
     counts: dict[str, int],
-) -> None:
-    labels = {
-        TILE_CATEGORY_POSITIVE: "positive",
-        TILE_CATEGORY_HARD_NEGATIVE: "hard_negative",
-        TILE_CATEGORY_BACKGROUND: "background",
-    }
-    for category, factor in factors.items():
-        if factor > 0.0 and counts.get(category, 0) == 0:
-            raise TilePreparationError(
-                f"tile_preparation.{labels[category]}_factor > 0, "
-                f"но {labels[category]} tiles не найдены."
-            )
+    *,
+    dataset_size: int,
+) -> tuple[dict[str, float], list[str]]:
+    positive_factor = factors[TILE_CATEGORY_POSITIVE]
+    hard_negative_factor = factors[TILE_CATEGORY_HARD_NEGATIVE]
+    background_factor = factors[TILE_CATEGORY_BACKGROUND]
+    positive_count = counts[TILE_CATEGORY_POSITIVE]
+    hard_negative_count = counts[TILE_CATEGORY_HARD_NEGATIVE]
+    background_count = counts[TILE_CATEGORY_BACKGROUND]
+    marked_factor = positive_factor + hard_negative_factor
+    if background_factor > 0.0 and background_count == 0:
+        raise TilePreparationError(
+            "tile_preparation.background_factor > 0, но background tiles не найдены."
+        )
+    hard_negative_cap = (
+        hard_negative_count / dataset_size
+        if dataset_size > 0 and hard_negative_count > 0
+        else 0.0
+    )
+    effective_hard_negative_factor = min(hard_negative_factor, hard_negative_cap)
+    effective_positive_factor = marked_factor - effective_hard_negative_factor
+    if effective_positive_factor > 0.0 and positive_count == 0:
+        raise TilePreparationError(
+            "tile_preparation positive+hard_negative budget > 0, "
+            "но positive tiles для marked budget не найдены."
+        )
+    warnings: list[str] = []
+    if hard_negative_factor > effective_hard_negative_factor:
+        warnings.append(
+            "hard_negative_factor_used уменьшен из-за отсутствия или малого числа "
+            "hard_negative tiles; недостающий marked budget перенесен в positive."
+        )
+    return (
+        {
+            TILE_CATEGORY_POSITIVE: effective_positive_factor,
+            TILE_CATEGORY_HARD_NEGATIVE: effective_hard_negative_factor,
+            TILE_CATEGORY_BACKGROUND: background_factor,
+        },
+        warnings,
+    )
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:

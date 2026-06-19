@@ -292,7 +292,7 @@ def test_load_settings_resolves_legacy_background_factor(tmp_path: Path) -> None
     assert settings.tile_preparation.background_factor == 0.5
 
 
-def test_load_settings_rejects_hard_negative_factor_without_annotation(tmp_path: Path) -> None:
+def test_load_settings_accepts_hard_negative_factor_without_annotation(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
@@ -303,8 +303,11 @@ def test_load_settings_rejects_hard_negative_factor_without_annotation(tmp_path:
         encoding="utf-8",
     )
 
-    with pytest.raises(SettingsError, match="hard_negative_annotation_file"):
-        api.load_settings(settings_path)
+    settings = api.load_settings(settings_path)
+
+    assert settings.tile_preparation.positive_factor == 0.4
+    assert settings.tile_preparation.hard_negative_factor == 0.2
+    assert settings.tile_preparation.background_factor == 0.4
 
 
 def test_load_settings_accepts_augmentation_level_three(tmp_path: Path) -> None:
