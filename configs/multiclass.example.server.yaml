@@ -1,4 +1,4 @@
-runtime:
+﻿runtime:
   project_root: /opt/mlsystem2/repo
   scratch_root: /opt/mlsystem2/runtime/multiclass_smoke/scratch
   logs_root: /opt/mlsystem2/runtime/multiclass_smoke/logs
@@ -67,6 +67,8 @@ tile_preparation:
   stride: 512
   augmentation_level: 1
   positive_factor: 0.8
+  hard_negative_factor: 0.0
+  background_factor: 0.2
 
 train:
   task: multiclass

@@ -1,4 +1,4 @@
-"""Публичные контракты подготовки тайлов."""
+﻿"""Публичные контракты подготовки тайлов."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ class TileClassAnnotation(BaseModel):
     slug: str
     name: str
     annotation_file: str | Path
+    hard_negative_annotation_file: str | Path | None = None
     priority: int = 0
 
 
@@ -34,6 +35,7 @@ class TileDataloaderRequest(BaseModel):
 
     vrt_xml: str
     annotation_file: str | Path | None = None
+    hard_negative_annotation_file: str | Path | None = None
     class_annotations: list[TileClassAnnotation] = Field(default_factory=list)
     batch_size: int = Field(gt=0)
     mode: Literal["train", "val"]
@@ -48,6 +50,10 @@ class TileDataloaderRequest(BaseModel):
             raise ValueError(
                 "TileDataloaderRequest должен задавать либо annotation_file, "
                 "либо class_annotations"
+            )
+        if has_multiclass and self.hard_negative_annotation_file is not None:
+            raise ValueError(
+                "hard_negative_annotation_file задается в TileDataloaderRequest только для binary режима"
             )
         return self
 

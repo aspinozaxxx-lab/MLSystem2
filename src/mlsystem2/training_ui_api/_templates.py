@@ -1,4 +1,4 @@
-"""Исходные шаблоны обучения и инференса для миграций и reset."""
+﻿"""Исходные шаблоны обучения и инференса для миграций и reset."""
 
 from __future__ import annotations
 
@@ -42,9 +42,25 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "tile_preparation.positive_factor",
             "label": "Доля positive тайлов",
             "value_type": "number",
-            "tooltip": "Целевая доля foreground/positive samples в train epoch.",
-            "min_value": 0.01,
-            "max_value": 0.99,
+            "tooltip": "Целевая доля positive samples в train epoch; сумма трех долей должна быть равна 1.",
+            "min_value": 0,
+            "max_value": 1,
+        },
+        {
+            "key": "tile_preparation.hard_negative_factor",
+            "label": "Доля hard negative тайлов",
+            "value_type": "number",
+            "tooltip": "Целевая доля hard negative samples в train epoch; сумма трех долей должна быть равна 1.",
+            "min_value": 0,
+            "max_value": 1,
+        },
+        {
+            "key": "tile_preparation.background_factor",
+            "label": "Доля background тайлов",
+            "value_type": "number",
+            "tooltip": "Целевая доля обычных background samples в train epoch; сумма трех долей должна быть равна 1.",
+            "min_value": 0,
+            "max_value": 1,
         },
         {
             "key": "train.epochs",
@@ -159,6 +175,8 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "tile_preparation.stride": 256,
     "tile_preparation.augmentation_level": 3,
     "tile_preparation.positive_factor": 0.8,
+    "tile_preparation.hard_negative_factor": 0.0,
+    "tile_preparation.background_factor": 0.2,
     "train.epochs": 80,
     "train.batch_size": 4,
     "train.learning_rate": 0.00001,
@@ -178,6 +196,11 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
 
 CONFIG_KEYS = {str(field["key"]) for field in CONFIG_SCHEMA["fields"]}
 CONFIG_FIELDS = {str(field["key"]): field for field in CONFIG_SCHEMA["fields"]}
+TILE_FACTOR_KEYS = {
+    "tile_preparation.positive_factor",
+    "tile_preparation.hard_negative_factor",
+    "tile_preparation.background_factor",
+}
 
 
 INFERENCE_CONFIG_SCHEMA: dict[str, Any] = {
@@ -291,7 +314,28 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
+    _resolve_legacy_tile_factors(result, config or {})
     return result
+
+
+def _resolve_legacy_tile_factors(result: dict[str, Any], config: dict[str, Any]) -> None:
+    if "tile_preparation.background_factor" in config:
+        return
+    positive_factor = _float_or_default(result.get("tile_preparation.positive_factor"), 0.5)
+    hard_negative_factor = _float_or_default(
+        result.get("tile_preparation.hard_negative_factor"),
+        0.0,
+    )
+    result["tile_preparation.background_factor"] = (
+        1.0 - positive_factor - hard_negative_factor
+    )
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def sanitize_inference_template_config(

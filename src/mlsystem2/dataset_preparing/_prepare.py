@@ -1,4 +1,4 @@
-"""Реализация подготовки датасета."""
+﻿"""Реализация подготовки датасета."""
 
 from __future__ import annotations
 
@@ -40,6 +40,11 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         raise AssertionError("binary request должен быть провалидирован до подготовки")
     scenes_file = Path(request.scenes_file)
     annotation_file = Path(request.annotation_file)
+    hard_negative_file = (
+        Path(request.hard_negative_annotation_file)
+        if request.hard_negative_annotation_file is not None
+        else None
+    )
 
     errors: list[str] = []
     scenes = _read_scenes_or_collect_error(scenes_file, errors)
@@ -53,14 +58,18 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         errors.append(f"Файл разметки не существует: {annotation_file}")
     elif not annotation_file.is_file():
         errors.append(f"Путь разметки не является файлом: {annotation_file}")
+    if hard_negative_file is not None:
+        if not hard_negative_file.exists():
+            errors.append(f"Файл hard negative разметки не существует: {hard_negative_file}")
+        elif not hard_negative_file.is_file():
+            errors.append(f"Путь hard negative разметки не является файлом: {hard_negative_file}")
 
     if errors:
         report = _build_report(
             scenes=scenes,
-            rows=[],
+            positive_rows=[],
+            hard_negative_rows=[],
             scene_to_image={},
-            train_names=set(),
-            val_names=set(),
             missing_files=[],
             errors=errors,
         )
@@ -70,10 +79,9 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
     if image_index is None:
         report = _build_report(
             scenes=scenes,
-            rows=[],
+            positive_rows=[],
+            hard_negative_rows=[],
             scene_to_image={},
-            train_names=set(),
-            val_names=set(),
             missing_files=[],
             errors=errors,
         )
@@ -86,7 +94,10 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         scene: path.resolve()
         for scene, path in filtered.scene_to_image.items()
     }
-    resolved_ambiguous = _resolve_ambiguous_scenes(filtered.ambiguous_scenes, [annotation_file])
+    resolved_ambiguous = _resolve_ambiguous_scenes(
+        filtered.ambiguous_scenes,
+        _annotation_files(annotation_file, hard_negative_file),
+    )
     scene_to_image.update({
         scene: path.resolve()
         for scene, path in resolved_ambiguous.items()
@@ -99,12 +110,15 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         joined = "; ".join(path.resolve().as_posix() for path in paths)
         errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
 
-    rows = _count_objects_or_collect_error(scenes, scene_to_image, annotation_file, errors)
-    found_rows = [row for row in rows if row.scene_name in scene_to_image]
+    positive_rows = _count_objects_or_collect_error(scenes, scene_to_image, annotation_file, errors)
+    hard_negative_rows = _count_optional_objects_or_collect_error(
+        scenes,
+        scene_to_image,
+        hard_negative_file,
+        errors,
+    )
+    found_rows = [row for row in positive_rows if row.scene_name in scene_to_image]
     pool_scene_ids = [row.scene_name for row in found_rows]
-    train_names: set[str] = set()
-    val_names: set[str] = set()
-    pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
@@ -133,15 +147,18 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
                 val_vrt_xml=val_vrt_xml,
                 pool_vrt_xml=pool_vrt_xml,
                 annotation_file=annotation_file.resolve().as_posix(),
+                hard_negative_annotation_file=(
+                    hard_negative_file.resolve().as_posix()
+                    if hard_negative_file is not None
+                    else None
+                ),
             )
 
     report = _build_report(
         scenes=scenes,
-        rows=rows,
+        positive_rows=positive_rows,
+        hard_negative_rows=hard_negative_rows,
         scene_to_image=scene_to_image,
-        train_names=train_names,
-        val_names=val_names,
-        pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
     )
@@ -156,10 +173,16 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     errors: list[str] = []
     scenes_by_class: dict[str, list[str]] = {}
     annotation_by_slug: dict[str, Path] = {}
+    hard_negative_by_slug: dict[str, Path] = {}
 
     for class_request in classes:
         scenes_file = Path(class_request.scenes_file)
         annotation_file = Path(class_request.annotation_file)
+        hard_negative_file = (
+            Path(class_request.hard_negative_annotation_file)
+            if class_request.hard_negative_annotation_file is not None
+            else None
+        )
         scenes = _read_scenes_or_collect_error(scenes_file, errors)
         scenes_by_class[class_request.slug] = scenes
         annotation_by_slug[class_request.slug] = annotation_file
@@ -171,6 +194,18 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
             errors.append(
                 f"Путь разметки класса {class_request.slug} не является файлом: {annotation_file}"
             )
+        if hard_negative_file is not None:
+            hard_negative_by_slug[class_request.slug] = hard_negative_file
+            if not hard_negative_file.exists():
+                errors.append(
+                    f"Файл hard negative разметки класса {class_request.slug} не существует: "
+                    f"{hard_negative_file}"
+                )
+            elif not hard_negative_file.is_file():
+                errors.append(
+                    f"Путь hard negative разметки класса {class_request.slug} не является файлом: "
+                    f"{hard_negative_file}"
+                )
 
     scenes = _unique_preserving_order(
         scene
@@ -187,10 +222,9 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     if errors:
         report = _build_report(
             scenes=scenes,
-            rows=[],
+            positive_rows=[],
+            hard_negative_rows=[],
             scene_to_image={},
-            train_names=set(),
-            val_names=set(),
             missing_files=[],
             errors=errors,
         )
@@ -200,10 +234,9 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     if image_index is None:
         report = _build_report(
             scenes=scenes,
-            rows=[],
+            positive_rows=[],
+            hard_negative_rows=[],
             scene_to_image={},
-            train_names=set(),
-            val_names=set(),
             missing_files=[],
             errors=errors,
         )
@@ -226,7 +259,7 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     }
     resolved_ambiguous = _resolve_ambiguous_scenes(
         filtered.ambiguous_scenes,
-        list(annotation_by_slug.values()),
+        [*annotation_by_slug.values(), *hard_negative_by_slug.values()],
     )
     scene_to_image.update({
         scene: path.resolve()
@@ -240,18 +273,22 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         joined = "; ".join(path.resolve().as_posix() for path in paths)
         errors.append(f"Сцена неоднозначно сопоставлена со снимками: {scene}: {joined}")
 
-    rows = _count_multiclass_objects_or_collect_errors(
+    positive_rows = _count_multiclass_objects_or_collect_errors(
         classes,
         scenes,
         scene_to_image,
         annotation_by_slug,
         errors,
     )
-    found_rows = [row for row in rows if row.scene_name in scene_to_image]
+    hard_negative_rows = _count_multiclass_optional_objects_or_collect_errors(
+        classes,
+        scenes,
+        scene_to_image,
+        hard_negative_by_slug,
+        errors,
+    )
+    found_rows = [row for row in positive_rows if row.scene_name in scene_to_image]
     pool_scene_ids = [row.scene_name for row in found_rows]
-    train_names: set[str] = set()
-    val_names: set[str] = set()
-    pool_names = set(pool_scene_ids)
 
     if not found_rows:
         errors.append("Не найдено ни одного снимка из списка сцен.")
@@ -286,6 +323,11 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
                         slug=class_request.slug,
                         name=class_request.name,
                         annotation_file=Path(class_request.annotation_file).resolve().as_posix(),
+                        hard_negative_annotation_file=(
+                            hard_negative_by_slug[class_request.slug].resolve().as_posix()
+                            if class_request.slug in hard_negative_by_slug
+                            else None
+                        ),
                         priority=class_request.priority,
                     )
                     for class_id, class_request in enumerate(classes, start=1)
@@ -294,11 +336,9 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
 
     report = _build_report(
         scenes=scenes,
-        rows=rows,
+        positive_rows=positive_rows,
+        hard_negative_rows=hard_negative_rows,
         scene_to_image=scene_to_image,
-        train_names=train_names,
-        val_names=val_names,
-        pool_names=pool_names,
         missing_files=missing_files,
         errors=errors,
     )
@@ -345,6 +385,17 @@ def _count_objects_or_collect_error(
         ]
 
 
+def _count_optional_objects_or_collect_error(
+    scenes: list[str],
+    scene_to_image: dict[str, Path],
+    annotation_file: Path | None,
+    errors: list[str],
+) -> list[SceneObjectCount]:
+    if annotation_file is None:
+        return _zero_object_rows(scenes, scene_to_image)
+    return _count_objects_or_collect_error(scenes, scene_to_image, annotation_file, errors)
+
+
 def _count_multiclass_objects_or_collect_errors(
     classes: list[DatasetClassRequest],
     scenes: list[str],
@@ -375,6 +426,51 @@ def _count_multiclass_objects_or_collect_errors(
                 object_count=existing.object_count + row.object_count,
             )
     return [counts_by_scene[scene] for scene in scenes]
+
+
+def _count_multiclass_optional_objects_or_collect_errors(
+    classes: list[DatasetClassRequest],
+    scenes: list[str],
+    scene_to_image: dict[str, Path],
+    annotation_by_slug: dict[str, Path],
+    errors: list[str],
+) -> list[SceneObjectCount]:
+    counts_by_scene = {
+        scene: SceneObjectCount(
+            scene_name=scene,
+            image_path=scene_to_image.get(scene),
+            object_count=0,
+        )
+        for scene in scenes
+    }
+    for class_request in classes:
+        annotation_file = annotation_by_slug.get(class_request.slug)
+        if annotation_file is None:
+            continue
+        class_rows = _count_objects_or_collect_error(
+            scenes,
+            scene_to_image,
+            annotation_file,
+            errors,
+        )
+        for row in class_rows:
+            existing = counts_by_scene[row.scene_name]
+            counts_by_scene[row.scene_name] = SceneObjectCount(
+                scene_name=row.scene_name,
+                image_path=existing.image_path or row.image_path,
+                object_count=existing.object_count + row.object_count,
+            )
+    return [counts_by_scene[scene] for scene in scenes]
+
+
+def _zero_object_rows(
+    scenes: list[str],
+    scene_to_image: dict[str, Path],
+) -> list[SceneObjectCount]:
+    return [
+        SceneObjectCount(scene_name=scene, image_path=scene_to_image.get(scene), object_count=0)
+        for scene in scenes
+    ]
 
 
 def _resolve_ambiguous_scenes(
@@ -452,55 +548,44 @@ def _unique_preserving_order(values) -> list[str]:
 def _build_report(
     *,
     scenes: list[str],
-    rows: list[SceneObjectCount],
+    positive_rows: list[SceneObjectCount],
+    hard_negative_rows: list[SceneObjectCount],
     scene_to_image: dict[str, Path],
-    train_names: set[str],
-    val_names: set[str],
     missing_files: list[str],
     errors: list[str],
-    pool_names: set[str] | None = None,
 ) -> DatasetPreparationReport:
-    count_by_scene = {row.scene_name: row.object_count for row in rows}
-    pool_names = pool_names or set()
+    positive_by_scene = {row.scene_name: row.object_count for row in positive_rows}
+    hard_negative_by_scene = {row.scene_name: row.object_count for row in hard_negative_rows}
     scene_reports = [
         DatasetSceneReport(
             scene_id=scene,
             image_path=scene_to_image[scene].as_posix() if scene in scene_to_image else None,
-            object_count=max(0, int(count_by_scene.get(scene, 0))),
-            split=_scene_split(scene, scene_to_image, train_names, val_names, pool_names),
+            positive_objects=max(0, int(positive_by_scene.get(scene, 0))),
+            hard_negative_objects=max(0, int(hard_negative_by_scene.get(scene, 0))),
+            object_count=max(0, int(positive_by_scene.get(scene, 0)))
+            + max(0, int(hard_negative_by_scene.get(scene, 0))),
         )
         for scene in scenes
     ]
-    train_objects = sum(item.object_count for item in scene_reports if item.split == "train")
-    val_objects = sum(item.object_count for item in scene_reports if item.split == "val")
+    positive_objects = sum(item.positive_objects for item in scene_reports)
+    hard_negative_objects = sum(item.hard_negative_objects for item in scene_reports)
     return DatasetPreparationReport(
         status="error" if errors else "ok",
         scenes_total=len(scenes),
         scenes_found=len(scene_to_image),
-        objects_total=sum(item.object_count for item in scene_reports),
-        train_scenes_count=sum(1 for item in scene_reports if item.split == "train"),
-        train_objects_count=train_objects,
-        val_scenes_count=sum(1 for item in scene_reports if item.split == "val"),
-        val_objects_count=val_objects,
+        positive_objects=positive_objects,
+        hard_negative_objects=hard_negative_objects,
+        objects_total=positive_objects + hard_negative_objects,
         scenes=scene_reports,
         missing_files=missing_files,
         errors=errors,
     )
 
 
-def _scene_split(
-    scene: str,
-    scene_to_image: dict[str, Path],
-    train_names: set[str],
-    val_names: set[str],
-    pool_names: set[str],
-) -> str:
-    if scene not in scene_to_image:
-        return "missing"
-    if scene in train_names:
-        return "train"
-    if scene in val_names:
-        return "val"
-    if scene in pool_names:
-        return "pool"
-    return "excluded"
+def _annotation_files(
+    annotation_file: Path,
+    hard_negative_file: Path | None,
+) -> list[Path]:
+    if hard_negative_file is None:
+        return [annotation_file]
+    return [annotation_file, hard_negative_file]

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import inspect
 from pathlib import Path
@@ -124,8 +124,20 @@ def test_dataset_artifact_files_prefix_multiclass_sources() -> None:
     assert _runner._dataset_artifact_files(_multiclass_settings()) == {
         "class_a_scenes.txt": "./class_a.txt",
         "class_a_annotation.geojson": "./class_a.geojson",
+        "class_a_hard_negative.geojson": "./class_a_hard_negative.geojson",
         "class_b_scenes.txt": "./class_b.txt",
         "class_b_annotation.geojson": "./class_b.geojson",
+    }
+
+
+def test_dataset_artifact_files_include_binary_hard_negative_source() -> None:
+    settings = _settings(initial_checkpoint_uri=None)
+    settings.dataset.hard_negative_annotation_file = "./hard_negative.geojson"
+
+    assert _runner._dataset_artifact_files(settings) == {
+        "scenes.txt": "./scenes.txt",
+        "annotations.geojson": "./annotations.geojson",
+        "hard_negative.geojson": "./hard_negative.geojson",
     }
 
 
@@ -228,6 +240,7 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
                 slug="class_a",
                 name="Класс А",
                 annotation_file="./class_a.geojson",
+                hard_negative_annotation_file="./class_a_hard_negative.geojson",
                 priority=7,
             )
         ],
@@ -240,9 +253,15 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
     assert dataset_request.classes is not None
     assert [item.slug for item in dataset_request.classes] == ["class_a", "class_b"]
     assert [item.priority for item in dataset_request.classes] == [5, 0]
+    assert dataset_request.classes[0].hard_negative_annotation_file == (
+        "./class_a_hard_negative.geojson"
+    )
     assert tile_request.annotation_file is None
     assert [item.slug for item in tile_request.class_annotations] == ["class_a"]
     assert [item.priority for item in tile_request.class_annotations] == [7]
+    assert tile_request.class_annotations[0].hard_negative_annotation_file == (
+        "./class_a_hard_negative.geojson"
+    )
     assert train_request.config.task == "multiclass"
     assert train_request.config.loss == "cross_entropy"
     assert train_request.config.class_slugs == ["class_a", "class_b"]
@@ -250,11 +269,13 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
 
 def test_train_pipeline_builds_tile_split_requests() -> None:
     settings = _settings(initial_checkpoint_uri=None)
+    settings.dataset.hard_negative_annotation_file = "./hard_negative.geojson"
     prepared = PreparedDataset(
         train_vrt_xml="TRAIN",
         val_vrt_xml="VAL",
         pool_vrt_xml="POOL",
         annotation_file="./annotations.geojson",
+        hard_negative_annotation_file="./hard_negative.geojson",
     )
 
     dataset_request = _runner._dataset_request(settings)
@@ -276,11 +297,14 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
 
     assert not hasattr(dataset_request, "negative_scene_limit")
     assert not hasattr(dataset_request, "split_granularity")
+    assert dataset_request.hard_negative_annotation_file == "./hard_negative.geojson"
     assert tile_split is not None
     assert tile_split.val_fraction == settings.dataset.val_fraction
     assert tile_split.seed == settings.tile_preparation.seed
     assert train_request.vrt_xml == "POOL"
     assert val_request.vrt_xml == "POOL"
+    assert train_request.hard_negative_annotation_file == "./hard_negative.geojson"
+    assert val_request.hard_negative_annotation_file == "./hard_negative.geojson"
     assert train_request.tile_split == tile_split
     assert val_request.tile_split == tile_split
 
@@ -342,10 +366,9 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         valid_footprint_stride = 64
         valid_footprint_valid_cells = 10
         valid_footprint_total_cells = 12
-        uses_vrt_source_rects = True
         estimated_positive_tiles = 2
-        estimated_negative_tiles = 3
-        estimated_class_positive_tiles = {"class_a": 1}
+        estimated_hard_negative_tiles = 1
+        estimated_background_tiles = 2
         class_balance_enabled = False
         class_balance_warnings: list[str] = []
 
@@ -366,11 +389,21 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
                 {
                     "augmented_tile_count": 1,
                     "positive_tile_count": 2,
-                    "class_positive_tile_counts": {"class_a": 1},
-                    "class_pixel_counts": {"class_a": 32},
+                    "hard_negative_tile_count": 0,
+                    "background_tile_count": 0,
+                    "augmented_positive_tile_count": 1,
+                    "augmented_hard_negative_tile_count": 0,
                 },
             )
-            yield Images(1), object()
+            yield (
+                Images(1),
+                object(),
+                {
+                    "positive_tile_count": 0,
+                    "hard_negative_tile_count": 0,
+                    "background_tile_count": 1,
+                },
+            )
 
         def __len__(self) -> int:
             return 2
@@ -378,7 +411,18 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     loader = _runner._CountingLoader(Loader(), "train")
 
     assert len(list(loader)) == 2
-    assert loader.snapshot() == {
+    snapshot = loader.snapshot()
+    assert not {
+        "uses_vrt_source_rects",
+        "tile_split_enabled",
+        "estimated_class_positive_tiles",
+        "target_positive_factor",
+        "is_diagnostic_sampling",
+        "observed_class_pixel_counts",
+        "observed_class_positive_tile_counts",
+        "estimated_negative_tiles",
+    } & set(snapshot)
+    assert snapshot == {
         "tile_count": 5,
         "batch_count": 2,
         "source_rect_count": 1,
@@ -388,33 +432,58 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "valid_footprint_stride": 64,
         "valid_footprint_valid_cells": 10,
         "valid_footprint_total_cells": 12,
-        "uses_vrt_source_rects": True,
         "pool_window_count": None,
         "split_window_count": None,
-        "tile_split_enabled": None,
         "estimated_positive_tiles": 2,
-        "estimated_negative_tiles": 3,
-        "estimated_class_positive_tiles": {"class_a": 1},
+        "estimated_hard_negative_tiles": 1,
+        "estimated_background_tiles": 2,
         "sampling_mode": "sequential",
         "positive_factor_used": None,
-        "target_positive_factor": None,
+        "hard_negative_factor_used": None,
+        "background_factor_used": None,
         "cache_mode": None,
         "cached_batches": None,
         "cached_tiles": None,
         "class_balance_enabled": False,
-        "is_diagnostic_sampling": False,
         "observed_batches": 2,
         "observed_tiles": 3,
         "observed_positive_tiles": 2,
+        "observed_hard_negative_tiles": 0,
+        "observed_background_tiles": 1,
         "observed_positive_ratio": 2 / 3,
-        "observed_negative_ratio": 1.0 - 2 / 3,
-        "ratio_abs_error": None,
+        "observed_hard_negative_ratio": 0.0,
+        "observed_background_ratio": 1 / 3,
+        "positive_ratio_abs_error": None,
+        "hard_negative_ratio_abs_error": None,
+        "background_ratio_abs_error": None,
         "observed_augmented_tiles": 1,
-        "observed_class_positive_tile_counts": {"class_a": 1},
-        "observed_class_pixel_counts": {"class_a": 32},
+        "observed_augmented_positive_tiles": 1,
+        "observed_augmented_hard_negative_tiles": 0,
         "observed_real_tiles": 2,
         "warnings": [],
     }
+
+
+def test_tile_preparation_report_exposes_three_train_factors() -> None:
+    class SnapshotLoader:
+        def __init__(self, split: str) -> None:
+            self.split = split
+
+        def snapshot(self) -> dict[str, object]:
+            return {"split": self.split}
+
+    settings = _settings(initial_checkpoint_uri=None)
+    report = _runner._tile_preparation_report(
+        settings,
+        SnapshotLoader("train"),
+        SnapshotLoader("val"),
+    )
+
+    assert report["positive_factor"] == 0.5
+    assert report["hard_negative_factor"] == 0.0
+    assert report["background_factor"] == 0.5
+    assert report["splits"]["train"] == {"split": "train"}
+    assert report["splits"]["val"] == {"split": "val"}
 
 
 def test_counting_loader_reports_target_positive_ratio() -> None:
@@ -426,10 +495,9 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
         valid_footprint_stride = 64
         valid_footprint_valid_cells = 4
         valid_footprint_total_cells = 4
-        uses_vrt_source_rects = True
         estimated_positive_tiles = 2
-        estimated_negative_tiles = 2
-        estimated_class_positive_tiles = {"class_a": 2}
+        estimated_hard_negative_tiles = 1
+        estimated_background_tiles = 1
         class_balance_enabled = True
         class_balance_warnings: list[str] = []
 
@@ -443,7 +511,15 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
         dataset = Dataset()
 
         def __iter__(self):
-            yield Images(), object(), {"positive_tile_count": 2}
+            yield (
+                Images(),
+                object(),
+                {
+                    "positive_tile_count": 2,
+                    "hard_negative_tile_count": 1,
+                    "background_tile_count": 1,
+                },
+            )
 
         def __len__(self) -> int:
             return 1
@@ -453,19 +529,27 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
         "train",
         sampling_mode="weighted_class_balance",
         positive_factor_used=0.5,
+        hard_negative_factor_used=0.25,
+        background_factor_used=0.25,
     )
 
     list(loader)
     snapshot = loader.snapshot()
 
-    assert snapshot["target_positive_factor"] == 0.5
+    assert snapshot["positive_factor_used"] == 0.5
+    assert snapshot["hard_negative_factor_used"] == 0.25
+    assert snapshot["background_factor_used"] == 0.25
     assert snapshot["observed_positive_ratio"] == 0.5
-    assert snapshot["observed_negative_ratio"] == 0.5
-    assert snapshot["ratio_abs_error"] == 0.0
-    assert snapshot["estimated_class_positive_tiles"] == {"class_a": 2}
+    assert snapshot["observed_hard_negative_ratio"] == 0.25
+    assert snapshot["observed_background_ratio"] == 0.25
+    assert snapshot["positive_ratio_abs_error"] == 0.0
+    assert snapshot["hard_negative_ratio_abs_error"] == 0.0
+    assert snapshot["background_ratio_abs_error"] == 0.0
     assert snapshot["pool_window_count"] is None
     assert snapshot["split_window_count"] is None
-    assert snapshot["tile_split_enabled"] is None
+    assert "target_positive_factor" not in snapshot
+    assert "estimated_class_positive_tiles" not in snapshot
+    assert "tile_split_enabled" not in snapshot
 
 
 def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
@@ -477,10 +561,9 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
         valid_footprint_stride = 64
         valid_footprint_valid_cells = 4
         valid_footprint_total_cells = 4
-        uses_vrt_source_rects = True
         estimated_positive_tiles = 2
-        estimated_negative_tiles = 2
-        estimated_class_positive_tiles = None
+        estimated_hard_negative_tiles = 1
+        estimated_background_tiles = 1
         class_balance_enabled = False
         class_balance_warnings: list[str] = []
 
@@ -498,7 +581,15 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
         sampler = None
 
         def __iter__(self):
-            yield Images(), object(), {"positive_tile_count": 2}
+            yield (
+                Images(),
+                object(),
+                {
+                    "positive_tile_count": 2,
+                    "hard_negative_tile_count": 1,
+                    "background_tile_count": 1,
+                },
+            )
 
         def __len__(self) -> int:
             return 1
@@ -508,7 +599,6 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
         raw_loader,
         "val",
         sampling_mode=_runner._sampling_mode(_settings(initial_checkpoint_uri=None), raw_loader),
-        positive_factor_used=0.5,
     )
 
     list(loader)
@@ -519,6 +609,11 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
     assert snapshot["cached_batches"] == 1
     assert snapshot["cached_tiles"] == 4
     assert snapshot["observed_positive_ratio"] == 0.5
+    assert snapshot["observed_hard_negative_ratio"] == 0.25
+    assert snapshot["observed_background_ratio"] == 0.25
+    assert snapshot["positive_ratio_abs_error"] is None
+    assert snapshot["hard_negative_ratio_abs_error"] is None
+    assert snapshot["background_ratio_abs_error"] is None
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:
@@ -580,6 +675,7 @@ def _multiclass_settings() -> SystemSettings:
                     name="Класс А",
                     scenes_file="./class_a.txt",
                     annotation_file="./class_a.geojson",
+                    hard_negative_annotation_file="./class_a_hard_negative.geojson",
                     priority=5,
                 ),
                 DatasetClassSettings(
@@ -633,11 +729,9 @@ def _dataset_result(dataset: PreparedDataset | None = None) -> DatasetPreparatio
             status="ok",
             scenes_total=0,
             scenes_found=0,
+            positive_objects=0,
+            hard_negative_objects=0,
             objects_total=0,
-            train_scenes_count=0,
-            train_objects_count=0,
-            val_scenes_count=0,
-            val_objects_count=0,
             scenes=[],
             missing_files=[],
             errors=[],

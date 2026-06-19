@@ -1,4 +1,4 @@
-"""Сервисные операции training UI API."""
+﻿"""Сервисные операции training UI API."""
 
 from __future__ import annotations
 
@@ -625,6 +625,8 @@ def create_training_job(
         request.config,
         fallback=template_row.default_config if template_row is not None else None,
     )
+    _validate_tile_factor_config(job_config)
+    _validate_hard_negative_dataset_config(job_config, dataset)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
         type=JobType.TRAINING.value,
@@ -1648,6 +1650,45 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _validate_tile_factor_config(config: dict[str, Any]) -> None:
+    positive_factor = _float_or_error(config, "tile_preparation.positive_factor")
+    hard_negative_factor = _float_or_error(config, "tile_preparation.hard_negative_factor")
+    background_factor = _float_or_error(config, "tile_preparation.background_factor")
+    for key, value in (
+        ("tile_preparation.positive_factor", positive_factor),
+        ("tile_preparation.hard_negative_factor", hard_negative_factor),
+        ("tile_preparation.background_factor", background_factor),
+    ):
+        if value < 0.0 or value > 1.0:
+            raise TrainingUIAPIError(f"{key} должен быть в диапазоне 0..1")
+    if abs(positive_factor + hard_negative_factor + background_factor - 1.0) > 1e-6:
+        raise TrainingUIAPIError(
+            "Сумма positive_factor, hard_negative_factor и background_factor должна быть равна 1"
+        )
+    if positive_factor == 0.0 and hard_negative_factor == 0.0 and background_factor == 0.0:
+        raise TrainingUIAPIError("Хотя бы один tile factor должен быть больше 0")
+
+
+def _validate_hard_negative_dataset_config(
+    config: dict[str, Any],
+    dataset: DatasetInfo,
+) -> None:
+    hard_negative_factor = _float_or_error(config, "tile_preparation.hard_negative_factor")
+    if hard_negative_factor > 0.0 and not dataset.hard_negative_annotation_file:
+        raise TrainingUIAPIError(
+            "hard_negative_factor > 0 требует hard_negative.geojson в выбранном датасете"
+        )
+
+
+def _float_or_error(config: dict[str, Any], key: str) -> float:
+    try:
+        return float(config[key])
+    except KeyError as exc:
+        raise TrainingUIAPIError(f"Параметр {key} не задан") from exc
+    except (TypeError, ValueError) as exc:
+        raise TrainingUIAPIError(f"Параметр {key} должен быть числом") from exc
 
 
 def _now() -> datetime:

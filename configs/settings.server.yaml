@@ -1,4 +1,4 @@
-runtime:
+﻿runtime:
   project_root: /opt/mlsystem2/repo
   scratch_root: /data/mlsystem2/runtime/scratch
   logs_root: /data/mlsystem2/runtime/logs
@@ -11,6 +11,9 @@ tile_preparation:
   num_workers: 16
   prefetch_epochs: 1
   seed: 42
+  positive_factor: 0.5
+  hard_negative_factor: 0.0
+  background_factor: 0.5
   val_positive_factor: 0.5
   class_balance: false
 

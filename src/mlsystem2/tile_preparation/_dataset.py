@@ -1,4 +1,4 @@
-"""Dataset тайлов по одному VRT XML и GeoJSON."""
+﻿"""Dataset тайлов по одному VRT XML и GeoJSON."""
 
 from __future__ import annotations
 
@@ -18,12 +18,18 @@ from ._windows import build_vrt_source_windows_with_diagnostics
 from .contracts import TileClassAnnotation, TilePreparationError, TileSplitRequest
 
 
+TILE_CATEGORY_POSITIVE = "positive"
+TILE_CATEGORY_HARD_NEGATIVE = "hard_negative"
+TILE_CATEGORY_BACKGROUND = "background"
+
+
 class TileDataset:
     def __init__(
         self,
         *,
         vrt_xml: str,
         annotation_file: str | Path | None = None,
+        hard_negative_annotation_file: str | Path | None = None,
         class_annotations: list[TileClassAnnotation] | None = None,
         tile_size: int,
         stride: int,
@@ -31,11 +37,18 @@ class TileDataset:
         seed: int,
         augmentation_level: int,
         positive_factor: float = 0.5,
+        hard_negative_factor: float = 0.0,
+        background_factor: float = 0.5,
         class_balance: bool = False,
         tile_split: TileSplitRequest | None = None,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file) if annotation_file is not None else None
+        self._hard_negative_annotation_file = (
+            Path(hard_negative_annotation_file)
+            if hard_negative_annotation_file is not None
+            else None
+        )
         self._class_annotations = sorted(
             list(class_annotations or []),
             key=lambda item: (item.priority, item.class_id),
@@ -45,6 +58,8 @@ class TileDataset:
         self._seed = seed
         self._augmentation_level = augmentation_level
         self._positive_factor = positive_factor
+        self._hard_negative_factor = hard_negative_factor
+        self._background_factor = background_factor
         self._class_balance = class_balance
         self._tile_split = tile_split
         self._tile_split_warnings: list[str] = []
@@ -54,7 +69,10 @@ class TileDataset:
         self._dataset: DatasetReader | None = None
         self._annotation_index: AnnotationIndex | None = None
         self._class_annotation_indexes: dict[int, AnnotationIndex] = {}
+        self._hard_negative_annotation_indexes: dict[Path, AnnotationIndex] = {}
         self._positive_hint_by_index: list[bool] | None = None
+        self._hard_negative_hint_by_index: list[bool] | None = None
+        self._category_hint_by_index: list[str] | None = None
         self._class_hints_by_index: list[frozenset[int]] | None = None
 
         with open_vrt_xml(vrt_xml) as dataset:
@@ -93,6 +111,11 @@ class TileDataset:
                     ]
                 else:
                     self._positive_hint_by_index = self._build_positive_hints(dataset)
+                self._hard_negative_hint_by_index = self._build_hard_negative_hints(dataset)
+                self._category_hint_by_index = _tile_categories(
+                    self._positive_hint_by_index,
+                    self._hard_negative_hint_by_index,
+                )
             self._pool_window_count = len(self._windows)
             if self._tile_split is not None:
                 self._apply_tile_split(self._tile_split)
@@ -112,9 +135,13 @@ class TileDataset:
 
         mask = self._read_annotation_mask(dataset, window, nodata_pixels)
         positive_before_augmentation = bool(np.count_nonzero(mask) > 0)
+        category = self._sample_category(index, positive_before_augmentation)
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
-        if should_augment and positive_before_augmentation:
+        if should_augment and category in {
+            TILE_CATEGORY_POSITIVE,
+            TILE_CATEGORY_HARD_NEGATIVE,
+        }:
             image, mask, augmented = apply_augmentations(
                 image,
                 mask,
@@ -123,7 +150,7 @@ class TileDataset:
                 sample_index=index,
             )
 
-        meta = self._sample_meta(mask, augmented)
+        meta = self._sample_meta(category, augmented)
         return (
             np.ascontiguousarray(image),
             np.ascontiguousarray(mask),
@@ -143,6 +170,19 @@ class TileDataset:
         if self._positive_hint_by_index is None:
             return None
         return list(self._positive_hint_by_index)
+
+    @property
+    def hard_negative_hints(self) -> list[bool] | None:
+        if self._hard_negative_hint_by_index is None:
+            return None
+        return list(self._hard_negative_hint_by_index)
+
+    @property
+    def tile_categories(self) -> list[str] | None:
+        categories = self._category_hints()
+        if categories is None:
+            return None
+        return list(categories)
 
     @property
     def uses_multiclass_masks(self) -> bool:
@@ -177,20 +217,12 @@ class TileDataset:
         return self._valid_footprint_total_cells
 
     @property
-    def uses_vrt_source_rects(self) -> bool:
-        return self._uses_vrt_source_rects
-
-    @property
     def pool_window_count(self) -> int:
         return self._pool_window_count
 
     @property
     def split_window_count(self) -> int:
         return self._split_window_count
-
-    @property
-    def tile_split_enabled(self) -> bool:
-        return self._tile_split is not None
 
     @property
     def tile_split_warnings(self) -> list[str]:
@@ -203,23 +235,18 @@ class TileDataset:
         return sum(1 for item in self._positive_hint_by_index if item)
 
     @property
-    def estimated_negative_tiles(self) -> int | None:
-        if self._positive_hint_by_index is None:
+    def estimated_hard_negative_tiles(self) -> int | None:
+        categories = self._category_hints()
+        if categories is None:
             return None
-        return sum(1 for item in self._positive_hint_by_index if not item)
+        return sum(1 for item in categories if item == TILE_CATEGORY_HARD_NEGATIVE)
 
     @property
-    def estimated_class_positive_tiles(self) -> dict[str, int] | None:
-        if self._class_hints_by_index is None:
+    def estimated_background_tiles(self) -> int | None:
+        categories = self._category_hints()
+        if categories is None:
             return None
-        counts = {annotation.slug: 0 for annotation in self._class_annotations}
-        slug_by_id = {annotation.class_id: annotation.slug for annotation in self._class_annotations}
-        for hints in self._class_hints_by_index:
-            for class_id in hints:
-                slug = slug_by_id.get(class_id)
-                if slug is not None:
-                    counts[slug] += 1
-        return counts
+        return sum(1 for item in categories if item == TILE_CATEGORY_BACKGROUND)
 
     @property
     def class_balance_enabled(self) -> bool:
@@ -229,7 +256,7 @@ class TileDataset:
     def class_balance_warnings(self) -> list[str]:
         if not self.class_balance_enabled:
             return []
-        counts = self.estimated_class_positive_tiles
+        counts = self._class_positive_tile_counts()
         if counts is None:
             return []
         warnings: list[str] = []
@@ -240,22 +267,67 @@ class TileDataset:
                 warnings.append(f"class_balance: для класса {slug} найдено мало positive windows: {count}.")
         return warnings
 
-    def sampling_weights(self, positive_factor: float | None = None) -> list[float] | None:
-        if self._positive_hint_by_index is None:
+    def sampling_weights(
+        self,
+        positive_factor: float | None = None,
+        hard_negative_factor: float | None = None,
+        background_factor: float | None = None,
+    ) -> list[float] | None:
+        categories = self._category_hints()
+        if categories is None:
             return None
-        positive_count = self.estimated_positive_tiles or 0
-        negative_count = self.estimated_negative_tiles or 0
-        if positive_count == 0 or negative_count == 0:
-            return None
-        factor = self._positive_factor if positive_factor is None else positive_factor
+        factors = {
+            TILE_CATEGORY_POSITIVE: (
+                getattr(self, "_positive_factor", 0.5)
+                if positive_factor is None
+                else positive_factor
+            ),
+            TILE_CATEGORY_HARD_NEGATIVE: (
+                getattr(self, "_hard_negative_factor", 0.0)
+                if hard_negative_factor is None
+                else hard_negative_factor
+            ),
+            TILE_CATEGORY_BACKGROUND: (
+                getattr(self, "_background_factor", 0.5)
+                if background_factor is None
+                else background_factor
+            ),
+        }
+        counts = _category_counts(categories)
+        _validate_sampling_categories(factors, counts)
+        positive_count = counts[TILE_CATEGORY_POSITIVE]
+        hard_negative_count = counts[TILE_CATEGORY_HARD_NEGATIVE]
+        background_count = counts[TILE_CATEGORY_BACKGROUND]
+        positive_factor_value = factors[TILE_CATEGORY_POSITIVE]
+        hard_negative_weight = (
+            factors[TILE_CATEGORY_HARD_NEGATIVE] / hard_negative_count
+            if hard_negative_count > 0
+            else 0.0
+        )
+        background_weight = (
+            factors[TILE_CATEGORY_BACKGROUND] / background_count
+            if background_count > 0
+            else 0.0
+        )
+        positive_weights: list[float] | None = None
         if self.class_balance_enabled and self._class_hints_by_index is not None:
-            return self._class_balanced_sampling_weights(factor, negative_count)
-        positive_weight = factor / positive_count
-        negative_weight = (1.0 - factor) / negative_count
-        return [
-            positive_weight if positive else negative_weight
-            for positive in self._positive_hint_by_index
-        ]
+            positive_weights = self._class_balanced_positive_weights(positive_factor_value)
+        positive_weight = (
+            positive_factor_value / positive_count
+            if positive_count > 0
+            else 0.0
+        )
+        weights: list[float] = []
+        for index, category in enumerate(categories):
+            if category == TILE_CATEGORY_POSITIVE:
+                weights.append(
+                    positive_weights[index] if positive_weights is not None else positive_weight
+                )
+            elif category == TILE_CATEGORY_HARD_NEGATIVE:
+                weights.append(hard_negative_weight)
+            else:
+                weights.append(background_weight)
+        return weights
 
     def close(self) -> None:
         if self._dataset is not None:
@@ -271,6 +343,7 @@ class TileDataset:
         state["_dataset"] = None
         state["_annotation_index"] = None
         state["_class_annotation_indexes"] = {}
+        state["_hard_negative_annotation_indexes"] = {}
         return state
 
     def __del__(self) -> None:
@@ -299,6 +372,16 @@ class TileDataset:
         if index is None:
             index = load_annotation_index(annotation.annotation_file, self._vrt_crs)
             self._class_annotation_indexes[annotation.class_id] = index
+        return index
+
+    def _hard_negative_annotation_index_or_load(
+        self,
+        annotation_file: Path,
+    ) -> AnnotationIndex:
+        index = self._hard_negative_annotation_indexes.get(annotation_file)
+        if index is None:
+            index = load_annotation_index(annotation_file, self._vrt_crs)
+            self._hard_negative_annotation_indexes[annotation_file] = index
         return index
 
     def _read_image_raw(self, dataset: DatasetReader, window: Window) -> np.ndarray:
@@ -365,6 +448,14 @@ class TileDataset:
         self._positive_hint_by_index = [
             self._positive_hint_by_index[index] for index in selected_indices
         ]
+        if self._hard_negative_hint_by_index is not None:
+            self._hard_negative_hint_by_index = [
+                self._hard_negative_hint_by_index[index] for index in selected_indices
+            ]
+        if self._category_hint_by_index is not None:
+            self._category_hint_by_index = [
+                self._category_hint_by_index[index] for index in selected_indices
+            ]
         if self._class_hints_by_index is not None:
             self._class_hints_by_index = [
                 self._class_hints_by_index[index] for index in selected_indices
@@ -401,13 +492,59 @@ class TileDataset:
             hints.append(frozenset(class_ids))
         return hints
 
-    def _class_balanced_sampling_weights(
+    def _build_hard_negative_hints(self, dataset: DatasetReader) -> list[bool]:
+        annotation_files = self._hard_negative_annotation_files()
+        if not annotation_files:
+            return [False for _ in self._windows]
+        hints: list[bool] = []
+        for tile_window in self._windows:
+            window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
+            bounds = dataset.window_bounds(window)
+            hints.append(
+                any(
+                    self._hard_negative_annotation_index_or_load(annotation_file).query_bounds(bounds)
+                    for annotation_file in annotation_files
+                )
+            )
+        return hints
+
+    def _hard_negative_annotation_files(self) -> list[Path]:
+        paths: list[Path] = []
+        if self._hard_negative_annotation_file is not None:
+            paths.append(self._hard_negative_annotation_file)
+        for annotation in self._class_annotations:
+            if annotation.hard_negative_annotation_file is not None:
+                paths.append(Path(annotation.hard_negative_annotation_file))
+        return _unique_paths(paths)
+
+    def _category_hints(self) -> list[str] | None:
+        category_hints = getattr(self, "_category_hint_by_index", None)
+        if category_hints is not None:
+            return category_hints
+        positive_hints = getattr(self, "_positive_hint_by_index", None)
+        if positive_hints is None:
+            return None
+        hard_negative_hints = getattr(self, "_hard_negative_hint_by_index", None) or [
+            False for _ in positive_hints
+        ]
+        return _tile_categories(positive_hints, hard_negative_hints)
+
+    def _sample_category(self, index: int, positive: bool) -> str:
+        if positive:
+            return TILE_CATEGORY_POSITIVE
+        hard_negative_hints = self._hard_negative_hint_by_index
+        if hard_negative_hints is not None and hard_negative_hints[index]:
+            return TILE_CATEGORY_HARD_NEGATIVE
+        return TILE_CATEGORY_BACKGROUND
+
+    def _class_balanced_positive_weights(
         self,
         factor: float,
-        negative_count: int,
     ) -> list[float] | None:
         if self._class_hints_by_index is None:
             return None
+        if factor == 0.0:
+            return [0.0 for _ in self._class_hints_by_index]
         counts_by_id = {annotation.class_id: 0 for annotation in self._class_annotations}
         for hints in self._class_hints_by_index:
             for class_id in hints:
@@ -419,11 +556,10 @@ class TileDataset:
         if not positive_class_ids:
             return None
         class_budget = factor / len(positive_class_ids)
-        negative_weight = (1.0 - factor) / negative_count
         weights: list[float] = []
         for hints in self._class_hints_by_index:
             if not hints:
-                weights.append(negative_weight)
+                weights.append(0.0)
                 continue
             weight = sum(
                 class_budget / counts_by_id[class_id]
@@ -433,21 +569,26 @@ class TileDataset:
             weights.append(weight)
         return weights
 
-    def _sample_meta(self, mask: np.ndarray, augmented: bool) -> dict[str, object]:
-        meta: dict[str, object] = {
+    def _class_positive_tile_counts(self) -> dict[str, int] | None:
+        if self._class_hints_by_index is None:
+            return None
+        counts = {annotation.slug: 0 for annotation in self._class_annotations}
+        slug_by_id = {annotation.class_id: annotation.slug for annotation in self._class_annotations}
+        for hints in self._class_hints_by_index:
+            for class_id in hints:
+                slug = slug_by_id.get(class_id)
+                if slug is not None:
+                    counts[slug] += 1
+        return counts
+
+    def _sample_meta(self, category: str, augmented: bool) -> dict[str, object]:
+        return {
             "augmented": augmented,
-            "positive": bool(np.count_nonzero(mask) > 0),
+            "category": category,
+            "positive": category == TILE_CATEGORY_POSITIVE,
+            "hard_negative": category == TILE_CATEGORY_HARD_NEGATIVE,
+            "background": category == TILE_CATEGORY_BACKGROUND,
         }
-        if self._class_annotations:
-            meta["class_positive"] = {
-                annotation.slug: bool(np.any(mask == annotation.class_id))
-                for annotation in self._class_annotations
-            }
-            meta["class_pixels"] = {
-                annotation.slug: int(np.count_nonzero(mask == annotation.class_id))
-                for annotation in self._class_annotations
-            }
-        return meta
 
 
 def _split_tile_indices(
@@ -506,6 +647,61 @@ def _split_index_group(
     train = [index for index in indices if index not in val_set]
     val = [index for index in indices if index in val_set]
     return train, val, []
+
+
+def _tile_categories(
+    positive_hints: list[bool],
+    hard_negative_hints: list[bool],
+) -> list[str]:
+    categories: list[str] = []
+    for positive, hard_negative in zip(positive_hints, hard_negative_hints):
+        if positive:
+            categories.append(TILE_CATEGORY_POSITIVE)
+        elif hard_negative:
+            categories.append(TILE_CATEGORY_HARD_NEGATIVE)
+        else:
+            categories.append(TILE_CATEGORY_BACKGROUND)
+    return categories
+
+
+def _category_counts(categories: list[str]) -> dict[str, int]:
+    return {
+        TILE_CATEGORY_POSITIVE: sum(1 for item in categories if item == TILE_CATEGORY_POSITIVE),
+        TILE_CATEGORY_HARD_NEGATIVE: sum(
+            1 for item in categories if item == TILE_CATEGORY_HARD_NEGATIVE
+        ),
+        TILE_CATEGORY_BACKGROUND: sum(
+            1 for item in categories if item == TILE_CATEGORY_BACKGROUND
+        ),
+    }
+
+
+def _validate_sampling_categories(
+    factors: dict[str, float],
+    counts: dict[str, int],
+) -> None:
+    labels = {
+        TILE_CATEGORY_POSITIVE: "positive",
+        TILE_CATEGORY_HARD_NEGATIVE: "hard_negative",
+        TILE_CATEGORY_BACKGROUND: "background",
+    }
+    for category, factor in factors.items():
+        if factor > 0.0 and counts.get(category, 0) == 0:
+            raise TilePreparationError(
+                f"tile_preparation.{labels[category]}_factor > 0, "
+                f"но {labels[category]} tiles не найдены."
+            )
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+    return result
 
 
 def _resolve_nodata(dataset: DatasetReader) -> object:

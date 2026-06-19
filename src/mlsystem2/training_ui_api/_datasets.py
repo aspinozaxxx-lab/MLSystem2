@@ -1,4 +1,4 @@
-"""Чтение публичного инвентаря MLMarkup для UI."""
+﻿"""Чтение публичного инвентаря MLMarkup для UI."""
 
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ def _dataset_from_variant_folder(
     variant_name = variant_path.name if variant_path != class_path else DEFAULT_VARIANT
     dataset_name = _dataset_display_name(class_path.name, variant_name)
     scenes_file = _first_file(variant_path, ".txt")
-    annotation_file = _first_file(variant_path, ".geojson")
+    annotation_file, hard_negative_annotation_file, diagnostics = _annotation_files(variant_path)
     updated_at, version = _path_metadata(variant_path, repo_root)
     return DatasetInfo(
         key=dataset_name,
@@ -156,9 +156,13 @@ def _dataset_from_variant_folder(
         path=str(variant_path),
         scenes_file=str(scenes_file) if scenes_file else None,
         annotation_file=str(annotation_file) if annotation_file else None,
+        hard_negative_annotation_file=(
+            str(hard_negative_annotation_file) if hard_negative_annotation_file else None
+        ),
         image_count=_dataset_image_count(scenes_file, image_index),
         version=version,
         updated_at=updated_at,
+        diagnostics=diagnostics,
     )
 
 
@@ -173,6 +177,36 @@ def _looks_like_dataset_folder(path: Path) -> bool:
 def _first_file(path: Path, suffix: str) -> Path | None:
     files = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() == suffix)
     return files[0] if files else None
+
+
+def _annotation_files(path: Path) -> tuple[Path | None, Path | None, list[str]]:
+    geojson_files = sorted(
+        (item for item in path.iterdir() if item.is_file() and item.suffix.lower() == ".geojson"),
+        key=lambda item: item.name.casefold(),
+    )
+    hard_negative_files = [
+        item for item in geojson_files if item.name.casefold() == "hard_negative.geojson"
+    ]
+    positive_files = [item for item in geojson_files if item not in hard_negative_files]
+    diagnostics: list[str] = []
+    annotation_file: Path | None = None
+    hard_negative_annotation_file: Path | None = None
+
+    if len(positive_files) == 1:
+        annotation_file = positive_files[0]
+    elif len(positive_files) > 1:
+        diagnostics.append(
+            "В папке датасета найдено несколько positive GeoJSON, выбор разметки неоднозначен."
+        )
+
+    if len(hard_negative_files) == 1:
+        hard_negative_annotation_file = hard_negative_files[0]
+    elif len(hard_negative_files) > 1:
+        diagnostics.append(
+            "В папке датасета найдено несколько hard_negative.geojson, выбор разметки неоднозначен."
+        )
+
+    return annotation_file, hard_negative_annotation_file, diagnostics
 
 
 def _direct_raster_count(path: Path) -> int:

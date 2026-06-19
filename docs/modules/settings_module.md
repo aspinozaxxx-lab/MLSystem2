@@ -1,4 +1,4 @@
-# Модуль settings
+﻿# Модуль settings
 
 ## Назначение
 
@@ -14,9 +14,9 @@
 
 - `SettingsError` - ошибка загрузки или валидации.
 - `RuntimeSettings` - поля `project_root`, `scratch_root`, `logs_root`, `cleanup_scratch_after_mlflow_log`.
-- `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, `priority`.
-- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
-- `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, `positive_factor`, `val_positive_factor`, `class_balance`.
+- `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
+- `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
+- `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, `positive_factor`, `hard_negative_factor`, `background_factor`, `val_positive_factor`, `class_balance`.
 - `TrainSettings` - поля `task`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
 - `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
 - `SystemSettings` - корневой DTO настроек.
@@ -31,11 +31,11 @@
 
 `settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `tile_preparation.num_workers`, `prefetch_epochs`, `seed`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
 
-`run.yml` хранит задание конкретного обучения: пути разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, positive sampling, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. Параметры inference задаются отдельно при создании задания псевдоразметки.
+`run.yml` хранит задание конкретного обучения: пути positive-разметки, optional hard-negative разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, train sampling factors, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. Параметры inference задаются отдельно при создании задания псевдоразметки.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 
-Positive-aware tile sampling является единственным штатным train-режимом. `positive_factor` используется для `mode=train`: значение `0.8` означает примерно 80% positive и 20% negative samples в training epoch. Val выборка всегда фиксированная и кэшированная в RAM: positive и negative tiles берутся поровну без replacement по меньшей группе, а `val_positive_factor` остается совместимым параметром и серверным default `0.5`. В multiclass режиме `positive_factor` остается балансом foreground/background. Если дополнительно задано `class_balance=true`, positive-доля train sampling распределяется между классами с найденными positive windows примерно равномерно; классы без positive windows попадают в warnings. Аугментация применяется только к positive train tiles. Эти поля не меняют masks и labels.
+Category-aware tile sampling является штатным train-режимом. `positive_factor`, `hard_negative_factor` и `background_factor` задают доли полного train sampler budget для трех взаимоисключающих категорий: positive, hard_negative и background. Каждый фактор находится в диапазоне `0..1`, сумма после defaults должна быть равна `1.0`, нулевое значение отключает категорию. Для legacy config без `background_factor` он вычисляется как `1 - positive_factor - hard_negative_factor`; server default равен `0.5 / 0.0 / 0.5`, UI default равен `0.8 / 0.0 / 0.2`. Если `hard_negative_factor > 0`, должен быть задан `hard_negative_annotation_file`. Val выборка остается фиксированной и кэшированной в RAM: train factors не применяются к val loader, а `val_positive_factor` остается совместимым параметром и серверным default `0.5`. В multiclass режиме `class_balance=true` распределяет только positive-бюджет между классами с найденными positive windows; hard_negative и background бюджеты остаются отдельными. Аугментация применяется к positive и hard_negative train tiles, background train tiles не аугментируются. Hard negative не меняет masks и labels: в target mask это всегда background `0`.
 
 `prefetch_epochs` задает целевой запас PyTorch DataLoader prefetch в эпохах только для train loader. `tile_preparation` вычисляет effective train `prefetch_factor` как `ceil(effective_batches_per_epoch * prefetch_epochs / num_workers)`, где `effective_batches_per_epoch = min(ceil(dataset_size / batch_size), max_train_batches_per_epoch)`, если batch limit задан, иначе используется полный train split. Val loader не использует PyTorch worker prefetch: его batch-и один раз собираются в CPU RAM cache до старта обучения и переиспользуются на каждой эпохе.
 
@@ -52,6 +52,7 @@ dataset:
   images_dir: /data/mlsystem2/prepared_images/
   scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
   annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
+  hard_negative_annotation_file: /data/MLMarkup/Вырубки/hard_negative.geojson
   val_fraction: 0.2
 ```
 
@@ -66,9 +67,10 @@ dataset:
       name: Абразия
       scenes_file: /data/MLMarkup/Абразия/abrasion.txt
       annotation_file: /data/MLMarkup/Абразия/abrasion.geojson
+      hard_negative_annotation_file: /data/MLMarkup/Абразия/hard_negative.geojson
       priority: 0
 ```
 
-Валидация `DatasetSettings`: либо заданы `classes`, либо заданы `scenes_file` + `annotation_file`; смешивать режимы нельзя. `classes` не должен быть пустым в multiclass режиме. `slug` и `name` должны быть уникальны. Class id назначается порядком в config: `background=0`, первый класс `1`. `priority` используется только при пересечении multiclass разметки: больший приоритет перекрывает меньший, при равном приоритете используется порядок `class_id`.
+Валидация `DatasetSettings`: либо заданы `classes`, либо заданы `scenes_file` + `annotation_file`; смешивать режимы нельзя. `hard_negative_annotation_file` в верхнем уровне относится только к binary режиму, а в multiclass задается внутри конкретного `DatasetClassSettings`. `classes` не должен быть пустым в multiclass режиме. `slug` и `name` должны быть уникальны. Class id назначается порядком в config: `background=0`, первый класс `1`. `priority` используется только при пересечении multiclass positive-разметки: больший приоритет перекрывает меньший, при равном приоритете используется порядок `class_id`.
 
 Валидация `SystemSettings`: `dataset.classes` требует `train.task=multiclass`, `train.loss=cross_entropy` или `train.loss=cross_entropy_dice` и `train.output_channels=len(dataset.classes)+1`. Binary dataset требует `train.task=binary`; multiclass loss в binary режиме запрещен.

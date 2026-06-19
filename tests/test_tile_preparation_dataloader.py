@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -23,7 +23,12 @@ from mlsystem2.tile_preparation._dataloader import (
     _ensure_val_cache_fits_memory,
     _linux_mem_available_bytes,
 )
-from mlsystem2.tile_preparation._dataset import TileDataset
+from mlsystem2.tile_preparation._dataset import (
+    TILE_CATEGORY_BACKGROUND,
+    TILE_CATEGORY_HARD_NEGATIVE,
+    TILE_CATEGORY_POSITIVE,
+    TileDataset,
+)
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
     TileDataloaderRequest,
@@ -128,12 +133,15 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     assert images.shape == (2, 1, 4, 4)
     assert masks.shape == (2, 1, 4, 4)
     assert batch_meta["augmented_tile_count"] == 0
-    assert batch_meta["class_positive_tile_counts"] == {}
-    assert batch_meta["class_pixel_counts"] == {}
+    assert batch_meta["augmented_positive_tile_count"] == 0
+    assert batch_meta["augmented_hard_negative_tile_count"] == 0
     assert batch_meta["tile_augmented"] == [False, False]
     assert len(batch_meta["tile_positive"]) == 2
     assert batch_meta["positive_tile_count"] == sum(batch_meta["tile_positive"])
     assert batch_meta["positive_tile_count"] == 1
+    assert batch_meta["hard_negative_tile_count"] == 0
+    assert batch_meta["background_tile_count"] == 1
+    assert batch_meta["tile_category"] == [TILE_CATEGORY_POSITIVE, TILE_CATEGORY_BACKGROUND]
     assert images.dtype == torch.float32
     assert masks.dtype == torch.float32
     assert set(torch.unique(masks).tolist()) <= {0.0, 1.0}
@@ -156,7 +164,17 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
     vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
-    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=2))
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=2,
+            positive_factor=0.0,
+            background_factor=1.0,
+        )
+    )
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
@@ -173,10 +191,15 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
     assert batch_meta == {
         "augmented_tile_count": 0,
         "positive_tile_count": 0,
-        "class_positive_tile_counts": {},
-        "class_pixel_counts": {},
+        "hard_negative_tile_count": 0,
+        "background_tile_count": 1,
+        "augmented_positive_tile_count": 0,
+        "augmented_hard_negative_tile_count": 0,
         "tile_augmented": [False],
         "tile_positive": [False],
+        "tile_hard_negative": [False],
+        "tile_background": [True],
+        "tile_category": [TILE_CATEGORY_BACKGROUND],
     }
     assert images.dtype == torch.float32
     assert torch.equal(images[0], torch.as_tensor(data.astype(np.float32)))
@@ -201,6 +224,8 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
             batch_size=1,
             input_channels=1,
             augmentation_level=2,
+            positive_factor=1.0,
+            background_factor=0.0,
         )
     )
 
@@ -220,10 +245,15 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     assert batch_meta == {
         "augmented_tile_count": 1,
         "positive_tile_count": 1,
-        "class_positive_tile_counts": {},
-        "class_pixel_counts": {},
+        "hard_negative_tile_count": 0,
+        "background_tile_count": 0,
+        "augmented_positive_tile_count": 1,
+        "augmented_hard_negative_tile_count": 0,
         "tile_augmented": [True],
         "tile_positive": [True],
+        "tile_hard_negative": [False],
+        "tile_background": [False],
+        "tile_category": [TILE_CATEGORY_POSITIVE],
     }
 
     loader.dataset.close()
@@ -289,7 +319,17 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
     class_b = tmp_path / "class_b.geojson"
     _write_annotation_polygon(class_a, [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])
     _write_annotation_polygon(class_b, [[2, 1], [3, 1], [3, 2], [2, 2], [2, 1]])
-    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=1,
+            positive_factor=1.0,
+            background_factor=0.0,
+        )
+    )
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
@@ -319,8 +359,9 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
     assert masks.dtype == torch.long
     assert set(torch.unique(masks).tolist()) == {0, 1, 2}
     assert batch_meta["positive_tile_count"] == 1
-    assert batch_meta["class_positive_tile_counts"] == {"class_a": 1, "class_b": 1}
-    assert batch_meta["class_pixel_counts"] == {"class_a": 1, "class_b": 1}
+    assert batch_meta["hard_negative_tile_count"] == 0
+    assert batch_meta["background_tile_count"] == 0
+    assert batch_meta["tile_category"] == [TILE_CATEGORY_POSITIVE]
     loader.dataset.close()
 
 
@@ -335,7 +376,17 @@ def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path
     polygon = [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]]
     _write_annotation_polygon(class_a, polygon)
     _write_annotation_polygon(class_b, polygon)
-    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=1,
+            positive_factor=1.0,
+            background_factor=0.0,
+        )
+    )
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
@@ -393,7 +444,13 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     assert len(dataset) == 4
     assert image.shape == (1, 4, 4)
     assert mask.shape == (1, 4, 4)
-    assert sample_meta == {"augmented": False, "positive": False}
+    assert sample_meta == {
+        "augmented": False,
+        "category": TILE_CATEGORY_BACKGROUND,
+        "positive": False,
+        "hard_negative": False,
+        "background": True,
+    }
     assert torch.equal(
         torch.as_tensor(edge_tile[:, 0]),
         torch.as_tensor(data[0, 0:4, 4].astype(np.float32)),
@@ -462,7 +519,13 @@ def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
     assert image.shape == (1, 64, 64)
     assert torch.all(torch.as_tensor(image) == 1000.0)
     assert torch.all(torch.as_tensor(mask) == 0.0)
-    assert sample_meta == {"augmented": False, "positive": False}
+    assert sample_meta == {
+        "augmented": False,
+        "category": TILE_CATEGORY_BACKGROUND,
+        "positive": False,
+        "hard_negative": False,
+        "background": True,
+    }
 
     dataset.close()
 
@@ -544,7 +607,13 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
     assert read_calls == 1
     assert image.shape == (1, 4, 4)
     assert mask.shape == (1, 4, 4)
-    assert sample_meta == {"augmented": False, "positive": False}
+    assert sample_meta == {
+        "augmented": False,
+        "category": TILE_CATEGORY_BACKGROUND,
+        "positive": False,
+        "hard_negative": False,
+        "background": True,
+    }
     dataset.close()
 
 
@@ -631,18 +700,74 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
     assert batch_meta["augmented_tile_count"] == 0
 
 
-def test_train_augmentation_applies_only_to_positive_tiles(tmp_path: Path) -> None:
+def test_tile_category_precedence_keeps_hard_negative_masks_empty(tmp_path: Path) -> None:
     pytest.importorskip("torch")
-    raster_path = tmp_path / "smart_aug.tif"
-    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    raster_path = tmp_path / "category.tif"
+    data = np.full((1, 4, 12), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
     vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
-    _write_annotation_height4(annotation_file)
+    hard_negative_file = tmp_path / "hard_negative.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [1.5, 2.5], [1.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    _write_annotation_polygon(
+        hard_negative_file,
+        [[0.5, 2.5], [5.5, 2.5], [5.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
 
     dataset = TileDataset(
         vrt_xml=vrt_xml,
         annotation_file=annotation_file,
+        hard_negative_annotation_file=hard_negative_file,
+        tile_size=4,
+        stride=4,
+        mode="train",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    positive_image, positive_mask, positive_meta = dataset[0]
+    hard_image, hard_mask, hard_meta = dataset[1]
+    background_image, background_mask, background_meta = dataset[2]
+
+    assert positive_image.shape == hard_image.shape == background_image.shape == (1, 4, 4)
+    assert dataset.tile_categories == [
+        TILE_CATEGORY_POSITIVE,
+        TILE_CATEGORY_HARD_NEGATIVE,
+        TILE_CATEGORY_BACKGROUND,
+    ]
+    assert positive_meta["category"] == TILE_CATEGORY_POSITIVE
+    assert hard_meta["category"] == TILE_CATEGORY_HARD_NEGATIVE
+    assert background_meta["category"] == TILE_CATEGORY_BACKGROUND
+    assert np.count_nonzero(positive_mask) > 0
+    assert np.count_nonzero(hard_mask) == 0
+    assert np.count_nonzero(background_mask) == 0
+    dataset.close()
+
+
+def test_train_augmentation_applies_to_positive_and_hard_negative_tiles(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "smart_aug.tif"
+    data = np.full((1, 4, 12), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    hard_negative_file = tmp_path / "hard_negative.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [1.5, 2.5], [1.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    _write_annotation_polygon(
+        hard_negative_file,
+        [[4.5, 2.5], [5.5, 2.5], [5.5, 3.5], [4.5, 3.5], [4.5, 2.5]],
+    )
+
+    dataset = TileDataset(
+        vrt_xml=vrt_xml,
+        annotation_file=annotation_file,
+        hard_negative_annotation_file=hard_negative_file,
         tile_size=4,
         stride=4,
         mode="train",
@@ -651,11 +776,44 @@ def test_train_augmentation_applies_only_to_positive_tiles(tmp_path: Path) -> No
     )
 
     _positive_image, _positive_mask, positive_meta = dataset[0]
-    _negative_image, _negative_mask, negative_meta = dataset[1]
+    _hard_image, hard_mask, hard_meta = dataset[1]
+    _background_image, _background_mask, background_meta = dataset[2]
 
-    assert positive_meta == {"augmented": True, "positive": True}
-    assert negative_meta == {"augmented": False, "positive": False}
+    assert positive_meta["augmented"] is True
+    assert positive_meta["category"] == TILE_CATEGORY_POSITIVE
+    assert hard_meta["augmented"] is True
+    assert hard_meta["category"] == TILE_CATEGORY_HARD_NEGATIVE
+    assert background_meta["augmented"] is False
+    assert background_meta["category"] == TILE_CATEGORY_BACKGROUND
+    assert np.count_nonzero(hard_mask) == 0
     dataset.close()
+
+
+def test_collate_batch_reports_category_and_augmentation_counters() -> None:
+    pytest.importorskip("torch")
+    image = np.ones((1, 2, 2), dtype=np.float32)
+    empty_mask = np.zeros((1, 2, 2), dtype=np.float32)
+    positive_mask = np.ones((1, 2, 2), dtype=np.float32)
+
+    _images, _masks, batch_meta = dataloader_impl._collate_tile_batch(
+        [
+            (image, positive_mask, {"category": TILE_CATEGORY_POSITIVE, "augmented": True}),
+            (image, empty_mask, {"category": TILE_CATEGORY_HARD_NEGATIVE, "augmented": True}),
+            (image, empty_mask, {"category": TILE_CATEGORY_BACKGROUND, "augmented": False}),
+        ]
+    )
+
+    assert batch_meta["positive_tile_count"] == 1
+    assert batch_meta["hard_negative_tile_count"] == 1
+    assert batch_meta["background_tile_count"] == 1
+    assert batch_meta["augmented_tile_count"] == 2
+    assert batch_meta["augmented_positive_tile_count"] == 1
+    assert batch_meta["augmented_hard_negative_tile_count"] == 1
+    assert batch_meta["tile_category"] == [
+        TILE_CATEGORY_POSITIVE,
+        TILE_CATEGORY_HARD_NEGATIVE,
+        TILE_CATEGORY_BACKGROUND,
+    ]
 
 
 def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) -> None:
@@ -699,10 +857,11 @@ def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) ->
     assert val_loader.cached_tiles == 2
     assert val_loader.cached_batches == 2
     assert train_loader.dataset.estimated_positive_tiles == 1
-    assert train_loader.dataset.estimated_negative_tiles == 1
+    assert train_loader.dataset.estimated_hard_negative_tiles == 0
+    assert train_loader.dataset.estimated_background_tiles == 1
     assert val_loader.dataset.estimated_positive_tiles == 1
-    assert val_loader.dataset.estimated_negative_tiles == 1
-    assert train_loader.dataset.uses_vrt_source_rects is True
+    assert val_loader.dataset.estimated_hard_negative_tiles == 0
+    assert val_loader.dataset.estimated_background_tiles == 1
     train_loader.dataset.close()
     val_loader.dataset.close()
 
@@ -821,7 +980,8 @@ def test_val_cached_loader_uses_min_group_without_replacement(tmp_path: Path) ->
     )
 
     assert val_loader.dataset.estimated_positive_tiles == 3
-    assert val_loader.dataset.estimated_negative_tiles == 10
+    assert val_loader.dataset.estimated_hard_negative_tiles == 0
+    assert val_loader.dataset.estimated_background_tiles == 10
     assert val_loader.cached_tiles == 6
     positive_tiles = 0
     total_tiles = 0
@@ -958,19 +1118,54 @@ def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> No
     dataset.close()
 
 
-def test_sampling_weights_follow_positive_factor() -> None:
+def test_sampling_weights_distribute_three_category_budgets() -> None:
     dataset = TileDataset.__new__(TileDataset)
-    dataset._positive_hint_by_index = [True, True, *([False] * 8)]
-    dataset._positive_factor = 0.8
+    dataset._positive_hint_by_index = [True, True, False, False, False]
+    dataset._hard_negative_hint_by_index = [False, False, True, True, False]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
     dataset._class_balance = False
     dataset._class_annotations = []
     dataset._class_hints_by_index = None
 
-    weights = dataset.sampling_weights(0.8)
+    weights = dataset.sampling_weights()
 
     assert weights is not None
-    assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if positive) == pytest.approx(0.8)
-    assert sum(weight for weight, positive in zip(weights, dataset._positive_hint_by_index) if not positive) == pytest.approx(0.2)
+    assert sum(weights[:2]) == pytest.approx(0.5)
+    assert sum(weights[2:4]) == pytest.approx(0.3)
+    assert weights[4] == pytest.approx(0.2)
+
+
+def test_sampling_weights_allow_only_one_category_budget() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, False, False]
+    dataset._hard_negative_hint_by_index = [False, True, False]
+    dataset._positive_factor = 0.0
+    dataset._hard_negative_factor = 1.0
+    dataset._background_factor = 0.0
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    weights = dataset.sampling_weights()
+
+    assert weights == [0.0, 1.0, 0.0]
+
+
+def test_sampling_weights_reject_missing_hard_negative_factor_category() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, False]
+    dataset._hard_negative_hint_by_index = [False, False]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.2
+    dataset._background_factor = 0.3
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    with pytest.raises(TilePreparationError, match="hard_negative_factor"):
+        dataset.sampling_weights()
 
 
 def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
@@ -990,13 +1185,12 @@ def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
         TileClassAnnotation(class_id=2, slug="rare", name="Rare", annotation_file="b.geojson"),
     ]
 
-    weights = dataset.sampling_weights(0.8)
+    weights = dataset.sampling_weights(0.8, 0.0, 0.2)
 
     assert weights is not None
     assert weights[2] > weights[0]
     assert sum(weights[:3]) == pytest.approx(0.8)
     assert sum(weights[3:]) == pytest.approx(0.2)
-    assert dataset.estimated_class_positive_tiles == {"common": 2, "rare": 1}
 
 
 def _window_keys(dataset) -> list[tuple[int, int]]:
@@ -1121,6 +1315,9 @@ def _write_config(
     num_workers: int = 0,
     input_channels: int = 3,
     augmentation_level: int = 0,
+    positive_factor: float = 0.5,
+    hard_negative_factor: float = 0.0,
+    background_factor: float = 0.5,
     val_positive_factor: float = 0.5,
 ) -> Path:
     settings_path = tmp_path / "config.yaml"
@@ -1145,7 +1342,9 @@ tile_preparation:
   prefetch_epochs: 2
   seed: 42
   augmentation_level: {augmentation_level}
-  positive_factor: 0.5
+  positive_factor: {positive_factor}
+  hard_negative_factor: {hard_negative_factor}
+  background_factor: {background_factor}
   val_positive_factor: {val_positive_factor}
 
 train:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 from pathlib import Path
@@ -239,6 +239,74 @@ def test_load_settings_rejects_stride_larger_than_tile_size(tmp_path: Path) -> N
         api.load_settings(settings_path)
 
 
+def test_load_settings_accepts_tile_category_factors(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config()
+        .replace(
+            "  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson",
+            "  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson\n"
+            "  hard_negative_annotation_file: /data/MLMarkup/Вырубки/hard_negative.geojson",
+        )
+        .replace(
+            "  positive_factor: 0.5",
+            "  positive_factor: 0.4\n  hard_negative_factor: 0.25\n  background_factor: 0.35",
+        ),
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.dataset.hard_negative_annotation_file == (
+        "/data/MLMarkup/Вырубки/hard_negative.geojson"
+    )
+    assert settings.tile_preparation.positive_factor == 0.4
+    assert settings.tile_preparation.hard_negative_factor == 0.25
+    assert settings.tile_preparation.background_factor == 0.35
+
+
+def test_load_settings_rejects_tile_factor_sum_not_one(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  positive_factor: 0.5",
+            "  positive_factor: 0.5\n  hard_negative_factor: 0.3\n  background_factor: 0.3",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="positive_factor"):
+        api.load_settings(settings_path)
+
+
+def test_load_settings_resolves_legacy_background_factor(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(_minimal_config(), encoding="utf-8")
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.tile_preparation.hard_negative_factor == 0.0
+    assert settings.tile_preparation.background_factor == 0.5
+
+
+def test_load_settings_rejects_hard_negative_factor_without_annotation(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  positive_factor: 0.5",
+            "  positive_factor: 0.4\n  hard_negative_factor: 0.2\n  background_factor: 0.4",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="hard_negative_annotation_file"):
+        api.load_settings(settings_path)
+
+
 def test_load_settings_accepts_augmentation_level_three(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
@@ -291,6 +359,8 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.max_val_batches_per_epoch is None
     assert settings.train.max_training_time_sec is None
     assert settings.tile_preparation.positive_factor == 0.5
+    assert settings.tile_preparation.hard_negative_factor == 0.0
+    assert settings.tile_preparation.background_factor == 0.5
     assert settings.tile_preparation.val_positive_factor == 0.5
     assert settings.tile_preparation.class_balance is False
     assert settings.tile_preparation.prefetch_epochs == 2.0

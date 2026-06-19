@@ -1,4 +1,4 @@
-"""Оркестрация конвейера обучения."""
+﻿"""Оркестрация конвейера обучения."""
 
 from __future__ import annotations
 
@@ -190,22 +190,22 @@ def run_train_pipeline(
                 if _uses_weighted_sampler(train_loader)
                 else None
             ),
-            is_diagnostic_sampling=False,
+            hard_negative_factor_used=(
+                settings.tile_preparation.hard_negative_factor
+                if _uses_weighted_sampler(train_loader)
+                else None
+            ),
+            background_factor_used=(
+                settings.tile_preparation.background_factor
+                if _uses_weighted_sampler(train_loader)
+                else None
+            ),
         )
-        val_uses_weighted_sampler = _uses_weighted_sampler(val_loader)
         val_sampling_mode = _sampling_mode(settings, val_loader)
-        if val_sampling_mode == "cached_balanced":
-            val_positive_factor_used = 0.5
-        elif val_uses_weighted_sampler:
-            val_positive_factor_used = settings.tile_preparation.val_positive_factor
-        else:
-            val_positive_factor_used = None
         val_loader = _CountingLoader(
             val_loader,
             "val",
             sampling_mode=val_sampling_mode,
-            positive_factor_used=val_positive_factor_used,
-            is_diagnostic_sampling=False,
         )
 
         model = _load_or_create_model(settings, deps)
@@ -310,6 +310,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                     name=item.name,
                     scenes_file=item.scenes_file,
                     annotation_file=item.annotation_file,
+                    hard_negative_annotation_file=item.hard_negative_annotation_file,
                     priority=item.priority,
                 )
                 for item in settings.dataset.classes
@@ -320,6 +321,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         images_dir=settings.dataset.images_dir,
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
+        hard_negative_annotation_file=settings.dataset.hard_negative_annotation_file,
         val_fraction=settings.dataset.val_fraction,
     )
 
@@ -330,12 +332,20 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
         for item in settings.dataset.classes:
             files[f"{item.slug}_scenes{Path(item.scenes_file).suffix}"] = item.scenes_file
             files[f"{item.slug}_annotation{Path(item.annotation_file).suffix}"] = item.annotation_file
+            if item.hard_negative_annotation_file is not None:
+                files[
+                    f"{item.slug}_hard_negative{Path(item.hard_negative_annotation_file).suffix}"
+                ] = item.hard_negative_annotation_file
         return files
     files = {}
     if settings.dataset.scenes_file is not None:
         files[Path(settings.dataset.scenes_file).name] = settings.dataset.scenes_file
     if settings.dataset.annotation_file is not None:
         files[Path(settings.dataset.annotation_file).name] = settings.dataset.annotation_file
+    if settings.dataset.hard_negative_annotation_file is not None:
+        files[Path(settings.dataset.hard_negative_annotation_file).name] = (
+            settings.dataset.hard_negative_annotation_file
+        )
     return files
 
 
@@ -367,6 +377,7 @@ def _tile_request(
                     slug=item.slug,
                     name=item.name,
                     annotation_file=item.annotation_file,
+                    hard_negative_annotation_file=item.hard_negative_annotation_file,
                     priority=item.priority,
                 )
                 for item in dataset.class_annotations
@@ -381,6 +392,7 @@ def _tile_request(
     return TileDataloaderRequest(
         vrt_xml=vrt_xml,
         annotation_file=dataset.annotation_file,
+        hard_negative_annotation_file=dataset.hard_negative_annotation_file,
         batch_size=batch_size,
         mode=mode,
         tile_split=tile_split,
@@ -419,19 +431,23 @@ class _CountingLoader:
         *,
         sampling_mode: str = "sequential",
         positive_factor_used: float | None = None,
-        is_diagnostic_sampling: bool = False,
+        hard_negative_factor_used: float | None = None,
+        background_factor_used: float | None = None,
     ) -> None:
         self.loader = loader
         self.split = split
         self.sampling_mode = sampling_mode
         self.positive_factor_used = positive_factor_used
-        self.is_diagnostic_sampling = is_diagnostic_sampling
+        self.hard_negative_factor_used = hard_negative_factor_used
+        self.background_factor_used = background_factor_used
         self.observed_batches = 0
         self.observed_tiles = 0
         self.observed_augmented_tiles = 0
+        self.observed_augmented_positive_tiles = 0
+        self.observed_augmented_hard_negative_tiles = 0
         self.observed_positive_tiles = 0
-        self.observed_class_positive_tile_counts: dict[str, int] = {}
-        self.observed_class_pixel_counts: dict[str, int] = {}
+        self.observed_hard_negative_tiles = 0
+        self.observed_background_tiles = 0
 
     def __iter__(self):
         for batch in self.loader:
@@ -440,16 +456,28 @@ class _CountingLoader:
             meta = batch[2] if len(batch) > 2 else {}
             aug_count = int(meta.get("augmented_tile_count", 0)) if isinstance(meta, dict) else 0
             positive_count = int(meta.get("positive_tile_count", 0)) if isinstance(meta, dict) else 0
-            class_positive_counts = (
-                meta.get("class_positive_tile_counts", {}) if isinstance(meta, dict) else {}
+            hard_negative_count = (
+                int(meta.get("hard_negative_tile_count", 0)) if isinstance(meta, dict) else 0
             )
-            class_pixel_counts = meta.get("class_pixel_counts", {}) if isinstance(meta, dict) else {}
+            background_count = (
+                int(meta.get("background_tile_count", 0)) if isinstance(meta, dict) else 0
+            )
+            augmented_positive_count = (
+                int(meta.get("augmented_positive_tile_count", 0)) if isinstance(meta, dict) else 0
+            )
+            augmented_hard_negative_count = (
+                int(meta.get("augmented_hard_negative_tile_count", 0))
+                if isinstance(meta, dict)
+                else 0
+            )
             self.observed_batches += 1
             self.observed_tiles += tile_count
             self.observed_augmented_tiles += aug_count
+            self.observed_augmented_positive_tiles += augmented_positive_count
+            self.observed_augmented_hard_negative_tiles += augmented_hard_negative_count
             self.observed_positive_tiles += positive_count
-            _add_counts(self.observed_class_positive_tile_counts, class_positive_counts)
-            _add_counts(self.observed_class_pixel_counts, class_pixel_counts)
+            self.observed_hard_negative_tiles += hard_negative_count
+            self.observed_background_tiles += background_count
             yield batch
 
     def __len__(self) -> int:
@@ -471,18 +499,41 @@ class _CountingLoader:
         if isinstance(tile_split_warnings, list):
             warnings.extend(str(item) for item in tile_split_warnings)
         observed_positive_ratio = _safe_ratio(self.observed_positive_tiles, self.observed_tiles)
-        observed_negative_ratio = (
-            None if observed_positive_ratio is None else 1.0 - observed_positive_ratio
+        observed_hard_negative_ratio = _safe_ratio(
+            self.observed_hard_negative_tiles,
+            self.observed_tiles,
         )
-        ratio_abs_error = (
-            None
-            if observed_positive_ratio is None or self.positive_factor_used is None
-            else abs(observed_positive_ratio - self.positive_factor_used)
+        observed_background_ratio = _safe_ratio(
+            self.observed_background_tiles,
+            self.observed_tiles,
         )
-        if ratio_abs_error is not None and ratio_abs_error > 0.1:
-            warnings.append(
-                "observed_positive_ratio отклонился от target_positive_factor больше чем на 0.1."
-            )
+        positive_ratio_abs_error = _ratio_abs_error(
+            observed_positive_ratio,
+            self.positive_factor_used,
+        )
+        hard_negative_ratio_abs_error = _ratio_abs_error(
+            observed_hard_negative_ratio,
+            self.hard_negative_factor_used,
+        )
+        background_ratio_abs_error = _ratio_abs_error(
+            observed_background_ratio,
+            self.background_factor_used,
+        )
+        _add_ratio_warning(
+            warnings,
+            "positive",
+            positive_ratio_abs_error,
+        )
+        _add_ratio_warning(
+            warnings,
+            "hard_negative",
+            hard_negative_ratio_abs_error,
+        )
+        _add_ratio_warning(
+            warnings,
+            "background",
+            background_ratio_abs_error,
+        )
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
@@ -505,33 +556,38 @@ class _CountingLoader:
                 self.dataset,
                 "valid_footprint_total_cells",
             ),
-            "uses_vrt_source_rects": _dataset_attr(self.dataset, "uses_vrt_source_rects"),
             "pool_window_count": _dataset_attr(self.dataset, "pool_window_count"),
             "split_window_count": _dataset_attr(self.dataset, "split_window_count"),
-            "tile_split_enabled": _dataset_attr(self.dataset, "tile_split_enabled"),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
-            "estimated_negative_tiles": _dataset_attr(self.dataset, "estimated_negative_tiles"),
-            "estimated_class_positive_tiles": _dataset_attr(
+            "estimated_hard_negative_tiles": _dataset_attr(
                 self.dataset,
-                "estimated_class_positive_tiles",
+                "estimated_hard_negative_tiles",
             ),
+            "estimated_background_tiles": _dataset_attr(self.dataset, "estimated_background_tiles"),
             "sampling_mode": self.sampling_mode,
             "positive_factor_used": self.positive_factor_used,
-            "target_positive_factor": self.positive_factor_used,
+            "hard_negative_factor_used": self.hard_negative_factor_used,
+            "background_factor_used": self.background_factor_used,
             "cache_mode": _loader_attr(self.loader, "cache_mode"),
             "cached_batches": _loader_attr(self.loader, "cached_batches"),
             "cached_tiles": _loader_attr(self.loader, "cached_tiles"),
             "class_balance_enabled": _dataset_attr(self.dataset, "class_balance_enabled"),
-            "is_diagnostic_sampling": self.is_diagnostic_sampling,
             "observed_batches": self.observed_batches,
             "observed_tiles": self.observed_tiles,
             "observed_positive_tiles": self.observed_positive_tiles,
+            "observed_hard_negative_tiles": self.observed_hard_negative_tiles,
+            "observed_background_tiles": self.observed_background_tiles,
             "observed_positive_ratio": observed_positive_ratio,
-            "observed_negative_ratio": observed_negative_ratio,
-            "ratio_abs_error": ratio_abs_error,
+            "observed_hard_negative_ratio": observed_hard_negative_ratio,
+            "observed_background_ratio": observed_background_ratio,
+            "positive_ratio_abs_error": positive_ratio_abs_error,
+            "hard_negative_ratio_abs_error": hard_negative_ratio_abs_error,
+            "background_ratio_abs_error": background_ratio_abs_error,
             "observed_augmented_tiles": self.observed_augmented_tiles,
-            "observed_class_positive_tile_counts": self.observed_class_positive_tile_counts,
-            "observed_class_pixel_counts": self.observed_class_pixel_counts,
+            "observed_augmented_positive_tiles": self.observed_augmented_positive_tiles,
+            "observed_augmented_hard_negative_tiles": (
+                self.observed_augmented_hard_negative_tiles
+            ),
             "observed_real_tiles": self.observed_tiles - self.observed_augmented_tiles,
             "warnings": warnings,
         }
@@ -550,6 +606,8 @@ def _tile_preparation_report(
         "prefetch_epochs": settings.tile_preparation.prefetch_epochs,
         "augmentation_level": settings.tile_preparation.augmentation_level,
         "positive_factor": settings.tile_preparation.positive_factor,
+        "hard_negative_factor": settings.tile_preparation.hard_negative_factor,
+        "background_factor": settings.tile_preparation.background_factor,
         "val_positive_factor": settings.tile_preparation.val_positive_factor,
         "class_balance": settings.tile_preparation.class_balance,
         "splits": {
@@ -567,7 +625,7 @@ def _sampling_mode(settings: SystemSettings, loader: object) -> str:
         return "sequential"
     if settings.dataset.classes and settings.tile_preparation.class_balance:
         return "weighted_class_balance"
-    return "weighted_positive_factor"
+    return "weighted_category_factor"
 
 
 def _uses_weighted_sampler(loader: object) -> bool:
@@ -586,6 +644,23 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
     if denominator <= 0:
         return None
     return numerator / denominator
+
+
+def _ratio_abs_error(observed: float | None, target: float | None) -> float | None:
+    if observed is None or target is None:
+        return None
+    return abs(observed - target)
+
+
+def _add_ratio_warning(
+    warnings: list[str],
+    category: str,
+    ratio_abs_error: float | None,
+) -> None:
+    if ratio_abs_error is not None and ratio_abs_error > 0.1:
+        warnings.append(
+            f"observed_{category}_ratio отклонился от заданного factor больше чем на 0.1."
+        )
 
 
 def _dataset_attr(dataset: object, name: str) -> object:
@@ -671,7 +746,6 @@ def _mlflow_class_tag(settings: SystemSettings) -> str:
         return "unknown"
     return Path(settings.dataset.annotation_file).stem
 
-
 def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
     if settings.dataset.classes:
         names = [Path(item.annotation_file).stem for item in settings.dataset.classes]
@@ -679,11 +753,3 @@ def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
     if settings.dataset.annotation_file is None:
         return None
     return Path(settings.dataset.annotation_file).stem
-
-
-def _add_counts(target: dict[str, int], source: object) -> None:
-    if not isinstance(source, dict):
-        return
-    for key, value in source.items():
-        slug = str(key)
-        target[slug] = target.get(slug, 0) + int(value)

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ast
 from pathlib import Path
@@ -22,7 +22,7 @@ ALLOWED_MODULE_IMPORTS = {
 
 def test_forbidden_imports_are_absent() -> None:
     for path in SRC.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(_read_python_source(path), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -40,7 +40,7 @@ def test_forbidden_imports_are_absent() -> None:
 
 def test_mlflow_imports_are_adapter_only() -> None:
     for path in SRC.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(_read_python_source(path), filename=str(path))
         for node in ast.walk(tree):
             names: list[str] = []
             if isinstance(node, ast.Import):
@@ -66,7 +66,7 @@ def test_training_ui_does_not_write_mlflow_metrics() -> None:
         "end_run",
     }
     for path in (SRC / "training_ui_api").rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = ast.parse(_read_python_source(path), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.module != "mlsystem2.mlflow_adapter.api":
                 continue
@@ -90,6 +90,10 @@ def _assert_no_cross_module_internal_import(path: Path, module: str) -> None:
     imported_top = parts[1]
     if imported_top != current_top and any(part.startswith("_") for part in parts[2:]):
         raise AssertionError(f"{path}: импортирует приватный модуль из {imported_top}: {module}")
+
+
+def _read_python_source(path: Path) -> str:
+    return path.read_text(encoding="utf-8-sig")
 
 
 def _assert_allowed_import(path: Path, root: str, imported: str) -> None:

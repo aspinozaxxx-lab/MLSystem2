@@ -1,4 +1,4 @@
-"""Публичные контракты подготовки датасета."""
+﻿"""Публичные контракты подготовки датасета."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ class DatasetClassRequest(BaseModel):
     name: str
     scenes_file: str
     annotation_file: str
+    hard_negative_annotation_file: str | None = None
     priority: int = 0
 
 
@@ -27,13 +28,18 @@ class DatasetPreparationRequest(BaseModel):
     images_dir: str
     scenes_file: str | None = None
     annotation_file: str | None = None
+    hard_negative_annotation_file: str | None = None
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
         classes = self.classes or []
-        has_binary_paths = self.scenes_file is not None or self.annotation_file is not None
+        has_binary_paths = (
+            self.scenes_file is not None
+            or self.annotation_file is not None
+            or self.hard_negative_annotation_file is not None
+        )
         if has_binary_paths and classes:
             raise ValueError(
                 "DatasetPreparationRequest должен задавать либо classes, "
@@ -57,6 +63,7 @@ class DatasetClassAnnotation(BaseModel):
     slug: str
     name: str
     annotation_file: str
+    hard_negative_annotation_file: str | None = None
     priority: int = 0
 
 
@@ -67,6 +74,7 @@ class PreparedDataset(BaseModel):
     val_vrt_xml: str
     pool_vrt_xml: str | None = None
     annotation_file: str | None = None
+    hard_negative_annotation_file: str | None = None
     class_annotations: list[DatasetClassAnnotation] = Field(default_factory=list)
 
 
@@ -75,8 +83,9 @@ class DatasetSceneReport(BaseModel):
 
     scene_id: str
     image_path: str | None
+    positive_objects: int = Field(ge=0)
+    hard_negative_objects: int = Field(ge=0)
     object_count: int = Field(ge=0)
-    split: Literal["train", "val", "pool", "excluded", "missing"]
 
 
 class DatasetPreparationReport(BaseModel):
@@ -85,11 +94,9 @@ class DatasetPreparationReport(BaseModel):
     status: Literal["ok", "error"]
     scenes_total: int = Field(ge=0)
     scenes_found: int = Field(ge=0)
+    positive_objects: int = Field(ge=0)
+    hard_negative_objects: int = Field(ge=0)
     objects_total: int = Field(ge=0)
-    train_scenes_count: int = Field(ge=0)
-    train_objects_count: int = Field(ge=0)
-    val_scenes_count: int = Field(ge=0)
-    val_objects_count: int = Field(ge=0)
     scenes: list[DatasetSceneReport]
     missing_files: list[str]
     errors: list[str]

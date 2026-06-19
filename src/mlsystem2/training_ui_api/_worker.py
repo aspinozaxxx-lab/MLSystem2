@@ -1,4 +1,4 @@
-"""Фоновый исполнитель очереди training UI API."""
+﻿"""Фоновый исполнитель очереди training UI API."""
 
 from __future__ import annotations
 
@@ -326,6 +326,13 @@ def _build_training_config(
     run_dir: Path,
 ) -> dict[str, Any]:
     flat = dict(row.config or {})
+    positive_factor = _float_value(flat, "tile_preparation.positive_factor", 0.5)
+    hard_negative_factor = _float_value(flat, "tile_preparation.hard_negative_factor", 0.0)
+    background_factor = _float_value(
+        flat,
+        "tile_preparation.background_factor",
+        1.0 - positive_factor - hard_negative_factor,
+    )
     return {
         "runtime": {
             "project_root": str(config.project_root),
@@ -341,7 +348,9 @@ def _build_training_config(
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "augmentation_level": _int_value(flat, "tile_preparation.augmentation_level", 0),
-            "positive_factor": _float_value(flat, "tile_preparation.positive_factor", 0.5),
+            "positive_factor": positive_factor,
+            "hard_negative_factor": hard_negative_factor,
+            "background_factor": background_factor,
         },
         "train": {
             "model_name": row.architecture,
@@ -446,6 +455,11 @@ def _dataset_config(
     return {
         "scenes_file": dataset.scenes_file,
         "annotation_file": dataset.annotation_file,
+        **(
+            {"hard_negative_annotation_file": dataset.hard_negative_annotation_file}
+            if dataset.hard_negative_annotation_file
+            else {}
+        ),
     }
 
 

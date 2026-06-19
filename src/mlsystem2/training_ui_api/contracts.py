@@ -1,4 +1,4 @@
-"""Публичные контракты training UI API."""
+﻿"""Публичные контракты training UI API."""
 
 from __future__ import annotations
 
@@ -91,9 +91,11 @@ class DatasetInfo(BaseModel):
     is_custom: bool = False
     scenes_file: str | None = None
     annotation_file: str | None = None
+    hard_negative_annotation_file: str | None = None
     image_count: int | None = None
     version: str | None = None
     updated_at: datetime | None = None
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class DatasetListResponse(BaseModel):

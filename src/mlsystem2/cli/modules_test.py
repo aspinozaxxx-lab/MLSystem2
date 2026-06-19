@@ -1,4 +1,4 @@
-"""Локальная диагностика связки dataset_preparing и tile_preparation."""
+﻿"""Локальная диагностика связки dataset_preparing и tile_preparation."""
 
 from __future__ import annotations
 
@@ -364,7 +364,6 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "valid_footprint_stride": _dataset_attr(dataset, "valid_footprint_stride"),
         "valid_footprint_valid_cells": _dataset_attr(dataset, "valid_footprint_valid_cells"),
         "valid_footprint_total_cells": _dataset_attr(dataset, "valid_footprint_total_cells"),
-        "uses_vrt_source_rects": _dataset_attr(dataset, "uses_vrt_source_rects"),
         "dataset_len": _safe_len(dataset),
         "loader_len": _safe_len(loader),
         "augmentation_level": AUGMENTATION_LEVEL,

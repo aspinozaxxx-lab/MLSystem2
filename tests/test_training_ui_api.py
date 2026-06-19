@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -768,6 +768,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == ["Вырубки\\main", "Custom"]
         assert datasets[0]["image_count"] == 1
+        assert datasets[0]["hard_negative_annotation_file"] is None
         image_folders = client.get("/api/v1/image-folders").json()["folders"]
         assert image_folders == [
             {
@@ -830,6 +831,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "train.max_train_batches_per_epoch" in template_keys
         assert "train.max_val_batches_per_epoch" in template_keys
         assert "train.max_training_time_sec" in template_keys
+        assert "tile_preparation.positive_factor" in template_keys
+        assert "tile_preparation.hard_negative_factor" in template_keys
+        assert "tile_preparation.background_factor" in template_keys
+        assert segformer_template["default_config"]["tile_preparation.positive_factor"] == 0.8
+        assert segformer_template["default_config"]["tile_preparation.hard_negative_factor"] == 0.0
+        assert segformer_template["default_config"]["tile_preparation.background_factor"] == 0.2
         assert segformer_template["default_config"]["train.max_train_batches_per_epoch"] == 72
         assert segformer_template["default_config"]["train.max_val_batches_per_epoch"] == 1000
         assert segformer_template["default_config"]["train.max_training_time_sec"] == 1800
@@ -1122,6 +1129,10 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         '{"type":"FeatureCollection","features":[]}',
         encoding="utf-8",
     )
+    (class_dir / "hard_negative.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -1160,6 +1171,8 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "tile_preparation.stride": 32,
                     "tile_preparation.augmentation_level": 0,
                     "tile_preparation.positive_factor": 0.5,
+                    "tile_preparation.hard_negative_factor": 0.2,
+                    "tile_preparation.background_factor": 0.3,
                     "train.epochs": 1,
                     "train.batch_size": 1,
                     "train.learning_rate": 0.0001,
@@ -1196,6 +1209,9 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "input_channels" not in config_yaml
         assert "images_dir" not in config_yaml
         assert "inference:" not in config_yaml
+        assert "hard_negative_annotation_file:" in config_yaml
+        assert "hard_negative_factor: 0.2" in config_yaml
+        assert "background_factor: 0.3" in config_yaml
         assert "max_train_batches_per_epoch: 72" in config_yaml
         assert "max_val_batches_per_epoch: 1000" in config_yaml
         assert "max_training_time_sec: null" in config_yaml
@@ -1208,6 +1224,50 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][0][0] == "bash"
     assert started[0][1]["cwd"] == str(tmp_path)
     assert started[0][1]["start_new_session"] is True
+
+
+def test_training_ui_rejects_hard_negative_factor_without_dataset_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    class_dir = mlmarkup_root / "Вырубки" / "main"
+    class_dir.mkdir(parents=True)
+    (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    job_config = _short_training_config()
+    job_config["tile_preparation.positive_factor"] = 0.5
+    job_config["tile_preparation.hard_negative_factor"] = 0.2
+    job_config["tile_preparation.background_factor"] = 0.3
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        with pytest.raises(TrainingUIAPIError, match="hard_negative.geojson"):
+            create_training_job(
+                session,
+                TrainingJobCreate(
+                    mlflow_experiment_id="1",
+                    mlflow_experiment_name="ui-test",
+                    mlflow_run_name="worker-test",
+                    dataset_key="Вырубки\\main",
+                    architecture="smp_segformer_b2",
+                    config=job_config,
+                ),
+                config,
+            )
 
 
 def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Path, monkeypatch) -> None:
@@ -1709,6 +1769,8 @@ def _short_training_config() -> dict[str, object]:
         "tile_preparation.stride": 32,
         "tile_preparation.augmentation_level": 0,
         "tile_preparation.positive_factor": 0.5,
+        "tile_preparation.hard_negative_factor": 0.0,
+        "tile_preparation.background_factor": 0.5,
         "train.epochs": 1,
         "train.batch_size": 1,
         "train.learning_rate": 0.0001,

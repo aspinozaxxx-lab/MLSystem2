@@ -1,4 +1,4 @@
-"""Создание torch DataLoader для тайлов."""
+﻿"""Создание torch DataLoader для тайлов."""
 
 from __future__ import annotations
 
@@ -10,7 +10,12 @@ import numpy as np
 
 from mlsystem2.settings.api import get_settings
 
-from ._dataset import TileDataset
+from ._dataset import (
+    TILE_CATEGORY_BACKGROUND,
+    TILE_CATEGORY_HARD_NEGATIVE,
+    TILE_CATEGORY_POSITIVE,
+    TileDataset,
+)
 from .contracts import TileDataloaderRequest, TilePreparationError
 
 
@@ -35,6 +40,7 @@ def create_tile_dataloader(
         dataset = TileDataset(
             vrt_xml=request.vrt_xml,
             annotation_file=request.annotation_file,
+            hard_negative_annotation_file=request.hard_negative_annotation_file,
             class_annotations=request.class_annotations,
             tile_size=tile_settings.tile_size,
             stride=tile_settings.stride,
@@ -42,6 +48,8 @@ def create_tile_dataloader(
             seed=tile_settings.seed,
             augmentation_level=tile_settings.augmentation_level,
             positive_factor=tile_settings.positive_factor,
+            hard_negative_factor=tile_settings.hard_negative_factor,
+            background_factor=tile_settings.background_factor,
             class_balance=tile_settings.class_balance,
             tile_split=request.tile_split,
         )
@@ -62,7 +70,11 @@ def create_tile_dataloader(
     generator.manual_seed(tile_settings.seed)
 
     sampler = None
-    weights = dataset.sampling_weights(tile_settings.positive_factor)
+    weights = dataset.sampling_weights(
+        tile_settings.positive_factor,
+        tile_settings.hard_negative_factor,
+        tile_settings.background_factor,
+    )
     if weights is not None:
         sampler = WeightedRandomSampler(
             weights=weights,
@@ -303,14 +315,37 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
     masks = _collate_masks(torch, samples)
     metas = [sample[2] if len(sample) > 2 else {} for sample in samples]
     tile_augmented = [bool(meta.get("augmented", False)) for meta in metas]
-    tile_positive = [bool(meta.get("positive", False)) for meta in metas]
+    tile_categories = [
+        str(meta.get("category") or _legacy_category(meta))
+        for meta in metas
+    ]
+    tile_positive = [category == TILE_CATEGORY_POSITIVE for category in tile_categories]
+    tile_hard_negative = [
+        category == TILE_CATEGORY_HARD_NEGATIVE for category in tile_categories
+    ]
+    tile_background = [category == TILE_CATEGORY_BACKGROUND for category in tile_categories]
+    augmented_positive = [
+        augmented and positive
+        for augmented, positive in zip(tile_augmented, tile_positive)
+    ]
+    augmented_hard_negative = [
+        augmented and hard_negative
+        for augmented, hard_negative in zip(tile_augmented, tile_hard_negative)
+    ]
     batch_meta = {
         "augmented_tile_count": sum(1 for item in tile_augmented if item),
         "positive_tile_count": sum(1 for item in tile_positive if item),
-        "class_positive_tile_counts": _class_positive_tile_counts(metas),
-        "class_pixel_counts": _class_pixel_counts(metas),
+        "hard_negative_tile_count": sum(1 for item in tile_hard_negative if item),
+        "background_tile_count": sum(1 for item in tile_background if item),
+        "augmented_positive_tile_count": sum(1 for item in augmented_positive if item),
+        "augmented_hard_negative_tile_count": sum(
+            1 for item in augmented_hard_negative if item
+        ),
         "tile_augmented": tile_augmented,
         "tile_positive": tile_positive,
+        "tile_hard_negative": tile_hard_negative,
+        "tile_background": tile_background,
+        "tile_category": tile_categories,
     }
     return images, masks, batch_meta
 
@@ -324,29 +359,12 @@ def _collate_masks(torch, samples: list[tuple[np.ndarray, np.ndarray, dict[str, 
     )
 
 
-def _class_positive_tile_counts(metas: list[dict[str, object]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for meta in metas:
-        raw = meta.get("class_positive")
-        if not isinstance(raw, dict):
-            continue
-        for slug, is_positive in raw.items():
-            if bool(is_positive):
-                counts[str(slug)] = counts.get(str(slug), 0) + 1
-            else:
-                counts.setdefault(str(slug), 0)
-    return counts
-
-
-def _class_pixel_counts(metas: list[dict[str, object]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for meta in metas:
-        raw = meta.get("class_pixels")
-        if not isinstance(raw, dict):
-            continue
-        for slug, pixel_count in raw.items():
-            counts[str(slug)] = counts.get(str(slug), 0) + int(pixel_count)
-    return counts
+def _legacy_category(meta: dict[str, object]) -> str:
+    if bool(meta.get("positive", False)):
+        return TILE_CATEGORY_POSITIVE
+    if bool(meta.get("hard_negative", False)):
+        return TILE_CATEGORY_HARD_NEGATIVE
+    return TILE_CATEGORY_BACKGROUND
 
 
 def _seed_tile_worker(worker_id: int) -> None:

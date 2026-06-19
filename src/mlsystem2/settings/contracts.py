@@ -1,8 +1,8 @@
-"""Публичные контракты настроек."""
+﻿"""Публичные контракты настроек."""
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,6 +27,7 @@ class DatasetClassSettings(BaseModel):
     name: str
     scenes_file: str
     annotation_file: str
+    hard_negative_annotation_file: str | None = None
     priority: int = 0
 
 
@@ -36,12 +37,17 @@ class DatasetSettings(BaseModel):
     images_dir: str
     scenes_file: str | None = None
     annotation_file: str | None = None
+    hard_negative_annotation_file: str | None = None
     classes: list[DatasetClassSettings] = Field(default_factory=list)
     val_fraction: float = Field(gt=0.0, lt=1.0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
-        has_binary_paths = self.scenes_file is not None or self.annotation_file is not None
+        has_binary_paths = (
+            self.scenes_file is not None
+            or self.annotation_file is not None
+            or self.hard_negative_annotation_file is not None
+        )
         has_classes = bool(self.classes)
         if has_binary_paths and has_classes:
             raise ValueError(
@@ -71,14 +77,38 @@ class TilePreparationSettings(BaseModel):
     prefetch_epochs: float = Field(default=2.0, gt=0.0)
     seed: int = 42
     augmentation_level: int = Field(default=0, ge=0, le=3)
-    positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
+    positive_factor: float = Field(default=0.5, ge=0.0, le=1.0)
+    hard_negative_factor: float = Field(default=0.0, ge=0.0, le=1.0)
+    background_factor: float = Field(ge=0.0, le=1.0)
     val_positive_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
     class_balance: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_background_factor(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "background_factor" in data:
+            return data
+        resolved = dict(data)
+        positive_factor = float(resolved.get("positive_factor", 0.5))
+        hard_negative_factor = float(resolved.get("hard_negative_factor", 0.0))
+        resolved["background_factor"] = 1.0 - positive_factor - hard_negative_factor
+        return resolved
+
     @model_validator(mode="after")
-    def validate_stride(self) -> Self:
+    def validate_tile_settings(self) -> Self:
         if self.stride > self.tile_size:
             raise ValueError("stride должен быть меньше или равен tile_size")
+        factor_sum = self.positive_factor + self.hard_negative_factor + self.background_factor
+        if abs(factor_sum - 1.0) > 1e-6:
+            raise ValueError(
+                "Сумма positive_factor, hard_negative_factor и background_factor должна быть равна 1.0"
+            )
+        if (
+            self.positive_factor == 0.0
+            and self.hard_negative_factor == 0.0
+            and self.background_factor == 0.0
+        ):
+            raise ValueError("Хотя бы один tile factor должен быть больше 0")
         return self
 
 
@@ -146,6 +176,10 @@ class SystemSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_dataset_train_consistency(self) -> Self:
+        if self.tile_preparation.hard_negative_factor > 0.0 and not _has_hard_negative_annotation(self.dataset):
+            raise ValueError(
+                "tile_preparation.hard_negative_factor > 0 требует hard_negative_annotation_file"
+            )
         if self.dataset.is_multiclass:
             if self.train.task != "multiclass":
                 raise ValueError("dataset.classes требует train.task=multiclass")
@@ -170,6 +204,12 @@ def _validate_unique_values(values: list[str], field_name: str) -> None:
     if duplicates:
         joined = ", ".join(sorted(duplicates))
         raise ValueError(f"dataset.classes должен иметь уникальные {field_name}: {joined}")
+
+
+def _has_hard_negative_annotation(dataset: DatasetSettings) -> bool:
+    if dataset.is_multiclass:
+        return any(item.hard_negative_annotation_file for item in dataset.classes)
+    return bool(dataset.hard_negative_annotation_file)
 
 
 __all__ = [

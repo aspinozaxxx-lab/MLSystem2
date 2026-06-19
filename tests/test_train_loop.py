@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -510,6 +510,6 @@ def _fake_multiclass_loader(torch):
     masks[:, 2:6, 2:6] = 1
     masks[:, 9:13, 9:13] = 2
     return [
-        (images, masks, {"class_positive_tile_counts": {"class_a": 2, "class_b": 2}}),
-        (images + 0.1, masks, {"class_positive_tile_counts": {"class_a": 2, "class_b": 2}}),
+        (images, masks, {"positive_tile_count": 2}),
+        (images + 0.1, masks, {"positive_tile_count": 2}),
     ]

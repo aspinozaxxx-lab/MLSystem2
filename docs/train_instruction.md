@@ -1,4 +1,4 @@
-# Инструкция для обучения модели
+﻿# Инструкция для обучения модели
 
 Этот документ нужен Codex-агенту, который запускает обычное обучение MLSystem2 на заданном датасете и с заданными параметрами. Цель - не исследовать систему заново при каждом старте, а быстро проверить входные данные, собрать конфиг, запустить обучение, проконтролировать MLflow и зафиксировать результат.
 
@@ -180,7 +180,7 @@ PY
 
 ## 5. Конфиг двоичного датасета
 
-Для одного класса используй `dataset.scenes_file` и `dataset.annotation_file`.
+Для одного класса используй `dataset.scenes_file` и `dataset.annotation_file`. Если есть hard negative объекты, добавь `dataset.hard_negative_annotation_file`.
 
 Пример для вырубок:
 
@@ -189,6 +189,7 @@ dataset:
   images_dir: /data/mlsystem2/prepared_images/
   scenes_file: /data/MLMarkup/Вырубки/deforestation.txt
   annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson
+  hard_negative_annotation_file: /data/MLMarkup/Вырубки/hard_negative.geojson
   val_fraction: 0.2
 
 train:
@@ -226,6 +227,8 @@ tile_preparation:
   stride: 256
   augmentation_level: 2
   positive_factor: 0.8
+  hard_negative_factor: 0.0
+  background_factor: 0.2
 
 train:
   epochs: 30

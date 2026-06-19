@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -47,6 +47,46 @@ def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
     _assert_vrt_reads(result.dataset.val_vrt_xml)
 
 
+def test_prepare_dataset_report_counts_hard_negative_objects(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    _write_raster(images / "scene_a.tif", 1, 0)
+    _write_raster(images / "scene_b.tif", 2, 4)
+    _write_raster(images / "scene_c.tif", 3, 8)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\nscene_b\nscene_c\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    hard_negative_file = tmp_path / "hard_negative.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif", "scene_a.tif", "scene_b.tif", "scene_c.tif"])
+    _write_annotation(hard_negative_file, ["scene_b.tif", "scene_c.tif", "scene_c.tif"])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            hard_negative_annotation_file=str(hard_negative_file),
+            val_fraction=0.5,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert result.dataset.hard_negative_annotation_file == hard_negative_file.resolve().as_posix()
+    assert result.report.positive_objects == 4
+    assert result.report.hard_negative_objects == 3
+    assert result.report.objects_total == 7
+    assert "train_scenes_count" not in result.report.model_dump()
+    scene_by_id = {scene.scene_id: scene for scene in result.report.scenes}
+    assert scene_by_id["scene_a"].positive_objects == 2
+    assert scene_by_id["scene_a"].hard_negative_objects == 0
+    assert scene_by_id["scene_a"].object_count == 2
+    assert scene_by_id["scene_c"].positive_objects == 1
+    assert scene_by_id["scene_c"].hard_negative_objects == 2
+    assert scene_by_id["scene_c"].object_count == 3
+    assert "split" not in result.report.scenes[0].model_dump()
+
+
 def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
     tmp_path: Path,
 ) -> None:
@@ -64,9 +104,11 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
     class_a_annotation = tmp_path / "class_a.geojson"
     class_b_annotation = tmp_path / "class_b.geojson"
     class_c_annotation = tmp_path / "class_c.geojson"
+    class_a_hard_negative = tmp_path / "class_a_hard_negative.geojson"
     _write_annotation(class_a_annotation, ["scene_a.tif", "scene_b.tif"])
     _write_annotation(class_b_annotation, ["scene_b.tif", "scene_c.tif"])
     _write_annotation(class_c_annotation, ["scene_a.tif"])
+    _write_annotation(class_a_hard_negative, ["scene_c.tif", "scene_c.tif"])
 
     result = prepare_dataset(
         DatasetPreparationRequest(
@@ -77,6 +119,7 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
                     name="Класс А",
                     scenes_file=str(class_a_scenes),
                     annotation_file=str(class_a_annotation),
+                    hard_negative_annotation_file=str(class_a_hard_negative),
                 ),
                 DatasetClassRequest(
                     slug="class_b",
@@ -98,9 +141,14 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
     assert result.report.status == "ok"
     assert result.report.scenes_total == 3
     assert result.report.scenes_found == 3
-    assert result.report.objects_total == 5
+    assert result.report.positive_objects == 5
+    assert result.report.hard_negative_objects == 2
+    assert result.report.objects_total == 7
     assert result.dataset is not None
     assert result.dataset.annotation_file is None
+    assert result.dataset.class_annotations[0].hard_negative_annotation_file == (
+        class_a_hard_negative.resolve().as_posix()
+    )
     assert [item.class_id for item in result.dataset.class_annotations] == [1, 2, 3]
     assert [item.slug for item in result.dataset.class_annotations] == [
         "class_a",
@@ -138,9 +186,9 @@ def test_prepare_dataset_tile_mode_keeps_all_binary_scenes(
     assert first.dataset.pool_vrt_xml is not None
     assert first.dataset.train_vrt_xml == first.dataset.pool_vrt_xml
     assert first.dataset.val_vrt_xml == first.dataset.pool_vrt_xml
-    assert _scene_ids_with_split(first, "pool") == _scene_ids_with_split(second, "pool")
-    assert set(_scene_ids_with_split(first, "pool")) == {"scene_a", "scene_b", "scene_c", "scene_d"}
-    assert _scene_ids_with_split(first, "excluded") == []
+    assert _scene_ids(first) == _scene_ids(second)
+    assert set(_scene_ids(first)) == {"scene_a", "scene_b", "scene_c", "scene_d"}
+    assert all(scene.image_path is not None for scene in first.report.scenes)
 
 
 def test_prepare_dataset_tile_mode_keeps_all_multiclass_scenes(
@@ -183,8 +231,8 @@ def test_prepare_dataset_tile_mode_keeps_all_multiclass_scenes(
     assert result.report.status == "ok"
     assert result.dataset is not None
     assert [item.slug for item in result.dataset.class_annotations] == ["class_a", "class_b"]
-    assert set(_scene_ids_with_split(result, "pool")) >= {"scene_a"}
-    assert len(_scene_ids_with_split(result, "pool")) == 3
+    assert set(_scene_ids(result)) >= {"scene_a"}
+    assert len(_scene_ids(result)) == 3
 
 
 def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(
@@ -276,7 +324,7 @@ def test_prepare_dataset_expands_folder_scene_entry(tmp_path: Path) -> None:
     assert result.dataset is not None
     assert result.report.scenes_total == 2
     assert result.report.scenes_found == 2
-    assert set(_scene_ids_with_split(result, "pool")) == {
+    assert set(_scene_ids(result)) == {
         "kanopus/irkutsk/scene_a.tif",
         "kanopus/irkutsk/scene_b.tif",
     }
@@ -300,6 +348,40 @@ def test_prepare_dataset_resolves_ambiguous_scene_by_annotation_geometry(tmp_pat
             images_dir=str(images),
             scenes_file=str(scenes_file),
             annotation_file=str(annotation_file),
+            val_fraction=0.5,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert result.report.scenes[0].image_path is not None
+    assert result.report.scenes[0].image_path.endswith("/near/scene_a.tif")
+
+
+def test_prepare_dataset_resolves_ambiguous_scene_by_hard_negative_geometry(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    far_folder = images / "far"
+    near_folder = images / "near"
+    far_folder.mkdir(parents=True)
+    near_folder.mkdir(parents=True)
+    _write_raster(far_folder / "scene_a.tif", 1, 1_000_000)
+    _write_raster(near_folder / "scene_a.tif", 2, 0)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    hard_negative_file = tmp_path / "hard_negative.geojson"
+    _write_annotation(annotation_file, [])
+    _write_geometry_annotation(
+        hard_negative_file,
+        [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+    )
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            hard_negative_annotation_file=str(hard_negative_file),
             val_fraction=0.5,
         )
     )
@@ -448,6 +530,21 @@ def _write_annotation(path: Path, scene_names: list[str]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_geometry_annotation(path: Path, coordinates: list[list[list[float]]]) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {"type": "Polygon", "coordinates": coordinates},
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _assert_vrt_reads(vrt_xml: str) -> None:
     with MemoryFile(vrt_xml.encode("utf-8")) as memory_file:
         with memory_file.open() as dataset:
@@ -455,5 +552,5 @@ def _assert_vrt_reads(vrt_xml: str) -> None:
     assert data.shape == (1, 1)
 
 
-def _scene_ids_with_split(result, split: str) -> list[str]:
-    return [scene.scene_id for scene in result.report.scenes if scene.split == split]
+def _scene_ids(result) -> list[str]:
+    return [scene.scene_id for scene in result.report.scenes]

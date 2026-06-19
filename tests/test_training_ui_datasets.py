@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import subprocess
@@ -95,6 +95,41 @@ def test_list_datasets_counts_images_from_folder_entries_with_dedup(tmp_path: Pa
     datasets = {item.key: item for item in list_datasets(mlmarkup_root, images_root)}
 
     assert datasets["Вырубки\\main"].image_count == 2
+
+
+def test_list_datasets_splits_positive_and_hard_negative_geojson(tmp_path: Path) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    dataset = mlmarkup_root / "Вырубки" / "main"
+    dataset.mkdir(parents=True)
+    (dataset / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (dataset / "annotation.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "hard_negative.geojson").write_text("{}", encoding="utf-8")
+
+    datasets = {item.key: item for item in list_datasets(mlmarkup_root)}
+
+    assert datasets["Вырубки\\main"].annotation_file == str(dataset / "annotation.geojson")
+    assert datasets["Вырубки\\main"].hard_negative_annotation_file == str(
+        dataset / "hard_negative.geojson"
+    )
+    assert datasets["Вырубки\\main"].diagnostics == []
+
+
+def test_list_datasets_reports_ambiguous_positive_geojson(tmp_path: Path) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    dataset = mlmarkup_root / "Вырубки" / "main"
+    dataset.mkdir(parents=True)
+    (dataset / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
+    (dataset / "a.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "b.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "hard_negative.geojson").write_text("{}", encoding="utf-8")
+
+    datasets = {item.key: item for item in list_datasets(mlmarkup_root)}
+
+    assert datasets["Вырубки\\main"].annotation_file is None
+    assert datasets["Вырубки\\main"].hard_negative_annotation_file == str(
+        dataset / "hard_negative.geojson"
+    )
+    assert datasets["Вырубки\\main"].diagnostics
 
 
 def _git(args: list[str], cwd: Path, *, date: str | None = None) -> None:
