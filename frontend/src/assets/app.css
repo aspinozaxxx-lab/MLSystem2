@@ -501,14 +501,6 @@ th {
   background: #fbfdff;
 }
 
-.change-action-text {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.2;
-}
-
 .nested-table {
   margin-top: 10px;
   background: #fbfdff;

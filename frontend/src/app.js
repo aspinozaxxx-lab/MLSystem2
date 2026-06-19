@@ -1378,7 +1378,6 @@ function renderResultChangesTable(changes, options = {}) {
                     ? statusBadge(item.status, item.type, item.progress)
                     : `<span class="badge ok">${escapeHtml(item.action)}</span>`}
                 </span>
-                <small class="change-action-text">${escapeHtml(item.action)}</small>
               </td>
               <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
             </tr>

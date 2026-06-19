@@ -702,6 +702,7 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "recommended_range" in app_js
     assert "bindResultChangeRows" in app_js
     assert 'activeClick: "job"' in app_js
+    assert "change-action-text" not in app_js
     assert "jobConfigView" in app_js
     assert "inferenceTemplateById" in app_js
     assert "inference_template_config" in app_js
