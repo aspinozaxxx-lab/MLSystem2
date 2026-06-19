@@ -2,6 +2,8 @@
 
 Этот документ описывает, как Codex должен делать псевдоразметку снимков через Geoalert по лучшей обученной сети MLSystem2. Инструкция рассчитана на ручную оркестрацию действиями Codex: проверить модель, экспортировать checkpoint в Triton, запустить Geoalert `Compose`, собрать GeoJSON, проверить результат и скопировать его пользователю.
 
+Псевдоразметка через Training UI не использует этот путь: UI запускает `mlsystem2.training_ui_api._pseudo_runner`, загружает `checkpoints/best.pt` напрямую через PyTorch (`inference_backend=pytorch_one_off`) и не создает Triton model archive, pipeline YAML или запись в model repository. Этот Geoalert/Triton runbook нужен только для явного ручного production-инференса или экспорта модели по отдельному запросу.
+
 Не добавляй новый CLI и не создавай постоянный модуль в `src`, если пользователь просит только псевдоразметку. Временные скрипты для одноразового серверного прогона можно создавать в runtime-папке запуска или подавать в Python через stdin. Код MLSystem2 менять не нужно, если нет явной ошибки.
 
 ## 1. Основные пути
@@ -337,13 +339,28 @@ dims: [ -1, 1, -1, -1 ]
 
 ## 6. Загрузка модели в Triton
 
-Triton обычно запущен в контейнере `geoalert-triton`. Если новая модель не подхватилась, перезапусти контейнер:
+Triton должен работать в explicit model control mode, чтобы модели из `/opt/geoalert/triton_models` не загружались в GPU-память автоматически. Для восстановления контейнера с тем же image и read-only model repository используй:
 
 ```bash
-docker restart geoalert-triton
+docker stop geoalert-triton
+docker rm geoalert-triton
+docker run -d \
+  --name geoalert-triton \
+  --gpus all \
+  --restart unless-stopped \
+  -p 8000:8000 \
+  -p 8001:8001 \
+  -p 8002:8002 \
+  -v /opt/geoalert/triton_models:/models:ro \
+  nvcr.io/nvidia/tritonserver:25.03-py3 \
+  tritonserver \
+  --model-repository=/models \
+  --strict-model-config=true \
+  --log-verbose=0 \
+  --model-control-mode=explicit
 ```
 
-Дождись ready и проверь модель:
+Не добавляй `--load-model`, если нет отдельного решения держать конкретную production-модель в памяти. После старта проверь, что сервер жив и repository index не содержит загруженных `READY` моделей:
 
 ```bash
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
@@ -354,12 +371,21 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
   sleep 1
 done
 
-curl -s http://127.0.0.1:8000/v2/models/mlsystem2_deforestation_test2_hpo0003_thr080
-curl -s http://127.0.0.1:8000/v2/models/mlsystem2_deforestation_test2_hpo0003_thr080/ready
+curl -s -X POST http://127.0.0.1:8000/v2/repository/index
 docker logs geoalert-triton --since 2m 2>&1 | tail -120
+nvidia-smi
 ```
 
-Модель должна быть `READY`.
+Для ручного production-прогона загружай только выбранную модель и после завершения выгружай ее:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v2/repository/models/mlsystem2_deforestation_test2_hpo0003_thr080/load
+curl -s http://127.0.0.1:8000/v2/models/mlsystem2_deforestation_test2_hpo0003_thr080
+curl -s http://127.0.0.1:8000/v2/models/mlsystem2_deforestation_test2_hpo0003_thr080/ready
+curl -s -X POST http://127.0.0.1:8000/v2/repository/models/mlsystem2_deforestation_test2_hpo0003_thr080/unload
+```
+
+Во время Geoalert `Compose` модель должна быть `READY`; после unload она не должна оставаться загруженной в GPU-памяти.
 
 ## 7. Geoalert pipeline YAML
 

@@ -188,15 +188,17 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 и возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса.
 
 Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
-загруженного файла, скачивает `checkpoints/best.pt`
+загруженного файла, пишет в `pseudo_config.yaml` `inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
 строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
-`/api/v1/files/{file_id}/download`. При выборе папки сервис создает stored txt с одной строкой-относительным путем
-папки. `PseudoMarkupResultInfo.image_count` содержит количество фактически найденных снимков по txt, включая
-загруженные custom txt и строки-папки. `StoredFileInfo.size_bytes` используется frontend для отображения размера
-скачиваемого GeoJSON. `DELETE /api/v1/results/pseudo-markup/{result_id}` удаляет строку результата, связанный
-inference job и принадлежащие UI-сервису stored files внутри `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT`; исходные
-файлы MLMarkup не удаляются.
+`/api/v1/files/{file_id}/download`. Этот путь не создает Triton model archive, Geoalert pipeline YAML или запись в
+Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. При выборе
+папки сервис создает stored txt с одной строкой-относительным путем папки. `PseudoMarkupResultInfo.image_count`
+содержит количество фактически найденных снимков по txt, включая загруженные custom txt и строки-папки.
+`StoredFileInfo.size_bytes` используется frontend для отображения размера скачиваемого GeoJSON.
+`DELETE /api/v1/results/pseudo-markup/{result_id}` удаляет строку результата, связанный inference job и
+принадлежащие UI-сервису stored files внутри `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT`; исходные файлы MLMarkup не
+удаляются.
 
 Перед инференсом раннер ищет реальные TIFF по строкам txt, удаляет повторные совпадения и выбирает профиль
 постобработки по числу уникальных снимков. Для `<=5` снимков используется прежний режим без постобработки, для
@@ -208,5 +210,6 @@ inference job и принадлежащие UI-сервису stored files вн�
 используется для отсечения озер и прудов.
 Перед записью итогового скачиваемого GeoJSON раннер сливает
 пересекающиеся и касающиеся полигоны через `unary_union`; per-scene GeoJSON остаются диагностическими файлами
-без глобального слияния. Отчет псевдоразметки содержит выбранный профиль, число уникальных снимков, параметры
-постобработки, `feature_count_before_merge` и финальный `feature_count`; HTTP API и схема БД при этом не меняются.
+без глобального слияния. Отчет псевдоразметки содержит `inference_backend=pytorch_one_off`, `triton_model=null`,
+выбранный профиль, число уникальных снимков, параметры постобработки, `feature_count_before_merge` и финальный
+`feature_count`; HTTP API и схема БД при этом не меняются.

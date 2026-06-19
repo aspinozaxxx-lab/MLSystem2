@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import BigInteger
 from sqlalchemy import select
@@ -1784,8 +1785,12 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_row.tmp_path is not None
         pseudo_run_dir = Path(pseudo_row.tmp_path)
         pseudo_config = (pseudo_run_dir / "pseudo_config.yaml").read_text(encoding="utf-8")
+        pseudo_config_payload = yaml.safe_load(pseudo_config)
         assert "threshold: 0.7" in pseudo_config
         assert "checkpoint_artifact_path: checkpoints/best.pt" in pseudo_config
+        assert pseudo_config_payload["inference_backend"] == "pytorch_one_off"
+        for forbidden_key in ("triton_model", "pipeline", "model_repository", "model_archive"):
+            assert forbidden_key not in pseudo_config_payload
 
         output = pseudo_run_dir / "scratch" / "pseudo_markup.geojson"
         output.parent.mkdir(parents=True, exist_ok=True)

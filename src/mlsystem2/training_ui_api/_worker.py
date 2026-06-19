@@ -416,6 +416,7 @@ def _build_pseudo_markup_config(
         threshold = _float_value(flat, "train.threshold", 0.5)
     return {
         "run_root": str(run_dir / "scratch"),
+        "inference_backend": "pytorch_one_off",
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
         "scenes_file": result.scenes_file.path,

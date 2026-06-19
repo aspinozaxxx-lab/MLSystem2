@@ -32,6 +32,9 @@ from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
 
 
+PSEUDO_INFERENCE_BACKEND = "pytorch_one_off"
+
+
 @dataclass(frozen=True)
 class _PostprocessProfile:
     level: int
@@ -123,6 +126,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     batch_size = int(config.get("batch_size") or 1)
     device = str(config.get("device") or "cpu")
 
+    torch = None
+    loaded = None
+    model = None
     try:
         torch = _torch()
         loaded = load_checkpoint(
@@ -132,6 +138,12 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         model.to(torch.device(device))
         model.eval()
     except Exception as exc:  # noqa: BLE001
+        try:
+            del model
+            del loaded
+        except UnboundLocalError:
+            pass
+        _release_cuda_cache(torch, device)
         failures = [{"stage": "load_checkpoint", "error": repr(exc)}]
         _write_pseudo_progress(
             progress_path,
@@ -156,76 +168,14 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             postprocess_profile=postprocess_profile,
         )
 
-    for scene in missing:
-        scene_reports.append(
-            {
-                "scene_id": scene,
-                "number": len(scene_reports) + 1,
-                "status": "missing_image",
-                "feature_count": 0,
-            }
-        )
-    _write_pseudo_progress(
-        progress_path,
-        total=progress_total,
-        started=started,
-        scene_reports=scene_reports,
-        failures=failures,
-    )
-
-    for scene_input in scene_inputs:
-        scene_started = time.time()
-        try:
-            scene_features = _infer_scene(
-                torch=torch,
-                model=model,
-                image_path=scene_input.image_path,
-                scene=scene_input.scene_id,
-                config=config,
-                tile_size=tile_size,
-                stride=stride,
-                batch_size=batch_size,
-                threshold=threshold,
-                device=device,
-                postprocess_profile=postprocess_profile,
-            )
-            all_features.extend(scene_features)
-            _write_feature_collection(
-                run_root / "per_scene" / _safe_dir_name(scene_input.scene_id) / "pseudo_markup.geojson",
-                scene_features,
-            )
+    try:
+        for scene in missing:
             scene_reports.append(
                 {
-                    "scene_id": scene_input.scene_id,
-                    "request_scene": scene_input.request_scenes[0],
-                    "request_scenes": list(scene_input.request_scenes),
-                    "request_scene_count": scene_input.request_scene_count,
+                    "scene_id": scene,
                     "number": len(scene_reports) + 1,
-                    "status": "ok",
-                    "image": str(scene_input.image_path),
-                    "feature_count": len(scene_features),
-                    "elapsed_sec": round(time.time() - scene_started, 3),
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            failures.append(
-                {
-                    "scene_id": scene_input.scene_id,
-                    "image": str(scene_input.image_path),
-                    "error": repr(exc),
-                }
-            )
-            scene_reports.append(
-                {
-                    "scene_id": scene_input.scene_id,
-                    "request_scene": scene_input.request_scenes[0],
-                    "request_scenes": list(scene_input.request_scenes),
-                    "request_scene_count": scene_input.request_scene_count,
-                    "number": len(scene_reports) + 1,
-                    "status": "failed",
-                    "image": str(scene_input.image_path),
+                    "status": "missing_image",
                     "feature_count": 0,
-                    "error": repr(exc),
                 }
             )
         _write_pseudo_progress(
@@ -236,25 +186,95 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             failures=failures,
         )
 
-    feature_count_before_merge = len(all_features)
-    merged_features = _merge_overlapping_features(all_features)
-    merged_features = _filter_compact_features(merged_features, postprocess_profile)
-    _write_feature_collection(output_geojson, merged_features)
-    status = _final_status(scene_reports, failures, missing)
-    return _summary(
-        config,
-        scenes=scenes,
-        status=status,
-        output_geojson=output_geojson,
-        started=started,
-        scene_reports=scene_reports,
-        failures=failures,
-        missing=missing,
-        feature_count=len(merged_features),
-        feature_count_before_merge=feature_count_before_merge,
-        unique_image_count=len(scene_inputs),
-        postprocess_profile=postprocess_profile,
-    )
+        for scene_input in scene_inputs:
+            scene_started = time.time()
+            try:
+                scene_features = _infer_scene(
+                    torch=torch,
+                    model=model,
+                    image_path=scene_input.image_path,
+                    scene=scene_input.scene_id,
+                    config=config,
+                    tile_size=tile_size,
+                    stride=stride,
+                    batch_size=batch_size,
+                    threshold=threshold,
+                    device=device,
+                    postprocess_profile=postprocess_profile,
+                )
+                all_features.extend(scene_features)
+                _write_feature_collection(
+                    run_root / "per_scene" / _safe_dir_name(scene_input.scene_id) / "pseudo_markup.geojson",
+                    scene_features,
+                )
+                scene_reports.append(
+                    {
+                        "scene_id": scene_input.scene_id,
+                        "request_scene": scene_input.request_scenes[0],
+                        "request_scenes": list(scene_input.request_scenes),
+                        "request_scene_count": scene_input.request_scene_count,
+                        "number": len(scene_reports) + 1,
+                        "status": "ok",
+                        "image": str(scene_input.image_path),
+                        "feature_count": len(scene_features),
+                        "elapsed_sec": round(time.time() - scene_started, 3),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(
+                    {
+                        "scene_id": scene_input.scene_id,
+                        "image": str(scene_input.image_path),
+                        "error": repr(exc),
+                    }
+                )
+                scene_reports.append(
+                    {
+                        "scene_id": scene_input.scene_id,
+                        "request_scene": scene_input.request_scenes[0],
+                        "request_scenes": list(scene_input.request_scenes),
+                        "request_scene_count": scene_input.request_scene_count,
+                        "number": len(scene_reports) + 1,
+                        "status": "failed",
+                        "image": str(scene_input.image_path),
+                        "feature_count": 0,
+                        "error": repr(exc),
+                    }
+                )
+            _write_pseudo_progress(
+                progress_path,
+                total=progress_total,
+                started=started,
+                scene_reports=scene_reports,
+                failures=failures,
+            )
+
+        feature_count_before_merge = len(all_features)
+        merged_features = _merge_overlapping_features(all_features)
+        merged_features = _filter_compact_features(merged_features, postprocess_profile)
+        _write_feature_collection(output_geojson, merged_features)
+        status = _final_status(scene_reports, failures, missing)
+        return _summary(
+            config,
+            scenes=scenes,
+            status=status,
+            output_geojson=output_geojson,
+            started=started,
+            scene_reports=scene_reports,
+            failures=failures,
+            missing=missing,
+            feature_count=len(merged_features),
+            feature_count_before_merge=feature_count_before_merge,
+            unique_image_count=len(scene_inputs),
+            postprocess_profile=postprocess_profile,
+        )
+    finally:
+        try:
+            del model
+            del loaded
+        except UnboundLocalError:
+            pass
+        _release_cuda_cache(torch, device)
 
 
 def _infer_scene(
@@ -1025,6 +1045,8 @@ def _summary(
 ) -> dict[str, Any]:
     return {
         "status": status,
+        "inference_backend": PSEUDO_INFERENCE_BACKEND,
+        "triton_model": None,
         "class_key": config.get("class_key"),
         "class_name": config.get("class_name"),
         "input_scene_count": len(scenes),
@@ -1055,6 +1077,19 @@ def _summary(
         "failures": failures,
         "missing": missing,
     }
+
+
+def _release_cuda_cache(torch: Any | None, device: str) -> None:
+    if torch is None or not str(device).startswith("cuda"):
+        return
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return
+    try:
+        if cuda.is_available():
+            cuda.empty_cache()
+    except Exception:  # noqa: BLE001
+        return
 
 
 def _torch():

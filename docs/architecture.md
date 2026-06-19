@@ -58,6 +58,11 @@ process и помечает известный MLflow run как `KILLED`; по�
 Шаблоны обучения в `training_ui_api` бывают базовыми для сети и привязанными к конкретному варианту
 датасета. При создании job сервис сначала ищет шаблон `(architecture, dataset_key)`, затем использует
 базовый `(architecture, null)`, поэтому frontend не дублирует эту бизнес-логику.
+Псевдоразметка Training UI запускается отдельным процессом с backend `pytorch_one_off`: worker пишет
+`pseudo_config.yaml`, runner загружает checkpoint через `models.load_checkpoint`, выполняет локальный
+PyTorch-инференс и после обработки освобождает CUDA cache. Этот путь не экспортирует модель в Triton, не
+создает Geoalert pipeline YAML и не добавляет запись в Triton model repository; Triton остается ручным
+production-инференсом и явным экспортом.
 Страница экспорта модели в `training_ui_api` принимает локальный MLSystem2 checkpoint `.pt`, берет threshold и
 sample_size из metadata checkpoint, собирает временный zip-архив для `models-serving-service` и Triton CPU,
 отдает его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.

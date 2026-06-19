@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
 
+from mlsystem2.training_ui_api import _pseudo_runner
 from mlsystem2.training_ui_api._pseudo_runner import (
+    PSEUDO_INFERENCE_BACKEND,
     _completed_image_count,
     _collect_scene_inputs,
     _final_status,
@@ -21,6 +25,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _select_postprocess_profile,
     _summary,
     _write_pseudo_progress,
+    run_pseudo_markup,
 )
 
 
@@ -308,6 +313,8 @@ def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) ->
     )
 
     assert summary["input_scene_count"] == 2
+    assert summary["inference_backend"] == PSEUDO_INFERENCE_BACKEND
+    assert summary["triton_model"] is None
     assert summary["unique_image_count"] == 51
     assert summary["feature_count_before_merge"] == 3
     assert summary["feature_count"] == 2
@@ -321,6 +328,68 @@ def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) ->
     assert "binary_closing_radius" not in summary["postprocess_params"]
     assert summary["postprocess_merge_overlaps"] is True
     assert summary["postprocess_merge_policy"] == "overlap_or_touch"
+
+
+def test_run_pseudo_markup_uses_local_checkpoint_and_releases_cuda(tmp_path, monkeypatch) -> None:
+    config = _pseudo_runner_config(tmp_path)
+    fake_torch = _FakeTorch()
+    fake_model = _FakeModel()
+    load_requests = []
+
+    def fake_load_checkpoint(request):
+        load_requests.append(request)
+        return SimpleNamespace(model=SimpleNamespace(model=fake_model))
+
+    def fake_infer_scene(**kwargs):
+        assert kwargs["torch"] is fake_torch
+        assert kwargs["model"] is fake_model
+        return []
+
+    monkeypatch.setattr(_pseudo_runner, "_torch", lambda: fake_torch)
+    monkeypatch.setattr(_pseudo_runner, "load_checkpoint", fake_load_checkpoint)
+    monkeypatch.setattr(_pseudo_runner, "_infer_scene", fake_infer_scene)
+
+    report = run_pseudo_markup(config)
+
+    assert report["status"] == "ok"
+    assert report["inference_backend"] == "pytorch_one_off"
+    assert report["triton_model"] is None
+    assert report["processed"] == 1
+    assert load_requests
+    assert str(load_requests[0].checkpoint_uri).endswith("best.pt")
+    assert fake_model.device == "cuda"
+    assert fake_model.eval_called is True
+    assert fake_torch.cuda.empty_cache_calls == 1
+
+
+def test_run_pseudo_markup_releases_cuda_on_checkpoint_error(tmp_path, monkeypatch) -> None:
+    config = _pseudo_runner_config(tmp_path)
+    fake_torch = _FakeTorch()
+
+    def fake_load_checkpoint(request):
+        del request
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr(_pseudo_runner, "_torch", lambda: fake_torch)
+    monkeypatch.setattr(_pseudo_runner, "load_checkpoint", fake_load_checkpoint)
+
+    report = run_pseudo_markup(config)
+
+    assert report["status"] == "error"
+    assert report["inference_backend"] == "pytorch_one_off"
+    assert report["triton_model"] is None
+    assert report["failures"][0]["stage"] == "load_checkpoint"
+    assert fake_torch.cuda.empty_cache_calls == 1
+    output = json.loads((tmp_path / "pseudo_markup.geojson").read_text(encoding="utf-8"))
+    assert output == {"type": "FeatureCollection", "features": []}
+
+
+def test_pseudo_runner_keeps_triton_registration_out_of_one_off_path() -> None:
+    source = Path(_pseudo_runner.__file__).read_text(encoding="utf-8")
+
+    assert "load_checkpoint(" in source
+    for forbidden in ("build_triton_model_export_zip", "model_repository", "model_archive", "tritonclient"):
+        assert forbidden not in source
 
 
 def test_final_status_errors_when_no_scenes_processed() -> None:
@@ -347,3 +416,61 @@ def _geojson_feature(geometry, scene_id: str) -> dict:
             "postprocess_level": 1,
         },
     }
+
+
+def _pseudo_runner_config(tmp_path) -> dict[str, object]:
+    images_root = tmp_path / "images"
+    images_root.mkdir()
+    (images_root / "scene-1.tif").touch()
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene-1\n", encoding="utf-8")
+    checkpoint_path = tmp_path / "best.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    return {
+        "run_root": str(tmp_path / "run"),
+        "output_geojson": str(tmp_path / "pseudo_markup.geojson"),
+        "report_path": str(tmp_path / "report.json"),
+        "scenes_file": str(scenes_file),
+        "images_root": str(images_root),
+        "local_checkpoint_path": str(checkpoint_path),
+        "threshold": 0.5,
+        "tile_size": 32,
+        "stride": 32,
+        "batch_size": 1,
+        "device": "cuda",
+        "class_key": "deforestation",
+        "class_name": "Вырубки",
+    }
+
+
+class _FakeModel:
+    def __init__(self) -> None:
+        self.device = None
+        self.eval_called = False
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def eval(self):
+        self.eval_called = True
+        return self
+
+
+class _FakeCuda:
+    def __init__(self) -> None:
+        self.empty_cache_calls = 0
+
+    def is_available(self) -> bool:
+        return True
+
+    def empty_cache(self) -> None:
+        self.empty_cache_calls += 1
+
+
+class _FakeTorch:
+    def __init__(self) -> None:
+        self.cuda = _FakeCuda()
+
+    def device(self, value: str) -> str:
+        return value
