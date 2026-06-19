@@ -371,6 +371,7 @@ def _build_training_config(
             "loss": str(_flat_value(flat, "train.loss", "bce_dice")),
             "focal_alpha": _float_value(flat, "train.focal_alpha", 0.6),
             "pos_weight": _float_value(flat, "train.pos_weight", 1.0),
+            "hard_negative_weight": _float_value(flat, "train.hard_negative_weight", 1.0),
             "tversky_alpha": _float_value(flat, "train.tversky_alpha", 0.4),
             "tversky_beta": _float_value(flat, "train.tversky_beta", 0.6),
             "threshold": _float_value(flat, "train.threshold", 0.5),

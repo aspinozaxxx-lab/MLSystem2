@@ -82,6 +82,7 @@ train:
   loss: cross_entropy
   focal_alpha: 0.6
   pos_weight: 1.0
+  hard_negative_weight: 1.0
   tversky_alpha: 0.4
   tversky_beta: 0.6
   threshold: 0.5

@@ -354,6 +354,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.loss == "bce_dice"
     assert settings.train.focal_alpha == 0.6
     assert settings.train.pos_weight == 1.0
+    assert settings.train.hard_negative_weight == 1.0
     assert settings.train.tversky_alpha == 0.4
     assert settings.train.tversky_beta == 0.6
     assert settings.train.threshold == 0.5

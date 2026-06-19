@@ -392,6 +392,75 @@ def test_focal_tversky_loss_is_focal_plus_tversky() -> None:
     assert not torch.allclose(loss, torch.pow(tversky, 2.0))
 
 
+def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.full((2, 1, 2, 2), 2.0, dtype=torch.float32)
+    masks = torch.zeros((2, 1, 2, 2), dtype=torch.float32)
+    base_config = TrainConfig(
+        epochs=1,
+        batch_size=2,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        focal_alpha=0.6,
+        pos_weight=1.0,
+        hard_negative_weight=1.0,
+        tversky_alpha=0.4,
+        tversky_beta=0.6,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+    hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
+    meta = {
+        "tile_hard_negative": [True, False],
+    }
+
+    base_loss = _trainer._loss(torch, logits, masks, base_config, meta)
+    hard_loss = _trainer._loss(torch, logits, masks, hard_config, meta)
+
+    assert hard_loss > base_loss
+
+
+def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixels() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.zeros((2, 2, 2, 2), dtype=torch.float32)
+    logits[:, 1, :, :] = 2.0
+    masks = torch.zeros((2, 2, 2), dtype=torch.long)
+    base_config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=2,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="cross_entropy",
+        focal_alpha=0.6,
+        pos_weight=1.0,
+        hard_negative_weight=1.0,
+        tversky_alpha=0.4,
+        tversky_beta=0.6,
+        threshold=0.5,
+        early_stopping_patience=1,
+        class_slugs=["class_a"],
+    )
+    hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
+    meta = {
+        "tile_hard_negative": [True, False],
+    }
+
+    base_loss = _trainer._loss(torch, logits, masks, base_config, meta)
+    hard_loss = _trainer._loss(torch, logits, masks, hard_config, meta)
+
+    assert hard_loss > base_loss
+
+
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 

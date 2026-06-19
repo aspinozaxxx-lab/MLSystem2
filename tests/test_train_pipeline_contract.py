@@ -275,6 +275,7 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
     )
     assert train_request.config.task == "multiclass"
     assert train_request.config.loss == "cross_entropy"
+    assert train_request.config.hard_negative_weight == 1.0
     assert train_request.config.class_slugs == ["class_a", "class_b"]
 
 

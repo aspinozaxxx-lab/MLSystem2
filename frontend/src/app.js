@@ -195,8 +195,9 @@ async function logout() {
   renderLogin();
 }
 
-function renderHomePage() {
+async function renderHomePage() {
   const linkMap = Object.fromEntries(state.links.map((item) => [item.key, item.url]));
+  const changes = await apiJson("/results/changes");
   renderShell(`
     <section class="hero">
       <h1>MLSystem2</h1>
@@ -242,7 +243,12 @@ function renderHomePage() {
       ${homeTrainingCard("Экспорт модели", "Архив для регистрации модели в Triton CPU service.", "#/model-export")}
       ${homeTrainingCard("Результаты", "Классы, метрики и псевдоразметка.", "#/results")}
     </section>
+    <section class="panel">
+      <h2>Последние изменения</h2>
+      ${renderResultChangesTable(changes.changes || [], { activeClick: "class" })}
+    </section>
   `);
+  bindResultChangeRows({ activeClick: "class" });
 }
 
 function homeTrainingCard(title, text, href) {
@@ -1255,7 +1261,7 @@ async function updateQueueEnabled(queue, enabled) {
 
 async function renderJobPage(jobId) {
   const job = await apiJson(`/jobs/${encodeURIComponent(jobId)}`);
-  const template = templateFor(job.architecture, job.dataset_key);
+  const configView = jobConfigView(job);
   renderShell(`
     <section class="toolbar">
       <button class="secondary" type="button" id="job-back">← Назад</button>
@@ -1273,11 +1279,29 @@ async function renderJobPage(jobId) {
       </div>
     </section>
     <section class="panel">
-      <h2>Config</h2>
-      <div class="form-grid">${renderConfigFields(template.config_schema, job.config, true)}</div>
+      <h2>${escapeHtml(configView.title)}</h2>
+      <div class="form-grid">${renderConfigFields(configView.schema, configView.values, true)}</div>
     </section>
   `);
   document.getElementById("job-back").addEventListener("click", () => navigate("#/queue"));
+}
+
+function jobConfigView(job) {
+  if (job.type === "inference") {
+    const template = inferenceTemplateById(job.config?.inference_template_id)
+      || inferenceTemplateFor(job.architecture, job.dataset_key);
+    return {
+      title: "Параметры инференса",
+      schema: template.config_schema,
+      values: job.config?.inference_template_config || {},
+    };
+  }
+  const template = templateFor(job.architecture, job.dataset_key);
+  return {
+    title: "Параметры обучения",
+    schema: template.config_schema,
+    values: job.config || {},
+  };
 }
 
 async function renderResultsPage() {
@@ -1292,12 +1316,10 @@ async function renderResultsPage() {
     </section>
     <section class="panel">
       <h2>Последние изменения</h2>
-      ${renderResultChangesTable(changes.changes || [])}
+      ${renderResultChangesTable(changes.changes || [], { activeClick: "class" })}
     </section>
   `);
-  for (const row of document.querySelectorAll(".result-change-row")) {
-    row.addEventListener("click", () => navigate(`#/results/${encodeURIComponent(row.dataset.classKey)}`));
-  }
+  bindResultChangeRows({ activeClick: "class" });
 }
 
 function renderResultClassCard(item) {
@@ -1320,10 +1342,11 @@ function renderResultClassCard(item) {
   `;
 }
 
-function renderResultChangesTable(changes) {
+function renderResultChangesTable(changes, options = {}) {
   if (!changes.length) {
     return `<div class="info-box">Изменений пока нет.</div>`;
   }
+  const activeClick = options.activeClick || "class";
   return `
     <div class="table-wrap">
       <table>
@@ -1333,20 +1356,31 @@ function renderResultChangesTable(changes) {
             <th>сеть</th>
             <th>датасет</th>
             <th>что сделано</th>
+            <th>MLflow</th>
           </tr>
         </thead>
         <tbody>
           ${changes.map((item) => `
-            <tr class="result-change-row" data-class-key="${escapeAttr(item.class_key)}">
+            <tr
+              class="result-change-row ${item.item_type === "job" ? "active-job-change-row" : ""}"
+              data-class-key="${escapeAttr(item.class_key)}"
+              data-job-id="${escapeAttr(item.job_id || "")}"
+              data-active-click="${escapeAttr(activeClick)}"
+            >
               <td>${formatDateTime(item.changed_at)}</td>
               <td>${escapeHtml(item.model_name)}</td>
               <td>${escapeHtml(item.dataset_name)}</td>
               <td>
                 <span class="result-status-badges">
+                  ${item.type ? jobTypeBadge(item.type) : ""}
                   ${sourceBadge(item.source)}
-                  <span class="badge ok">${escapeHtml(item.action)}</span>
+                  ${item.item_type === "job"
+                    ? statusBadge(item.status, item.type, item.progress)
+                    : `<span class="badge ok">${escapeHtml(item.action)}</span>`}
                 </span>
+                <small class="change-action-text">${escapeHtml(item.action)}</small>
               </td>
+              <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1355,8 +1389,28 @@ function renderResultChangesTable(changes) {
   `;
 }
 
+function bindResultChangeRows(options = {}) {
+  const activeClick = options.activeClick || "class";
+  for (const row of document.querySelectorAll(".result-change-row")) {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("a, button")) return;
+      if (row.classList.contains("active-job-change-row") && activeClick === "job" && row.dataset.jobId) {
+        navigate(`#/jobs/${encodeURIComponent(row.dataset.jobId)}`);
+        return;
+      }
+      navigate(`#/results/${encodeURIComponent(row.dataset.classKey)}`);
+    });
+  }
+}
+
 async function renderClassResultPage(classKey) {
-  const payload = await apiJson(`/results/classes/${encodeURIComponent(classKey)}`);
+  const [payload, changes] = await Promise.all([
+    apiJson(`/results/classes/${encodeURIComponent(classKey)}`),
+    apiJson("/results/changes"),
+  ]);
+  const activeJobs = (changes.changes || []).filter((item) => (
+    item.item_type === "job" && item.class_key === classKey
+  ));
   renderShell(`
     <section class="toolbar">
       <button class="secondary" type="button" id="results-back">← Назад</button>
@@ -1365,11 +1419,18 @@ async function renderClassResultPage(classKey) {
     <section class="hero compact-hero">
       <h1>${escapeHtml(payload.class_name)}</h1>
     </section>
+    ${activeJobs.length ? `
+      <section class="panel">
+        <h2>Запланировано и в процессе</h2>
+        ${renderResultChangesTable(activeJobs, { activeClick: "job" })}
+      </section>
+    ` : ""}
     <section class="panel">
       ${renderResultsTable(payload)}
     </section>
   `);
   document.getElementById("results-back").addEventListener("click", () => navigate("#/results"));
+  bindResultChangeRows({ activeClick: "job" });
   for (const button of document.querySelectorAll(".pseudo-button")) {
     button.addEventListener("click", () => showPseudoModal(payload.class_key, button.dataset.result || ""));
   }
@@ -1383,7 +1444,10 @@ async function renderClassResultPage(classKey) {
       showPseudoDeleteModal(payload.class_key, button.dataset.pseudo || "", button.dataset.label || "");
     });
   }
-  scheduleProgressRefresh(() => renderClassResultPage(classKey), hasRunningClassResults(payload));
+  scheduleProgressRefresh(
+    () => renderClassResultPage(classKey),
+    hasRunningClassResults(payload) || activeJobs.some((item) => ["queued", "running"].includes(item.status))
+  );
 }
 
 function renderResultsTable(payload) {
@@ -1662,19 +1726,20 @@ function showAutomationDisableModal() {
 function renderConfigFields(schema, values, readonly = false, options = {}) {
   return (schema.fields || []).map((field) => {
     const value = values[field.key];
-    const title = `${field.label} (${field.key})`;
+    const tooltip = configFieldTooltip(field);
     const applyAll = options.applyAll && !readonly
       ? `<button class="secondary field-apply-all" type="button" data-apply-key="${escapeAttr(field.key)}">установить для всех</button>`
       : "";
     const label = `
       <span class="field-help">
-        ${escapeHtml(title)}
-        <span class="help-icon" title="${escapeAttr(field.tooltip)}">i</span>
+        <span class="field-title">${escapeHtml(field.label)}</span>
+        <span class="help-icon" tabindex="0" aria-label="${escapeAttr(tooltip)}" data-tooltip="${escapeAttr(tooltip)}">i</span>
       </span>
+      <span class="field-key">${escapeHtml(field.key)}</span>
     `;
     if (field.value_type === "boolean") {
       return `
-        <label class="checkbox-row">
+        <label class="config-field-label checkbox-row">
           <input data-config-key="${escapeAttr(field.key)}" data-value-type="${field.value_type}" type="checkbox" ${value ? "checked" : ""} ${readonly ? "disabled" : ""}>
           ${label}
           ${applyAll}
@@ -1683,7 +1748,7 @@ function renderConfigFields(schema, values, readonly = false, options = {}) {
     }
     if (field.value_type === "select") {
       return `
-        <label>${label}
+        <label class="config-field-label">${label}
           <select data-config-key="${escapeAttr(field.key)}" data-value-type="${field.value_type}" ${readonly ? "disabled" : ""}>
             ${(field.options || []).map((item) => option(item, item, item === value)).join("")}
           </select>
@@ -1694,7 +1759,7 @@ function renderConfigFields(schema, values, readonly = false, options = {}) {
     const inputType = field.value_type.startsWith("integer") || field.value_type.startsWith("number") ? "number" : "text";
     const step = field.value_type.startsWith("number") ? "any" : "1";
     return `
-      <label>${label}
+      <label class="config-field-label">${label}
         <input
           data-config-key="${escapeAttr(field.key)}"
           data-value-type="${field.value_type}"
@@ -1707,6 +1772,28 @@ function renderConfigFields(schema, values, readonly = false, options = {}) {
       </label>
     `;
   }).join("");
+}
+
+function configFieldTooltip(field) {
+  const parts = [];
+  if (field.tooltip) parts.push(field.tooltip);
+  const allowed = configAllowedRange(field);
+  if (allowed) parts.push(`Допустимо: ${allowed}.`);
+  if (field.recommended_range) parts.push(`Рекомендуемые значения: ${field.recommended_range}`);
+  if (field.options && field.options.length) parts.push(`Варианты: ${field.options.join(", ")}.`);
+  return parts.join("\n\n");
+}
+
+function configAllowedRange(field) {
+  const min = field.min_value;
+  const max = field.max_value;
+  if (min !== null && min !== undefined && max !== null && max !== undefined) {
+    return `${min}..${max}`;
+  }
+  if (min !== null && min !== undefined) return `не меньше ${min}`;
+  if (max !== null && max !== undefined) return `не больше ${max}`;
+  if (String(field.value_type || "").includes("null")) return "пусто или числовое значение";
+  return "";
 }
 
 function collectConfig(form) {
@@ -1747,6 +1834,11 @@ function selectedInferenceTemplate() {
   if (byId) return byId;
   return baseInferenceTemplates().find((item) => item.architecture === state.selectedArchitecture)
     || state.inferenceTemplates[0];
+}
+
+function inferenceTemplateById(templateId) {
+  if (!templateId) return null;
+  return state.inferenceTemplates.find((item) => item.id === templateId) || null;
 }
 
 function templateFor(architecture, datasetKey = null) {

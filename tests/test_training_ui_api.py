@@ -698,6 +698,13 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "new-experiment-name-field" in app_js
     assert 'newExperimentNameField.classList.toggle("hidden", experimentSelect.value !== "")' in app_js
     assert "mlflow_run_name:" not in app_js
+    assert "configFieldTooltip" in app_js
+    assert "recommended_range" in app_js
+    assert "bindResultChangeRows" in app_js
+    assert 'activeClick: "job"' in app_js
+    assert "jobConfigView" in app_js
+    assert "inferenceTemplateById" in app_js
+    assert "inference_template_config" in app_js
     assert 'route[0] === "model-export"' in app_js
     assert 'href="#/model-export">Экспорт модели</a>' in app_js
     assert "/model-export/triton-zip" in app_js
@@ -870,12 +877,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "train.max_train_batches_per_epoch" in template_keys
         assert "train.max_val_batches_per_epoch" in template_keys
         assert "train.max_training_time_sec" in template_keys
+        assert "train.hard_negative_weight" in template_keys
         assert "tile_preparation.positive_factor" in template_keys
         assert "tile_preparation.hard_negative_factor" in template_keys
         assert "tile_preparation.background_factor" in template_keys
         assert segformer_template["default_config"]["tile_preparation.positive_factor"] == 0.8
         assert segformer_template["default_config"]["tile_preparation.hard_negative_factor"] == 0.0
         assert segformer_template["default_config"]["tile_preparation.background_factor"] == 0.2
+        assert segformer_template["default_config"]["train.hard_negative_weight"] == 1.0
         assert segformer_template["default_config"]["train.max_train_batches_per_epoch"] == 72
         assert segformer_template["default_config"]["train.max_val_batches_per_epoch"] == 1000
         assert segformer_template["default_config"]["train.max_training_time_sec"] == 1800
@@ -883,6 +892,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
         )
         assert loss_field["options"] == ["bce_dice", "focal_dice", "focal_tversky"]
+        hard_weight_field = next(
+            item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.hard_negative_weight"
+        )
+        assert "ложноположительные" in hard_weight_field["tooltip"]
+        assert "1..5" in hard_weight_field["recommended_range"]
         changed_config = dict(segformer_template["default_config"])
         changed_config["train.batch_size"] = 3
         updated = client.put(
@@ -1080,8 +1094,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             session.flush()
             session.commit()
         changes = client.get("/api/v1/results/changes").json()["changes"]
-        assert changes[0]["action"] == "обучена сеть"
-        assert changes[0]["class_key"] == "custom"
+        assert changes[0]["item_type"] == "job"
+        assert changes[0]["status"] in {"queued", "running"}
+        completed_change = next(item for item in changes if item["action"] == "обучена сеть")
+        assert completed_change["item_type"] == "training_result"
+        assert completed_change["class_key"] == "custom"
 
         deleted = client.delete(f"/api/v1/jobs/{job['id']}").json()
         assert deleted["status"] == "cancelled"
@@ -1219,6 +1236,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "train.loss": "bce_dice",
                     "train.focal_alpha": 0.6,
                     "train.pos_weight": 1.0,
+                    "train.hard_negative_weight": 2.0,
                     "train.tversky_alpha": 0.4,
                     "train.tversky_beta": 0.6,
                     "train.threshold": 0.5,
@@ -1259,6 +1277,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "positive_factor: 0.5" in config_yaml
         assert "hard_negative_factor: 0.3" in config_yaml
         assert "background_factor: 0.2" in config_yaml
+        assert "hard_negative_weight: 2.0" in config_yaml
         assert "max_train_batches_per_epoch: 72" in config_yaml
         assert "max_val_batches_per_epoch: 1000" in config_yaml
         assert "max_training_time_sec: null" in config_yaml
@@ -1889,6 +1908,7 @@ def _short_training_config() -> dict[str, object]:
         "train.loss": "bce_dice",
         "train.focal_alpha": 0.6,
         "train.pos_weight": 1.0,
+        "train.hard_negative_weight": 1.0,
         "train.tversky_alpha": 0.4,
         "train.tversky_beta": 0.6,
         "train.threshold": 0.5,

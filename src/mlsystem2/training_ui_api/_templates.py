@@ -117,6 +117,13 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "min_value": 0,
         },
         {
+            "key": "train.hard_negative_weight",
+            "label": "Hard negative weight",
+            "value_type": "number",
+            "tooltip": "Вес background-пикселей внутри hard-negative тайлов для binary loss.",
+            "min_value": 0,
+        },
+        {
             "key": "train.tversky_alpha",
             "label": "Tversky alpha",
             "value_type": "number",
@@ -184,6 +191,7 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.loss": "focal_tversky",
     "train.focal_alpha": 0.6,
     "train.pos_weight": 1.0,
+    "train.hard_negative_weight": 1.0,
     "train.tversky_alpha": 0.4,
     "train.tversky_beta": 0.6,
     "train.threshold": 0.7,
@@ -194,8 +202,6 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-CONFIG_KEYS = {str(field["key"]) for field in CONFIG_SCHEMA["fields"]}
-CONFIG_FIELDS = {str(field["key"]): field for field in CONFIG_SCHEMA["fields"]}
 TILE_FACTOR_KEYS = {
     "tile_preparation.positive_factor",
     "tile_preparation.hard_negative_factor",
@@ -292,6 +298,150 @@ RIVERS_INFERENCE_CONFIG: dict[str, Any] = {
     "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
 }
 
+_TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
+    "dataset.val_fraction": (
+        "Доля подготовленных тайлов, которая уходит в validation. Увеличение делает оценку стабильнее, но оставляет меньше данных для обучения. Связано с общим числом сцен: на маленьких датасетах слишком большая доля может обеднить train.",
+        "0.1..0.25 обычно, 0.2 как базовый выбор; ниже 0.1 только для очень маленьких smoke-запусков, выше 0.3 при большом датасете и шумной метрике.",
+    ),
+    "tile_preparation.tile_size": (
+        "Размер квадратного окна в пикселях. Чем больше тайл, тем больше контекст и расход GPU/RAM; чем меньше, тем быстрее обучение, но хуже крупные объекты и границы.",
+        "256..768; 512 обычно. Увеличивать для крупных объектов и контекстных признаков, уменьшать при OOM или мелких объектах.",
+    ),
+    "tile_preparation.stride": (
+        "Шаг между соседними окнами. Меньший шаг увеличивает перекрытие и число тайлов, помогает не терять границы объектов, но замедляет подготовку и обучение.",
+        "tile_size/2 обычно. Делать ближе к tile_size для быстрых запусков, меньше tile_size/2 для редких объектов и важных границ.",
+    ),
+    "tile_preparation.augmentation_level": (
+        "Интенсивность train-аугментаций. Применяется к positive и hard-negative тайлам, обычный background не аугментируется. Чем выше уровень, тем лучше обобщение, но выше риск исказить слабые признаки.",
+        "0 для диагностики, 1 для геометрии, 2..3 для рабочих запусков; 3 использовать, когда датасет небольшой или есть переобучение.",
+    ),
+    "tile_preparation.positive_factor": (
+        "Целевая доля positive тайлов в train sampler. Вместе с hard-negative образует marked-бюджет; если hard-negative тайлов мало, остаток hard-negative доли переносится сюда.",
+        "0.4..0.8; повышать при редких positive объектах или низком recall, снижать при большом числе false positive.",
+    ),
+    "tile_preparation.hard_negative_factor": (
+        "Целевая доля hard-negative тайлов внутри train sampler. Это размеченные области, которые должны оставаться фоном. Не создает отдельный класс модели.",
+        "0..0.4; начинать с 0.1..0.3 при известных ложных срабатываниях. Если hard-negative мало, sampler ограничит долю и отдаст остаток positive.",
+    ),
+    "tile_preparation.background_factor": (
+        "Доля обычных фоновых тайлов. Background не получает дефицит marked-бюджета и нужен, чтобы модель видела разнообразный нормальный фон.",
+        "0.1..0.4; снижать при очень редких объектах, повышать при false positive на обычном фоне. Сумма трех долей должна быть 1.",
+    ),
+    "train.epochs": (
+        "Максимальное число эпох. Реальная остановка может наступить раньше по early stopping или wall-clock лимиту.",
+        "30..100 для рабочих запусков; 1..5 для smoke. Увеличивать, если val F1 еще растет и нет переобучения.",
+    ),
+    "train.batch_size": (
+        "Количество тайлов в одном optimizer step. Больше batch стабилизирует градиент, но требует больше GPU-памяти.",
+        "2..8 для 512px на текущих моделях; уменьшать при OOM, повышать при свободной памяти и шумном loss.",
+    ),
+    "train.learning_rate": (
+        "Скорость обновления AdamW. Слишком большая дает скачки loss и плохой checkpoint, слишком маленькая замедляет обучение.",
+        "1e-5..3e-4; для fine-tune SegFormer обычно 1e-5..5e-5. Менять вместе с batch size и длительностью обучения.",
+    ),
+    "train.weight_decay": (
+        "L2-регуляризация AdamW. Помогает против переобучения, но слишком большое значение мешает подстроиться под новый класс.",
+        "0..1e-3; обычно 1e-4. Повышать при переобучении, снижать если train loss плохо падает.",
+    ),
+    "train.loss": (
+        "Binary loss для обучения одного класса. bce_dice проще и стабильнее, focal_dice сильнее фокусируется на сложных пикселях, focal_tversky отдельно управляет FP/FN.",
+        "focal_tversky для рабочих запусков с дисбалансом, bce_dice для диагностики, focal_dice если нужно усилить сложные пиксели без Tversky.",
+    ),
+    "train.focal_alpha": (
+        "Баланс focal-компоненты между positive и background. Влияет на focal_dice/focal_tversky и связан с pos_weight.",
+        "0.4..0.8; повышать при низком recall, снижать при избытке false positive.",
+    ),
+    "train.pos_weight": (
+        "Вес positive пикселей в binary BCE/focal части loss. Background остается 1, hard negative регулируется отдельным hard_negative_weight.",
+        "1..5; повышать при пропусках объектов и низком recall, снижать при жирных масках и false positive.",
+    ),
+    "train.hard_negative_weight": (
+        "Вес отрицательных пикселей hard-negative тайлов в binary loss. Усиливает штраф за ложноположительные предсказания в областях, где модель особенно не должна выделять объект.",
+        "1..5; 1 выключает усиление. Повышать при false positive на hard-negative объектах, снижать если модель начинает терять похожие настоящие positive.",
+    ),
+    "train.tversky_alpha": (
+        "Штраф false positive в Tversky-компоненте. Больше alpha делает модель осторожнее и уменьшает лишние выделения.",
+        "0.3..0.7; повышать при false positive, снижать если модель недовыделяет объекты.",
+    ),
+    "train.tversky_beta": (
+        "Штраф false negative в Tversky-компоненте. Больше beta сильнее наказывает пропуски positive пикселей.",
+        "0.3..0.8; повышать при низком recall, снижать при разрастании масок. Часто alpha+beta держат около 1.",
+    ),
+    "train.threshold": (
+        "Порог вероятности для binary validation и последующего инференса из checkpoint metadata. Не меняет logits, но меняет precision/recall trade-off.",
+        "0.5..0.8; повышать при false positive, снижать при пропусках. Лучший threshold также оценивается на validation.",
+    ),
+    "train.early_stopping_patience": (
+        "Сколько эпох ждать без улучшения validation F1 перед остановкой. Защищает от лишнего времени и переобучения.",
+        "8..20; меньше для быстрых итераций, больше когда метрика шумная или датасет большой.",
+    ),
+    "train.max_train_batches_per_epoch": (
+        "Ограничение длины train epoch в batch-ах. Это debug/smoke рычаг: он ускоряет итерацию, но меняет статистику обучения.",
+        "Пусто для полного обучения; 50..200 для быстрых HPO/smoke, если нужно сравнить конфиги за ограниченное время.",
+    ),
+    "train.max_val_batches_per_epoch": (
+        "Ограничение validation epoch в batch-ах. Ускоряет проверку, но делает метрику менее стабильной.",
+        "Пусто или 500..2000. Уменьшать только для быстрых экспериментов; для финального сравнения лучше полный val.",
+    ),
+    "train.max_training_time_sec": (
+        "Wall-clock лимит обучения. Проверяется после завершения эпохи, поэтому процесс сохраняет final checkpoint штатно.",
+        "Пусто без лимита; 1800 для короткого запуска, 7200..14400 для длинных рабочих обучений.",
+    ),
+}
+
+_INFERENCE_FIELD_HELP: dict[str, tuple[str, str]] = {
+    "postprocess.mask_min_object_pixels": (
+        "Удаляет мелкие connected components прямо в raster mask до векторизации. Помогает убрать шум, но может потерять маленькие настоящие объекты.",
+        "Пусто для авто-профиля; 16..128 px. Повышать при точечном шуме, снижать для мелких объектов.",
+    ),
+    "postprocess.mask_min_hole_pixels": (
+        "Заливает маленькие дырки в raster mask. Укрупняет и стабилизирует полигоны, но может закрыть реальные внутренние просветы.",
+        "Пусто для авто-профиля; 16..256 px. Повышать при рваных масках, снижать для объектов с настоящими отверстиями.",
+    ),
+    "postprocess.binary_closing_radius": (
+        "Радиус morphological closing в пикселях. Соединяет близкие фрагменты и сглаживает разрывы до векторизации.",
+        "Пусто для авто-профиля; 1..3 px. Использовать при разорванных масках, не повышать при близких разных объектах.",
+    ),
+    "postprocess.min_area_m2": (
+        "Минимальная площадь итогового полигона. Фильтрует мелкие ложные объекты после перевода в геометрию.",
+        "Пусто для авто-профиля; 100..10000 м² по масштабу класса. Повышать при мелком шуме, снижать для маленьких объектов.",
+    ),
+    "postprocess.min_hole_area_m2": (
+        "Минимальная площадь дырки, которую оставляем в полигоне. Меньшие дырки удаляются из геометрии.",
+        "Пусто для авто-профиля; 100..10000 м². Повышать для цельных объектов, снижать если внутренние пустоты важны.",
+    ),
+    "postprocess.simplify_m": (
+        "Упрощение контура в метрах. Снижает число вершин и делает GeoJSON легче, но может съесть тонкие детали.",
+        "Пусто для авто-профиля; 1..20 м. Повышать для тяжелых/шумных контуров, снижать для точной границы.",
+    ),
+    "postprocess.filter_compact_objects.enabled": (
+        "Включает удаление компактных объектов по форме. Полезно для рек, когда нужно убрать озера и пруды, но опасно для классов, где объект сам компактный.",
+        "Обычно выключено; включать для вытянутых классов вроде рек, где компактные полигоны являются ложными.",
+    ),
+    "postprocess.filter_compact_objects.min_isoperimetric_quotient": (
+        "Порог компактности: чем выше, тем меньше объектов считаются достаточно компактными для удаления.",
+        "0.2..0.5; повышать, если фильтр удаляет слишком много, снижать, если компактные ложные объекты остаются.",
+    ),
+    "postprocess.filter_compact_objects.max_bbox_ratio": (
+        "Порог вытянутости minimum rotated rectangle. Компактный объект удаляется только если он не слишком вытянут.",
+        "2..5; снижать для более строгого удаления круглых объектов, повышать чтобы захватывать слегка вытянутые ложные объекты.",
+    ),
+}
+
+def _apply_schema_help(schema: dict[str, Any], help_by_key: dict[str, tuple[str, str]]) -> None:
+    for field in schema["fields"]:
+        key = str(field["key"])
+        details = help_by_key.get(key)
+        if details is None:
+            continue
+        field["tooltip"], field["recommended_range"] = details
+
+
+_apply_schema_help(CONFIG_SCHEMA, _TRAIN_FIELD_HELP)
+_apply_schema_help(INFERENCE_CONFIG_SCHEMA, _INFERENCE_FIELD_HELP)
+
+CONFIG_KEYS = {str(field["key"]) for field in CONFIG_SCHEMA["fields"]}
+CONFIG_FIELDS = {str(field["key"]): field for field in CONFIG_SCHEMA["fields"]}
 INFERENCE_CONFIG_KEYS = {str(field["key"]) for field in INFERENCE_CONFIG_SCHEMA["fields"]}
 INFERENCE_CONFIG_FIELDS = {
     str(field["key"]): field for field in INFERENCE_CONFIG_SCHEMA["fields"]

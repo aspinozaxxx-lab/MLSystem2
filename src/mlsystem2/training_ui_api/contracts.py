@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -162,6 +162,7 @@ class ConfigField(BaseModel):
     options: list[str] | None = None
     min_value: float | None = None
     max_value: float | None = None
+    recommended_range: str | None = None
 
 
 class ConfigSchema(BaseModel):
@@ -386,7 +387,7 @@ class PseudoMarkupResultInfo(BaseModel):
     scenes_file: StoredFileInfo | None = None
     geojson_file: StoredFileInfo | None = None
     image_count: int | None = None
-    status: ResultStatus
+    status: Literal["queued", "running", "ok", "error", "cancelled"]
     created_at: datetime
     progress: RuntimeProgress | None = None
 
@@ -422,13 +423,17 @@ class ResultChangeInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    item_type: Literal["job", "training_result", "pseudo_markup_result"] = "training_result"
+    job_id: UUID | None = None
+    type: JobType | None = None
     class_key: str
     dataset_name: str
     model_name: str
     action: str
     source: JobSource = JobSource.MANUAL
-    status: ResultStatus
+    status: Literal["queued", "running", "ok", "error", "cancelled"]
     changed_at: datetime
+    mlflow_run_url: str | None = None
 
 
 class ResultChangesResponse(BaseModel):

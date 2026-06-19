@@ -776,6 +776,8 @@ def class_results(
 
 
 def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
+    ensure_queue_positions(session)
+    active_changes = [_job_change_info(session, row) for row in _queue_rows(session)]
     training_rows = session.scalars(
         select(TrainingResultRow)
         .where(
@@ -797,6 +799,9 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
         changes.append(
             ResultChangeInfo(
                 id=row.id,
+                item_type="training_result",
+                job_id=row.job_id,
+                type=JobType.TRAINING,
                 class_key=row.class_key,
                 dataset_name=row.class_display_name,
                 model_name=row.model_name,
@@ -804,6 +809,7 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
                 source=JobSource(row.source),
                 status=ResultStatus(row.status),
                 changed_at=row.updated_at or row.trained_at or row.created_at or _now(),
+                mlflow_run_url=row.mlflow_run_url,
             )
         )
     for row in pseudo_rows:
@@ -811,6 +817,9 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
         changes.append(
             ResultChangeInfo(
                 id=row.id,
+                item_type="pseudo_markup_result",
+                job_id=row.job_id,
+                type=JobType.INFERENCE,
                 class_key=row.class_key,
                 dataset_name=row.source_dataset_name,
                 model_name=model_name,
@@ -821,7 +830,49 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
             )
         )
     changes.sort(key=lambda item: item.changed_at, reverse=True)
-    return ResultChangesResponse(changes=changes[:limit])
+    return ResultChangesResponse(changes=[*active_changes, *changes[:limit]])
+
+
+def _job_change_info(session: Session, row: JobRow) -> ResultChangeInfo:
+    job_type = JobType(row.type)
+    class_key = _job_class_key(row)
+    return ResultChangeInfo(
+        id=row.id,
+        item_type="job",
+        job_id=row.id,
+        type=job_type,
+        class_key=class_key,
+        dataset_name=row.training_dataset_name or row.dataset_name,
+        model_name=row.model_name,
+        action=_job_change_action(row),
+        source=JobSource(row.source),
+        status=row.status,
+        changed_at=row.started_at or row.created_at or _now(),
+        mlflow_run_url=_job_mlflow_run_url(session, row),
+    )
+
+
+def _job_class_key(row: JobRow) -> str:
+    if row.type == JobType.INFERENCE.value:
+        value = (row.config or {}).get("class_key")
+        if isinstance(value, str) and value:
+            return value
+    return row.dataset_key or row.training_dataset_name or row.dataset_name
+
+
+def _job_change_action(row: JobRow) -> str:
+    running = row.status == JobStatus.RUNNING.value
+    if row.type == JobType.TRAINING.value:
+        return "идёт обучение" if running else "запланировано обучение"
+    return "идёт псевдоразметка" if running else "запланирована псевдоразметка"
+
+
+def _job_mlflow_run_url(session: Session, row: JobRow) -> str | None:
+    if row.type != JobType.TRAINING.value:
+        return None
+    return session.scalar(
+        select(TrainingResultRow.mlflow_run_url).where(TrainingResultRow.job_id == row.id)
+    )
 
 
 def create_pseudo_markup_job(

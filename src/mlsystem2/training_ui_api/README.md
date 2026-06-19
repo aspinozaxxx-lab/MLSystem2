@@ -123,8 +123,10 @@ process получает SIGTERM, а известный MLflow run помеча�
 Шаблон хранит `config_schema` и `default_config` в JSONB. `default_config` использует ключи вида
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
 В этот набор входят `tile_preparation.positive_factor`, `tile_preparation.hard_negative_factor`,
-`tile_preparation.background_factor` и `train.max_training_time_sec`: пустое значение означает обучение без
-wall-clock лимита. Сумма трех tile factors должна быть равна `1`; если hard-negative разметки или tiles нет,
+`tile_preparation.background_factor`, `train.pos_weight`, `train.hard_negative_weight` и
+`train.max_training_time_sec`: пустое значение означает обучение без
+wall-clock лимита. Схема каждого параметра хранит label, tooltip, допустимые границы и рекомендуемый диапазон
+для одинаковых подсказок на страницах шаблонов, запуска и просмотра задания. Сумма трех tile factors должна быть равна `1`; если hard-negative разметки или tiles нет,
 недостающая hard-negative доля используется как positive внутри общего marked-бюджета.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
@@ -164,7 +166,8 @@ Frontend не обращается к Postgres. Сервис не импорти
 параметров задания и запускает публичный CLI
 `python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...`.
 Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
-и не записываются в `run.yml`. Worker всегда записывает в `run.yml` нормализованные три tile factors и добавляет
+и не записываются в `run.yml`. Worker всегда записывает в `run.yml` нормализованные три tile factors,
+`train.hard_negative_weight` и добавляет
 `hard_negative_annotation_file`, если он найден у встроенного MLMarkup dataset. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
@@ -179,9 +182,11 @@ Jobs запускаются из единой очереди с внутренн
 стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает все active auto
 jobs. Failed auto attempt не ретраится до новой версии датасета или снятия и повторной установки галочки.
 
-`GET /api/v1/results/changes` возвращает последние 20 успешных изменений из `training_results` и
-`pseudo_markup_results`, отсортированные по времени изменения. Каждая строка содержит `class_key`, имя модели,
-имя датасета и действие: `обучена сеть` или `создана разметка`.
+`GET /api/v1/results/changes` возвращает сначала active jobs со статусами `queued`/`running`, затем последние
+20 успешных изменений из `training_results` и `pseudo_markup_results`, отсортированные по времени изменения.
+Каждая строка содержит `item_type`, optional `job_id`, `type`, `class_key`, имя модели, имя датасета, status,
+optional `mlflow_run_url` и действие: `запланировано обучение`, `идёт обучение`, `запланирована псевдоразметка`,
+`идёт псевдоразметка`, `обучена сеть` или `создана разметка`.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший
