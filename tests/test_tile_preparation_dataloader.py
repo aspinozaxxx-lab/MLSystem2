@@ -1177,11 +1177,51 @@ def test_sampling_weights_cap_small_hard_negative_budget_and_fill_positive() -> 
     weights = dataset.sampling_weights()
 
     assert weights is not None
-    assert sum(weights[:2]) == pytest.approx(0.6)
-    assert weights[2] == pytest.approx(0.2)
+    assert sum(weights[:2]) == pytest.approx(0.8 * 2 / 3)
+    assert weights[2] == pytest.approx(0.8 * 1 / 3)
     assert sum(weights[3:]) == pytest.approx(0.2)
-    assert dataset.positive_factor_used == pytest.approx(0.6)
-    assert dataset.hard_negative_factor_used == pytest.approx(0.2)
+    assert dataset.positive_factor_used == pytest.approx(0.8 * 2 / 3)
+    assert dataset.hard_negative_factor_used == pytest.approx(0.8 * 1 / 3)
+    assert dataset.background_factor_used == pytest.approx(0.2)
+    assert any("marked tiles" in item for item in dataset.sampling_warnings)
+
+
+def test_sampling_weights_cap_hard_negative_by_marked_pool_ratio_regression() -> None:
+    positive_count = 1834
+    hard_negative_count = 283
+    background_count = 17608
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = (
+        [True] * positive_count
+        + [False] * hard_negative_count
+        + [False] * background_count
+    )
+    dataset._hard_negative_hint_by_index = (
+        [False] * positive_count
+        + [True] * hard_negative_count
+        + [False] * background_count
+    )
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
+    dataset._class_balance = False
+    dataset._class_annotations = []
+    dataset._class_hints_by_index = None
+
+    weights = dataset.sampling_weights()
+
+    expected_hard_factor = 0.8 * hard_negative_count / (positive_count + hard_negative_count)
+    assert weights is not None
+    assert sum(weights[:positive_count]) == pytest.approx(0.8 - expected_hard_factor)
+    assert sum(weights[positive_count : positive_count + hard_negative_count]) == pytest.approx(
+        expected_hard_factor
+    )
+    assert sum(weights[positive_count + hard_negative_count :]) == pytest.approx(0.2)
+    assert dataset.hard_negative_factor_used == pytest.approx(expected_hard_factor)
+    assert dataset.hard_negative_factor_used != pytest.approx(
+        hard_negative_count / (positive_count + hard_negative_count + background_count)
+    )
+    assert dataset.positive_factor_used == pytest.approx(0.8 - expected_hard_factor)
     assert dataset.background_factor_used == pytest.approx(0.2)
 
 
@@ -1254,6 +1294,39 @@ def test_multiclass_class_balance_sampling_weights_boost_rare_classes() -> None:
     assert weights[2] > weights[0]
     assert sum(weights[:3]) == pytest.approx(0.8)
     assert sum(weights[3:]) == pytest.approx(0.2)
+
+
+def test_class_balance_uses_effective_positive_budget_with_hard_negative_deficit() -> None:
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._positive_hint_by_index = [True, True, True, False, False, False]
+    dataset._hard_negative_hint_by_index = [False, False, False, True, False, False]
+    dataset._class_hints_by_index = [
+        frozenset({1}),
+        frozenset({1}),
+        frozenset({2}),
+        frozenset(),
+        frozenset(),
+        frozenset(),
+    ]
+    dataset._positive_factor = 0.5
+    dataset._hard_negative_factor = 0.3
+    dataset._background_factor = 0.2
+    dataset._class_balance = True
+    dataset._class_annotations = [
+        TileClassAnnotation(class_id=1, slug="common", name="Common", annotation_file="a.geojson"),
+        TileClassAnnotation(class_id=2, slug="rare", name="Rare", annotation_file="b.geojson"),
+    ]
+
+    weights = dataset.sampling_weights()
+
+    assert weights is not None
+    assert weights[2] > weights[0]
+    assert sum(weights[:3]) == pytest.approx(0.6)
+    assert weights[3] == pytest.approx(0.2)
+    assert sum(weights[4:]) == pytest.approx(0.2)
+    assert dataset.positive_factor_used == pytest.approx(0.6)
+    assert dataset.hard_negative_factor_used == pytest.approx(0.2)
+    assert dataset.background_factor_used == pytest.approx(0.2)
 
 
 def _window_keys(dataset) -> list[tuple[int, int]]:

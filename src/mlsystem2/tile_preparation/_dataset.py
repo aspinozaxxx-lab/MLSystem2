@@ -324,7 +324,6 @@ class TileDataset:
         factors, warnings = _effective_sampling_factors(
             factors,
             counts,
-            dataset_size=len(categories),
         )
         self._sampling_factor_used = factors
         self._sampling_warnings = warnings
@@ -712,8 +711,6 @@ def _category_counts(categories: list[str]) -> dict[str, int]:
 def _effective_sampling_factors(
     factors: dict[str, float],
     counts: dict[str, int],
-    *,
-    dataset_size: int,
 ) -> tuple[dict[str, float], list[str]]:
     positive_factor = factors[TILE_CATEGORY_POSITIVE]
     hard_negative_factor = factors[TILE_CATEGORY_HARD_NEGATIVE]
@@ -726,11 +723,8 @@ def _effective_sampling_factors(
         raise TilePreparationError(
             "tile_preparation.background_factor > 0, но background tiles не найдены."
         )
-    hard_negative_cap = (
-        hard_negative_count / dataset_size
-        if dataset_size > 0 and hard_negative_count > 0
-        else 0.0
-    )
+    marked_count = positive_count + hard_negative_count
+    hard_negative_cap = marked_factor * hard_negative_count / marked_count if marked_count > 0 else 0.0
     effective_hard_negative_factor = min(hard_negative_factor, hard_negative_cap)
     effective_positive_factor = marked_factor - effective_hard_negative_factor
     if effective_positive_factor > 0.0 and positive_count == 0:
@@ -742,7 +736,8 @@ def _effective_sampling_factors(
     if hard_negative_factor > effective_hard_negative_factor:
         warnings.append(
             "hard_negative_factor_used уменьшен из-за отсутствия или малого числа "
-            "hard_negative tiles; недостающий marked budget перенесен в positive."
+            "hard_negative tiles относительно marked tiles; недостающий marked budget "
+            "перенесен в positive."
         )
     return (
         {
