@@ -725,6 +725,37 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "[a-z0-9_-]" in app_js
 
 
+def test_frontend_build_adds_asset_cache_busting(tmp_path: Path, monkeypatch) -> None:
+    from frontend import build
+
+    src = tmp_path / "src"
+    dist = tmp_path / "dist"
+    (src / "assets").mkdir(parents=True)
+    (src / "index.html").write_text(
+        '<link rel="stylesheet" href="./assets/app.css">\n'
+        '<script type="module" src="./app.js"></script>\n',
+        encoding="utf-8",
+    )
+    (src / "app.js").write_text("console.log('MLSystem2')", encoding="utf-8")
+    (src / "assets" / "app.css").write_text("body{margin:0}", encoding="utf-8")
+
+    monkeypatch.setattr(build, "SRC", src)
+    monkeypatch.setattr(build, "DIST", dist)
+    monkeypatch.setattr(
+        build,
+        "REQUIRED",
+        [src / "index.html", src / "app.js", src / "assets" / "app.css"],
+    )
+
+    build.main()
+
+    index = (dist / "index.html").read_text(encoding="utf-8")
+    assert './app.js?v=' in index
+    assert './assets/app.css?v=' in index
+    assert 'src="./app.js"' not in index
+    assert 'href="./assets/app.css"' not in index
+
+
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
