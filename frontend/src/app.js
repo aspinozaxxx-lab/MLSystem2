@@ -1,4 +1,4 @@
-const API = "/api/v1";
+﻿const API = "/api/v1";
 const root = document.getElementById("app");
 const PROGRESS_REFRESH_MS = 10000;
 let progressRefreshTimer = null;
@@ -263,11 +263,11 @@ async function renderStartPage() {
   const template = templateFor(state.selectedArchitecture, initialDatasetKey);
   const datasets = state.datasets.map((item) => option(item.key, item.name, false)).join("");
   const models = state.models.map((item) => option(item.architecture, item.display_name, item.architecture === state.selectedArchitecture)).join("");
+  const defaultExperimentId = latestExperimentId();
   const experimentsOptions = [
-    `<option value="">Новый experiment</option>`,
-    ...state.experiments.map((item) => option(item.experiment_id, item.name, false)),
+    `<option value="" ${defaultExperimentId ? "" : "selected"}>Новый experiment</option>`,
+    ...state.experiments.map((item) => option(item.experiment_id, item.name, item.experiment_id === defaultExperimentId)),
   ].join("");
-  const runName = recommendedRunName();
   renderShell(`
     <section class="hero compact-hero">
       <h1>Запуск обучения</h1>
@@ -279,11 +279,8 @@ async function renderStartPage() {
           <label>MLflow experiment
             <select name="experiment_id" id="experiment-select">${experimentsOptions}</select>
           </label>
-          <label>Новое имя experiment
+          <label id="new-experiment-name-field" class="${defaultExperimentId ? "hidden" : ""}">Новое имя experiment
             <input name="experiment_name" value="MLSystem2">
-          </label>
-          <label>MLflow run name
-            <input name="run_name" value="${escapeAttr(runName)}">
           </label>
           <label>Датасет
             <select name="dataset_key" id="dataset-select">${datasets}</select>
@@ -318,6 +315,8 @@ async function renderStartPage() {
   `);
 
   const datasetSelect = document.getElementById("dataset-select");
+  const experimentSelect = document.getElementById("experiment-select");
+  const newExperimentNameField = document.getElementById("new-experiment-name-field");
   const uploadPanel = document.getElementById("custom-upload");
   const syncTemplateFields = () => {
     const currentTemplate = templateFor(state.selectedArchitecture, datasetSelect.value);
@@ -328,12 +327,16 @@ async function renderStartPage() {
     );
   };
   const syncUpload = () => uploadPanel.classList.toggle("hidden", datasetSelect.value !== "custom");
+  const syncExperimentName = () => {
+    newExperimentNameField.classList.toggle("hidden", experimentSelect.value !== "");
+  };
+  experimentSelect.addEventListener("change", syncExperimentName);
   datasetSelect.addEventListener("change", () => {
     syncUpload();
     syncTemplateFields();
-    document.querySelector("input[name='run_name']").value = recommendedRunName(datasetSelect.value);
   });
   syncUpload();
+  syncExperimentName();
 
   document.getElementById("architecture-select").addEventListener("change", async (event) => {
     state.selectedArchitecture = event.currentTarget.value;
@@ -599,7 +602,6 @@ async function submitStartForm(event) {
   const payload = {
     mlflow_experiment_id: experimentId,
     mlflow_experiment_name: experimentName,
-    mlflow_run_name: String(data.get("run_name") || recommendedRunName()).trim(),
     dataset_key: datasetKey,
     custom_dataset_id: customDatasetId,
     architecture: String(data.get("architecture") || state.selectedArchitecture),
@@ -1791,12 +1793,15 @@ function templateTitle(template) {
   return template.dataset_name || template.display_name;
 }
 
-function recommendedRunName(datasetKey = null) {
-  const dataset = state.datasets.find((item) => item.key === (datasetKey || document.querySelector("[name='dataset_key']")?.value)) || state.datasets[0];
-  const architecture = state.selectedArchitecture || "model";
-  const date = new Date();
-  const stamp = `${String(date.getDate()).padStart(2, "0")}${String(date.getMonth() + 1).padStart(2, "0")}`;
-  return `${slug(dataset?.name || "dataset")}_${slug(architecture)}_${stamp}`;
+function latestExperimentId() {
+  if (!state.experiments.length) return "";
+  return state.experiments.reduce((latest, item) => {
+    const latestNumber = Number(latest.experiment_id);
+    const itemNumber = Number(item.experiment_id);
+    if (!Number.isFinite(itemNumber)) return latest;
+    if (!Number.isFinite(latestNumber) || itemNumber > latestNumber) return item;
+    return latest;
+  }, state.experiments[0]).experiment_id;
 }
 
 function renderTable(headers, rows) {
@@ -2022,14 +2027,6 @@ function formatF1Score(value) {
 
 function pad(value) {
   return String(value).padStart(2, "0");
-}
-
-function slug(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^\p{L}\p{N}_-]+/gu, "");
 }
 
 function escapeHtml(value) {

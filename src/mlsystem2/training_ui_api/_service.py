@@ -642,7 +642,7 @@ def create_training_job(
         tile_size=tile_size,
         mlflow_experiment_id=request.mlflow_experiment_id,
         mlflow_experiment_name=request.mlflow_experiment_name,
-        mlflow_run_name=request.mlflow_run_name,
+        mlflow_run_name=_blank_to_none(request.mlflow_run_name),
         config=job_config,
         custom_dataset_id=request.custom_dataset_id,
     )
@@ -1682,3 +1682,10 @@ def _float_or_error(config: dict[str, Any], key: str) -> float:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None

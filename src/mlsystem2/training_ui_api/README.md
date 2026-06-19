@@ -90,6 +90,11 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 `GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
 имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.
 
+На странице запуска обучения frontend по умолчанию выбирает существующий MLflow experiment с максимальным числовым
+`experiment_id`. Поле `Новое имя experiment` показывается только при выборе пункта `Новый experiment`. Ручное поле
+`MLflow run name` не показывается и не отправляется: при пустом имени worker не передает `--run-name`, а имя run
+формируется модулем `mlflow_adapter` по tag `class`.
+
 `GET /api/v1/automation` возвращает глобальный выключатель, непустые MLMarkup-датасеты без `Custom`, UI-модели и
 матрицу правил `(dataset_key, architecture)`. `PUT /api/v1/automation/enabled` включает автоматику или полностью
 отключает ее: активные automatic jobs отменяются, queued automatic jobs очищаются из очередей, running training

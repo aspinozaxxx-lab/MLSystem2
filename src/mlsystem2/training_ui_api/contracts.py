@@ -273,7 +273,7 @@ class TrainingJobCreate(BaseModel):
 
     mlflow_experiment_id: str | None = None
     mlflow_experiment_name: str
-    mlflow_run_name: str
+    mlflow_run_name: str | None = None
     dataset_key: str
     custom_dataset_id: UUID | None = None
     architecture: str

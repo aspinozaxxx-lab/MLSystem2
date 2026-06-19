@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -766,7 +767,30 @@ def _mlflow_class_tag(settings: SystemSettings) -> str:
         return "multiclass"
     if settings.dataset.annotation_file is None:
         return "unknown"
-    return Path(settings.dataset.annotation_file).stem
+    return _binary_dataset_class_slug(settings)
+
+
+def _binary_dataset_class_slug(settings: SystemSettings) -> str:
+    annotation_path = Path(settings.dataset.annotation_file or "")
+    if settings.dataset.scenes_file:
+        scenes_path = Path(settings.dataset.scenes_file)
+        if (
+            annotation_path.parent == scenes_path.parent
+            and annotation_path.parent.name
+            and annotation_path.parent.parent.name
+            and annotation_path.parent.parent.parent.name.lower() == "mlmarkup"
+        ):
+            class_slug = _slug_part(annotation_path.parent.parent.name)
+            variant_slug = _slug_part(annotation_path.parent.name)
+            if class_slug and variant_slug:
+                return f"{class_slug}_{variant_slug}"
+    return _slug_part(annotation_path.stem) or "unknown"
+
+
+def _slug_part(value: str) -> str:
+    normalized = re.sub(r"\s+", "_", value.strip().lower())
+    return re.sub(r"[^\w-]+", "", normalized, flags=re.UNICODE)
+
 
 def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
     if settings.dataset.classes:

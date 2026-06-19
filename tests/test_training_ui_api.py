@@ -692,6 +692,12 @@ def test_training_result_model_export_requires_ok_status_and_mlflow_run(
 
 def test_training_ui_frontend_has_model_export_page() -> None:
     app_js = Path("frontend/src/app.js").read_text(encoding="utf-8")
+    assert "MLflow run name" not in app_js
+    assert 'name="run_name"' not in app_js
+    assert "latestExperimentId" in app_js
+    assert "new-experiment-name-field" in app_js
+    assert 'newExperimentNameField.classList.toggle("hidden", experimentSelect.value !== "")' in app_js
+    assert "mlflow_run_name:" not in app_js
     assert 'route[0] === "model-export"' in app_js
     assert 'href="#/model-export">Экспорт модели</a>' in app_js
     assert "/model-export/triton-zip" in app_js
@@ -932,7 +938,6 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             json={
                 "mlflow_experiment_id": "45",
                 "mlflow_experiment_name": "Segformer-b2-HPO-deforest-2605",
-                "mlflow_run_name": "ui_test_run",
                 "dataset_key": "custom",
                 "custom_dataset_id": custom["id"],
                 "architecture": "smp_segformer_b2",
@@ -941,6 +946,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         ).json()
         assert job["status"] == "queued"
         assert job["dataset_name"] == "Custom"
+        assert job["mlflow_run_name"] is None
         assert "train.device" not in job["config"]
         assert "dataset.split_granularity" not in job["config"]
 
