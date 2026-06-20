@@ -8,6 +8,7 @@ from time import perf_counter
 
 from mlsystem2.models.api import save_checkpoint
 from mlsystem2.models.contracts import SaveCheckpointRequest
+from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 
 from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgressEvent
 from .contracts import TrainProgressSink, TrainRequest, TrainResult
@@ -130,17 +131,19 @@ def _train_epoch(
     has_optimizer_step = False
     nonfinite_gradient_skips = 0
     for batch_index, batch in enumerate(loader, start=1):
-        images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
+        images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
-        masks = _prepare_masks(torch, masks, config, device)
+        masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
         _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "train")
         _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "train")
+        if config.task == "binary":
+            _validate_binary_targets(torch, masks, epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         if config.task == "multiclass":
             _validate_multiclass_targets(torch, masks, logits.shape[1], epoch, batch_index, "train")
-        loss = _loss(torch, logits, masks, config, meta)
+        loss = _loss(torch, logits, masks, config, hard_negative_pixels)
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
@@ -205,14 +208,15 @@ def _validate_epoch(
     }
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
-            images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
+            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
-            masks = _prepare_masks(torch, masks, config, device)
+            masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
+            _validate_binary_targets(torch, masks, epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
-            loss = _loss(torch, logits, masks, config, meta)
+            loss = _loss(torch, logits, masks, config, hard_negative_pixels)
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
@@ -260,16 +264,16 @@ def _validate_multiclass_epoch(
 
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
-            images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
+            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
-            masks = _prepare_masks(torch, masks, config, device)
+            masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
             num_classes = int(logits.shape[1])
             _validate_multiclass_targets(torch, masks, num_classes, epoch, batch_index, "val")
-            loss = _loss(torch, logits, masks, config, meta)
+            loss = _loss(torch, logits, masks, config, hard_negative_pixels)
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
@@ -340,42 +344,60 @@ def _forward_logits(torch, model, images, masks):
     return logits
 
 
-def _prepare_masks(torch, masks, config, device):
+def _prepare_supervision_masks(torch, masks, config, device):
     if config.task == "multiclass":
-        prepared = masks.to(device=device)
-        if prepared.ndim == 4 and prepared.shape[1] == 1:
-            prepared = prepared[:, 0, :, :]
-        return prepared.to(dtype=torch.long)
-    return masks.to(device=device, dtype=torch.float32)
+        raw = masks.to(device=device)
+        if raw.ndim == 4 and raw.shape[1] == 1:
+            raw = raw[:, 0, :, :]
+        raw = raw.to(dtype=torch.long)
+        hard_negative_pixels = raw == HARD_NEGATIVE_LABEL
+        target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
+        return target, hard_negative_pixels
+    raw = masks.to(device=device, dtype=torch.float32)
+    hard_negative_pixels = raw == float(HARD_NEGATIVE_LABEL)
+    target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
+    return target, hard_negative_pixels
 
 
-def _loss(torch, logits, masks, config, meta: dict[str, object] | None = None):
+def _loss(torch, logits, masks, config, hard_negative_pixels=None):
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(
                 "multiclass train поддерживает только loss=cross_entropy или cross_entropy_dice"
             )
-        weights = _multiclass_loss_weights(torch, logits, masks, config, meta)
+        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
         cross_entropy = _weighted_mean(
             torch.nn.functional.cross_entropy(logits, masks, reduction="none"),
             weights,
         )
         if config.loss == "cross_entropy_dice":
-            return cross_entropy + _multiclass_dice_loss(torch, logits, masks, weights)
+            return cross_entropy + _multiclass_dice_loss(
+                torch,
+                logits,
+                masks,
+                hard_negative_pixels,
+                config,
+            )
         return cross_entropy
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _binary_loss_weights(torch, logits, masks, config, meta)
+        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
             pos_weight=pos_weight,
             reduction="none",
         )
-        return _weighted_mean(bce, weights) + _dice_loss(torch, logits, masks, weights)
+        return _weighted_mean(bce, weights) + _dice_loss(
+            torch,
+            logits,
+            masks,
+            hard_negative_pixels,
+            config,
+        )
     if config.loss == "focal_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _binary_loss_weights(torch, logits, masks, config, meta)
+        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
@@ -384,11 +406,17 @@ def _loss(torch, logits, masks, config, meta: dict[str, object] | None = None):
         )
         pt = torch.exp(-bce)
         focal = config.focal_alpha * torch.pow(1.0 - pt, 2.0) * bce
-        return _weighted_mean(focal, weights) + _dice_loss(torch, logits, masks, weights)
+        return _weighted_mean(focal, weights) + _dice_loss(
+            torch,
+            logits,
+            masks,
+            hard_negative_pixels,
+            config,
+        )
     if config.loss == "focal_tversky":
-        weights = _binary_loss_weights(torch, logits, masks, config, meta)
+        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
         focal, _bce = _focal_loss_with_bce(torch, logits, masks, config, weights)
-        return focal + _tversky_loss(torch, logits, masks, config, weights)
+        return focal + _tversky_loss(torch, logits, masks, config, hard_negative_pixels)
     raise TrainError(f"Неподдерживаемый loss: {config.loss}")
 
 
@@ -412,50 +440,18 @@ def _best_threshold_metrics(
     return best_threshold, best_precision, best_recall, max(best_f1, 0.0)
 
 
-def _binary_loss_weights(torch, logits, masks, config, meta: dict[str, object] | None):
+def _pixel_loss_weights(torch, logits, hard_negative_pixels, config):
+    del torch
     hard_negative_weight = float(getattr(config, "hard_negative_weight", 1.0))
-    tile_hard_negative = _tile_hard_negative_tensor(
-        torch,
-        int(logits.shape[0]),
-        logits.device,
-        logits.dtype,
-        meta,
-    )
-    if hard_negative_weight == 1.0 or tile_hard_negative is None:
+    if (
+        hard_negative_weight == 1.0
+        or hard_negative_pixels is None
+        or not hasattr(hard_negative_pixels, "to")
+    ):
         return None
-    tile_mask = tile_hard_negative.reshape(-1, 1, 1, 1)
-    negative_mask = (masks <= 0.5).to(dtype=logits.dtype)
-    return 1.0 + (hard_negative_weight - 1.0) * tile_mask * negative_mask
-
-
-def _multiclass_loss_weights(torch, logits, masks, config, meta: dict[str, object] | None):
-    hard_negative_weight = float(getattr(config, "hard_negative_weight", 1.0))
-    tile_hard_negative = _tile_hard_negative_tensor(
-        torch,
-        int(logits.shape[0]),
-        logits.device,
-        logits.dtype,
-        meta,
-    )
-    if hard_negative_weight == 1.0 or tile_hard_negative is None:
-        return None
-    tile_mask = tile_hard_negative.reshape(-1, 1, 1)
-    background_mask = (masks == 0).to(dtype=logits.dtype)
-    return 1.0 + (hard_negative_weight - 1.0) * tile_mask * background_mask
-
-
-def _tile_hard_negative_tensor(torch, batch_size: int, device, dtype, meta: dict[str, object] | None):
-    if not isinstance(meta, dict):
-        return None
-    tile_hard_negative = meta.get("tile_hard_negative")
-    if not isinstance(tile_hard_negative, list) or len(tile_hard_negative) != batch_size:
-        return None
-    tile_mask = torch.as_tensor(
-        [1.0 if bool(item) else 0.0 for item in tile_hard_negative],
-        device=device,
-        dtype=dtype,
-    )
-    return tile_mask
+    return 1.0 + (
+        hard_negative_weight - 1.0
+    ) * hard_negative_pixels.to(device=logits.device, dtype=logits.dtype)
 
 
 def _weighted_mean(values, weights):
@@ -487,17 +483,18 @@ def _focal_loss_with_bce(torch, logits, masks, config, weights=None):
     return _weighted_mean(focal, weights), _weighted_mean(bce, weights)
 
 
-def _dice_loss(torch, logits, masks, weights=None):
+def _dice_loss(torch, logits, masks, hard_negative_pixels=None, config=None):
     probs = torch.sigmoid(logits)
-    if weights is not None:
-        probs = probs * weights
+    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    if probability_weights is not None:
+        probs = probs * probability_weights
     smooth = 1.0
     intersection = torch.sum(probs * masks)
     denominator = torch.sum(probs) + torch.sum(masks)
     return 1.0 - (2.0 * intersection + smooth) / (denominator + smooth)
 
 
-def _multiclass_dice_loss(torch, logits, masks, weights=None):
+def _multiclass_dice_loss(torch, logits, masks, hard_negative_pixels=None, config=None):
     probs = torch.softmax(logits, dim=1)
     num_classes = int(logits.shape[1])
     if num_classes <= 1:
@@ -509,8 +506,9 @@ def _multiclass_dice_loss(torch, logits, masks, weights=None):
     target = target.permute(0, 3, 1, 2).to(device=logits.device, dtype=probs.dtype)
     probs = probs[:, 1:, :, :]
     target = target[:, 1:, :, :]
-    if weights is not None:
-        probs = probs * weights.unsqueeze(1)
+    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    if probability_weights is not None:
+        probs = probs * probability_weights.unsqueeze(1)
     smooth = 1.0
     dims = (0, 2, 3)
     intersection = torch.sum(probs * target, dim=dims)
@@ -519,11 +517,12 @@ def _multiclass_dice_loss(torch, logits, masks, weights=None):
     return 1.0 - dice.mean()
 
 
-def _tversky_loss(torch, logits, masks, config, weights=None):
+def _tversky_loss(torch, logits, masks, config, hard_negative_pixels=None):
     probs = torch.sigmoid(logits)
     smooth = 1.0
     true_positive = torch.sum(probs * masks)
     false_positive_pixels = probs * (1.0 - masks)
+    weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
     if weights is not None:
         false_positive_pixels = false_positive_pixels * weights
     false_positive = torch.sum(false_positive_pixels)
@@ -643,4 +642,26 @@ def _validate_multiclass_targets(
         raise TrainError(
             f"Некорректные значения multiclass mask at stage={stage}, epoch={epoch}, "
             f"batch={batch_index}: ожидается диапазон 0..{num_classes - 1}"
+        )
+
+
+def _validate_binary_targets(
+    torch,
+    masks,
+    epoch: int,
+    batch_index: int,
+    stage: str,
+) -> None:
+    del torch
+    if masks.ndim != 4 or masks.shape[1] != 1:
+        raise TrainError(
+            f"Некорректная binary mask at stage={stage}, epoch={epoch}, "
+            f"batch={batch_index}: ожидалась форма [B,1,H,W], получено {tuple(masks.shape)}"
+        )
+    min_value = float(masks.min().item())
+    max_value = float(masks.max().item())
+    if min_value < 0.0 or max_value > 1.0:
+        raise TrainError(
+            f"Некорректные значения binary mask at stage={stage}, epoch={epoch}, "
+            "ожидается диапазон 0..1 после decode supervision mask"
         )

@@ -11,7 +11,7 @@ from rasterio.windows import Window
 
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
-from ._mask import rasterize_window_mask
+from ._mask import HARD_NEGATIVE_LABEL, build_supervision_mask
 from ._valid_footprint import filter_valid_windows
 from ._vrt import open_vrt_reader, open_vrt_xml
 from ._windows import build_vrt_source_windows_with_diagnostics
@@ -135,9 +135,8 @@ class TileDataset:
         nodata_pixels = _nodata_pixels(image_raw, self._nodata)
         image = image_raw.astype(np.float32, copy=False)
 
-        mask = self._read_annotation_mask(dataset, window, nodata_pixels)
-        positive_before_augmentation = bool(np.count_nonzero(mask) > 0)
-        category = self._sample_category(index, positive_before_augmentation)
+        mask = self._read_supervision_mask(dataset, window, nodata_pixels)
+        category = _tile_category_from_supervision_mask(mask)
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
         if should_augment and category in {
@@ -425,42 +424,48 @@ class TileDataset:
             masked=False,
         )
 
-    def _read_annotation_mask(
+    def _read_supervision_mask(
         self,
         dataset: DatasetReader,
         window: Window,
         nodata_pixels: np.ndarray,
     ) -> np.ndarray:
-        if self._class_annotations:
-            return self._read_multiclass_annotation_mask(dataset, window, nodata_pixels)
-        geometries = self._annotation_index_or_load().query_bounds(dataset.window_bounds(window))
-        mask = rasterize_window_mask(
-            geometries,
+        bounds = dataset.window_bounds(window)
+        mask = build_supervision_mask(
+            positive_layers=self._positive_layers(bounds),
+            hard_negative_geometries=self._hard_negative_geometries(bounds),
             out_shape=(self._tile_size, self._tile_size),
             transform=dataset.window_transform(window),
+            nodata_pixels=nodata_pixels,
         )
-        mask[nodata_pixels] = 0
+        if self._class_annotations:
+            return mask.astype(np.int64, copy=False)
         return mask.astype(np.float32, copy=False)[None, :, :]
 
-    def _read_multiclass_annotation_mask(
+    def _positive_layers(
         self,
-        dataset: DatasetReader,
-        window: Window,
-        nodata_pixels: np.ndarray,
-    ) -> np.ndarray:
-        mask = np.zeros((self._tile_size, self._tile_size), dtype=np.int64)
-        for annotation in self._class_annotations:
-            geometries = self._class_annotation_index_or_load(annotation).query_bounds(
-                dataset.window_bounds(window)
+        bounds: tuple[float, float, float, float],
+    ) -> list[tuple[int, list[object]]]:
+        if self._class_annotations:
+            return [
+                (
+                    annotation.class_id,
+                    self._class_annotation_index_or_load(annotation).query_bounds(bounds),
+                )
+                for annotation in self._class_annotations
+            ]
+        return [(1, self._annotation_index_or_load().query_bounds(bounds))]
+
+    def _hard_negative_geometries(
+        self,
+        bounds: tuple[float, float, float, float],
+    ) -> list[object]:
+        geometries: list[object] = []
+        for annotation_file in self._hard_negative_annotation_files():
+            geometries.extend(
+                self._hard_negative_annotation_index_or_load(annotation_file).query_bounds(bounds)
             )
-            class_mask = rasterize_window_mask(
-                geometries,
-                out_shape=(self._tile_size, self._tile_size),
-                transform=dataset.window_transform(window),
-            )
-            class_mask[nodata_pixels] = 0
-            mask[class_mask == 1] = annotation.class_id
-        return mask
+        return geometries
 
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
@@ -560,14 +565,6 @@ class TileDataset:
             False for _ in positive_hints
         ]
         return _tile_categories(positive_hints, hard_negative_hints)
-
-    def _sample_category(self, index: int, positive: bool) -> str:
-        if positive:
-            return TILE_CATEGORY_POSITIVE
-        hard_negative_hints = self._hard_negative_hint_by_index
-        if hard_negative_hints is not None and hard_negative_hints[index]:
-            return TILE_CATEGORY_HARD_NEGATIVE
-        return TILE_CATEGORY_BACKGROUND
 
     def _class_balanced_positive_weights(
         self,
@@ -694,6 +691,14 @@ def _tile_categories(
         else:
             categories.append(TILE_CATEGORY_BACKGROUND)
     return categories
+
+
+def _tile_category_from_supervision_mask(mask: np.ndarray) -> str:
+    if bool(np.any(mask > 0)):
+        return TILE_CATEGORY_POSITIVE
+    if bool(np.any(mask == HARD_NEGATIVE_LABEL)):
+        return TILE_CATEGORY_HARD_NEGATIVE
+    return TILE_CATEGORY_BACKGROUND
 
 
 def _category_counts(categories: list[str]) -> dict[str, int]:

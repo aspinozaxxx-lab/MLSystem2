@@ -120,7 +120,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.hard_negative_weight",
             "label": "Hard negative weight",
             "value_type": "number",
-            "tooltip": "Вес background-пикселей внутри hard-negative тайлов для binary loss.",
+            "tooltip": "Множитель штрафа только для пикселей внутри размеченных hard-negative зон. Остальной background имеет обычный вес 1.",
             "min_value": 0,
         },
         {
@@ -356,7 +356,7 @@ _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
         "1..5; повышать при пропусках объектов и низком recall, снижать при жирных масках и false positive.",
     ),
     "train.hard_negative_weight": (
-        "Вес отрицательных пикселей hard-negative тайлов в binary loss. Усиливает штраф за ложноположительные предсказания в областях, где модель особенно не должна выделять объект.",
+        "Множитель штрафа только для пикселей внутри размеченных hard-negative зон. Остальной background имеет обычный вес 1; positive pixels регулируются отдельно через positive weight и Dice/Tversky-компоненты.",
         "1..5; 1 выключает усиление. Повышать при false positive на hard-negative объектах, снижать если модель начинает терять похожие настоящие positive.",
     ),
     "train.tversky_alpha": (

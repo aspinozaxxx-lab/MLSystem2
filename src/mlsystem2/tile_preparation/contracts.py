@@ -12,6 +12,9 @@ class TilePreparationError(RuntimeError):
     """Ошибка подготовки тайлов."""
 
 
+HARD_NEGATIVE_LABEL = -1
+
+
 class TileClassAnnotation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +62,7 @@ class TileDataloaderRequest(BaseModel):
 
 
 __all__ = [
+    "HARD_NEGATIVE_LABEL",
     "TileClassAnnotation",
     "TileDataloaderRequest",
     "TilePreparationError",

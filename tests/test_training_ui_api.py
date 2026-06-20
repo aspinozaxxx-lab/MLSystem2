@@ -970,7 +970,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         hard_weight_field = next(
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.hard_negative_weight"
         )
-        assert "ложноположительные" in hard_weight_field["tooltip"]
+        assert "размеченных hard-negative зон" in hard_weight_field["tooltip"]
+        assert "Остальной background" in hard_weight_field["tooltip"]
         assert "1..5" in hard_weight_field["recommended_range"]
         changed_config = dict(segformer_template["default_config"])
         changed_config["train.batch_size"] = 3

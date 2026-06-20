@@ -181,6 +181,9 @@ PY
 ## 5. Конфиг двоичного датасета
 
 Для одного класса используй `dataset.scenes_file` и `dataset.annotation_file`. Если есть hard negative объекты, добавь `dataset.hard_negative_annotation_file`.
+Hard-negative GeoJSON содержит области, которые модель должна считать фоном: внутри tile supervision mask они
+получают служебное значение `-1`, перед loss превращаются в target background `0` и получают pixel weight из
+`train.hard_negative_weight`. Это не отдельный выходной класс модели.
 
 Пример для вырубок:
 
@@ -247,6 +250,9 @@ train:
   max_val_batches_per_epoch: 1000
   max_training_time_sec: 1800
 ```
+
+`tile_preparation.hard_negative_factor` управляет частотой hard-negative tiles в train sampler. `train.hard_negative_weight`
+управляет только штрафом loss на pixels внутри hard-negative геометрии; остальной background остается с весом `1`.
 
 Воркеры, prefetch, seed, device, binary task и каналы модели задаются defaults модулей.
 `max_train_batches_per_epoch`, `max_val_batches_per_epoch` и `max_training_time_sec` остаются параметрами запуска,

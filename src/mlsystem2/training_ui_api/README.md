@@ -128,6 +128,8 @@ process получает SIGTERM, а известный MLflow run помеча�
 wall-clock лимита. Схема каждого параметра хранит label, tooltip, допустимые границы и рекомендуемый диапазон
 для одинаковых подсказок на страницах шаблонов, запуска и просмотра задания. Сумма трех tile factors должна быть равна `1`; если hard-negative разметки или tiles нет,
 недостающая hard-negative доля используется как positive внутри общего marked-бюджета.
+`train.hard_negative_weight` не меняет sampler и не взвешивает весь tile: он усиливает loss только на pixels,
+которые в supervision mask пришли из `hard_negative_annotation_file`.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
 

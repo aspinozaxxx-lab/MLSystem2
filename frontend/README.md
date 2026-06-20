@@ -17,8 +17,8 @@ content hash, чтобы браузер не оставлял старый bundl
 датасетом.
 
 Форма запуска показывает только параметры обычного binary tile-training, которые оператор реально меняет:
-долю валидации, tile/stride, аугментации, sampling positive/hard-negative/background, веса positive и
-hard-negative loss, основные train-гиперпараметры, размер эпохи в batch-ах
+долю валидации, tile/stride, аугментации, sampling positive/hard-negative/background, вес positive pixels и
+pixel-level hard-negative loss, основные train-гиперпараметры, размер эпохи в batch-ах
 для train/validation и максимальное wall-clock время обучения. Названия параметров компактные, технический ключ
 вынесен мелкой строкой, а подсказки строятся из API-схемы и содержат допустимые значения, рекомендуемый диапазон,
 влияние параметра и связанные настройки. DataLoader

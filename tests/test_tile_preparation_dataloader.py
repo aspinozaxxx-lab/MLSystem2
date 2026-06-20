@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import builtins
+import inspect
 from time import perf_counter
 from pathlib import Path
 
@@ -15,8 +16,9 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation._augmentations import _geometric
+from mlsystem2.tile_preparation._augmentations import _geometric, _photometric
 from mlsystem2.tile_preparation import _dataloader as dataloader_impl
+from mlsystem2.tile_preparation import _dataset as dataset_impl
 from mlsystem2.tile_preparation._dataloader import (
     _available_memory_bytes,
     _effective_prefetch_factor,
@@ -29,7 +31,9 @@ from mlsystem2.tile_preparation._dataset import (
     TILE_CATEGORY_POSITIVE,
     TileDataset,
 )
+from mlsystem2.tile_preparation._mask import build_supervision_mask
 from mlsystem2.tile_preparation.contracts import (
+    HARD_NEGATIVE_LABEL,
     TileClassAnnotation,
     TileDataloaderRequest,
     TilePreparationError,
@@ -272,6 +276,91 @@ def test_multiclass_geometric_augmentation_keeps_labels() -> None:
     assert set(np.unique(augmented_mask).tolist()) == {0, 1, 2}
 
 
+def test_supervision_mask_builder_handles_empty_hard_negative_layer() -> None:
+    mask = build_supervision_mask(
+        positive_layers=[(1, [_polygon_geometry([[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])])],
+        hard_negative_geometries=[],
+        out_shape=(4, 4),
+        transform=from_origin(0, 4, 1, 1),
+        nodata_pixels=np.zeros((4, 4), dtype=bool),
+    )
+
+    assert mask.shape == (4, 4)
+    assert set(np.unique(mask).tolist()) == {0, 1}
+
+
+def test_supervision_mask_builder_preserves_hard_negative_background_and_priority() -> None:
+    nodata = np.zeros((4, 4), dtype=bool)
+    nodata[0, 0] = True
+    mask = build_supervision_mask(
+        positive_layers=[(1, [_polygon_geometry([[1, 2], [2, 2], [2, 3], [1, 3], [1, 2]])])],
+        hard_negative_geometries=[
+            _polygon_geometry([[0, 1], [3, 1], [3, 4], [0, 4], [0, 1]])
+        ],
+        out_shape=(4, 4),
+        transform=from_origin(0, 4, 1, 1),
+        nodata_pixels=nodata,
+    )
+
+    assert mask[0, 0] == 0
+    assert mask[1, 1] == 1
+    assert HARD_NEGATIVE_LABEL in set(np.unique(mask).tolist())
+    assert 0 in set(np.unique(mask).tolist())
+    assert mask[1, 0] == HARD_NEGATIVE_LABEL
+    assert mask[3, 3] == 0
+
+
+def test_tile_category_uses_supervision_values_without_count_nonzero() -> None:
+    hard_negative_mask = np.array([[HARD_NEGATIVE_LABEL, 0], [0, 0]], dtype=np.int64)
+    mixed_mask = np.array([[HARD_NEGATIVE_LABEL, 1], [0, 0]], dtype=np.int64)
+    background_mask = np.zeros((2, 2), dtype=np.int64)
+
+    assert (
+        dataset_impl._tile_category_from_supervision_mask(hard_negative_mask)
+        == TILE_CATEGORY_HARD_NEGATIVE
+    )
+    assert dataset_impl._tile_category_from_supervision_mask(mixed_mask) == TILE_CATEGORY_POSITIVE
+    assert (
+        dataset_impl._tile_category_from_supervision_mask(background_mask)
+        == TILE_CATEGORY_BACKGROUND
+    )
+    assert "count_nonzero" not in inspect.getsource(
+        dataset_impl._tile_category_from_supervision_mask
+    )
+
+
+def test_geometric_augmentation_preserves_hard_negative_label_values() -> None:
+    image = np.ones((1, 4, 4), dtype=np.float32)
+    mask = np.zeros((4, 4), dtype=np.int64)
+    mask[0:2, 0:2] = HARD_NEGATIVE_LABEL
+    mask[2:4, 2:4] = 2
+
+    _image, augmented_mask, augmented = _geometric(image, mask, _DeterministicRng())
+
+    assert augmented is True
+    assert int(np.sum(augmented_mask == HARD_NEGATIVE_LABEL)) == 4
+    assert set(np.unique(augmented_mask).tolist()) == {HARD_NEGATIVE_LABEL, 0, 2}
+
+
+def test_photometric_augmentation_does_not_change_supervision_mask() -> None:
+    image = np.ones((1, 4, 4), dtype=np.float32)
+    mask = np.zeros((4, 4), dtype=np.int64)
+    mask[0, 0] = HARD_NEGATIVE_LABEL
+    mask[1, 1] = 1
+
+    _image = _photometric(image, np.random.default_rng(3))
+
+    expected = np.array(
+        [
+            [HARD_NEGATIVE_LABEL, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    assert np.array_equal(mask, expected)
+
+
 def test_effective_prefetch_factor_targets_requested_epochs() -> None:
     assert (
         _effective_prefetch_factor(
@@ -361,6 +450,55 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
     assert batch_meta["positive_tile_count"] == 1
     assert batch_meta["hard_negative_tile_count"] == 0
     assert batch_meta["background_tile_count"] == 0
+    assert batch_meta["tile_category"] == [TILE_CATEGORY_POSITIVE]
+    loader.dataset.close()
+
+
+def test_create_tile_dataloader_returns_multiclass_supervision_mask_with_hard_negative(
+    tmp_path: Path,
+) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "multiclass_hard.tif"
+    data = np.full((1, 4, 4), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    class_a = tmp_path / "class_a.geojson"
+    hard_negative = tmp_path / "hard_negative.geojson"
+    _write_annotation_polygon(class_a, [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])
+    _write_annotation_polygon(hard_negative, [[2, 1], [3, 1], [3, 2], [2, 2], [2, 1]])
+    load_settings(
+        _write_config(
+            tmp_path,
+            tile_size=4,
+            stride=4,
+            batch_size=1,
+            input_channels=1,
+            positive_factor=1.0,
+            background_factor=0.0,
+        )
+    )
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            class_annotations=[
+                TileClassAnnotation(
+                    class_id=1,
+                    slug="class_a",
+                    name="Класс А",
+                    annotation_file=class_a,
+                    hard_negative_annotation_file=hard_negative,
+                ),
+            ],
+            batch_size=1,
+            mode="train",
+        )
+    )
+
+    _images, masks, batch_meta = next(iter(loader))
+    assert masks.shape == (1, 4, 4)
+    assert masks.dtype == torch.long
+    assert set(torch.unique(masks).tolist()) == {HARD_NEGATIVE_LABEL, 0, 1}
     assert batch_meta["tile_category"] == [TILE_CATEGORY_POSITIVE]
     loader.dataset.close()
 
@@ -700,7 +838,9 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
     assert batch_meta["augmented_tile_count"] == 0
 
 
-def test_tile_category_precedence_keeps_hard_negative_masks_empty(tmp_path: Path) -> None:
+def test_tile_category_precedence_keeps_hard_negative_pixels_in_supervision_mask(
+    tmp_path: Path,
+) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "category.tif"
     data = np.full((1, 4, 12), 1000, dtype=np.uint16)
@@ -733,6 +873,7 @@ def test_tile_category_precedence_keeps_hard_negative_masks_empty(tmp_path: Path
     background_image, background_mask, background_meta = dataset[2]
 
     assert positive_image.shape == hard_image.shape == background_image.shape == (1, 4, 4)
+    assert positive_mask.shape == hard_mask.shape == background_mask.shape == (1, 4, 4)
     assert dataset.tile_categories == [
         TILE_CATEGORY_POSITIVE,
         TILE_CATEGORY_HARD_NEGATIVE,
@@ -741,9 +882,11 @@ def test_tile_category_precedence_keeps_hard_negative_masks_empty(tmp_path: Path
     assert positive_meta["category"] == TILE_CATEGORY_POSITIVE
     assert hard_meta["category"] == TILE_CATEGORY_HARD_NEGATIVE
     assert background_meta["category"] == TILE_CATEGORY_BACKGROUND
-    assert np.count_nonzero(positive_mask) > 0
-    assert np.count_nonzero(hard_mask) == 0
-    assert np.count_nonzero(background_mask) == 0
+    assert np.any(positive_mask > 0)
+    assert np.any(positive_mask == HARD_NEGATIVE_LABEL)
+    assert not np.any(hard_mask > 0)
+    assert np.any(hard_mask == HARD_NEGATIVE_LABEL)
+    assert set(np.unique(background_mask).tolist()) == {0.0}
     dataset.close()
 
 
@@ -775,7 +918,7 @@ def test_train_augmentation_applies_to_positive_and_hard_negative_tiles(tmp_path
         augmentation_level=2,
     )
 
-    _positive_image, _positive_mask, positive_meta = dataset[0]
+    _positive_image, positive_mask, positive_meta = dataset[0]
     _hard_image, hard_mask, hard_meta = dataset[1]
     _background_image, _background_mask, background_meta = dataset[2]
 
@@ -785,7 +928,8 @@ def test_train_augmentation_applies_to_positive_and_hard_negative_tiles(tmp_path
     assert hard_meta["category"] == TILE_CATEGORY_HARD_NEGATIVE
     assert background_meta["augmented"] is False
     assert background_meta["category"] == TILE_CATEGORY_BACKGROUND
-    assert np.count_nonzero(hard_mask) == 0
+    assert np.any(positive_mask > 0)
+    assert np.any(hard_mask == HARD_NEGATIVE_LABEL)
     dataset.close()
 
 
@@ -814,6 +958,34 @@ def test_collate_batch_reports_category_and_augmentation_counters() -> None:
         TILE_CATEGORY_HARD_NEGATIVE,
         TILE_CATEGORY_BACKGROUND,
     ]
+
+
+def test_collate_batch_preserves_binary_hard_negative_label_without_pixel_meta() -> None:
+    torch = pytest.importorskip("torch")
+    image = np.ones((1, 2, 2), dtype=np.float32)
+    mask = np.array([[[HARD_NEGATIVE_LABEL, 0], [1, 0]]], dtype=np.float32)
+
+    _images, masks, batch_meta = dataloader_impl._collate_tile_batch(
+        [(image, mask, {"category": TILE_CATEGORY_POSITIVE, "augmented": False})]
+    )
+
+    assert masks.dtype == torch.float32
+    assert HARD_NEGATIVE_LABEL in set(torch.unique(masks).tolist())
+    assert "hard_negative_pixel_mask" not in batch_meta
+
+
+def test_collate_batch_preserves_multiclass_hard_negative_label_without_pixel_meta() -> None:
+    torch = pytest.importorskip("torch")
+    image = np.ones((1, 2, 2), dtype=np.float32)
+    mask = np.array([[HARD_NEGATIVE_LABEL, 0], [2, 0]], dtype=np.int64)
+
+    _images, masks, batch_meta = dataloader_impl._collate_tile_batch(
+        [(image, mask, {"category": TILE_CATEGORY_POSITIVE, "augmented": False})]
+    )
+
+    assert masks.dtype == torch.long
+    assert HARD_NEGATIVE_LABEL in set(torch.unique(masks).tolist())
+    assert "hard_negative_pixel_mask" not in batch_meta
 
 
 def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) -> None:
@@ -923,7 +1095,7 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
     read_calls = 0
     mask_calls = 0
     original_read = TileDataset._read_image_raw
-    original_mask = TileDataset._read_annotation_mask
+    original_mask = TileDataset._read_supervision_mask
 
     def counted_read(self, dataset, window):
         nonlocal read_calls
@@ -936,7 +1108,7 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
         return original_mask(self, dataset, window, nodata_pixels)
 
     monkeypatch.setattr(TileDataset, "_read_image_raw", counted_read)
-    monkeypatch.setattr(TileDataset, "_read_annotation_mask", counted_mask)
+    monkeypatch.setattr(TileDataset, "_read_supervision_mask", counted_mask)
 
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
@@ -1433,6 +1605,13 @@ def _write_annotation_polygon(path: Path, coordinates: list[list[float]]) -> Non
         ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _polygon_geometry(coordinates: list[list[float]]) -> dict[str, object]:
+    return {
+        "type": "Polygon",
+        "coordinates": [coordinates],
+    }
 
 
 def _write_empty_annotation(path: Path) -> None:

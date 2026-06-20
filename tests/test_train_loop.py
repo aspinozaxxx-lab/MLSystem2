@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from mlsystem2.models.contracts import ModelHandle, ModelSpec
+from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import EpochMetrics, TrainConfig, TrainError, TrainRequest
 
@@ -397,11 +398,12 @@ def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() ->
 
     from mlsystem2.train import _trainer
 
-    logits = torch.full((2, 1, 2, 2), 2.0, dtype=torch.float32)
-    masks = torch.zeros((2, 1, 2, 2), dtype=torch.float32)
+    logits = torch.full((1, 1, 2, 2), 2.0, dtype=torch.float32)
+    supervision = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    supervision[0, 0, 0, 0] = HARD_NEGATIVE_LABEL
     base_config = TrainConfig(
         epochs=1,
-        batch_size=2,
+        batch_size=1,
         device="cpu",
         learning_rate=0.001,
         weight_decay=0.0,
@@ -415,14 +417,21 @@ def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() ->
         early_stopping_patience=1,
     )
     hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
-    meta = {
-        "tile_hard_negative": [True, False],
-    }
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        hard_config,
+        torch.device("cpu"),
+    )
 
-    base_loss = _trainer._loss(torch, logits, masks, base_config, meta)
-    hard_loss = _trainer._loss(torch, logits, masks, hard_config, meta)
+    base_loss = _trainer._loss(torch, logits, masks, base_config, hard_negative_pixels)
+    hard_loss = _trainer._loss(torch, logits, masks, hard_config, hard_negative_pixels)
+    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, hard_config)
 
     assert hard_loss > base_loss
+    assert torch.equal(masks, torch.zeros_like(masks))
+    assert weights[0, 0, 0, 0].item() == pytest.approx(3.0)
+    assert weights[0, 0, 0, 1].item() == pytest.approx(1.0)
 
 
 def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixels() -> None:
@@ -430,13 +439,14 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
 
     from mlsystem2.train import _trainer
 
-    logits = torch.zeros((2, 2, 2, 2), dtype=torch.float32)
+    logits = torch.zeros((1, 2, 2, 2), dtype=torch.float32)
     logits[:, 1, :, :] = 2.0
-    masks = torch.zeros((2, 2, 2), dtype=torch.long)
+    supervision = torch.zeros((1, 2, 2), dtype=torch.long)
+    supervision[0, 0, 0] = HARD_NEGATIVE_LABEL
     base_config = TrainConfig(
         task="multiclass",
         epochs=1,
-        batch_size=2,
+        batch_size=1,
         device="cpu",
         learning_rate=0.001,
         weight_decay=0.0,
@@ -451,14 +461,194 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
         class_slugs=["class_a"],
     )
     hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
-    meta = {
-        "tile_hard_negative": [True, False],
-    }
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        hard_config,
+        torch.device("cpu"),
+    )
 
-    base_loss = _trainer._loss(torch, logits, masks, base_config, meta)
-    hard_loss = _trainer._loss(torch, logits, masks, hard_config, meta)
+    base_loss = _trainer._loss(torch, logits, masks, base_config, hard_negative_pixels)
+    hard_loss = _trainer._loss(torch, logits, masks, hard_config, hard_negative_pixels)
+    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, hard_config)
 
     assert hard_loss > base_loss
+    assert torch.equal(masks, torch.zeros_like(masks))
+    assert weights[0, 0, 0].item() == pytest.approx(3.0)
+    assert weights[0, 0, 1].item() == pytest.approx(1.0)
+
+
+def test_hard_negative_weight_ignores_tile_meta_without_supervision_pixels() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.full((1, 1, 2, 2), 2.0, dtype=torch.float32)
+    masks = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        hard_negative_weight=3.0,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    loss_without_meta = _trainer._loss(torch, logits, masks, config, None)
+    loss_with_old_meta = _trainer._loss(
+        torch,
+        logits,
+        masks,
+        config,
+        {"tile_hard_negative": [True]},
+    )
+
+    assert torch.allclose(loss_without_meta, loss_with_old_meta)
+
+
+def test_positive_pixels_do_not_receive_hard_negative_weight() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    supervision = torch.tensor(
+        [[[[HARD_NEGATIVE_LABEL, 1.0], [0.0, 0.0]]]],
+        dtype=torch.float32,
+    )
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        hard_negative_weight=4.0,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        config,
+        torch.device("cpu"),
+    )
+    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+
+    assert masks[0, 0, 0, 0].item() == pytest.approx(0.0)
+    assert masks[0, 0, 0, 1].item() == pytest.approx(1.0)
+    assert weights[0, 0, 0, 0].item() == pytest.approx(4.0)
+    assert weights[0, 0, 0, 1].item() == pytest.approx(1.0)
+
+
+def test_hard_negative_weight_one_matches_base_loss() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.tensor([[[[1.5, 1.5], [0.0, 0.0]]]], dtype=torch.float32)
+    supervision = torch.tensor(
+        [[[[HARD_NEGATIVE_LABEL, 0.0], [1.0, 0.0]]]],
+        dtype=torch.float32,
+    )
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        hard_negative_weight=1.0,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        config,
+        torch.device("cpu"),
+    )
+
+    base_loss = _trainer._loss(torch, logits, masks, config, None)
+    hard_loss = _trainer._loss(torch, logits, masks, config, hard_negative_pixels)
+
+    assert torch.allclose(base_loss, hard_loss)
+
+
+@pytest.mark.parametrize("loss_name", ["bce_dice", "focal_dice", "focal_tversky"])
+def test_binary_losses_support_pixel_hard_negative_weight(loss_name: str) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.randn((1, 1, 2, 2), dtype=torch.float32, requires_grad=True)
+    supervision = torch.tensor(
+        [[[[HARD_NEGATIVE_LABEL, 0.0], [1.0, 0.0]]]],
+        dtype=torch.float32,
+    )
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        focal_alpha=0.6,
+        hard_negative_weight=2.5,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        config,
+        torch.device("cpu"),
+    )
+
+    loss = _trainer._loss(torch, logits, masks, config, hard_negative_pixels)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(logits.grad).all()
+
+
+@pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
+def test_multiclass_losses_support_pixel_hard_negative_weight(loss_name: str) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.randn((1, 3, 2, 2), dtype=torch.float32, requires_grad=True)
+    supervision = torch.tensor([[[HARD_NEGATIVE_LABEL, 0], [1, 2]]], dtype=torch.long)
+    config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        hard_negative_weight=2.5,
+        threshold=0.5,
+        early_stopping_patience=1,
+        class_slugs=["class_a", "class_b"],
+    )
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
+        torch,
+        supervision,
+        config,
+        torch.device("cpu"),
+    )
+
+    loss = _trainer._loss(torch, logits, masks, config, hard_negative_pixels)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(logits.grad).all()
 
 
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
