@@ -261,6 +261,77 @@ def test_training_ui_pseudo_progress_is_returned_for_queue_and_class_results(
     assert pseudo_progress.total == 64
 
 
+def test_class_results_exposes_queued_job_statuses(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        training_job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        training_job.status = JobStatus.QUEUED.value
+        training_job.dataset_key = "class-key"
+        session.add(training_job)
+        session.flush()
+        queued_training = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="class-key",
+            class_key="class-key",
+            class_display_name="class",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.RUNNING.value,
+            job_id=training_job.id,
+        )
+        completed_training = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="class-key",
+            class_key="class-key",
+            class_display_name="class",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+        )
+        session.add_all([queued_training, completed_training])
+        session.flush()
+
+        pseudo_job = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 2, created_at)
+        pseudo_job.status = JobStatus.QUEUED.value
+        pseudo_job.dataset_key = "class-key"
+        pseudo_job.config = {"class_key": "class-key"}
+        session.add(pseudo_job)
+        session.flush()
+        queued_pseudo = PseudoMarkupResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="class-key",
+            training_result_id=completed_training.id,
+            class_key="class-key",
+            source_dataset_name="source",
+            status=ResultStatus.RUNNING.value,
+            job_id=pseudo_job.id,
+        )
+        session.add(queued_pseudo)
+        session.flush()
+
+        response = _service.class_results(session, "class-key", config)
+
+    training_result = next(item for item in response.results if item.id == queued_training.id)
+    completed_result = next(item for item in response.results if item.id == completed_training.id)
+    pseudo_result = completed_result.pseudo_markup_results[0]
+    assert training_result.status == "queued"
+    assert training_result.job_id == training_job.id
+    assert pseudo_result.status == "queued"
+    assert pseudo_result.job_id == pseudo_job.id
+
+
 def test_training_ui_worker_dispatches_inference_before_training(
     tmp_path: Path,
     monkeypatch,
@@ -701,7 +772,10 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "configFieldTooltip" in app_js
     assert "recommended_range" in app_js
     assert "bindResultChangeRows" in app_js
-    assert 'activeClick: "job"' in app_js
+    assert "Запланировано и в процессе" not in app_js
+    assert "bindClassResultJobRows" in app_js
+    assert "hasActiveClassResults" in app_js
+    assert "job-linked-row" in app_js
     assert "change-action-text" not in app_js
     assert "jobConfigView" in app_js
     assert "inferenceTemplateById" in app_js

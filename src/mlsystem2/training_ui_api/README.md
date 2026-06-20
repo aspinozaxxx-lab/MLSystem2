@@ -187,6 +187,9 @@ jobs. Failed auto attempt не ретраится до новой версии �
 Каждая строка содержит `item_type`, optional `job_id`, `type`, `class_key`, имя модели, имя датасета, status,
 optional `mlflow_run_url` и действие: `запланировано обучение`, `идёт обучение`, `запланирована псевдоразметка`,
 `идёт псевдоразметка`, `обучена сеть` или `создана разметка`.
+`GET /api/v1/results/classes/{class_key}` возвращает активные строки обучения и псевдоразметки прямо в основной
+структуре класса: `TrainingResultInfo` и `PseudoMarkupResultInfo` содержат необязательный `job_id`, а статус
+`queued`/`running` берется из связанного задания, пока результат еще не завершен.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший

@@ -1169,10 +1169,11 @@ function hasRunningJobs(jobs) {
   return (jobs || []).some((job) => job.status === "running");
 }
 
-function hasRunningClassResults(payload) {
+function hasActiveClassResults(payload) {
+  const activeStatuses = new Set(["queued", "running"]);
   return (payload.results || []).some((result) => {
-    if (result.status === "running") return true;
-    return (result.pseudo_markup_results || []).some((item) => item.status === "running");
+    if (activeStatuses.has(result.status)) return true;
+    return (result.pseudo_markup_results || []).some((item) => activeStatuses.has(item.status));
   });
 }
 
@@ -1403,13 +1404,7 @@ function bindResultChangeRows(options = {}) {
 }
 
 async function renderClassResultPage(classKey) {
-  const [payload, changes] = await Promise.all([
-    apiJson(`/results/classes/${encodeURIComponent(classKey)}`),
-    apiJson("/results/changes"),
-  ]);
-  const activeJobs = (changes.changes || []).filter((item) => (
-    item.item_type === "job" && item.class_key === classKey
-  ));
+  const payload = await apiJson(`/results/classes/${encodeURIComponent(classKey)}`);
   renderShell(`
     <section class="toolbar">
       <button class="secondary" type="button" id="results-back">← Назад</button>
@@ -1418,18 +1413,12 @@ async function renderClassResultPage(classKey) {
     <section class="hero compact-hero">
       <h1>${escapeHtml(payload.class_name)}</h1>
     </section>
-    ${activeJobs.length ? `
-      <section class="panel">
-        <h2>Запланировано и в процессе</h2>
-        ${renderResultChangesTable(activeJobs, { activeClick: "job" })}
-      </section>
-    ` : ""}
     <section class="panel">
       ${renderResultsTable(payload)}
     </section>
   `);
   document.getElementById("results-back").addEventListener("click", () => navigate("#/results"));
-  bindResultChangeRows({ activeClick: "job" });
+  bindClassResultJobRows();
   for (const button of document.querySelectorAll(".pseudo-button")) {
     button.addEventListener("click", () => showPseudoModal(payload.class_key, button.dataset.result || ""));
   }
@@ -1445,7 +1434,7 @@ async function renderClassResultPage(classKey) {
   }
   scheduleProgressRefresh(
     () => renderClassResultPage(classKey),
-    hasRunningClassResults(payload) || activeJobs.some((item) => ["queued", "running"].includes(item.status))
+    hasActiveClassResults(payload)
   );
 }
 
@@ -1454,6 +1443,7 @@ function renderResultsTable(payload) {
     return `<div class="info-box">Результатов пока нет.</div>`;
   }
   const groups = payload.results.map((item) => {
+    const linkedJob = isActiveStatus(item.status) && item.job_id;
     const pseudoAction = item.status === "ok"
       ? `<button class="secondary pseudo-button compact-action" type="button" data-result="${item.id}">Сделать псевдоразметку</button>`
       : "";
@@ -1469,7 +1459,7 @@ function renderResultsTable(payload) {
     ` : "";
     return `
       <tbody class="result-group">
-      <tr class="result-main-row">
+      <tr class="result-main-row ${linkedJob ? "job-linked-row" : ""}" data-job-id="${escapeAttr(item.job_id || "")}">
         <td class="result-model-cell">${escapeHtml(item.model_name)}</td>
         <td>${formatF1Score(item.f1_score)}</td>
         <td>${item.epoch ?? ""}</td>
@@ -1508,8 +1498,10 @@ function renderResultsTable(payload) {
 }
 
 function renderPseudoTable(result) {
-  const rows = result.pseudo_markup_results.map((item) => `
-    <tr>
+  const rows = result.pseudo_markup_results.map((item) => {
+    const linkedJob = isActiveStatus(item.status) && item.job_id;
+    return `
+    <tr class="${linkedJob ? "job-linked-row" : ""}" data-job-id="${escapeAttr(item.job_id || "")}">
       <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}">${escapeHtml(imageSourceLabel(item))}</a>` : escapeHtml(imageSourceLabel(item))}</td>
       <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">${escapeHtml(geojsonDownloadLabel(item.geojson_file))}</a>` : ""}</td>
       <td>${resultStatusView(item.status, item.source, "inference", item.progress)}</td>
@@ -1518,7 +1510,8 @@ function renderPseudoTable(result) {
         <button class="icon-button danger pseudo-delete-button" type="button" data-pseudo="${item.id}" data-label="${escapeAttr(item.source_dataset_name)}" title="Удалить">×</button>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
   return `
     <table class="nested-table">
       <thead>
@@ -1535,6 +1528,19 @@ function renderPseudoTable(result) {
       </tbody>
     </table>
   `;
+}
+
+function bindClassResultJobRows() {
+  for (const row of document.querySelectorAll(".job-linked-row")) {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("a, button")) return;
+      if (row.dataset.jobId) navigate(`#/jobs/${encodeURIComponent(row.dataset.jobId)}`);
+    });
+  }
+}
+
+function isActiveStatus(status) {
+  return status === "queued" || status === "running";
 }
 
 function datasetOptionLabel(item) {

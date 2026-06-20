@@ -1545,6 +1545,7 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
     ).all()
     return TrainingResultInfo(
         id=row.id,
+        job_id=row.job_id,
         source=JobSource(row.source),
         dataset_key=row.dataset_key,
         dataset_version=row.dataset_version,
@@ -1554,7 +1555,7 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
         epoch=row.epoch,
         trained_at=row.trained_at,
         mlflow_run_url=row.mlflow_run_url,
-        status=ResultStatus(row.status),
+        status=_public_result_status(session, row.status, row.job_id),
         progress=_training_result_progress(session, row),
         pseudo_markup_results=[_pseudo_markup_info(session, item) for item in pseudo_rows],
     )
@@ -1563,6 +1564,7 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
 def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
     return PseudoMarkupResultInfo(
         id=row.id,
+        job_id=row.job_id,
         source=JobSource(row.source),
         dataset_key=row.dataset_key,
         dataset_version=row.dataset_version,
@@ -1570,10 +1572,19 @@ def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoM
         scenes_file=_stored_file_info(row.scenes_file),
         geojson_file=_stored_file_info(row.geojson_file),
         image_count=_pseudo_markup_image_count(row),
-        status=ResultStatus(row.status),
+        status=_public_result_status(session, row.status, row.job_id),
         created_at=row.created_at,
         progress=_pseudo_result_progress(session, row),
     )
+
+
+def _public_result_status(session: Session, result_status: str, job_id: uuid.UUID | None) -> str:
+    if result_status != ResultStatus.RUNNING.value or job_id is None:
+        return result_status
+    job = session.get(JobRow, job_id)
+    if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+        return job.status
+    return result_status
 
 
 def _pseudo_markup_image_count(row: PseudoMarkupResultRow) -> int | None:

@@ -380,6 +380,7 @@ class PseudoMarkupResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    job_id: UUID | None = None
     source: JobSource = JobSource.MANUAL
     dataset_key: str | None = None
     dataset_version: str | None = None
@@ -396,6 +397,7 @@ class TrainingResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    job_id: UUID | None = None
     source: JobSource = JobSource.MANUAL
     dataset_key: str | None = None
     dataset_version: str | None = None
@@ -405,7 +407,7 @@ class TrainingResultInfo(BaseModel):
     epoch: int | None = None
     trained_at: datetime | None = None
     mlflow_run_url: str | None = None
-    status: ResultStatus
+    status: Literal["queued", "running", "ok", "error", "cancelled"]
     progress: RuntimeProgress | None = None
     pseudo_markup_results: list[PseudoMarkupResultInfo] = Field(default_factory=list)
 
