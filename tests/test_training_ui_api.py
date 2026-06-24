@@ -466,8 +466,50 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert metadata["sample_size_source"] == "checkpoint_metadata"
         assert metadata["model_archive"] == "models-serving-service/deforestation-b2.zip"
         assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
+        assert metadata["onnx_opset"] == 17
+        assert metadata["onnx_ir_version"] == 8
     finally:
         archive.cleanup()
+
+
+def test_model_export_normalizes_onnx_ir_for_old_triton(tmp_path: Path) -> None:
+    onnx = pytest.importorskip("onnx")
+    onnx_path = _minimal_onnx_path(tmp_path, opset=17, ir_version=10)
+
+    _model_export._normalize_onnx_for_triton(onnx_path)
+
+    model = onnx.load_model(onnx_path)
+    assert model.ir_version == 8
+    assert [item.version for item in model.opset_import if item.domain in ("", "ai.onnx")] == [17]
+    onnx.checker.check_model(str(onnx_path))
+
+
+def test_model_export_rejects_too_new_onnx_opset(tmp_path: Path) -> None:
+    pytest.importorskip("onnx")
+    onnx_path = _minimal_onnx_path(tmp_path, opset=18, ir_version=10)
+
+    with pytest.raises(TrainingUIAPIError, match="opset"):
+        _model_export._normalize_onnx_for_triton(onnx_path)
+
+
+def _minimal_onnx_path(tmp_path: Path, *, opset: int, ir_version: int) -> Path:
+    onnx = pytest.importorskip("onnx")
+    from onnx import TensorProto, helper
+
+    graph = helper.make_graph(
+        [helper.make_node("Identity", ["input"], ["output"])],
+        "minimal",
+        [helper.make_tensor_value_info("input", TensorProto.FLOAT, [1])],
+        [helper.make_tensor_value_info("output", TensorProto.FLOAT, [1])],
+    )
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_operatorsetid("", opset)],
+    )
+    model.ir_version = ir_version
+    onnx_path = tmp_path / "model.onnx"
+    onnx.save_model(model, onnx_path)
+    return onnx_path
 
 
 def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch) -> None:

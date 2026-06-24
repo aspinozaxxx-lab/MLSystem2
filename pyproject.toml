@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2",
   "PyYAML",
   "mlflow",
+  "onnx>=1.16",
   "numpy",
   "scipy",
   "boto3",
@@ -28,12 +29,14 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = [
+  "onnx>=1.16",
   "torch",
   "torchvision",
   "transformers",
   "segmentation-models-pytorch",
 ]
 dev = [
+  "onnx>=1.16",
   "pytest",
   "ruff",
   "httpx",

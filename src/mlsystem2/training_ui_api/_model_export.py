@@ -17,7 +17,8 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 from .contracts import TrainingUIAPIError
 
 MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$")
-ONNX_OPSET = 18
+ONNX_OPSET = 17
+ONNX_IR_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ def build_triton_model_export_zip(
                 "threshold": effective_threshold,
                 "threshold_source": "checkpoint_metadata",
                 "onnx_opset": ONNX_OPSET,
+                "onnx_ir_version": ONNX_IR_VERSION,
                 "checkpoint_filename": checkpoint_filename,
                 "checkpoint_metadata": loaded.artifact.metadata,
             },
@@ -247,11 +249,45 @@ def _export_binary_mask_onnx(
                 export_kwargs["external_data"] = True
             elif "use_external_data_format" in export_params:
                 export_kwargs["use_external_data_format"] = True
+            if "dynamo" in export_params:
+                export_kwargs["dynamo"] = False
             torch.onnx.export(wrapper, dummy, str(onnx_path), **export_kwargs)
     except Exception as exc:
         raise TrainingUIAPIError("Не удалось экспортировать checkpoint в ONNX.") from exc
     if not onnx_path.is_file():
         raise TrainingUIAPIError("ONNX exporter не создал model.onnx.")
+    _normalize_onnx_for_triton(onnx_path)
+
+
+def _normalize_onnx_for_triton(onnx_path: Path) -> None:
+    try:
+        import onnx
+    except ImportError as exc:
+        raise TrainingUIAPIError(
+            "Для экспорта ONNX под старый Triton требуется optional dependency onnx. "
+            "Установите пакет через `pip install -e .`."
+        ) from exc
+
+    try:
+        model = onnx.load_model(onnx_path, load_external_data=False)
+    except Exception as exc:
+        raise TrainingUIAPIError("Не удалось прочитать экспортированный ONNX.") from exc
+
+    default_opsets = [item.version for item in model.opset_import if item.domain in ("", "ai.onnx")]
+    if default_opsets and max(default_opsets) > ONNX_OPSET:
+        raise TrainingUIAPIError(
+            f"ONNX exporter создал модель с opset {max(default_opsets)}, "
+            f"а старый Triton export поддерживает не выше {ONNX_OPSET}."
+        )
+
+    model.ir_version = ONNX_IR_VERSION
+    try:
+        onnx.save_model(model, onnx_path, save_as_external_data=False)
+        onnx.checker.check_model(str(onnx_path))
+    except Exception as exc:
+        raise TrainingUIAPIError(
+            f"Не удалось привести ONNX к IR version {ONNX_IR_VERSION} для старого Triton."
+        ) from exc
 
 
 def _triton_config(model_name: str, input_channels: int) -> str:
