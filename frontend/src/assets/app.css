@@ -651,6 +651,16 @@ th {
 .badge.training { border-color: #b9d8ff; background: #eef6ff; color: var(--blue); }
 .badge.inference { border-color: #ffb5ad; background: #fff1f0; color: var(--error); }
 
+button.badge {
+  font: inherit;
+  cursor: pointer;
+}
+
+.log-badge:hover {
+  border-color: var(--error);
+  background: #ffe4e0;
+}
+
 .result-status-badges {
   display: inline-flex;
   align-items: center;
@@ -758,6 +768,24 @@ th {
 }
 
 .modal-card h2 { margin-top: 0; }
+
+.log-modal-card {
+  width: min(960px, 100%);
+}
+
+.log-view {
+  max-height: min(64vh, 680px);
+  overflow: auto;
+  margin: 12px 0 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f1720;
+  color: #f7fafc;
+  font: 12px/1.45 Consolas, "Courier New", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .toolbar {
   display: flex;

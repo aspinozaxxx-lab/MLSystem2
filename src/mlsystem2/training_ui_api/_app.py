@@ -46,6 +46,7 @@ from ._service import (
     inference_templates,
     image_folders,
     job_detail,
+    job_log,
     mlflow_experiments,
     models,
     move_job,
@@ -80,6 +81,7 @@ from .contracts import (
     InferenceTemplateUpdate,
     ImageFolderListResponse,
     JobDetail,
+    JobLogInfo,
     JobType,
     MLflowExperimentCreate,
     MLflowExperimentInfo,
@@ -458,6 +460,14 @@ def create_app() -> FastAPI:
         _: str = Depends(authenticated),
     ) -> JobDetail:
         return job_detail(db, job_id)
+
+    @app.get("/api/v1/jobs/{job_id}/log", response_model=JobLogInfo)
+    def get_job_log(
+        job_id: uuid.UUID,
+        db: Session = Depends(get_db),
+        _: str = Depends(authenticated),
+    ) -> JobLogInfo:
+        return job_log(db, job_id, config)
 
     @app.delete("/api/v1/jobs/{job_id}", response_model=JobDetail)
     def delete_job_route(

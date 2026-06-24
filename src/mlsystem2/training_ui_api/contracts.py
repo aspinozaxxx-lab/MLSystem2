@@ -376,6 +376,16 @@ class JobDetail(BaseModel):
     progress: RuntimeProgress | None = None
 
 
+class JobLogInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID
+    source_name: str
+    content: str
+    truncated: bool = False
+    size_bytes: int
+
+
 class PseudoMarkupResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -485,6 +495,7 @@ __all__ = [
     "ImageFolderInfo",
     "ImageFolderListResponse",
     "JobDetail",
+    "JobLogInfo",
     "JobSource",
     "JobStatus",
     "JobSummary",

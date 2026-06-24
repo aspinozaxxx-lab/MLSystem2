@@ -1432,6 +1432,7 @@ async function renderClassResultPage(classKey) {
       showPseudoDeleteModal(payload.class_key, button.dataset.pseudo || "", button.dataset.label || "");
     });
   }
+  bindJobLogButtons();
   scheduleProgressRefresh(
     () => renderClassResultPage(classKey),
     hasActiveClassResults(payload)
@@ -1465,7 +1466,7 @@ function renderResultsTable(payload) {
         <td>${item.epoch ?? ""}</td>
         <td>${formatDate(item.trained_at)}</td>
         <td>${item.mlflow_run_url ? `<a href="${escapeAttr(item.mlflow_run_url)}" target="_blank" rel="noreferrer">MLflow</a>` : ""}</td>
-        <td>${resultStatusView(item.status, item.source, "training", item.progress)}</td>
+        <td>${resultStatusView(item.status, item.source, "training", item.progress, item.job_id)}</td>
         <td>
           <div class="result-actions">
             ${pseudoAction}
@@ -1504,7 +1505,7 @@ function renderPseudoTable(result) {
     <tr class="${linkedJob ? "job-linked-row" : ""}" data-job-id="${escapeAttr(item.job_id || "")}">
       <td>${item.scenes_file ? `<a href="${escapeAttr(item.scenes_file.download_url)}">${escapeHtml(imageSourceLabel(item))}</a>` : escapeHtml(imageSourceLabel(item))}</td>
       <td>${item.geojson_file ? `<a href="${escapeAttr(item.geojson_file.download_url)}">${escapeHtml(geojsonDownloadLabel(item.geojson_file))}</a>` : ""}</td>
-      <td>${resultStatusView(item.status, item.source, "inference", item.progress)}</td>
+      <td>${resultStatusView(item.status, item.source, "inference", item.progress, item.job_id)}</td>
       <td>${formatDateTime(item.created_at)}</td>
       <td>
         <button class="icon-button danger pseudo-delete-button" type="button" data-pseudo="${item.id}" data-label="${escapeAttr(item.source_dataset_name)}" title="Удалить">×</button>
@@ -1535,6 +1536,16 @@ function bindClassResultJobRows() {
     row.addEventListener("click", (event) => {
       if (event.target.closest("a, button")) return;
       if (row.dataset.jobId) navigate(`#/jobs/${encodeURIComponent(row.dataset.jobId)}`);
+    });
+  }
+}
+
+function bindJobLogButtons() {
+  for (const button of document.querySelectorAll(".job-log-button")) {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const jobId = button.dataset.jobId || "";
+      if (jobId) await showJobLogModal(jobId);
     });
   }
 }
@@ -1921,11 +1932,11 @@ function statusView(status) {
   return `<span class="badge neutral">${escapeHtml(status || "")}</span>`;
 }
 
-function resultStatusView(status, source, type, progress) {
+function resultStatusView(status, source, type, progress, jobId = "") {
   return `
     <span class="result-status-badges">
       ${sourceBadge(source)}
-      ${statusBadge(status, type, progress)}
+      ${statusBadge(status, type, progress, jobId)}
     </span>
   `;
 }
@@ -1935,9 +1946,12 @@ function sourceBadge(source) {
   return `<span class="badge manual">manual</span>`;
 }
 
-function statusBadge(status, type, progress) {
+function statusBadge(status, type, progress, jobId = "") {
   if (status === "running") return `<span class="badge warning"><span class="spinner">↻</span> ${runningProgressLabel(type, progress)}</span>`;
   if (status === "ok") return `<span class="badge ok">✓ ОК</span>`;
+  if (status === "error" && jobId) {
+    return `<button class="badge error log-badge job-log-button" type="button" data-job-id="${escapeAttr(jobId)}" title="Открыть лог ошибки">× ошибка</button>`;
+  }
   if (status === "error") return `<span class="badge error">× ошибка</span>`;
   if (status === "cancelled") return `<span class="badge neutral">отменено</span>`;
   if (status === "queued") return `<span class="badge neutral">в очереди</span>`;
@@ -2067,6 +2081,26 @@ async function errorMessage(response) {
   } catch {
     return `HTTP ${response.status}`;
   }
+}
+
+async function showJobLogModal(jobId) {
+  const log = await apiJson(`/jobs/${encodeURIComponent(jobId)}/log`);
+  const prefix = log.truncated ? "Показан хвост файла. " : "";
+  state.modal = `
+    <div class="modal-backdrop">
+      <section class="modal-card log-modal-card">
+        <div class="panel-header">
+          <h2>Лог ошибки</h2>
+          <span class="badge neutral">${escapeHtml(log.source_name)}</span>
+        </div>
+        <p class="muted">${prefix}${formatFileSize(log.size_bytes) || ""}</p>
+        <pre class="log-view">${escapeHtml(log.content)}</pre>
+        <button class="primary" type="button" id="modal-ok">Закрыть</button>
+      </section>
+    </div>
+  `;
+  paintModal();
+  document.getElementById("modal-ok").addEventListener("click", closeModal);
 }
 
 function showModal(title, text, buttonText, onClose = null) {

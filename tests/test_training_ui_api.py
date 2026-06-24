@@ -332,6 +332,50 @@ def test_class_results_exposes_queued_job_statuses(
     assert pseudo_result.job_id == pseudo_job.id
 
 
+def test_training_ui_job_log_api_reads_failed_start_worker_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER", "mluser")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_PASSWORD", "secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job.status = JobStatus.FAILED.value
+        session.add(job)
+        session.flush()
+        run_dir = config.scratch_root / "jobs" / str(job.id)
+        run_dir.mkdir(parents=True)
+        (run_dir / "worker_error.txt").write_text(
+            "Не удалось запустить обучение.\n\nRuntimeError: Датасет не найден или неполный",
+            encoding="utf-8",
+        )
+        job_id = job.id
+        session.commit()
+
+    with TestClient(create_app()) as client:
+        assert client.get(f"/api/v1/jobs/{job_id}/log").status_code == 401
+        login = client.post("/api/v1/auth/login", json={"username": "mluser", "password": "secret"})
+        assert login.status_code == 200
+        response = client.get(f"/api/v1/jobs/{job_id}/log")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_name"] == "worker_error.txt"
+    assert payload["truncated"] is False
+    assert "Датасет не найден или неполный" in payload["content"]
+
+
 def test_training_ui_worker_dispatches_inference_before_training(
     tmp_path: Path,
     monkeypatch,
@@ -847,6 +891,10 @@ def test_training_ui_frontend_has_model_export_page() -> None:
     assert "showTrainingResultZipModal" in app_js
     assert "showTrainingResultZipSampleSizeModal" in app_js
     assert "[a-z0-9_-]" in app_js
+    assert "showJobLogModal" in app_js
+    assert "/log" in app_js
+    assert "job-log-button" in app_js
+    assert "log-view" in app_js
 
 
 def test_frontend_build_adds_asset_cache_busting(tmp_path: Path, monkeypatch) -> None:

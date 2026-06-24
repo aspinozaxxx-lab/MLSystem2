@@ -11,6 +11,7 @@ import shutil
 import shlex
 import subprocess
 import sys
+import traceback
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -265,7 +266,11 @@ def _start_training_job(
         )
     except Exception:
         LOGGER.exception("Failed to start training job %s", row.id)
-        _write_worker_error(run_dir, "Не удалось запустить обучение. Подробности в journalctl.")
+        _write_worker_error(
+            run_dir,
+            "Не удалось запустить обучение.\n\n"
+            f"{traceback.format_exc()}",
+        )
         _finish_training_job(session, row, config, succeeded=False)
         return
 
@@ -304,7 +309,11 @@ def _start_inference_job(
         )
     except Exception:
         LOGGER.exception("Failed to start pseudo-markup job %s", row.id)
-        _write_worker_error(run_dir, "Не удалось запустить псевдоразметку. Подробности в journalctl.")
+        _write_worker_error(
+            run_dir,
+            "Не удалось запустить псевдоразметку.\n\n"
+            f"{traceback.format_exc()}",
+        )
         _finish_inference_job(session, row, config, succeeded=False)
         return
 

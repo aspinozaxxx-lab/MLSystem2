@@ -85,6 +85,7 @@ from .contracts import (
     InferenceTemplateListResponse,
     InferenceTemplateUpdate,
     JobDetail,
+    JobLogInfo,
     JobSource,
     JobStatus,
     JobSummary,
@@ -114,6 +115,7 @@ from .contracts import (
 
 
 ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+JOB_LOG_MAX_BYTES = 128 * 1024
 
 
 def app_links(config: TrainingUIAPIConfig) -> AppLinksResponse:
@@ -708,6 +710,37 @@ def job_detail(session: Session, job_id: uuid.UUID) -> JobDetail:
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     return _job_detail(session, row)
+
+
+def job_log(
+    session: Session,
+    job_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+) -> JobLogInfo:
+    row = session.get(JobRow, job_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
+    run_dir = _job_run_dir(row, config)
+    if run_dir is None:
+        raise TrainingUIAPIError("Рабочая папка задания не найдена.")
+
+    for path in _job_log_candidates(row, run_dir):
+        if not path.is_file():
+            continue
+        try:
+            content, truncated, size_bytes = _read_log_tail(path, JOB_LOG_MAX_BYTES)
+        except OSError:
+            continue
+        if not content.strip():
+            continue
+        return JobLogInfo(
+            job_id=row.id,
+            source_name=path.relative_to(run_dir).as_posix(),
+            content=content,
+            truncated=truncated,
+            size_bytes=size_bytes,
+        )
+    raise TrainingUIAPIError("Лог задания не найден.")
 
 
 def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
@@ -1535,6 +1568,48 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         finished_at=row.finished_at,
         progress=_job_progress(session, row),
     )
+
+
+def _job_run_dir(row: JobRow, config: TrainingUIAPIConfig) -> Path | None:
+    candidates = []
+    if row.tmp_path:
+        candidates.append(Path(row.tmp_path))
+    candidates.append(config.scratch_root / "jobs" / str(row.id))
+
+    allowed_root = (config.scratch_root / "jobs").resolve()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(allowed_root)
+        except (OSError, ValueError):
+            continue
+        if resolved.exists():
+            return resolved
+    return None
+
+
+def _job_log_candidates(row: JobRow, run_dir: Path) -> list[Path]:
+    if row.type == JobType.INFERENCE.value:
+        return [
+            run_dir / "worker_error.txt",
+            run_dir / "logs" / "pseudo_markup.log",
+            run_dir / "scratch" / "report.json",
+        ]
+    return [
+        run_dir / "worker_error.txt",
+        run_dir / "train.log",
+        run_dir / "logs" / "train.log",
+    ]
+
+
+def _read_log_tail(path: Path, max_bytes: int) -> tuple[str, bool, int]:
+    size_bytes = path.stat().st_size
+    truncated = size_bytes > max_bytes
+    with path.open("rb") as stream:
+        if truncated:
+            stream.seek(-max_bytes, 2)
+        data = stream.read()
+    return data.decode("utf-8", errors="replace"), truncated, size_bytes
 
 
 def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingResultInfo:
