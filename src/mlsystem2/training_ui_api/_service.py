@@ -72,6 +72,7 @@ from .contracts import (
     AutomationRuleInfo,
     AutomationRuleUpdate,
     AutomationSnapshot,
+    BootstrapInfo,
     ClassListResponse,
     ClassResultsResponse,
     ConfigSchema,
@@ -161,6 +162,18 @@ def image_folders(config: TrainingUIAPIConfig) -> ImageFolderListResponse:
 
 def models() -> ModelListResponse:
     return ModelListResponse(models=ui_model_infos())
+
+
+def bootstrap(session: Session, config: TrainingUIAPIConfig) -> BootstrapInfo:
+    return BootstrapInfo(
+        links=app_links(config).links,
+        datasets=datasets(config).datasets,
+        image_folders=image_folders(config).folders,
+        classes=classes(config).classes,
+        models=models().models,
+        training_templates=training_templates(session).templates,
+        inference_templates=inference_templates(session).templates,
+    )
 
 
 def automation(session: Session, config: TrainingUIAPIConfig) -> AutomationSnapshot:

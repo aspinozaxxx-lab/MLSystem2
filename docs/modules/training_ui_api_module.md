@@ -4,6 +4,10 @@
 
 `training_ui_api` — отдельный FastAPI-сервис сайта MLSystem2. Он отдает публичный HTTP API для frontend, хранит UI-данные обучения в Postgres БД/схеме, сканирует `/data/MLMarkup` для актуальных датасетов и классов, управляет очередями training/inference и не выполняет прямой доступ frontend к БД.
 
+Frontend — React + TypeScript + Vite SPA. TypeScript-типы генерируются из OpenAPI командой
+`npm run generate:api --prefix frontend`, production static собирается в `frontend/dist`, а сервер Node.js
+на проде не нужен.
+
 ## Публичный интерфейс
 
 - `create_app() -> Any` - создает FastAPI-приложение.
@@ -15,6 +19,7 @@
 - `TrainingUIAPIError` - ошибка сервиса.
 - `TemplateSource`, `JobType`, `JobSource`, `JobStatus`, `ResultStatus`, `StoredFileKind` - enum-значения API.
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
+- `BootstrapInfo` - стартовый DTO для React frontend: links, datasets, image folders, classes, models и оба набора templates одним ответом.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
 - `DatasetInfo`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - датасеты и классы MLMarkup; `DatasetInfo` содержит `scenes_file`, positive `annotation_file`, optional `hard_negative_annotation_file` и `diagnostics`.
 - `ImageFolderInfo`, `ImageFolderListResponse` - папки подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT` с количеством TIFF.
@@ -24,6 +29,7 @@
 - `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания.
+- `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
 - `POST /api/v1/results/training/{result_id}/triton-zip` - multipart endpoint для сборки такого же zip-архива

@@ -17,7 +17,8 @@ from sqlalchemy import select
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment, MLflowTrainingProgress
 from mlsystem2.models.contracts import ModelsError
-from mlsystem2.training_ui_api import _app, _automation, _model_export, _service, _worker
+from mlsystem2.training_ui_api import _automation, _model_export, _service, _worker
+from mlsystem2.training_ui_api._routes import export as _export_routes
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
@@ -711,7 +712,7 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
             cleanup=lambda: None,
         )
 
-    monkeypatch.setattr(_app, "build_triton_model_export_zip", fake_build_zip)
+    monkeypatch.setattr(_export_routes, "build_triton_model_export_zip", fake_build_zip)
 
     with TestClient(create_app()) as client:
         assert client.post("/api/v1/model-export/triton-zip").status_code == 401
@@ -847,85 +848,58 @@ def test_training_result_model_export_requires_ok_status_and_mlflow_run(
             )
 
 
-def test_training_ui_frontend_has_model_export_page() -> None:
-    app_js = Path("frontend/src/app.js").read_text(encoding="utf-8")
-    assert "MLflow run name" not in app_js
-    assert 'name="run_name"' not in app_js
-    assert "latestExperimentId" in app_js
-    assert "new-experiment-name-field" in app_js
-    assert 'newExperimentNameField.classList.toggle("hidden", experimentSelect.value !== "")' in app_js
-    assert "mlflow_run_name:" not in app_js
-    assert "configFieldTooltip" in app_js
-    assert "recommended_range" in app_js
-    assert "bindResultChangeRows" in app_js
-    assert "Запланировано и в процессе" not in app_js
-    assert "bindClassResultJobRows" in app_js
-    assert "hasActiveClassResults" in app_js
-    assert "job-linked-row" in app_js
-    assert "change-action-text" not in app_js
-    assert "jobConfigView" in app_js
-    assert "inferenceTemplateById" in app_js
-    assert "inference_template_config" in app_js
-    assert 'route[0] === "model-export"' in app_js
-    assert 'href="#/model-export">Экспорт модели</a>' in app_js
-    assert "/model-export/triton-zip" in app_js
-    assert 'name="threshold"' not in app_js
-    assert "metadata.sample_size" in app_js
-    assert 'downloadBlob(blob, downloadFilename(response) || `${modelName}_export.zip`)' in app_js
-    assert 'apiJson("/image-folders")' in app_js
-    assert 'name="image_folder_key"' in app_js
-    assert "imageFolderOptionLabel" in app_js
-    assert "formatFileSize" in app_js
-    assert 'action="javascript:void(0)" method="post"' in app_js
-    assert "if (state.modal)" in app_js
-    assert "scheduleProgressRefresh(callback, true)" in app_js
-    assert "await renderClassResultPage(classKey)" in app_js
-    assert 'class="icon-button danger pseudo-delete-button"' in app_js
-    assert "/results/pseudo-markup/" in app_js
-    assert 'item.status === "ok"' in app_js
-    assert 'class="secondary result-zip-button compact-action"' in app_js
-    assert "/results/training/" in app_js
-    assert "/triton-zip" in app_js
-    assert "defaultTrainingZipModelName" in app_js
-    assert "_kanopus" in app_js
-    assert "showTrainingResultZipModal" in app_js
-    assert "showTrainingResultZipSampleSizeModal" in app_js
-    assert "[a-z0-9_-]" in app_js
-    assert "showJobLogModal" in app_js
-    assert "/log" in app_js
-    assert "job-log-button" in app_js
-    assert "log-view" in app_js
+def test_training_ui_frontend_is_react_vite_app() -> None:
+    package_json = json.loads(Path("frontend/package.json").read_text(encoding="utf-8"))
+    app_tsx = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    api_client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    api_types = Path("frontend/src/api/types.ts").read_text(encoding="utf-8")
+    assert "react" in package_json["dependencies"]
+    assert "vite" in package_json["devDependencies"]
+    assert "openapi-typescript" in package_json["devDependencies"]
+    assert package_json["scripts"]["generate:api"].startswith("npm run generate:openapi")
+    assert not Path("frontend/src/app.js").exists()
+    assert not Path("frontend/src/assets/app.css").exists()
+    assert 'head === "model-export"' in app_tsx
+    assert "/bootstrap" in app_tsx
+    assert "/model-export/triton-zip" in app_tsx
+    assert "/results/training/" in app_tsx
+    assert "/triton-zip" in app_tsx
+    assert "metadata.sample_size" in app_tsx
+    assert "showJobLog" in app_tsx
+    assert "/log" in app_tsx
+    assert "log-view" in app_tsx
+    assert "hasActiveClassResults" in app_tsx
+    assert "recommended_range" in app_tsx
+    assert "downloadBlob(response.blob" in app_tsx
+    assert 'pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"' in app_tsx
+    assert "components[\"schemas\"][\"BootstrapInfo\"]" in api_types
+    assert "credentials: \"same-origin\"" in api_client
 
 
-def test_frontend_build_adds_asset_cache_busting(tmp_path: Path, monkeypatch) -> None:
+def test_frontend_build_runs_vite_wrapper(tmp_path: Path, monkeypatch) -> None:
     from frontend import build
 
-    src = tmp_path / "src"
-    dist = tmp_path / "dist"
-    (src / "assets").mkdir(parents=True)
-    (src / "index.html").write_text(
-        '<link rel="stylesheet" href="./assets/app.css">\n'
-        '<script type="module" src="./app.js"></script>\n',
-        encoding="utf-8",
-    )
-    (src / "app.js").write_text("console.log('MLSystem2')", encoding="utf-8")
-    (src / "assets" / "app.css").write_text("body{margin:0}", encoding="utf-8")
+    root = tmp_path / "frontend"
+    dist = root / "dist"
+    root.mkdir()
+    (root / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
 
-    monkeypatch.setattr(build, "SRC", src)
+    def fake_frontend_build() -> None:
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text(
+            '<!doctype html><script type="module" src="/assets/index-test.js"></script>',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(build, "ROOT", root)
     monkeypatch.setattr(build, "DIST", dist)
-    monkeypatch.setattr(
-        build,
-        "REQUIRED",
-        [src / "index.html", src / "app.js", src / "assets" / "app.css"],
-    )
+    monkeypatch.setattr(build, "run_frontend_build", fake_frontend_build)
 
     build.main()
 
     index = (dist / "index.html").read_text(encoding="utf-8")
-    assert './app.js?v=' in index
-    assert './assets/app.css?v=' in index
-    assert 'src="./app.js"' not in index
-    assert 'href="./assets/app.css"' not in index
+    assert "/assets/index-test.js" in index
+    assert "dashboard" not in index.lower()
 
 
 def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
@@ -941,9 +915,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     (image_folder / "scene-2.tif").touch()
     frontend_dist = tmp_path / "frontend" / "dist"
     (frontend_dist / "assets").mkdir(parents=True)
-    (frontend_dist / "index.html").write_text("<!doctype html><title>MLSystem2</title>", encoding="utf-8")
-    (frontend_dist / "app.js").write_text("console.log('MLSystem2')", encoding="utf-8")
-    (frontend_dist / "assets" / "app.css").write_text("body{margin:0}", encoding="utf-8")
+    (frontend_dist / "index.html").write_text(
+        '<!doctype html><title>MLSystem2</title><script type="module" src="/assets/index-test.js"></script>',
+        encoding="utf-8",
+    )
+    (frontend_dist / "assets" / "index-test.js").write_text("console.log('MLSystem2')", encoding="utf-8")
+    (frontend_dist / "assets" / "index-test.css").write_text("body{margin:0}", encoding="utf-8")
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -959,10 +936,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     with TestClient(create_app()) as client:
         assert client.get("/api/v1/health").json()["status"] == "ok"
         assert client.get("/").text.startswith("<!doctype html>")
-        app_js = client.get("/app.js")
+        app_js = client.get("/assets/index-test.js")
         assert app_js.text == "console.log('MLSystem2')"
         assert app_js.headers["content-type"].split(";")[0] in {"text/javascript", "application/javascript"}
-        assert client.get("/assets/app.css").text == "body{margin:0}"
+        assert client.get("/assets/index-test.css").text == "body{margin:0}"
+        assert client.get("/not-a-real-frontend-route").text.startswith("<!doctype html>")
         unauthorized = client.get("/api/v1/datasets")
         assert unauthorized.status_code == 401
         assert client.get("/auth/proxy-check").status_code == 401
@@ -975,6 +953,20 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         proxy_check = client.get("/auth/proxy-check")
         assert proxy_check.status_code == 204
         assert proxy_check.headers["x-remote-user"] == "mluser"
+
+        bootstrap = client.get("/api/v1/bootstrap").json()
+        assert set(bootstrap) == {
+            "links",
+            "datasets",
+            "image_folders",
+            "classes",
+            "models",
+            "training_templates",
+            "inference_templates",
+        }
+        assert [item["name"] for item in bootstrap["datasets"]] == ["Вырубки\\main", "Custom"]
+        assert bootstrap["image_folders"][0]["key"] == "kanopus/irkutsk"
+        assert len(bootstrap["training_templates"]) == 7
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == ["Вырубки\\main", "Custom"]

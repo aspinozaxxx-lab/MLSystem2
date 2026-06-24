@@ -1,0 +1,29 @@
+import type { components } from "./schema";
+
+export type AppLink = components["schemas"]["AppLink"];
+export type AutomationRuleInfo = components["schemas"]["AutomationRuleInfo"];
+export type AutomationSnapshot = components["schemas"]["AutomationSnapshot"];
+export type BootstrapInfo = components["schemas"]["BootstrapInfo"];
+export type ClassInfo = components["schemas"]["ClassInfo"];
+export type ClassResultsResponse = components["schemas"]["ClassResultsResponse"];
+export type ConfigField = components["schemas"]["ConfigField"];
+export type ConfigSchema = components["schemas"]["ConfigSchema"];
+export type CustomDatasetInfo = components["schemas"]["CustomDatasetInfo"];
+export type DatasetInfo = components["schemas"]["DatasetInfo"];
+export type ImageFolderInfo = components["schemas"]["ImageFolderInfo"];
+export type InferenceTemplate = components["schemas"]["InferenceTemplate"];
+export type JobDetail = components["schemas"]["JobDetail"];
+export type JobLogInfo = components["schemas"]["JobLogInfo"];
+export type JobSummary = components["schemas"]["JobSummary"];
+export type MLflowExperimentInfo = components["schemas"]["MLflowExperimentInfo"];
+export type ModelInfo = components["schemas"]["ModelInfo"];
+export type PseudoMarkupResultInfo = components["schemas"]["PseudoMarkupResultInfo"];
+export type QueueSnapshot = components["schemas"]["QueueSnapshot"];
+export type ResultChangeInfo = components["schemas"]["ResultChangeInfo"];
+export type ResultChangesResponse = components["schemas"]["ResultChangesResponse"];
+export type RuntimeProgress = components["schemas"]["RuntimeProgress"];
+export type TrainingResultInfo = components["schemas"]["TrainingResultInfo"];
+export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
+
+export type AnyTemplate = TrainingTemplate | InferenceTemplate;
+export type JsonRecord = Record<string, unknown>;

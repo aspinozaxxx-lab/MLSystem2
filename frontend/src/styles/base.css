@@ -1,0 +1,72 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --surface-soft: #f8fafc;
+  --surface-strong: #eef4f8;
+  --text: #17202a;
+  --muted: #607080;
+  --border: #d7e0ea;
+  --accent: #0f6e8c;
+  --accent-strong: #0b5369;
+  --accent-soft: #e3f4f8;
+  --ok: #167044;
+  --ok-soft: #e7f6ed;
+  --warn: #a15c00;
+  --warn-soft: #fff2d8;
+  --danger: #b42318;
+  --danger-soft: #fde8e6;
+  --purple: #5d5a9f;
+  --purple-soft: #ecebfa;
+  --shadow: 0 10px 30px rgba(20, 32, 45, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+}
+
+a {
+  color: var(--accent);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+code,
+pre {
+  font-family: "Cascadia Mono", Consolas, monospace;
+}

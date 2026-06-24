@@ -13,6 +13,7 @@ htmlcov/
 venv/
 env/
 uv.lock
+node_modules/
 
 # Build and packaging artifacts
 build/
