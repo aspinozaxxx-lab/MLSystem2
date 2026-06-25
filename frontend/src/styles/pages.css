@@ -108,6 +108,21 @@
   margin-bottom: 16px;
 }
 
+.training-summary-table td:first-child {
+  min-width: 180px;
+}
+
+.pseudo-subtable-wrap {
+  width: calc(100% - 28px);
+  margin: 8px 0 0 28px;
+  border-left: 3px solid var(--danger-soft);
+}
+
+.pseudo-table th:first-child,
+.pseudo-table td:first-child {
+  min-width: 220px;
+}
+
 .result-group h3 {
   display: flex;
   align-items: center;
@@ -154,7 +169,18 @@
 }
 
 .job-config .metric code {
+  display: inline;
   word-break: break-word;
+}
+
+.config-metric .muted {
+  display: inline;
+  margin-right: 6px;
+}
+
+.field [title],
+.config-metric[title] {
+  cursor: help;
 }
 
 .source-lines {

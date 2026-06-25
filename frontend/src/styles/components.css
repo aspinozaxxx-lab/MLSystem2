@@ -226,6 +226,22 @@ input[type="checkbox"] {
   color: var(--purple);
 }
 
+.badge.source-badge.manual,
+.badge.action-badge.kind-training {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.badge.source-badge.auto {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.badge.action-badge.kind-pseudo {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .badge-button {
   border: 0;
   cursor: pointer;
@@ -270,6 +286,51 @@ tr:last-child td {
 
 .clickable-row:hover td {
   background: #f6fbfd;
+}
+
+.status-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.action-cell {
+  min-width: 170px;
+}
+
+.action-cell > * {
+  margin: 2px 6px 2px 0;
+  vertical-align: middle;
+}
+
+.result-change-row.kind-training td,
+.training-result-row td {
+  background: rgba(227, 244, 248, 0.45);
+}
+
+.result-change-row.kind-pseudo td,
+.pseudo-result-row td {
+  background: rgba(253, 232, 230, 0.35);
+}
+
+.result-change-row.kind-training:hover td,
+.training-result-row:hover td {
+  background: rgba(227, 244, 248, 0.75);
+}
+
+.result-change-row.kind-pseudo:hover td,
+.pseudo-result-row:hover td {
+  background: rgba(253, 232, 230, 0.65);
+}
+
+.visually-hidden-header {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .empty-state {

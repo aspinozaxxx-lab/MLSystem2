@@ -3163,6 +3163,17 @@
             "format": "date-time",
             "title": "Created At"
           },
+          "runtime_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Minutes"
+          },
           "progress": {
             "anyOf": [
               {

@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Settings,
   Trash2,
-  Upload,
   X,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
@@ -55,6 +54,7 @@ import {
   formatDateTime,
   formatF1Score,
   formatFileSize,
+  formatRuntimeMinutes,
   integerOrNull,
   isValidExportModelName,
   runningProgressLabel,
@@ -938,7 +938,7 @@ function QueuePage({ run }: RoutedPageProps) {
   );
 }
 
-function JobPage({ run, jobId }: RoutedPageProps & { jobId: string }) {
+function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string }) {
   const [job, setJob] = useState<JobDetail | null>(null);
   const load = useCallback(async () => {
     const payload = await run(() => apiJson<JobDetail>(`/jobs/${encodeURIComponent(jobId)}`));
@@ -977,12 +977,15 @@ function JobPage({ run, jobId }: RoutedPageProps & { jobId: string }) {
       <section className="panel">
         <PanelHeader title="Конфиг" subtitle={job.readonly ? "readonly snapshot" : ""} />
         <div className="job-config">
-          {Object.entries(job.config || {}).map(([key, value]) => (
-            <div className="metric" key={key}>
-              <span className="muted">{key}</span>
-              <code>{String(value)}</code>
-            </div>
-          ))}
+          {Object.entries(job.config || {}).map(([key, value]) => {
+            const tooltip = configTooltipForKey(bootstrap, key);
+            return (
+              <div className="metric config-metric" key={key} title={tooltip || key}>
+                <span className="muted">{key}:</span>
+                <code>{formatConfigValue(value)}</code>
+              </div>
+            );
+          })}
         </div>
       </section>
     </>
@@ -1175,14 +1178,13 @@ function ConfigEditor({
         const current = value[field.key] ?? "";
         const tooltip = configFieldTooltip(field);
         const label = (
-          <>
+          <span title={tooltip || field.label}>
             <span>{field.label}</span>
-            {tooltip ? <small>{tooltip}</small> : null}
-          </>
+          </span>
         );
         if (field.value_type === "boolean") {
           return (
-            <label className="field checkbox-field" key={field.key}>
+            <label className="field checkbox-field" key={field.key} title={tooltip || field.label}>
               <input
                 type="checkbox"
                 checked={Boolean(current)}
@@ -1203,7 +1205,12 @@ function ConfigEditor({
             {label}
             <div className="inline-row">
               {field.options?.length ? (
-                <select value={String(current)} disabled={readonly} onChange={(event) => setField(field, event.target.value)}>
+                <select
+                  value={String(current)}
+                  disabled={readonly}
+                  title={tooltip || field.label}
+                  onChange={(event) => setField(field, event.target.value)}
+                >
                   {field.options.map((option) => (
                     <option value={option} key={option}>
                       {option}
@@ -1218,6 +1225,7 @@ function ConfigEditor({
                   disabled={readonly}
                   required={field.required}
                   onChange={(event) => setField(field, event.target.value)}
+                  title={tooltip || field.label}
                 />
               )}
               {onApplyField && !readonly ? (
@@ -1494,12 +1502,21 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
         </thead>
         <tbody>
           {changes.map((item) => (
-            <tr className="clickable-row" key={item.id} onClick={() => navigate(`results/${encodeURIComponent(item.class_key)}`)}>
-              <td onClick={(event) => event.stopPropagation()}>{resultStatusBadge(item.status, item.type, undefined, item.job_id, showJobLog)}</td>
+            <tr
+              className={`clickable-row result-change-row ${resultKindClass(changeResultKind(item))}`}
+              key={item.id}
+              onClick={() => navigate(`results/${encodeURIComponent(item.class_key)}`)}
+            >
+              <td onClick={(event) => event.stopPropagation()}>
+                <span className="status-stack">
+                  {resultStatusBadge(item.status, item.type, undefined, item.job_id, showJobLog)}
+                  {sourceBadge(item.source)}
+                </span>
+              </td>
               <td>{item.class_key}</td>
               <td>{item.dataset_name}</td>
               <td>{item.model_name}</td>
-              <td>{item.action}</td>
+              <td>{actionBadge(item.action, changeResultKind(item))}</td>
               <td>{formatDateTime(item.changed_at)}</td>
             </tr>
           ))}
@@ -1531,70 +1548,93 @@ function ResultsTable({
     <div className="form-stack">
       {payload.results.map((result) => (
         <section className="result-group" key={result.id}>
-          <h3>
-            <span>{result.model_name}</span>
-            <span className="inline-row">
-              {result.status === "ok" ? (
-                <>
-                  <button className="secondary compact-action" type="button" onClick={() => onPseudo(result)}>
-                    <Upload size={14} />
-                    Pseudo
-                  </button>
-                  <button className="secondary compact-action" type="button" onClick={() => onZip(result)}>
-                    <Archive size={14} />
-                    Zip
-                  </button>
-                </>
-              ) : null}
-              {result.mlflow_run_url ? (
-                <a className="secondary compact-action" href={result.mlflow_run_url} target="_blank" rel="noreferrer">
-                  MLflow
-                </a>
-              ) : null}
-            </span>
-          </h3>
           <div className="table-wrap">
-            <table>
-              <thead>
+            <table className="training-summary-table">
+              <thead className="visually-hidden-header">
                 <tr>
+                  <th>МОДЕЛЬ</th>
                   <th>Статус</th>
-                  <th>Dataset version</th>
                   <th>F1</th>
                   <th>Epoch</th>
-                  <th>Дата</th>
+                  <th>Создано</th>
+                  <th>Действия</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>{resultStatusBadge(result.status, "training", result.progress, result.job_id, showJobLog)}</td>
-                  <td>{shortVersion(result.dataset_version)}</td>
-                  <td>{formatF1Score(result.f1_score)}</td>
-                  <td>{result.epoch ?? "—"}</td>
-                  <td>{formatDateTime(result.trained_at)}</td>
+                <tr className="training-result-row">
+                  <td title="МОДЕЛЬ">
+                    <span className="source-lines">
+                      <strong>{result.model_name}</strong>
+                      <small className="muted">{result.architecture}</small>
+                    </span>
+                  </td>
+                  <td title="Статус">
+                    <span className="status-stack">
+                      {resultStatusBadge(result.status, "training", result.progress, result.job_id, showJobLog)}
+                      {sourceBadge(result.source)}
+                    </span>
+                  </td>
+                  <td title="F1">{formatF1Score(result.f1_score)}</td>
+                  <td title="Epoch">{result.epoch ?? "—"}</td>
+                  <td title="Создано">{formatDateTime(result.trained_at)}</td>
+                  <td className="action-cell" title="Действия">
+                    {result.status === "ok" ? (
+                      <>
+                        <button className="secondary compact-action" type="button" onClick={() => onPseudo(result)}>
+                          <Play size={14} />
+                          Pseudo
+                        </button>
+                        <button className="secondary compact-action" type="button" onClick={() => onZip(result)}>
+                          <Archive size={14} />
+                          Zip
+                        </button>
+                      </>
+                    ) : null}
+                    {result.mlflow_run_url ? (
+                      <a className="secondary compact-action" href={result.mlflow_run_url} target="_blank" rel="noreferrer">
+                        MLflow
+                      </a>
+                    ) : null}
+                    {result.job_id ? (
+                      <a className="secondary compact-action" href={`#/jobs/${result.job_id}`}>
+                        Job
+                      </a>
+                    ) : null}
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
           {(result.pseudo_markup_results || []).length ? (
-            <div className="table-wrap">
-              <table>
+            <div className="table-wrap pseudo-subtable-wrap">
+              <table className="pseudo-table">
                 <thead>
                   <tr>
-                    <th>Pseudo source</th>
+                    <th>ИСТОЧНИК</th>
                     <th>Статус</th>
                     <th>GeoJSON</th>
                     <th>Создано</th>
-                    <th></th>
+                    <th>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(result.pseudo_markup_results || []).map((item) => (
-                    <tr key={item.id}>
-                      <td>{imageSourceLabel(item, datasets, imageFolders)}</td>
-                      <td>{resultStatusBadge(item.status, "inference", item.progress, item.job_id, showJobLog)}</td>
-                      <td>{item.geojson_file ? geojsonDownloadLink(item.geojson_file) : "—"}</td>
-                      <td>{formatDateTime(item.created_at)}</td>
-                      <td>
+                    <tr className="pseudo-result-row" key={item.id}>
+                      <td title="ИСТОЧНИК">{imageSourceLabel(item, datasets, imageFolders)}</td>
+                      <td title="Статус">
+                        <span className="status-stack">
+                          {resultStatusBadge(item.status, "inference", item.progress, item.job_id, showJobLog)}
+                          {sourceBadge(item.source)}
+                        </span>
+                      </td>
+                      <td title="GeoJSON">{item.geojson_file ? geojsonDownloadLink(item.geojson_file) : "—"}</td>
+                      <td title="Создано">{pseudoCreatedLabel(item)}</td>
+                      <td className="action-cell" title="Действия">
+                        {item.job_id ? (
+                          <a className="secondary compact-action" href={`#/jobs/${item.job_id}`}>
+                            Job
+                          </a>
+                        ) : null}
                         <button className="danger icon-button" type="button" title="Удалить" onClick={() => onDeletePseudo(item)}>
                           <Trash2 size={15} />
                         </button>
@@ -1777,6 +1817,21 @@ function configFieldTooltip(field: ConfigField): string {
   return parts.filter(Boolean).join(" · ");
 }
 
+function configTooltipForKey(bootstrap: BootstrapInfo, key: string): string {
+  const templates = [...bootstrap.training_templates, ...bootstrap.inference_templates];
+  for (const template of templates) {
+    const field = (template.config_schema.fields || []).find((candidate) => candidate.key === key);
+    if (field) return configFieldTooltip(field);
+  }
+  return "";
+}
+
+function formatConfigValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 function configAllowedRange(field: ConfigField): string {
   const min = field.min_value;
   const max = field.max_value;
@@ -1810,8 +1865,28 @@ function resultStatusBadge(
   return badge;
 }
 
+type ResultKind = "training" | "pseudo" | "neutral";
+
+function changeResultKind(item: ResultChangeInfo): ResultKind {
+  if (item.item_type === "training_result" || item.type === "training") return "training";
+  if (item.item_type === "pseudo_markup_result" || item.type === "inference") return "pseudo";
+  const action = item.action.toLowerCase();
+  if (action.includes("обуч")) return "training";
+  if (action.includes("размет")) return "pseudo";
+  return "neutral";
+}
+
+function resultKindClass(kind: ResultKind): string {
+  return kind === "neutral" ? "" : `kind-${kind}`;
+}
+
+function actionBadge(action: string, kind: ResultKind) {
+  return <span className={`badge action-badge ${resultKindClass(kind)}`}>{action}</span>;
+}
+
 function sourceBadge(source: string) {
-  return <span className={`badge ${source === "automation" ? "ok" : "neutral"}`}>{source}</span>;
+  const automated = source === "automation";
+  return <span className={`badge source-badge ${automated ? "auto" : "manual"}`}>{automated ? "auto" : "manual"}</span>;
 }
 
 function jobTypeBadge(type: string) {
@@ -1863,12 +1938,16 @@ function imageFolderOptionLabel(item: ImageFolderInfo): string {
 }
 
 function imageSourceLabel(item: PseudoMarkupResultInfo, datasets: DatasetInfo[], folders: ImageFolderInfo[]): string {
-  if (item.dataset_key) {
-    return datasets.find((dataset) => dataset.key === item.dataset_key)?.name || item.source_dataset_name;
-  }
-  const folder = folders.find((candidate) => candidate.key === item.source_dataset_name);
+  const label = item.dataset_key
+    ? datasets.find((dataset) => dataset.key === item.dataset_key)?.name || item.source_dataset_name
+    : folders.find((candidate) => candidate.key === item.source_dataset_name)?.name || item.source_dataset_name;
   const count = integerOrNull(item.image_count);
-  return `${folder?.name || item.source_dataset_name}${count === null ? "" : ` (${count} img)`}`;
+  return `${label}${count === null ? "" : ` (${count} снимков)`}`;
+}
+
+function pseudoCreatedLabel(item: PseudoMarkupResultInfo): string {
+  const runtime = formatRuntimeMinutes(item.runtime_minutes);
+  return runtime ? `${formatDateTime(item.created_at)} (за ${runtime})` : formatDateTime(item.created_at);
 }
 
 function geojsonDownloadLink(file: { download_url: string; original_name: string; size_bytes: number }) {

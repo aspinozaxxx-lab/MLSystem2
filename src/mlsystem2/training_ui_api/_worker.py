@@ -742,7 +742,10 @@ def _pseudo_geojson_download_name(
 
 
 def _filename_part(value: str) -> str:
-    return " ".join(str(value).strip().split()) or "unknown"
+    normalized = re.sub(r"[\\/]+", "_", str(value).strip())
+    normalized = re.sub(r"\s+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or "unknown"
 
 
 def _best_training_checkpoint(

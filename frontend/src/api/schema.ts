@@ -1187,6 +1187,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Runtime Minutes */
+            runtime_minutes?: number | null;
             progress?: components["schemas"]["RuntimeProgress"] | null;
         };
         /** QueueEnabledUpdate */

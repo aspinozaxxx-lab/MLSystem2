@@ -4,7 +4,7 @@ import json
 import os
 import re
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -2024,13 +2024,17 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         completed_pseudo = session.get(JobRow, pseudo_job.id)
         assert completed_pseudo is not None
         assert completed_pseudo.status == JobStatus.COMPLETED.value
+        assert completed_pseudo.started_at is not None
+        completed_pseudo.started_at = completed_pseudo.finished_at - timedelta(minutes=30)
+        session.flush()
         assert not (pseudo_run_dir / "scratch").exists()
         refreshed_results = _service.class_results(session, "Вырубки\\main", config)
         pseudo_results = refreshed_results.results[0].pseudo_markup_results
         assert pseudo_results[0].status == ResultStatus.OK
+        assert pseudo_results[0].runtime_minutes == 30
         assert pseudo_results[0].geojson_file is not None
         assert re.fullmatch(
-            r"Вырубки\\main_segformer b2_\d{2}_\d{2}_\d{2}_\d{2}\.geojson",
+            r"Вырубки_main_segformer_b2_\d{2}_\d{2}_\d{2}_\d{2}\.geojson",
             pseudo_results[0].geojson_file.original_name,
         )
         geojson_path = config.stored_files_root / "pseudo_markup_geojson"

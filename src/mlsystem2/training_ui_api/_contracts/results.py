@@ -36,6 +36,7 @@ class PseudoMarkupResultInfo(BaseModel):
     image_count: int | None = None
     status: Literal["queued", "running", "ok", "error", "cancelled"]
     created_at: datetime
+    runtime_minutes: int | None = None
     progress: RuntimeProgress | None = None
 
 

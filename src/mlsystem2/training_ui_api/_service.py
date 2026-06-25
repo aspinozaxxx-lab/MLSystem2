@@ -1662,6 +1662,7 @@ def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoM
         image_count=_pseudo_markup_image_count(row),
         status=_public_result_status(session, row.status, row.job_id),
         created_at=row.created_at,
+        runtime_minutes=_job_runtime_minutes(session, row.job_id),
         progress=_pseudo_result_progress(session, row),
     )
 
@@ -1781,6 +1782,21 @@ def _elapsed_minutes(started_at: datetime | None) -> int | None:
     if started_at.tzinfo is None:
         started_at = started_at.replace(tzinfo=timezone.utc)
     return max(0, int((current - started_at).total_seconds() // 60))
+
+
+def _job_runtime_minutes(session: Session, job_id: uuid.UUID | None) -> int | None:
+    if job_id is None:
+        return None
+    job = session.get(JobRow, job_id)
+    if job is None or job.started_at is None or job.finished_at is None:
+        return None
+    started_at = job.started_at
+    finished_at = job.finished_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
+    return max(0, int((finished_at - started_at).total_seconds() // 60))
 
 
 def _job_actions(row: JobRow) -> list[str]:

@@ -28,6 +28,15 @@ export function formatFileSize(value: number | null | undefined): string {
   return `${formatDecimal(bytes / 1024 / 1024)} MB`;
 }
 
+export function formatRuntimeMinutes(value: number | null | undefined): string {
+  const minutes = integerOrNull(value);
+  if (minutes === null || minutes < 0) return "";
+  if (minutes < 60) return `${minutes}м`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${hours}:${String(remainder).padStart(2, "0")}`;
+}
+
 export function formatDecimal(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
