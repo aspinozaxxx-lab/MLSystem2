@@ -28,6 +28,20 @@ export function formatFileSize(value: number | null | undefined): string {
   return `${formatDecimal(bytes / 1024 / 1024)} MB`;
 }
 
+export function formatObjectCount(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "— объектов";
+  const count = integerOrNull(value);
+  if (count === null || count < 0) return "— объектов";
+  return `${count} ${objectWord(count)}`;
+}
+
+export function formatGeojsonSummary(
+  objectCount: number | null | undefined,
+  sizeBytes: number | null | undefined,
+): string {
+  return `${formatObjectCount(objectCount)} - ${formatFileSize(sizeBytes)}`;
+}
+
 export function formatRuntimeMinutes(value: number | null | undefined): string {
   const minutes = integerOrNull(value);
   if (minutes === null || minutes < 0) return "";
@@ -52,6 +66,16 @@ export function formatDecimal(value: number): string {
 export function integerOrNull(value: unknown): number | null {
   const number = Number(value);
   return Number.isInteger(number) ? number : null;
+}
+
+function objectWord(count: number): string {
+  const abs = Math.abs(count);
+  const lastTwo = abs % 100;
+  const last = abs % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "объектов";
+  if (last === 1) return "объект";
+  if (last >= 2 && last <= 4) return "объекта";
+  return "объектов";
 }
 
 export function shortVersion(version: string | null | undefined): string {

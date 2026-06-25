@@ -66,6 +66,7 @@ class StoredFileInfo(BaseModel):
     kind: StoredFileKind
     original_name: str
     size_bytes: int
+    object_count: int | None = None
     created_at: datetime
     download_url: str
 

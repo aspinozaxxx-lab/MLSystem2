@@ -209,8 +209,10 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 `/api/v1/files/{file_id}/download`. Этот путь не создает Triton model archive, Geoalert pipeline YAML или запись в
 Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. При выборе
 папки сервис создает stored txt с одной строкой-относительным путем папки. `PseudoMarkupResultInfo.image_count`
-содержит количество фактически найденных снимков по txt, включая загруженные custom txt и строки-папки.
-`StoredFileInfo.size_bytes` используется frontend для отображения размера скачиваемого GeoJSON.
+содержит сохраненное в БД количество фактически найденных снимков по txt, включая загруженные custom txt и
+строки-папки. `StoredFileInfo.size_bytes` и nullable `StoredFileInfo.object_count` берутся из БД и используются
+frontend для отображения размера и количества объектов скачиваемого GeoJSON; страница результатов не читает
+GeoJSON и не обходит корень снимков при открытии.
 `DELETE /api/v1/results/pseudo-markup/{result_id}` удаляет строку результата, связанный inference job и
 принадлежащие UI-сервису stored files внутри `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT`; исходные файлы MLMarkup не
 удаляются.

@@ -55,6 +55,7 @@ import {
   formatDateTime,
   formatF1Score,
   formatFileSize,
+  formatGeojsonSummary,
   formatRuntimeMinutes,
   integerOrNull,
   isValidExportModelName,
@@ -1971,13 +1972,12 @@ function pseudoCreatedLabel(item: PseudoMarkupResultInfo): string {
   return runtime ? `${formatDateTime(item.created_at)} (за ${runtime})` : formatDateTime(item.created_at);
 }
 
-function geojsonDownloadLink(file: { download_url: string; original_name: string; size_bytes: number }) {
+function geojsonDownloadLink(file: { download_url: string; original_name: string; size_bytes: number; object_count?: number | null }) {
   const displayName = displayStoredFileName(file.original_name) || file.original_name;
   return (
     <a className="secondary compact-action file-download-link" href={file.download_url} title={displayName}>
       <Download size={14} />
-      <span className="file-link-name">{displayName}</span>
-      <span className="file-link-size">· {formatFileSize(file.size_bytes)}</span>
+      <span className="file-link-name">{formatGeojsonSummary(file.object_count, file.size_bytes)}</span>
     </a>
   );
 }

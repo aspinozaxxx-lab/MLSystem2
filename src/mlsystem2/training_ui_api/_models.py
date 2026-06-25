@@ -107,6 +107,7 @@ class StoredFileRow(Base):
     content_type: Mapped[str | None] = mapped_column(String(160), nullable=True)
     path: Mapped[str] = mapped_column(Text)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
+    object_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

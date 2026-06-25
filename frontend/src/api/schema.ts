@@ -1279,6 +1279,8 @@ export interface components {
             original_name: string;
             /** Size Bytes */
             size_bytes: number;
+            /** Object Count */
+            object_count?: number | null;
             /**
              * Created At
              * Format: date-time

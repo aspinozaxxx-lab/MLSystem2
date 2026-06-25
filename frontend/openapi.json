@@ -3436,6 +3436,17 @@
             "type": "integer",
             "title": "Size Bytes"
           },
+          "object_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Count"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",

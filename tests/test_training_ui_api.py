@@ -12,7 +12,7 @@ from uuid import UUID
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from sqlalchemy import BigInteger
+from sqlalchemy import BigInteger, Integer
 from sqlalchemy import select
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment, MLflowTrainingProgress
@@ -362,6 +362,8 @@ def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
 
     scenes_path = tmp_path / "legacy-scenes.txt"
     scenes_path.write_text("scene-1\n", encoding="utf-8")
+    geojson_path = tmp_path / "legacy.geojson"
+    geojson_path.write_text("not json", encoding="utf-8")
 
     def fail_runtime_image_count(*_args: object, **_kwargs: object) -> int:
         raise AssertionError("legacy class_results must not recalculate image_count")
@@ -375,6 +377,13 @@ def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
             path=str(scenes_path),
             size_bytes=scenes_path.stat().st_size,
         )
+        geojson_row = StoredFileRow(
+            kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+            original_name="legacy.geojson",
+            path=str(geojson_path),
+            size_bytes=geojson_path.stat().st_size,
+            object_count=None,
+        )
         training_result = TrainingResultRow(
             source=JobSource.MANUAL.value,
             dataset_key="class-key",
@@ -384,7 +393,7 @@ def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
             model_name="segformer b2",
             status=ResultStatus.OK.value,
         )
-        session.add_all([scenes_row, training_result])
+        session.add_all([scenes_row, geojson_row, training_result])
         session.flush()
         session.add(
             PseudoMarkupResultRow(
@@ -394,6 +403,7 @@ def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
                 class_key="class-key",
                 source_dataset_name="source",
                 scenes_file_id=scenes_row.id,
+                geojson_file_id=geojson_row.id,
                 image_count=None,
                 status=ResultStatus.OK.value,
             )
@@ -403,6 +413,8 @@ def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
         response = _service.class_results(session, "class-key", config)
 
     assert response.results[0].pseudo_markup_results[0].image_count is None
+    assert response.results[0].pseudo_markup_results[0].geojson_file is not None
+    assert response.results[0].pseudo_markup_results[0].geojson_file.object_count is None
 
 
 def test_training_ui_job_log_api_reads_failed_start_worker_error(
@@ -517,6 +529,33 @@ def test_stored_file_size_uses_bigint() -> None:
     from mlsystem2.training_ui_api._models import StoredFileRow
 
     assert isinstance(StoredFileRow.__table__.columns["size_bytes"].type, BigInteger)
+
+
+def test_stored_file_object_count_is_nullable_integer() -> None:
+    from mlsystem2.training_ui_api._models import StoredFileRow
+
+    column = StoredFileRow.__table__.columns["object_count"]
+    assert isinstance(column.type, Integer)
+    assert column.nullable is True
+
+
+def test_pseudo_geojson_object_count_prefers_report_and_falls_back_to_geojson(tmp_path: Path) -> None:
+    geojson_path = tmp_path / "pseudo.geojson"
+    geojson_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "geometry": None, "properties": {}},
+                    {"type": "Feature", "geometry": None, "properties": {}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _worker._pseudo_geojson_object_count(geojson_path, {"feature_count": 500}) == 500
+    assert _worker._pseudo_geojson_object_count(geojson_path, {}) == 2
 
 
 def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch) -> None:
@@ -2109,7 +2148,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
         (pseudo_run_dir / "scratch" / "report.json").write_text(
-            '{"status":"ok","processed":1,"feature_count":0}',
+            '{"status":"ok","processed":1,"feature_count":500}',
             encoding="utf-8",
         )
         (pseudo_run_dir / "exit_code").write_text("0\n", encoding="utf-8")
@@ -2140,6 +2179,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_db_row.image_count == 1
         geojson_file = pseudo_db_row.geojson_file
         assert geojson_file is not None
+        assert geojson_file.object_count == 500
         stored_geojson_path = Path(geojson_file.path)
         assert stored_geojson_path.is_file()
         geojson_file_id = geojson_file.id

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.mlflow_adapter.api import (
     create_experiment,
@@ -814,11 +814,29 @@ def class_results(
         )
         .order_by(TrainingResultRow.created_at.desc())
     ).all()
+    pseudo_by_training_id = _class_pseudo_results(session, [row.id for row in rows])
+    job_rows = _result_jobs(
+        session,
+        [
+            job_id
+            for row in rows
+            for job_id in [row.job_id, *[item.job_id for item in pseudo_by_training_id.get(row.id, [])]]
+            if job_id is not None
+        ],
+    )
     return ClassResultsResponse(
         class_key=dataset_info.key,
         class_name=dataset_info.name,
         dataset_updated_at=dataset_info.updated_at,
-        results=[_training_result_info(session, row) for row in rows],
+        results=[
+            _training_result_info(
+                session,
+                row,
+                pseudo_rows=pseudo_by_training_id.get(row.id, []),
+                jobs_by_id=job_rows,
+            )
+            for row in rows
+        ],
     )
 
 
@@ -1534,6 +1552,7 @@ def _stored_file_info(row: StoredFileRow | None) -> StoredFileInfo | None:
         kind=StoredFileKind(row.kind),
         original_name=stored_file_download_name(row),
         size_bytes=row.size_bytes,
+        object_count=row.object_count,
         created_at=row.created_at,
         download_url=f"/api/v1/files/{row.id}/download",
     )
@@ -1636,12 +1655,67 @@ def _read_log_tail(path: Path, max_bytes: int) -> tuple[str, bool, int]:
     return data.decode("utf-8", errors="replace"), truncated, size_bytes
 
 
-def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingResultInfo:
-    pseudo_rows = session.scalars(
+def _class_pseudo_results(
+    session: Session,
+    training_result_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[PseudoMarkupResultRow]]:
+    if not training_result_ids:
+        return {}
+    rows = session.scalars(
         select(PseudoMarkupResultRow)
-        .where(PseudoMarkupResultRow.training_result_id == row.id)
+        .where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
+        .options(
+            selectinload(PseudoMarkupResultRow.scenes_file),
+            selectinload(PseudoMarkupResultRow.geojson_file),
+        )
         .order_by(PseudoMarkupResultRow.created_at.desc())
     ).all()
+    results: dict[uuid.UUID, list[PseudoMarkupResultRow]] = {}
+    for row in rows:
+        if row.training_result_id is not None:
+            results.setdefault(row.training_result_id, []).append(row)
+    return results
+
+
+def _result_jobs(session: Session, job_ids: list[uuid.UUID]) -> dict[uuid.UUID, JobRow]:
+    unique_ids = sorted(set(job_ids), key=str)
+    if not unique_ids:
+        return {}
+    return {
+        row.id: row
+        for row in session.scalars(select(JobRow).where(JobRow.id.in_(unique_ids))).all()
+    }
+
+
+def _job_from_map(
+    session: Session,
+    job_id: uuid.UUID | None,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None,
+) -> JobRow | None:
+    if job_id is None:
+        return None
+    if jobs_by_id is not None:
+        return jobs_by_id.get(job_id)
+    return session.get(JobRow, job_id)
+
+
+def _training_result_info(
+    session: Session,
+    row: TrainingResultRow,
+    *,
+    pseudo_rows: list[PseudoMarkupResultRow] | None = None,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> TrainingResultInfo:
+    if pseudo_rows is None:
+        pseudo_rows = session.scalars(
+            select(PseudoMarkupResultRow)
+            .where(PseudoMarkupResultRow.training_result_id == row.id)
+            .options(
+                selectinload(PseudoMarkupResultRow.scenes_file),
+                selectinload(PseudoMarkupResultRow.geojson_file),
+            )
+            .order_by(PseudoMarkupResultRow.created_at.desc())
+        ).all()
     return TrainingResultInfo(
         id=row.id,
         job_id=row.job_id,
@@ -1654,13 +1728,17 @@ def _training_result_info(session: Session, row: TrainingResultRow) -> TrainingR
         epoch=row.epoch,
         trained_at=row.trained_at,
         mlflow_run_url=row.mlflow_run_url,
-        status=_public_result_status(session, row.status, row.job_id),
-        progress=_training_result_progress(session, row),
-        pseudo_markup_results=[_pseudo_markup_info(session, item) for item in pseudo_rows],
+        status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
+        progress=_training_result_progress(session, row, jobs_by_id),
+        pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],
     )
 
 
-def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoMarkupResultInfo:
+def _pseudo_markup_info(
+    session: Session,
+    row: PseudoMarkupResultRow,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> PseudoMarkupResultInfo:
     return PseudoMarkupResultInfo(
         id=row.id,
         job_id=row.job_id,
@@ -1671,17 +1749,22 @@ def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoM
         scenes_file=_stored_file_info(row.scenes_file),
         geojson_file=_stored_file_info(row.geojson_file),
         image_count=row.image_count,
-        status=_public_result_status(session, row.status, row.job_id),
+        status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         created_at=row.created_at,
-        runtime_minutes=_job_runtime_minutes(session, row.job_id),
-        progress=_pseudo_result_progress(session, row),
+        runtime_minutes=_job_runtime_minutes(session, row.job_id, jobs_by_id),
+        progress=_pseudo_result_progress(session, row, jobs_by_id),
     )
 
 
-def _public_result_status(session: Session, result_status: str, job_id: uuid.UUID | None) -> str:
+def _public_result_status(
+    session: Session,
+    result_status: str,
+    job_id: uuid.UUID | None,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> str:
     if result_status != ResultStatus.RUNNING.value or job_id is None:
         return result_status
-    job = session.get(JobRow, job_id)
+    job = _job_from_map(session, job_id, jobs_by_id)
     if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
         return job.status
     return result_status
@@ -1712,10 +1795,14 @@ def _training_job_progress(session: Session, row: JobRow) -> RuntimeProgress:
     )
 
 
-def _training_result_progress(session: Session, row: TrainingResultRow) -> RuntimeProgress | None:
+def _training_result_progress(
+    session: Session,
+    row: TrainingResultRow,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> RuntimeProgress | None:
     if row.status != ResultStatus.RUNNING.value:
         return None
-    job = session.get(JobRow, row.job_id) if row.job_id is not None else None
+    job = _job_from_map(session, row.job_id, jobs_by_id)
     run_id = row.mlflow_run_id or (_job_mlflow_run_id(session, job) if job is not None else None)
     return RuntimeProgress(
         current=_completed_training_epochs(run_id),
@@ -1734,10 +1821,14 @@ def _completed_training_epochs(run_id: str | None) -> int:
     return max(0, int(progress.completed_epochs))
 
 
-def _pseudo_result_progress(session: Session, row: PseudoMarkupResultRow) -> RuntimeProgress | None:
+def _pseudo_result_progress(
+    session: Session,
+    row: PseudoMarkupResultRow,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> RuntimeProgress | None:
     if row.status != ResultStatus.RUNNING.value or row.job_id is None:
         return None
-    job = session.get(JobRow, row.job_id)
+    job = _job_from_map(session, row.job_id, jobs_by_id)
     if job is None:
         return None
     return _pseudo_job_progress(job)
@@ -1795,10 +1886,12 @@ def _elapsed_minutes(started_at: datetime | None) -> int | None:
     return max(0, int((current - started_at).total_seconds() // 60))
 
 
-def _job_runtime_minutes(session: Session, job_id: uuid.UUID | None) -> int | None:
-    if job_id is None:
-        return None
-    job = session.get(JobRow, job_id)
+def _job_runtime_minutes(
+    session: Session,
+    job_id: uuid.UUID | None,
+    jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+) -> int | None:
+    job = _job_from_map(session, job_id, jobs_by_id)
     if job is None or job.started_at is None or job.finished_at is None:
         return None
     started_at = job.started_at

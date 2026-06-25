@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { displayStoredFileName, exportModelNamePart, formatFileSize, formatRuntimeMinutes, isValidExportModelName, runningProgressLabel } from "./format";
+import {
+  displayStoredFileName,
+  exportModelNamePart,
+  formatFileSize,
+  formatGeojsonSummary,
+  formatObjectCount,
+  formatRuntimeMinutes,
+  isValidExportModelName,
+  runningProgressLabel,
+} from "./format";
 
 describe("format helpers", () => {
   it("normalizes Triton export model name parts", () => {
@@ -14,6 +23,15 @@ describe("format helpers", () => {
     expect(formatRuntimeMinutes(30)).toBe("30м");
     expect(formatRuntimeMinutes(90)).toBe("1:30");
     expect(runningProgressLabel("inference", { current: 3, total: 10, elapsed_minutes: 2 })).toBe("3/10, 2 мин");
+  });
+
+  it("formats GeoJSON object summaries", () => {
+    expect(formatObjectCount(1)).toBe("1 объект");
+    expect(formatObjectCount(2)).toBe("2 объекта");
+    expect(formatObjectCount(5)).toBe("5 объектов");
+    expect(formatObjectCount(11)).toBe("11 объектов");
+    expect(formatObjectCount(null)).toBe("— объектов");
+    expect(formatGeojsonSummary(500, 3.5 * 1024 * 1024)).toBe("500 объектов - 3.5 MB");
   });
 
   it("normalizes displayed stored file names", () => {

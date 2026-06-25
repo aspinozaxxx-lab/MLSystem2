@@ -637,6 +637,7 @@ def _finish_inference_job(
             output_path,
             config,
             original_name=_pseudo_geojson_download_name(row, pseudo_results, row.finished_at),
+            object_count=_pseudo_geojson_object_count(output_path, report),
         )
     else:
         file_row = None
@@ -695,6 +696,7 @@ def _store_generated_geojson(
     config: TrainingUIAPIConfig,
     *,
     original_name: str,
+    object_count: int | None,
 ) -> StoredFileRow:
     file_id = uuid.uuid4()
     target_dir = config.stored_files_root / StoredFileKind.PSEUDO_MARKUP_GEOJSON.value
@@ -715,6 +717,7 @@ def _store_generated_geojson(
         content_type="application/geo+json",
         path=str(target_path),
         size_bytes=target_path.stat().st_size,
+        object_count=object_count,
     )
     session.add(row)
     try:
@@ -723,6 +726,32 @@ def _store_generated_geojson(
         target_path.unlink(missing_ok=True)
         raise
     return row
+
+
+def _pseudo_geojson_object_count(source_path: Path, report: dict[str, Any] | None) -> int | None:
+    count = _report_feature_count(report)
+    return count if count is not None else _geojson_feature_count(source_path)
+
+
+def _report_feature_count(report: dict[str, Any] | None) -> int | None:
+    if report is None:
+        return None
+    try:
+        count = int(report.get("feature_count"))
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
+
+
+def _geojson_feature_count(path: Path) -> int | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    features = payload.get("features")
+    return len(features) if isinstance(features, list) else None
 
 
 def _stored_scenes_image_count(row: StoredFileRow | None, config: TrainingUIAPIConfig) -> int | None:
