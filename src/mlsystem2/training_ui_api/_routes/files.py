@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._models import StoredFileRow
-from mlsystem2.training_ui_api._service import stored_file
+from mlsystem2.training_ui_api._service import stored_file, stored_file_download_name
 
 from .common import RouteContext
 
@@ -26,7 +26,7 @@ def register_file_routes(app: FastAPI, ctx: RouteContext) -> None:
         path = row.path
         if not Path(path).is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
-        return FileResponse(path, filename=row.original_name)
+        return FileResponse(path, filename=stored_file_download_name(row))
 
 
 __all__ = ["register_file_routes"]

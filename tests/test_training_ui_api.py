@@ -37,6 +37,7 @@ from mlsystem2.training_ui_api.contracts import (
     JobStatus,
     JobType,
     ResultStatus,
+    StoredFileKind,
     TrainingJobCreate,
     TrainingTemplateCreate,
     TrainingTemplateUpdate,
@@ -49,6 +50,17 @@ def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 0}) is False
     assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
+
+
+def test_pseudo_geojson_download_name_normalizes_legacy_slashes() -> None:
+    row = StoredFileRow(
+        kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+        original_name="Засоления\\main_segformer b2_07_38_06_06.geojson",
+        path="/tmp/file.geojson",
+        size_bytes=1,
+    )
+
+    assert _service.stored_file_download_name(row) == "Засоления_main_segformer b2_07_38_06_06.geojson"
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(

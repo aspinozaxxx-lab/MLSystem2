@@ -49,6 +49,7 @@ import type {
   TrainingTemplate,
 } from "./api/types";
 import {
+  displayStoredFileName,
   exportModelNamePart,
   formatDate,
   formatDateTime,
@@ -1550,6 +1551,14 @@ function ResultsTable({
         <section className="result-group" key={result.id}>
           <div className="table-wrap">
             <table className="training-summary-table">
+              <colgroup>
+                <col className="result-col-model" />
+                <col className="result-col-status" />
+                <col className="result-col-score" />
+                <col className="result-col-epoch" />
+                <col className="result-col-created" />
+                <col className="result-col-actions" />
+              </colgroup>
               <thead className="visually-hidden-header">
                 <tr>
                   <th>МОДЕЛЬ</th>
@@ -1557,7 +1566,7 @@ function ResultsTable({
                   <th>F1</th>
                   <th>Epoch</th>
                   <th>Создано</th>
-                  <th>Действия</th>
+                  <th aria-label="Действия"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1577,26 +1586,26 @@ function ResultsTable({
                   <td title="F1">{formatF1Score(result.f1_score)}</td>
                   <td title="Epoch">{result.epoch ?? "—"}</td>
                   <td title="Создано">{formatDateTime(result.trained_at)}</td>
-                  <td className="action-cell" title="Действия">
+                  <td className="action-cell">
                     {result.status === "ok" ? (
                       <>
-                        <button className="secondary compact-action" type="button" onClick={() => onPseudo(result)}>
+                        <button className="secondary compact-action" type="button" title="Запустить псевдоразметку" onClick={() => onPseudo(result)}>
                           <Play size={14} />
                           Pseudo
                         </button>
-                        <button className="secondary compact-action" type="button" onClick={() => onZip(result)}>
+                        <button className="secondary compact-action" type="button" title="Скачать Triton zip" onClick={() => onZip(result)}>
                           <Archive size={14} />
                           Zip
                         </button>
                       </>
                     ) : null}
                     {result.mlflow_run_url ? (
-                      <a className="secondary compact-action" href={result.mlflow_run_url} target="_blank" rel="noreferrer">
+                      <a className="secondary compact-action" href={result.mlflow_run_url} target="_blank" rel="noreferrer" title="Открыть MLflow run">
                         MLflow
                       </a>
                     ) : null}
                     {result.job_id ? (
-                      <a className="secondary compact-action" href={`#/jobs/${result.job_id}`}>
+                      <a className="secondary compact-action" href={`#/jobs/${result.job_id}`} title="Открыть job обучения">
                         Job
                       </a>
                     ) : null}
@@ -1608,13 +1617,20 @@ function ResultsTable({
           {(result.pseudo_markup_results || []).length ? (
             <div className="table-wrap pseudo-subtable-wrap">
               <table className="pseudo-table">
+                <colgroup>
+                  <col className="result-col-source" />
+                  <col className="result-col-status" />
+                  <col className="result-col-geojson" />
+                  <col className="result-col-created" />
+                  <col className="result-col-actions" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>ИСТОЧНИК</th>
                     <th>Статус</th>
                     <th>GeoJSON</th>
                     <th>Создано</th>
-                    <th>Действия</th>
+                    <th aria-label="Действия"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1629,9 +1645,9 @@ function ResultsTable({
                       </td>
                       <td title="GeoJSON">{item.geojson_file ? geojsonDownloadLink(item.geojson_file) : "—"}</td>
                       <td title="Создано">{pseudoCreatedLabel(item)}</td>
-                      <td className="action-cell" title="Действия">
+                      <td className="action-cell">
                         {item.job_id ? (
-                          <a className="secondary compact-action" href={`#/jobs/${item.job_id}`}>
+                          <a className="secondary compact-action" href={`#/jobs/${item.job_id}`} title="Открыть job разметки">
                             Job
                           </a>
                         ) : null}
@@ -1844,7 +1860,12 @@ function configAllowedRange(field: ConfigField): string {
 function statusBadge(status: string, type?: string | null, progress?: { current?: number | null; total?: number | null; elapsed_minutes?: number | null } | null) {
   const className = statusClass(status);
   const label = status === "running" ? runningProgressLabel(type, progress || null) : statusLabel(status);
-  return <span className={`badge ${className}`}>{label}</span>;
+  return (
+    <span className={`badge ${className}`}>
+      {status === "running" ? <RefreshCw className="status-spinner" size={13} /> : null}
+      {label}
+    </span>
+  );
 }
 
 function resultStatusBadge(
@@ -1951,10 +1972,12 @@ function pseudoCreatedLabel(item: PseudoMarkupResultInfo): string {
 }
 
 function geojsonDownloadLink(file: { download_url: string; original_name: string; size_bytes: number }) {
+  const displayName = displayStoredFileName(file.original_name) || file.original_name;
   return (
-    <a className="secondary compact-action" href={file.download_url}>
+    <a className="secondary compact-action file-download-link" href={file.download_url} title={displayName}>
       <Download size={14} />
-      {file.original_name} · {formatFileSize(file.size_bytes)}
+      <span className="file-link-name">{displayName}</span>
+      <span className="file-link-size">· {formatFileSize(file.size_bytes)}</span>
     </a>
   );
 }
@@ -2002,8 +2025,9 @@ function defaultTrainingZipModelName(result: TrainingResultInfo, datasets: Datas
   const filename = String(dataset?.annotation_file || "").split(/[\\/]/).pop() || "";
   const stem = filename.replace(/\.[^.]*$/, "");
   const datasetPart = exportModelNamePart(stem || dataset?.class_key || dataset?.name || result.dataset_key || "model");
-  const modelPart = exportModelNamePart(result.architecture || result.model_name);
-  return [datasetPart, modelPart].filter(Boolean).join("_");
+  const suffix = "kanopus";
+  if (!datasetPart || datasetPart === suffix || datasetPart.endsWith(`_${suffix}`)) return datasetPart || suffix;
+  return `${datasetPart}_${suffix}`;
 }
 
 async function exportCheckpointArchive(

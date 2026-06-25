@@ -247,6 +247,16 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 
+.status-spinner {
+  animation: status-spin 1s linear infinite;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -297,11 +307,28 @@ tr:last-child td {
 
 .action-cell {
   min-width: 170px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .action-cell > * {
-  margin: 2px 6px 2px 0;
+  margin: 2px 0 2px 6px;
   vertical-align: middle;
+}
+
+.file-download-link {
+  max-width: 100%;
+}
+
+.file-link-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-link-size {
+  flex: 0 0 auto;
 }
 
 .result-change-row.kind-training td,

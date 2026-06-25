@@ -108,6 +108,53 @@
   margin-bottom: 16px;
 }
 
+.training-summary-table,
+.pseudo-table {
+  min-width: 920px;
+  table-layout: fixed;
+}
+
+.training-summary-table .result-col-model {
+  width: 22%;
+}
+
+.training-summary-table .result-col-status {
+  width: 17%;
+}
+
+.training-summary-table .result-col-score,
+.training-summary-table .result-col-epoch {
+  width: 9%;
+}
+
+.training-summary-table .result-col-created {
+  width: 20%;
+}
+
+.training-summary-table .result-col-actions {
+  width: 23%;
+}
+
+.pseudo-table .result-col-source {
+  width: 22%;
+}
+
+.pseudo-table .result-col-status {
+  width: 17%;
+}
+
+.pseudo-table .result-col-geojson {
+  width: 28%;
+}
+
+.pseudo-table .result-col-created {
+  width: 18%;
+}
+
+.pseudo-table .result-col-actions {
+  width: 15%;
+}
+
 .training-summary-table td:first-child {
   min-width: 180px;
 }

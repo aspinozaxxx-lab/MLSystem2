@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import uuid
@@ -1529,11 +1530,19 @@ def _stored_file_info(row: StoredFileRow | None) -> StoredFileInfo | None:
     return StoredFileInfo(
         id=row.id,
         kind=StoredFileKind(row.kind),
-        original_name=row.original_name,
+        original_name=stored_file_download_name(row),
         size_bytes=row.size_bytes,
         created_at=row.created_at,
         download_url=f"/api/v1/files/{row.id}/download",
     )
+
+
+def stored_file_download_name(row: StoredFileRow) -> str:
+    if row.kind != StoredFileKind.PSEUDO_MARKUP_GEOJSON.value:
+        return row.original_name
+    normalized = re.sub(r"[\\/]+", "_", row.original_name.strip())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or row.original_name
 
 
 def _job_summary(session: Session, row: JobRow) -> JobSummary:

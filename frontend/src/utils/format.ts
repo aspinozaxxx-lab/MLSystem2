@@ -37,6 +37,13 @@ export function formatRuntimeMinutes(value: number | null | undefined): string {
   return `${hours}:${String(remainder).padStart(2, "0")}`;
 }
 
+export function displayStoredFileName(value: string | null | undefined): string {
+  return String(value || "")
+    .replace(/[\\/]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 export function formatDecimal(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
