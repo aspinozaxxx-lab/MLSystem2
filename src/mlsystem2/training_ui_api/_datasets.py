@@ -86,8 +86,16 @@ def find_image_folder(images_root: Path, folder_key: str) -> ImageFolderInfo | N
     return None
 
 
-def count_scenes_file_images(scenes_file: Path | None, images_root: Path) -> int | None:
-    return _dataset_image_count(scenes_file, _image_index(images_root))
+def build_image_index(images_root: Path) -> dict[str, list[Path]]:
+    return _image_index(images_root)
+
+
+def count_scenes_file_images(
+    scenes_file: Path | None,
+    images_root: Path,
+    image_index: dict[str, list[Path]] | None = None,
+) -> int | None:
+    return _dataset_image_count(scenes_file, image_index if image_index is not None else _image_index(images_root))
 
 
 def find_class(mlmarkup_root: Path, class_key: str, images_root: Path | None = None) -> ClassInfo | None:

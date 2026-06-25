@@ -28,7 +28,7 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
-from ._datasets import CUSTOM_KEY, list_datasets
+from ._datasets import CUSTOM_KEY, count_scenes_file_images, list_datasets
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -643,6 +643,8 @@ def _finish_inference_job(
     for result in pseudo_results:
         result.status = ResultStatus.OK.value if file_row is not None else ResultStatus.ERROR.value
         result.geojson_file_id = file_row.id if file_row is not None else result.geojson_file_id
+        if result.image_count is None:
+            result.image_count = _stored_scenes_image_count(result.scenes_file, config)
         result.updated_at = _now()
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
@@ -721,6 +723,12 @@ def _store_generated_geojson(
         target_path.unlink(missing_ok=True)
         raise
     return row
+
+
+def _stored_scenes_image_count(row: StoredFileRow | None, config: TrainingUIAPIConfig) -> int | None:
+    if row is None:
+        return None
+    return count_scenes_file_images(Path(row.path), config.images_root)
 
 
 def _cleanup_inference_scratch(row: JobRow) -> None:

@@ -261,6 +261,7 @@ class PseudoMarkupResultRow(Base):
     )
     class_key: Mapped[str] = mapped_column(String(180), index=True)
     source_dataset_name: Mapped[str] = mapped_column(String(240))
+    image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scenes_file_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("stored_files.id"),

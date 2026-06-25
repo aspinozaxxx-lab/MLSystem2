@@ -24,7 +24,7 @@ from mlsystem2.mlflow_adapter.contracts import (
 
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig
-from ._datasets import CUSTOM_KEY, list_datasets
+from ._datasets import CUSTOM_KEY, count_scenes_file_images, list_datasets
 from ._models import (
     AutomationControlRow,
     AutomationRuleRow,
@@ -328,6 +328,7 @@ def _ensure_pseudo_markup_for_rule(
         else {}
     )
     scenes_row = _store_existing_file(session, kind=StoredFileKind.SCENES_TXT, path=Path(dataset.scenes_file))
+    image_count = count_scenes_file_images(Path(scenes_row.path), config.images_root)
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.AUTOMATION.value,
@@ -361,6 +362,7 @@ def _ensure_pseudo_markup_for_rule(
             training_result_id=training_result.id,
             class_key=dataset.key,
             source_dataset_name=dataset.name,
+            image_count=image_count,
             scenes_file_id=scenes_row.id,
             status=ResultStatus.RUNNING.value,
             job_id=row.id,

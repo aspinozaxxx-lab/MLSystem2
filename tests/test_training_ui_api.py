@@ -345,6 +345,66 @@ def test_class_results_exposes_queued_job_statuses(
     assert pseudo_result.job_id == pseudo_job.id
 
 
+def test_class_results_uses_stored_pseudo_image_count_for_legacy_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "MLMarkup"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    scenes_path = tmp_path / "legacy-scenes.txt"
+    scenes_path.write_text("scene-1\n", encoding="utf-8")
+
+    def fail_runtime_image_count(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("legacy class_results must not recalculate image_count")
+
+    monkeypatch.setattr(_service, "count_scenes_file_images", fail_runtime_image_count)
+
+    with session_factory() as session:
+        scenes_row = StoredFileRow(
+            kind=StoredFileKind.SCENES_TXT.value,
+            original_name="legacy-scenes.txt",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        training_result = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="class-key",
+            class_key="class-key",
+            class_display_name="class",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+        )
+        session.add_all([scenes_row, training_result])
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                source=JobSource.MANUAL.value,
+                dataset_key="class-key",
+                training_result_id=training_result.id,
+                class_key="class-key",
+                source_dataset_name="source",
+                scenes_file_id=scenes_row.id,
+                image_count=None,
+                status=ResultStatus.OK.value,
+            )
+        )
+        session.flush()
+
+        response = _service.class_results(session, "class-key", config)
+
+    assert response.results[0].pseudo_markup_results[0].image_count is None
+
+
 def test_training_ui_job_log_api_reads_failed_start_worker_error(
     tmp_path: Path,
     monkeypatch,
@@ -1220,6 +1280,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             files={"scenes_txt": ("", b"", "application/octet-stream")},
         ).json()
         assert pseudo_with_empty_upload["type"] == "inference"
+
+        def fail_runtime_image_count(*_args: object, **_kwargs: object) -> int:
+            raise AssertionError("class_results must use stored pseudo image_count")
+
+        monkeypatch.setattr(_service, "count_scenes_file_images", fail_runtime_image_count)
         class_results = client.get("/api/v1/results/classes/custom").json()
         pseudo_results = class_results["results"][0]["pseudo_markup_results"]
         pseudo_scenes = next(
@@ -1248,6 +1313,14 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             if item["source_dataset_name"] == "Custom" and item["scenes_file"]["original_name"] == "manual.txt"
         )
         assert uploaded_txt_result["image_count"] == 2
+        session_factory = create_session_factory(get_config())
+        with session_factory() as session:
+            folder_db_row = session.get(PseudoMarkupResultRow, UUID(folder_result["id"]))
+            uploaded_db_row = session.get(PseudoMarkupResultRow, UUID(uploaded_txt_result["id"]))
+            assert folder_db_row is not None
+            assert uploaded_db_row is not None
+            assert folder_db_row.image_count == 2
+            assert uploaded_db_row.image_count == 2
         deleted_folder_pseudo = client.delete(f"/api/v1/jobs/{second_folder_pseudo['id']}")
         assert deleted_folder_pseudo.status_code == 200
         queue_after_delete = client.get("/api/v1/queues").json()["inference_jobs"]
@@ -1258,7 +1331,6 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         queue_after_pseudo_delete = client.get("/api/v1/queues").json()["inference_jobs"]
         assert uploaded_txt_pseudo["id"] not in {item["id"] for item in queue_after_pseudo_delete}
         result_id = class_results["results"][0]["id"]
-        session_factory = create_session_factory(get_config())
         with session_factory() as session:
             training_result = session.get(TrainingResultRow, UUID(result_id))
             assert training_result is not None
@@ -1786,11 +1858,14 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
         '{"type":"FeatureCollection","features":[]}',
         encoding="utf-8",
     )
+    images_root = tmp_path / "images"
+    images_root.mkdir()
+    (images_root / "scene-1.tif").touch()
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
-    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(images_root))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
     monkeypatch.setenv("MLSYSTEM2_PROJECT_ROOT", str(tmp_path))
@@ -1863,6 +1938,7 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
         pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
         assert pseudo_result is not None
         assert pseudo_result.scenes_file is not None
+        assert pseudo_result.image_count == 1
         assert Path(pseudo_result.scenes_file.path).read_text(encoding="utf-8") == "scene-1\n"
 
         training_result.status = ResultStatus.ERROR.value
@@ -1887,11 +1963,14 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         '{"type":"FeatureCollection","features":[]}',
         encoding="utf-8",
     )
+    images_root = tmp_path / "images"
+    images_root.mkdir()
+    (images_root / "scene-1.tif").touch()
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(mlmarkup_root))
-    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(images_root))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "files"))
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
     monkeypatch.setenv("MLSYSTEM2_PROJECT_ROOT", str(tmp_path))
@@ -2004,6 +2083,11 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_job.config["checkpoint_f1_score"] == 0.8123
         assert pseudo_job.config["checkpoint_epoch"] == 7
         assert pseudo_job.config["checkpoint_threshold"] == 0.7
+        legacy_pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
+        assert legacy_pseudo_result is not None
+        assert legacy_pseudo_result.image_count == 1
+        legacy_pseudo_result.image_count = None
+        session.flush()
 
         dispatch_inference_queue_once(session, config, popen_factory=fake_popen)
         session.flush()
@@ -2053,6 +2137,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert any(path.suffix == ".geojson" for path in geojson_path.iterdir())
         pseudo_db_row = session.get(PseudoMarkupResultRow, pseudo_results[0].id)
         assert pseudo_db_row is not None
+        assert pseudo_db_row.image_count == 1
         geojson_file = pseudo_db_row.geojson_file
         assert geojson_file is not None
         stored_geojson_path = Path(geojson_file.path)

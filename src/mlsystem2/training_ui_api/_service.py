@@ -1022,6 +1022,7 @@ def create_pseudo_markup_job(
     )
     session.add(row)
     session.flush()
+    image_count = _stored_scenes_image_count(scenes_row if scenes_file_id is not None else None, config)
     session.add(
         PseudoMarkupResultRow(
             source=JobSource.MANUAL.value,
@@ -1030,6 +1031,7 @@ def create_pseudo_markup_job(
             training_result_id=training_result_id,
             class_key=class_key,
             source_dataset_name=dataset_name,
+            image_count=image_count,
             scenes_file_id=scenes_file_id,
             status=ResultStatus.RUNNING.value,
             job_id=row.id,
@@ -1668,7 +1670,7 @@ def _pseudo_markup_info(session: Session, row: PseudoMarkupResultRow) -> PseudoM
         source_dataset_name=row.source_dataset_name,
         scenes_file=_stored_file_info(row.scenes_file),
         geojson_file=_stored_file_info(row.geojson_file),
-        image_count=_pseudo_markup_image_count(row),
+        image_count=row.image_count,
         status=_public_result_status(session, row.status, row.job_id),
         created_at=row.created_at,
         runtime_minutes=_job_runtime_minutes(session, row.job_id),
@@ -1685,10 +1687,10 @@ def _public_result_status(session: Session, result_status: str, job_id: uuid.UUI
     return result_status
 
 
-def _pseudo_markup_image_count(row: PseudoMarkupResultRow) -> int | None:
-    if row.scenes_file is None:
+def _stored_scenes_image_count(row: StoredFileRow | None, config: TrainingUIAPIConfig) -> int | None:
+    if row is None:
         return None
-    return count_scenes_file_images(Path(row.scenes_file.path), get_config().images_root)
+    return count_scenes_file_images(Path(row.path), config.images_root)
 
 
 def _job_progress(session: Session, row: JobRow) -> RuntimeProgress | None:
