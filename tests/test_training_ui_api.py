@@ -499,6 +499,9 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert (service_extract_dir / "deforestation-b2").exists()
         config = (service_extract_dir / "deforestation-b2" / "config.pbtxt").read_text(encoding="utf-8")
         assert 'name: "deforestation-b2"' in config
+        assert "dims: [ 1, 4, -1, -1 ]" in config
+        assert "dims: [ -1, 1, -1, -1 ]" in config
+        assert "dims: [ 1, 1, -1, -1 ]" not in config
         assert "KIND_CPU" in config
         assert "KIND_GPU" not in config
         pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(encoding="utf-8")

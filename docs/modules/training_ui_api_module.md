@@ -80,7 +80,7 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 берется из `metadata.sample_size`; для старых checkpoint без этого поля frontend показывает popup и повторяет
 запрос с ручным `sample_size`. Backend экспортирует binary segmentation модель в ONNX с uint8 mask output,
 совместимый со старым Triton CPU service (`opset 17`, `IR version 8`), создает `config.pbtxt` с
-`instance_group KIND_CPU` и возвращает внешний архив `<model_name>_export.zip`. В корне
+динамическим batch для output mask (`dims: [ -1, 1, -1, -1 ]`), `instance_group KIND_CPU` и возвращает внешний архив `<model_name>_export.zip`. В корне
 внешнего архива лежит `export_metadata.json`, pipeline YAML лежит в `pipelines/<model_name>_triton.yaml`, а
 чистый архив для `models-serving-service` лежит в `models-serving-service/<model_name>.zip`. Внутренний архив
 содержит только каталог `<model_name>` с Triton model repository файлами, поэтому после распаковки проходит

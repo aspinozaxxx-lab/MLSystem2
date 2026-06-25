@@ -305,7 +305,7 @@ output [
   {{
     name: "mask"
     data_type: TYPE_UINT8
-    dims: [ 1, 1, -1, -1 ]
+    dims: [ -1, 1, -1, -1 ]
   }}
 ]
 instance_group [
