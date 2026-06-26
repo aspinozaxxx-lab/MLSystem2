@@ -168,6 +168,51 @@ def test_training_ui_running_training_progress_is_returned_for_queue_and_class_r
     assert class_progress.elapsed_minutes == 16
 
 
+def test_class_results_returns_failed_training_dates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 6, 10, 17, 0, tzinfo=timezone.utc)
+    started_at = datetime(2026, 6, 10, 17, 24, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        job.status = JobStatus.FAILED.value
+        job.started_at = started_at
+        job.finished_at = started_at + timedelta(minutes=30)
+        job.dataset_key = "class-key"
+        session.add(job)
+        session.flush()
+        session.add(
+            TrainingResultRow(
+                source=JobSource.MANUAL.value,
+                dataset_key="class-key",
+                class_key="class-key",
+                class_display_name="class",
+                architecture="smp_segformer_b2",
+                model_name="segformer b2",
+                status=ResultStatus.ERROR.value,
+                job_id=job.id,
+                created_at=created_at,
+            )
+        )
+        session.flush()
+
+        result = _service.class_results(session, "class-key", config).results[0]
+
+    assert result.created_at.replace(tzinfo=timezone.utc) == created_at
+    assert result.started_at == started_at
+    assert result.trained_at is None
+
+
 def test_training_ui_running_training_progress_falls_back_without_mlflow_history(
     tmp_path: Path,
     monkeypatch,
@@ -459,6 +504,89 @@ def test_training_ui_job_log_api_reads_failed_start_worker_error(
     assert payload["source_name"] == "worker_error.txt"
     assert payload["truncated"] is False
     assert "Датасет не найден или неполный" in payload["content"]
+
+
+def test_training_ui_job_log_falls_back_to_journalctl(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT", "test-training-ui.service")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job.status = JobStatus.FAILED.value
+        job.finished_at = job.created_at + timedelta(minutes=1)
+        session.add(job)
+        session.flush()
+        run_dir = config.scratch_root / "jobs" / str(job.id)
+        run_dir.mkdir(parents=True)
+        (run_dir / "worker_error.txt").write_text(
+            "Не удалось запустить обучение. Подробности в journalctl.",
+            encoding="utf-8",
+        )
+        job.tmp_path = str(run_dir)
+        job_id = job.id
+        session.flush()
+
+        def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+            assert "test-training-ui.service" in args[0]
+            assert kwargs["timeout"] == 10
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    f"2026-06-10T00:00:00 service[1]: Failed to start training job {job_id}\n"
+                    "2026-06-10T00:00:00 service[1]: Traceback (most recent call last):\n"
+                    "2026-06-10T00:00:00 service[1]: RuntimeError: dataset is incomplete\n"
+                    "2026-06-10T00:00:01 service[1]: INFO: unrelated request\n"
+                ),
+            )
+
+        monkeypatch.setattr(_service.subprocess, "run", fake_run)
+        log = _service.job_log(session, job_id, config)
+
+    assert log.source_name == "journalctl:test-training-ui.service"
+    assert "Failed to start training job" in log.content
+    assert "dataset is incomplete" in log.content
+    assert "unrelated request" not in log.content
+
+
+def test_training_ui_job_log_reports_missing_when_journal_has_no_job(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job.status = JobStatus.FAILED.value
+        session.add(job)
+        session.flush()
+        job_id = job.id
+
+        monkeypatch.setattr(
+            _service.subprocess,
+            "run",
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="no matching lines\n"),
+        )
+        with pytest.raises(TrainingUIAPIError, match="Лог задания не найден"):
+            _service.job_log(session, job_id, config)
 
 
 def test_training_ui_worker_dispatches_inference_before_training(

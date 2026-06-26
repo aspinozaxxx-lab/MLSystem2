@@ -1343,6 +1343,13 @@ export interface components {
             epoch?: number | null;
             /** Trained At */
             trained_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
             /** Mlflow Run Url */
             mlflow_run_url?: string | null;
             /**

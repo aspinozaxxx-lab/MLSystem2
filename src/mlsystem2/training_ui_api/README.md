@@ -191,7 +191,8 @@ optional `mlflow_run_url` и действие: `запланировано об�
 `идёт псевдоразметка`, `обучена сеть` или `создана разметка`.
 `GET /api/v1/results/classes/{class_key}` возвращает активные строки обучения и псевдоразметки прямо в основной
 структуре класса: `TrainingResultInfo` и `PseudoMarkupResultInfo` содержат необязательный `job_id`, а статус
-`queued`/`running` берется из связанного задания, пока результат еще не завершен.
+`queued`/`running` берется из связанного задания, пока результат еще не завершен. `TrainingResultInfo.created_at`
+содержит время создания строки результата, а `started_at` - время запуска связанного job, если job успел стартовать.
 
 При успешном завершении training job worker читает через публичный `mlflow_adapter.api` историю метрики
 `val/best_threshold_pixel_f1`, по которой train-модуль сохраняет `checkpoints/best.pt`, и записывает лучший
@@ -213,6 +214,9 @@ Triton model repository; после обработки или ошибки за�
 строки-папки. `StoredFileInfo.size_bytes` и nullable `StoredFileInfo.object_count` берутся из БД и используются
 frontend для отображения размера и количества объектов скачиваемого GeoJSON; страница результатов не читает
 GeoJSON и не обходит корень снимков при открытии.
+`GET /api/v1/jobs/{job_id}/log` сначала отдает `worker_error.txt`, `train.log`, `logs/train.log` или
+`logs/pseudo_markup.log` из рабочей папки задания. Если локального лога нет или он указывает смотреть journalctl,
+endpoint возвращает фрагмент `journalctl` по unit из `MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT`.
 `DELETE /api/v1/results/pseudo-markup/{result_id}` удаляет строку результата, связанный inference job и
 принадлежащие UI-сервису stored files внутри `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT`; исходные файлы MLMarkup не
 удаляются.

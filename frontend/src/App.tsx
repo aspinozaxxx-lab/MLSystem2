@@ -57,6 +57,7 @@ import {
   formatFileSize,
   formatGeojsonSummary,
   formatRuntimeMinutes,
+  formatTrainingResultDate,
   integerOrNull,
   isValidExportModelName,
   runningProgressLabel,
@@ -1586,7 +1587,7 @@ function ResultsTable({
                   </td>
                   <td title="F1">{formatF1Score(result.f1_score)}</td>
                   <td title="Epoch">{result.epoch ?? "—"}</td>
-                  <td title="Создано">{formatDateTime(result.trained_at)}</td>
+                  <td title="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
                     {result.status === "ok" ? (
                       <>

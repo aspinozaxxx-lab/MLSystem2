@@ -53,6 +53,8 @@ class TrainingResultInfo(BaseModel):
     f1_score: float | None = None
     epoch: int | None = None
     trained_at: datetime | None = None
+    created_at: datetime
+    started_at: datetime | None = None
     mlflow_run_url: str | None = None
     status: Literal["queued", "running", "ok", "error", "cancelled"]
     progress: RuntimeProgress | None = None

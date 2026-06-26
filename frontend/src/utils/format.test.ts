@@ -7,6 +7,7 @@ import {
   formatGeojsonSummary,
   formatObjectCount,
   formatRuntimeMinutes,
+  formatTrainingResultDate,
   isValidExportModelName,
   runningProgressLabel,
 } from "./format";
@@ -32,6 +33,26 @@ describe("format helpers", () => {
     expect(formatObjectCount(11)).toBe("11 объектов");
     expect(formatObjectCount(null)).toBe("— объектов");
     expect(formatGeojsonSummary(500, 3.5 * 1024 * 1024)).toBe("500 объектов - 3.5 MB");
+  });
+
+  it("formats training result dates by status", () => {
+    expect(
+      formatTrainingResultDate(
+        "ok",
+        "2026-06-10T12:30:00",
+        "2026-06-10T12:00:00",
+        "2026-06-10T11:00:00",
+      ),
+    ).toContain("12:30");
+    expect(
+      formatTrainingResultDate(
+        "error",
+        null,
+        "2026-06-10T12:00:00",
+        "2026-06-10T11:00:00",
+      ),
+    ).toContain("12:00");
+    expect(formatTrainingResultDate("error", null, null, "2026-06-10T11:00:00")).toContain("11:00");
   });
 
   it("normalizes displayed stored file names", () => {

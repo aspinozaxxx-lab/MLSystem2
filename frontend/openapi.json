@@ -3638,6 +3638,23 @@
             ],
             "title": "Trained At"
           },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
           "mlflow_run_url": {
             "anyOf": [
               {
@@ -3684,6 +3701,7 @@
           "id",
           "model_name",
           "architecture",
+          "created_at",
           "status"
         ],
         "title": "TrainingResultInfo"

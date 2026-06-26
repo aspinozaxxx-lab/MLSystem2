@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -735,25 +736,28 @@ def job_log(
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     run_dir = _job_run_dir(row, config)
-    if run_dir is None:
-        raise TrainingUIAPIError("Рабочая папка задания не найдена.")
-
-    for path in _job_log_candidates(row, run_dir):
-        if not path.is_file():
-            continue
-        try:
-            content, truncated, size_bytes = _read_log_tail(path, JOB_LOG_MAX_BYTES)
-        except OSError:
-            continue
-        if not content.strip():
-            continue
-        return JobLogInfo(
-            job_id=row.id,
-            source_name=path.relative_to(run_dir).as_posix(),
-            content=content,
-            truncated=truncated,
-            size_bytes=size_bytes,
-        )
+    if run_dir is not None:
+        for path in _job_log_candidates(row, run_dir):
+            if not path.is_file():
+                continue
+            try:
+                content, truncated, size_bytes = _read_log_tail(path, JOB_LOG_MAX_BYTES)
+            except OSError:
+                continue
+            if not content.strip():
+                continue
+            if _requires_journal_fallback(content):
+                break
+            return JobLogInfo(
+                job_id=row.id,
+                source_name=path.relative_to(run_dir).as_posix(),
+                content=content,
+                truncated=truncated,
+                size_bytes=size_bytes,
+            )
+    journal = _journal_job_log(row, config)
+    if journal is not None:
+        return journal
     raise TrainingUIAPIError("Лог задания не найден.")
 
 
@@ -1645,6 +1649,88 @@ def _job_log_candidates(row: JobRow, run_dir: Path) -> list[Path]:
     ]
 
 
+def _requires_journal_fallback(content: str) -> bool:
+    text = content.strip().lower()
+    if not text:
+        return True
+    return "journalctl" in text
+
+
+def _journal_job_log(row: JobRow, config: TrainingUIAPIConfig) -> JobLogInfo | None:
+    if not config.journal_unit:
+        return None
+    since = _journal_timestamp(row.created_at - timedelta(minutes=2))
+    until = _journal_timestamp((row.finished_at or _now()) + timedelta(minutes=2))
+    try:
+        completed = subprocess.run(
+            [
+                "journalctl",
+                "-u",
+                config.journal_unit,
+                "--since",
+                since,
+                "--until",
+                until,
+                "--no-pager",
+                "--output",
+                "short-iso",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+    content = _extract_journal_job_block(completed.stdout, row.id)
+    if content is None:
+        return None
+    content, truncated, size_bytes = _trim_text_bytes(content, JOB_LOG_MAX_BYTES)
+    return JobLogInfo(
+        job_id=row.id,
+        source_name=f"journalctl:{config.journal_unit}",
+        content=content,
+        truncated=truncated,
+        size_bytes=size_bytes,
+    )
+
+
+def _journal_timestamp(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _extract_journal_job_block(output: str, job_id: uuid.UUID) -> str | None:
+    lines = output.splitlines()
+    start = next((index for index, line in enumerate(lines) if str(job_id) in line), None)
+    if start is None:
+        return None
+    collected: list[str] = []
+    for line in lines[start:]:
+        if collected and _journal_line_starts_unrelated_request(line):
+            break
+        collected.append(line)
+    content = "\n".join(collected).strip()
+    return content or None
+
+
+def _journal_line_starts_unrelated_request(line: str) -> bool:
+    message = line.rsplit("]: ", 1)[-1]
+    return message.startswith("INFO:") or message.startswith("Started ")
+
+
+def _trim_text_bytes(content: str, max_bytes: int) -> tuple[str, bool, int]:
+    data = content.encode("utf-8")
+    size_bytes = len(data)
+    if size_bytes <= max_bytes:
+        return content, False, size_bytes
+    trimmed = data[-max_bytes:].decode("utf-8", errors="replace")
+    return trimmed, True, size_bytes
+
+
 def _read_log_tail(path: Path, max_bytes: int) -> tuple[str, bool, int]:
     size_bytes = path.stat().st_size
     truncated = size_bytes > max_bytes
@@ -1716,6 +1802,7 @@ def _training_result_info(
             )
             .order_by(PseudoMarkupResultRow.created_at.desc())
         ).all()
+    job = _job_from_map(session, row.job_id, jobs_by_id)
     return TrainingResultInfo(
         id=row.id,
         job_id=row.job_id,
@@ -1727,6 +1814,8 @@ def _training_result_info(
         f1_score=row.f1_score,
         epoch=row.epoch,
         trained_at=row.trained_at,
+        created_at=row.created_at,
+        started_at=job.started_at if job is not None else None,
         mlflow_run_url=row.mlflow_run_url,
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         progress=_training_result_progress(session, row, jobs_by_id),

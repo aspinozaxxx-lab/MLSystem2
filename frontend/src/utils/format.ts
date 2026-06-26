@@ -42,6 +42,15 @@ export function formatGeojsonSummary(
   return `${formatObjectCount(objectCount)} - ${formatFileSize(sizeBytes)}`;
 }
 
+export function formatTrainingResultDate(
+  status: string | null | undefined,
+  trainedAt: string | null | undefined,
+  startedAt: string | null | undefined,
+  createdAt: string | null | undefined,
+): string {
+  return formatDateTime(status === "ok" ? trainedAt : startedAt || createdAt);
+}
+
 export function formatRuntimeMinutes(value: number | null | undefined): string {
   const minutes = integerOrNull(value);
   if (minutes === null || minutes < 0) return "";

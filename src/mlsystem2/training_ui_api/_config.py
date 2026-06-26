@@ -45,6 +45,7 @@ class TrainingUIAPIConfig:
     mlflow_ui_url: str
     minio_ui_url: str
     open_webui_url: str
+    journal_unit: str
     cors_origin: str | None
     worker_enabled: bool
     worker_interval_seconds: int
@@ -110,6 +111,7 @@ def get_config() -> TrainingUIAPIConfig:
             os.getenv("FRONTEND_MINIO_UI_URL", "/minio/browser/mlsystems/images/"),
         ),
         open_webui_url=os.getenv("MLSYSTEM2_OPEN_WEBUI_URL", os.getenv("FRONTEND_OPEN_WEBUI_URL", "/open-webui/")),
+        journal_unit=os.getenv("MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT", "mlsystem2-training-ui-api.service"),
         cors_origin=os.getenv("MLSYSTEM2_TRAINING_UI_CORS_ORIGIN"),
         worker_enabled=_bool_env("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", True),
         worker_interval_seconds=_int_env("MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS", 5),
