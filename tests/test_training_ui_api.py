@@ -1283,6 +1283,8 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/triton-zip" in app_tsx
     assert "metadata.sample_size" in app_tsx
     assert "sample_size_hint" in app_tsx
+    assert 'min="32"' in app_tsx
+    assert 'step="32"' in app_tsx
     assert "showJobLog" in app_tsx
     assert "/log" in app_tsx
     assert "log-view" in app_tsx

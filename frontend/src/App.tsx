@@ -743,7 +743,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                       <td>
                         <input
                           type="number"
-                          min="1"
+                          min="32"
                           step="32"
                           value={row.sampleSize}
                           disabled={!row.result || busy}
