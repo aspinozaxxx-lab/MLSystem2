@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,7 @@ from .contracts import (
     TrainingTemplateApplyField,
     TrainingTemplateCreate,
     TrainingJobCreate,
+    TrainingResultBatchExportRequest,
     TrainingResultInfo,
     TrainingTemplate,
     TrainingTemplateListResponse,
@@ -1099,6 +1101,102 @@ def export_training_result_triton_zip(
     sample_size: int | None,
     config: TrainingUIAPIConfig,
 ) -> ModelExportArchive:
+    row = _training_result_row_for_export(session, result_id)
+    return _build_training_result_export_archive(
+        row,
+        model_name=model_name,
+        sample_size=sample_size,
+        config=config,
+    )
+
+
+def export_training_results_triton_zip(
+    session: Session,
+    *,
+    request: TrainingResultBatchExportRequest,
+    config: TrainingUIAPIConfig,
+) -> ModelExportArchive:
+    if not request.items:
+        raise TrainingUIAPIError("Выберите хотя бы одну модель для экспорта.")
+    _validate_batch_export_uniqueness(request)
+
+    temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-results-export-"))
+    try:
+        export_root = temp_root / "export"
+        service_zip_dir = export_root / "models-serving-service"
+        pipeline_dir = export_root / "pipelines"
+        metadata_dir = export_root / "metadata"
+        service_zip_dir.mkdir(parents=True)
+        pipeline_dir.mkdir(parents=True)
+        metadata_dir.mkdir(parents=True)
+
+        exported_models: list[dict[str, object]] = []
+        for item in request.items:
+            row = _training_result_row_for_export(session, item.result_id)
+            model_name = item.model_name.strip()
+            archive = _build_training_result_export_archive(
+                row,
+                model_name=model_name,
+                sample_size=item.sample_size,
+                config=config,
+            )
+            try:
+                _copy_model_export_files(
+                    archive,
+                    model_name=model_name,
+                    service_zip_dir=service_zip_dir,
+                    pipeline_dir=pipeline_dir,
+                    metadata_dir=metadata_dir,
+                )
+            finally:
+                archive.cleanup()
+            exported_models.append(
+                {
+                    "result_id": str(row.id),
+                    "model_name": model_name,
+                    "class_key": row.class_key,
+                    "dataset_key": row.dataset_key,
+                    "trained_at": row.trained_at.isoformat() if row.trained_at is not None else None,
+                    "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+                    "model_archive": f"models-serving-service/{model_name}.zip",
+                    "pipeline": f"pipelines/{model_name}_triton.yaml",
+                    "metadata": f"metadata/{model_name}_export_metadata.json",
+                }
+            )
+
+        _write_export_json(
+            export_root / "export_metadata.json",
+            {
+                "format": "mlsystem2_batch_triton_export",
+                "models": exported_models,
+            },
+        )
+        zip_path = temp_root / "models_export.zip"
+        _zip_directory(export_root, zip_path)
+        return ModelExportArchive(
+            zip_path=zip_path,
+            filename="models_export.zip",
+            cleanup_root=temp_root,
+        )
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise
+
+
+def _validate_batch_export_uniqueness(request: TrainingResultBatchExportRequest) -> None:
+    result_ids: set[uuid.UUID] = set()
+    model_names: set[str] = set()
+    for item in request.items:
+        if item.result_id in result_ids:
+            raise TrainingUIAPIError("Один результат обучения нельзя добавить в экспорт дважды.")
+        result_ids.add(item.result_id)
+        model_name = item.model_name.strip()
+        if model_name in model_names:
+            raise TrainingUIAPIError("Имена моделей в общем архиве должны быть уникальными.")
+        model_names.add(model_name)
+
+
+def _training_result_row_for_export(session: Session, result_id: uuid.UUID) -> TrainingResultRow:
     row = session.get(TrainingResultRow, result_id)
     if row is None:
         raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
@@ -1106,7 +1204,16 @@ def export_training_result_triton_zip(
         raise TrainingUIAPIError("Экспорт доступен только для успешного результата обучения.")
     if not row.mlflow_run_id:
         raise TrainingUIAPIError("У результата обучения нет MLflow run id для скачивания best.pt.")
+    return row
 
+
+def _build_training_result_export_archive(
+    row: TrainingResultRow,
+    *,
+    model_name: str,
+    sample_size: int | None,
+    config: TrainingUIAPIConfig,
+) -> ModelExportArchive:
     with tempfile.TemporaryDirectory(prefix="mlsystem2-result-export-") as temp_dir:
         try:
             downloaded = download_run_artifact(
@@ -1132,6 +1239,39 @@ def export_training_result_triton_zip(
             checkpoint_bytes=checkpoint_bytes,
             sample_size=sample_size,
         )
+
+
+def _copy_model_export_files(
+    archive: ModelExportArchive,
+    *,
+    model_name: str,
+    service_zip_dir: Path,
+    pipeline_dir: Path,
+    metadata_dir: Path,
+) -> None:
+    expected_files = {
+        f"models-serving-service/{model_name}.zip": service_zip_dir / f"{model_name}.zip",
+        f"pipelines/{model_name}_triton.yaml": pipeline_dir / f"{model_name}_triton.yaml",
+        "export_metadata.json": metadata_dir / f"{model_name}_export_metadata.json",
+    }
+    with zipfile.ZipFile(archive.zip_path) as zip_file:
+        names = set(zip_file.namelist())
+        missing = [name for name in expected_files if name not in names]
+        if missing:
+            raise TrainingUIAPIError("Собранный архив модели не содержит ожидаемые файлы экспорта.")
+        for source_name, target_path in expected_files.items():
+            target_path.write_bytes(zip_file.read(source_name))
+
+
+def _write_export_json(path: Path, content: dict[str, object]) -> None:
+    path.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _zip_directory(source_dir: Path, zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(source_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(source_dir).as_posix())
 
 
 def _resolve_training_result(
@@ -1817,6 +1957,7 @@ def _training_result_info(
         created_at=row.created_at,
         started_at=job.started_at if job is not None else None,
         mlflow_run_url=row.mlflow_run_url,
+        sample_size_hint=job.tile_size if job is not None else None,
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         progress=_training_result_progress(session, row, jobs_by_id),
         pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],

@@ -226,6 +226,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/triton-zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Training Results Triton Zip */
+        post: operations["post_training_results_triton_zip_api_v1_results_training_triton_zip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/triton-zip": {
         parameters: {
             query?: never;
@@ -1318,6 +1335,23 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** TrainingResultBatchExportRequest */
+        TrainingResultBatchExportRequest: {
+            /** Items */
+            items?: components["schemas"]["TrainingResultExportItem"][];
+        };
+        /** TrainingResultExportItem */
+        TrainingResultExportItem: {
+            /**
+             * Result Id
+             * Format: uuid
+             */
+            result_id: string;
+            /** Model Name */
+            model_name: string;
+            /** Sample Size */
+            sample_size?: number | null;
+        };
         /** TrainingResultInfo */
         TrainingResultInfo: {
             /**
@@ -1352,6 +1386,8 @@ export interface components {
             started_at?: string | null;
             /** Mlflow Run Url */
             mlflow_run_url?: string | null;
+            /** Sample Size Hint */
+            sample_size_hint?: number | null;
             /**
              * Status
              * @enum {string}
@@ -1769,6 +1805,39 @@ export interface operations {
         requestBody?: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_post_model_export_triton_zip_api_v1_model_export_triton_zip_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_training_results_triton_zip_api_v1_results_training_triton_zip_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrainingResultBatchExportRequest"];
             };
         };
         responses: {

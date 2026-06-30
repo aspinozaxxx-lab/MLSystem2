@@ -200,8 +200,10 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 обучения, получает в `jobs.config` `mlflow_run_id`, `checkpoint_artifact_path=checkpoints/best.pt`,
 `inference_template_id`, `inference_template_config` и, когда MLflow доступен, полный `checkpoint_uri`.
 Для успешного результата обучения `POST /api/v1/results/training/{result_id}/triton-zip` скачивает тот же
-`checkpoints/best.pt` из MLflow, собирает временный архив Triton CPU тем же кодом, что страница `Экспорт модели`,
-и возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса.
+`checkpoints/best.pt` из MLflow, собирает временный архив Triton CPU тем же кодом, что endpoint checkpoint-экспорта,
+и возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса. `POST /api/v1/results/training/triton-zip`
+принимает список успешных результатов и имен моделей, собирает каждую модель тем же кодом и возвращает общий zip с
+`models-serving-service/`, `pipelines/`, `metadata/` и корневым `export_metadata.json`.
 
 Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
 загруженного файла, пишет в `pseudo_config.yaml` `inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`

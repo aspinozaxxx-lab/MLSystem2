@@ -63,9 +63,10 @@ process и помечает известный MLflow run как `KILLED`; по�
 PyTorch-инференс и после обработки освобождает CUDA cache. Этот путь не экспортирует модель в Triton, не
 создает Geoalert pipeline YAML и не добавляет запись в Triton model repository; Triton остается ручным
 production-инференсом и явным экспортом.
-Страница экспорта модели в `training_ui_api` принимает локальный MLSystem2 checkpoint `.pt`, берет threshold и
-sample_size из metadata checkpoint, собирает временный zip-архив для `models-serving-service` и Triton CPU,
-отдает его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
+Страница экспорта моделей в `training_ui_api` показывает последние успешные training results по вариантам
+MLMarkup, по умолчанию выбирает варианты `main`, скачивает `checkpoints/best.pt` из MLflow по сохраненным run id,
+собирает временный общий zip-архив для `models-serving-service` и Triton CPU через тот же сборщик, что одиночный
+экспорт, отдает его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
 На странице результатов обучения тот же временный zip-экспорт доступен для успешного training result: сервис
 скачивает `checkpoints/best.pt` из MLflow по сохраненному run id результата и передает checkpoint в общий сборщик
 экспорта.

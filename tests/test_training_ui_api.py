@@ -39,6 +39,8 @@ from mlsystem2.training_ui_api.contracts import (
     ResultStatus,
     StoredFileKind,
     TrainingJobCreate,
+    TrainingResultBatchExportRequest,
+    TrainingResultExportItem,
     TrainingTemplateCreate,
     TrainingTemplateUpdate,
     TrainingUIAPIError,
@@ -1036,6 +1038,105 @@ def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Pa
     assert response.content.startswith(b"PK")
 
 
+def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLFLOW_TRACKING_URI", "http://mlflow.local")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER", "mluser")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_PASSWORD", "secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        first = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="Реки\\main",
+            class_key="Реки\\main",
+            class_display_name="Реки\\main",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+            mlflow_run_id="run-rivers",
+        )
+        second = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+            mlflow_run_id="run-deforest",
+        )
+        session.add_all([first, second])
+        session.commit()
+        first_id = first.id
+        second_id = second.id
+
+    download_calls: list[str] = []
+    build_calls: list[dict[str, object]] = []
+
+    def fake_download_run_artifact(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["tracking_uri"] == "http://mlflow.local"
+        assert kwargs["artifact_path"] == "checkpoints/best.pt"
+        download_calls.append(str(kwargs["run_id"]))
+        checkpoint_path = Path(kwargs["dst_dir"]) / "best.pt"
+        checkpoint_path.write_bytes(b"checkpoint")
+        return SimpleNamespace(local_path=str(checkpoint_path))
+
+    def fake_build_zip(**kwargs: object) -> SimpleNamespace:
+        build_calls.append(dict(kwargs))
+        model_name = str(kwargs["model_name"])
+        zip_path = tmp_path / f"{model_name}_export.zip"
+        with zipfile.ZipFile(zip_path, "w") as zip_file:
+            zip_file.writestr(f"models-serving-service/{model_name}.zip", b"service-zip")
+            zip_file.writestr(f"pipelines/{model_name}_triton.yaml", "pipeline")
+            zip_file.writestr("export_metadata.json", json.dumps({"model_name": model_name}))
+        return SimpleNamespace(
+            zip_path=zip_path,
+            filename=f"{model_name}_export.zip",
+            cleanup=lambda: None,
+        )
+
+    monkeypatch.setattr(_service, "download_run_artifact", fake_download_run_artifact)
+    monkeypatch.setattr(_service, "build_triton_model_export_zip", fake_build_zip)
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/v1/results/training/triton-zip", json={"items": []}).status_code == 401
+        login = client.post("/api/v1/auth/login", json={"username": "mluser", "password": "secret"})
+        assert login.status_code == 200
+        response = client.post(
+            "/api/v1/results/training/triton-zip",
+            json={
+                "items": [
+                    {"result_id": str(first_id), "model_name": "rivers_kanopus", "sample_size": 512},
+                    {"result_id": str(second_id), "model_name": "deforest_kanopus", "sample_size": None},
+                ]
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].endswith('filename="models_export.zip"')
+    assert download_calls == ["run-rivers", "run-deforest"]
+    assert [item["model_name"] for item in build_calls] == ["rivers_kanopus", "deforest_kanopus"]
+    assert build_calls[0]["sample_size"] == 512
+    assert build_calls[1]["sample_size"] is None
+
+    batch_zip_path = tmp_path / "models_export.zip"
+    batch_zip_path.write_bytes(response.content)
+    with zipfile.ZipFile(batch_zip_path) as zip_file:
+        names = set(zip_file.namelist())
+        assert "models-serving-service/rivers_kanopus.zip" in names
+        assert "models-serving-service/deforest_kanopus.zip" in names
+        assert "pipelines/rivers_kanopus_triton.yaml" in names
+        assert "metadata/rivers_kanopus_export_metadata.json" in names
+        metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
+    assert [item["model_name"] for item in metadata["models"]] == ["rivers_kanopus", "deforest_kanopus"]
+
+
 def test_training_result_model_export_requires_ok_status_and_mlflow_run(
     tmp_path: Path,
     monkeypatch,
@@ -1088,6 +1189,78 @@ def test_training_result_model_export_requires_ok_status_and_mlflow_run(
                 sample_size=None,
                 config=config,
             )
+        with pytest.raises(TrainingUIAPIError, match="Имена моделей"):
+            _service.export_training_results_triton_zip(
+                session,
+                request=TrainingResultBatchExportRequest(
+                    items=[
+                        TrainingResultExportItem(result_id=running.id, model_name="same_name"),
+                        TrainingResultExportItem(result_id=without_run.id, model_name="same_name"),
+                    ]
+                ),
+                config=config,
+            )
+        with pytest.raises(TrainingUIAPIError, match="только для успешного"):
+            _service.export_training_results_triton_zip(
+                session,
+                request=TrainingResultBatchExportRequest(
+                    items=[TrainingResultExportItem(result_id=running.id, model_name="rivers_kanopus")]
+                ),
+                config=config,
+            )
+        with pytest.raises(TrainingUIAPIError, match="нет MLflow run id"):
+            _service.export_training_results_triton_zip(
+                session,
+                request=TrainingResultBatchExportRequest(
+                    items=[TrainingResultExportItem(result_id=without_run.id, model_name="rivers_kanopus")]
+                ),
+                config=config,
+            )
+
+
+def test_class_results_includes_sample_size_hint_from_training_job(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = JobRow(
+            type=JobType.TRAINING.value,
+            source=JobSource.MANUAL.value,
+            status=JobStatus.RUNNING.value,
+            queue_position=1,
+            dataset_key="Реки\\main",
+            dataset_name="Реки\\main",
+            model_name="segformer b2",
+            architecture="smp_segformer_b2",
+            tile_size=768,
+            config={},
+        )
+        session.add(job)
+        session.flush()
+        session.add(
+            TrainingResultRow(
+                source=JobSource.MANUAL.value,
+                dataset_key="Реки\\main",
+                class_key="Реки\\main",
+                class_display_name="Реки\\main",
+                architecture="smp_segformer_b2",
+                model_name="segformer b2",
+                status=ResultStatus.OK.value,
+                job_id=job.id,
+                mlflow_run_id="run-rivers",
+            )
+        )
+        session.flush()
+
+        response = _service.class_results(session, "Реки\\main", config)
+
+    assert response.results[0].sample_size_hint == 768
 
 
 def test_training_ui_frontend_is_react_vite_app() -> None:
@@ -1103,10 +1276,13 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert not Path("frontend/src/assets/app.css").exists()
     assert 'head === "model-export"' in app_tsx
     assert "/bootstrap" in app_tsx
-    assert "/model-export/triton-zip" in app_tsx
+    assert "Экспорт моделей" in app_tsx
+    assert "apiDownloadJson" in app_tsx
+    assert "/results/training/triton-zip" in app_tsx
     assert "/results/training/" in app_tsx
     assert "/triton-zip" in app_tsx
     assert "metadata.sample_size" in app_tsx
+    assert "sample_size_hint" in app_tsx
     assert "showJobLog" in app_tsx
     assert "/log" in app_tsx
     assert "log-view" in app_tsx

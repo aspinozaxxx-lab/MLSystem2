@@ -56,9 +56,24 @@ class TrainingResultInfo(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     mlflow_run_url: str | None = None
+    sample_size_hint: int | None = None
     status: Literal["queued", "running", "ok", "error", "cancelled"]
     progress: RuntimeProgress | None = None
     pseudo_markup_results: list[PseudoMarkupResultInfo] = Field(default_factory=list)
+
+
+class TrainingResultExportItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result_id: UUID
+    model_name: str
+    sample_size: int | None = None
+
+
+class TrainingResultBatchExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[TrainingResultExportItem] = Field(default_factory=list)
 
 
 class ClassResultsResponse(BaseModel):
@@ -141,5 +156,7 @@ __all__ = [
     "PseudoMarkupResultInfo",
     "ResultChangeInfo",
     "ResultChangesResponse",
+    "TrainingResultBatchExportRequest",
+    "TrainingResultExportItem",
     "TrainingResultInfo",
 ]

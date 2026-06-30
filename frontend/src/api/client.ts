@@ -62,6 +62,22 @@ export async function apiDownload(path: string, form: FormData): Promise<{ blob:
   };
 }
 
+export async function apiDownloadJson(path: string, body: unknown): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response), response.status);
+  }
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response),
+  };
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

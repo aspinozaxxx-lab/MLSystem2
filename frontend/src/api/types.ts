@@ -22,6 +22,8 @@ export type QueueSnapshot = components["schemas"]["QueueSnapshot"];
 export type ResultChangeInfo = components["schemas"]["ResultChangeInfo"];
 export type ResultChangesResponse = components["schemas"]["ResultChangesResponse"];
 export type RuntimeProgress = components["schemas"]["RuntimeProgress"];
+export type TrainingResultBatchExportRequest = components["schemas"]["TrainingResultBatchExportRequest"];
+export type TrainingResultExportItem = components["schemas"]["TrainingResultExportItem"];
 export type TrainingResultInfo = components["schemas"]["TrainingResultInfo"];
 export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
 

@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._model_export import build_triton_model_export_zip
-from mlsystem2.training_ui_api._service import export_training_result_triton_zip
-from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
+from mlsystem2.training_ui_api._service import export_training_result_triton_zip, export_training_results_triton_zip
+from mlsystem2.training_ui_api.contracts import TrainingResultBatchExportRequest, TrainingUIAPIError
 
 from .common import RouteContext
 
@@ -31,6 +31,24 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
             checkpoint_filename=checkpoint.filename or "",
             checkpoint_bytes=await checkpoint.read(),
             sample_size=sample_size,
+        )
+        return FileResponse(
+            archive.zip_path,
+            filename=archive.filename,
+            media_type="application/zip",
+            background=BackgroundTask(archive.cleanup),
+        )
+
+    @app.post("/api/v1/results/training/triton-zip")
+    def post_training_results_triton_zip(
+        request: TrainingResultBatchExportRequest,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> FileResponse:
+        archive = export_training_results_triton_zip(
+            db,
+            request=request,
+            config=ctx.config,
         )
         return FileResponse(
             archive.zip_path,

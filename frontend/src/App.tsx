@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
-import { ApiError, apiDownload, apiForm, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import type {
   AnyTemplate,
   AutomationRuleInfo,
@@ -45,6 +45,7 @@ import type {
   QueueSnapshot,
   ResultChangeInfo,
   ResultChangesResponse,
+  TrainingResultBatchExportRequest,
   TrainingResultInfo,
   TrainingTemplate,
 } from "./api/types";
@@ -233,7 +234,7 @@ function Shell({
     { href: "#/queue", key: "queue", label: "Очередь", icon: ListChecks },
     { href: "#/templates", key: "templates", label: "Шаблоны", icon: Settings },
     { href: "#/automation", key: "automation", label: "Автоматизация", icon: Activity },
-    { href: "#/model-export", key: "model-export", label: "Zip", icon: Archive },
+    { href: "#/model-export", key: "model-export", label: "Экспорт моделей", icon: Archive },
     { href: "#/results", key: "results", label: "Результаты", icon: BarChart3 },
   ];
   return (
@@ -564,44 +565,203 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   );
 }
 
-function ModelExportPage({ showModal, closeModal }: RoutedPageProps) {
+type ModelExportRow = {
+  dataset: DatasetInfo;
+  result: TrainingResultInfo | null;
+  selected: boolean;
+  modelName: string;
+  sampleSize: string;
+};
+
+function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
+  const [rows, setRows] = useState<ModelExportRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
+  useEffect(() => {
+    let cancelled = false;
+    const variants = bootstrap.classes.flatMap((item) => item.variants || []);
+    setLoading(true);
+    void Promise.all(
+      variants.map(async (dataset): Promise<ModelExportRow> => {
+        const payload = await run(() => apiJson<ClassResultsResponse>(`/results/classes/${encodeURIComponent(dataset.key)}`));
+        const result = payload ? latestSuccessfulTrainingResult(payload.results) : null;
+        return {
+          dataset,
+          result,
+          selected: Boolean(result && isMainDatasetVariant(dataset)),
+          modelName: result ? defaultTrainingZipModelName(result, bootstrap.datasets) : "",
+          sampleSize: result?.sample_size_hint ? String(result.sample_size_hint) : "",
+        };
+      }),
+    )
+      .then((items) => {
+        if (!cancelled) setRows(items);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrap.classes, bootstrap.datasets, run]);
+
+  const updateRow = (datasetKey: string, patch: Partial<ModelExportRow>) => {
+    setRows((current) => current.map((row) => (row.dataset.key === datasetKey ? { ...row, ...patch } : row)));
+  };
+
+  const availableRows = rows.filter((row) => row.result);
+  const selectedRows = rows.filter((row) => row.result && row.selected);
+  const allAvailableSelected = availableRows.length > 0 && availableRows.every((row) => row.selected);
+
+  const toggleAll = () => {
+    const nextSelected = !allAvailableSelected;
+    setRows((current) => current.map((row) => ({ ...row, selected: Boolean(row.result && nextSelected) })));
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const modelName = String(data.get("model_name") || "").trim();
-    const checkpoint = data.get("checkpoint");
-    if (!isValidExportModelName(modelName)) {
-      showModal({ title: "Ошибка", body: <p>Имя модели должно содержать только a-z, 0-9, дефис и подчеркивание.</p> });
+    if (!selectedRows.length) {
+      showModal({ title: "Ошибка", body: <p>Выберите хотя бы одну модель для экспорта.</p> });
       return;
     }
-    if (!(checkpoint instanceof File) || !checkpoint.name.toLowerCase().endsWith(".pt")) {
-      showModal({ title: "Ошибка", body: <p>Выберите MLSystem2 checkpoint .pt.</p> });
-      return;
+    const names = new Set<string>();
+    const items: NonNullable<TrainingResultBatchExportRequest["items"]> = [];
+    for (const row of selectedRows) {
+      const modelName = row.modelName.trim();
+      if (!isValidExportModelName(modelName)) {
+        showModal({ title: "Ошибка", body: <p>Имя модели должно содержать только a-z, 0-9, дефис и подчеркивание.</p> });
+        return;
+      }
+      if (names.has(modelName)) {
+        showModal({ title: "Ошибка", body: <p>Имена моделей в общем архиве должны быть уникальными.</p> });
+        return;
+      }
+      names.add(modelName);
+      const sampleSize = parseExportSampleSize(row.sampleSize);
+      if (sampleSize === undefined) {
+        showModal({ title: "Ошибка", body: <p>sample_size должен быть положительным числом, кратным 32.</p> });
+        return;
+      }
+      items.push({
+        result_id: row.result!.id,
+        model_name: modelName,
+        sample_size: sampleSize,
+      });
     }
-    await exportCheckpointArchive(modelName, checkpoint, null, setBusy, setStatus, showModal, closeModal);
+
+    setBusy(true);
+    setStatus("Сборка архива...");
+    try {
+      const request: TrainingResultBatchExportRequest = { items };
+      const response = await run(() => apiDownloadJson("/results/training/triton-zip", request));
+      if (response) {
+        downloadBlob(response.blob, response.filename || "models_export.zip");
+        setStatus("Архив готов");
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <>
-      <PageHeader title="Экспорт модели" subtitle="Сборка zip-архива для models-serving-service и текущего Triton" />
+      <PageHeader title="Экспорт моделей" subtitle="Последние успешные модели по вариантам MLMarkup" />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
-          <div className="form-grid">
-            <label className="field">
-              <span>Имя модели</span>
-              <input name="model_name" pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?" placeholder="deforestation-b2" required />
-            </label>
-            <label className="field">
-              <span>Checkpoint .pt</span>
-              <input name="checkpoint" type="file" accept=".pt" required />
-            </label>
-          </div>
+          <PanelHeader
+            title="Модели"
+            subtitle={loading ? "Загрузка результатов" : `Доступно к экспорту: ${availableRows.length}`}
+            aside={
+              <button className="secondary compact-action" type="button" disabled={!availableRows.length || busy} onClick={toggleAll}>
+                {allAvailableSelected ? "Снять все" : "Выбрать все"}
+              </button>
+            }
+          />
+          {loading ? (
+            <div className="empty-state">Загрузка моделей</div>
+          ) : rows.length ? (
+            <div className="table-wrap">
+              <table className="model-export-table">
+                <colgroup>
+                  <col className="model-export-col-check" />
+                  <col className="model-export-col-dataset" />
+                  <col className="model-export-col-model" />
+                  <col className="model-export-col-date" />
+                  <col className="model-export-col-name" />
+                  <col className="model-export-col-sample" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th aria-label="Выбрано"></th>
+                    <th>Класс</th>
+                    <th>Модель</th>
+                    <th>Обучена</th>
+                    <th>Имя выгрузки</th>
+                    <th>sample_size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr className={row.result ? "" : "disabled-row"} key={row.dataset.key}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={row.selected}
+                          disabled={!row.result || busy}
+                          aria-label={`Выбрать ${row.dataset.name}`}
+                          onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })}
+                        />
+                      </td>
+                      <td>
+                        <span className="source-lines">
+                          <strong>{row.dataset.name}</strong>
+                          {row.dataset.version ? <small className="muted">{shortVersion(row.dataset.version)}</small> : null}
+                        </span>
+                      </td>
+                      <td>
+                        {row.result ? (
+                          <span className="source-lines">
+                            <strong>{row.result.model_name}</strong>
+                            <small className="muted">{row.result.architecture}</small>
+                          </span>
+                        ) : (
+                          <span className="muted">Нет успешной модели</span>
+                        )}
+                      </td>
+                      <td>{row.result ? formatDateTime(row.result.trained_at || row.result.created_at) : "—"}</td>
+                      <td>
+                        <input
+                          value={row.modelName}
+                          disabled={!row.result || busy}
+                          pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
+                          aria-label={`Имя выгрузки ${row.dataset.name}`}
+                          onChange={(event) => updateRow(row.dataset.key, { modelName: event.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="1"
+                          step="32"
+                          value={row.sampleSize}
+                          disabled={!row.result || busy}
+                          aria-label={`sample_size ${row.dataset.name}`}
+                          onChange={(event) => updateRow(row.dataset.key, { sampleSize: event.target.value })}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state">Варианты датасетов не найдены</div>
+          )}
         </section>
         <div className="inline-row">
-          <button className="primary" type="submit" disabled={busy}>
+          <button className="primary" type="submit" disabled={busy || loading || !selectedRows.length}>
             <Archive size={16} />
             Собрать zip
           </button>
@@ -610,6 +770,31 @@ function ModelExportPage({ showModal, closeModal }: RoutedPageProps) {
       </form>
     </>
   );
+}
+
+function latestSuccessfulTrainingResult(results: TrainingResultInfo[]): TrainingResultInfo | null {
+  return (
+    [...results]
+      .filter((item) => item.status === "ok")
+      .sort((left, right) => trainingResultExportTime(right) - trainingResultExportTime(left))[0] || null
+  );
+}
+
+function trainingResultExportTime(result: TrainingResultInfo): number {
+  const timestamp = Date.parse(result.trained_at || result.created_at || "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function isMainDatasetVariant(dataset: DatasetInfo): boolean {
+  return dataset.variant_key === "main" || /[\\/]main$/.test(dataset.key);
+}
+
+function parseExportSampleSize(value: string): number | null | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const sampleSize = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) return undefined;
+  return sampleSize;
 }
 
 function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
@@ -2029,36 +2214,6 @@ function defaultTrainingZipModelName(result: TrainingResultInfo, datasets: Datas
   const suffix = "kanopus";
   if (!datasetPart || datasetPart === suffix || datasetPart.endsWith(`_${suffix}`)) return datasetPart || suffix;
   return `${datasetPart}_${suffix}`;
-}
-
-async function exportCheckpointArchive(
-  modelName: string,
-  checkpoint: File,
-  sampleSize: number | null,
-  setBusy: (busy: boolean) => void,
-  setStatus: (status: string) => void,
-  showModal: (modal: ModalState) => void,
-  closeModal: () => void,
-) {
-  setBusy(true);
-  setStatus("Сборка архива...");
-  const request = new FormData();
-  request.set("model_name", modelName);
-  request.set("checkpoint", checkpoint);
-  if (sampleSize !== null) request.set("sample_size", String(sampleSize));
-  try {
-    const response = await apiDownload("/model-export/triton-zip", request);
-    downloadBlob(response.blob, response.filename || `${modelName}_export.zip`);
-    setStatus("Архив готов");
-  } catch (error) {
-    if (error instanceof ApiError && error.message.includes("metadata.sample_size")) {
-      showSampleSizeModal((value) => exportCheckpointArchive(modelName, checkpoint, value, setBusy, setStatus, showModal, closeModal), showModal, closeModal);
-    } else {
-      showModal({ title: "Ошибка экспорта", body: <p>{error instanceof Error ? error.message : "Неизвестная ошибка"}</p> });
-    }
-  } finally {
-    setBusy(false);
-  }
 }
 
 function showTrainingResultZipModal(

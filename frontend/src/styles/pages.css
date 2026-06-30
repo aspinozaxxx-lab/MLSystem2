@@ -114,6 +114,44 @@
   table-layout: fixed;
 }
 
+.model-export-table {
+  min-width: 1040px;
+  table-layout: fixed;
+}
+
+.model-export-col-check {
+  width: 6%;
+}
+
+.model-export-col-dataset {
+  width: 22%;
+}
+
+.model-export-col-model {
+  width: 20%;
+}
+
+.model-export-col-date {
+  width: 16%;
+}
+
+.model-export-col-name {
+  width: 24%;
+}
+
+.model-export-col-sample {
+  width: 12%;
+}
+
+.model-export-table input {
+  min-width: 0;
+}
+
+.model-export-table .disabled-row td {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
 .training-summary-table .result-col-model {
   width: 22%;
 }

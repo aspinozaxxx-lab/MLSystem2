@@ -28,12 +28,16 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
 - `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
-- `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания.
+- `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания; `TrainingResultInfo.sample_size_hint` передает tile size из связанного job, если он известен.
+- `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
 - `POST /api/v1/results/training/{result_id}/triton-zip` - multipart endpoint для сборки такого же zip-архива
   из `checkpoints/best.pt` успешного результата обучения в MLflow; endpoint возвращает файл и не создает записей в БД.
+- `POST /api/v1/results/training/triton-zip` - JSON endpoint для сборки общего zip-архива нескольких успешных
+  результатов обучения; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
+  возвращает файл и не создает записей в БД.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -74,17 +78,21 @@ auto jobs: queued rows уходят из очередей, running process по�
 
 Для датасета `Реки\main` создан датасетный шаблон инференса `smp_segformer_b2` под вариант 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и включенный фильтр компактных объектов (`min_isoperimetric_quotient=0.25`, `max_bbox_ratio=3.5`). Фильтр удаляет компактные полигоны, похожие на пруды и озера, и оставляет вытянутые речные объекты.
 
-Страница `Экспорт модели` отправляет `.pt` checkpoint и имя модели в `POST /api/v1/model-export/triton-zip`.
+Endpoint `POST /api/v1/model-export/triton-zip` принимает `.pt` checkpoint и имя модели.
 Backend загружает checkpoint через `models.api.load_checkpoint`, берет threshold только из
 `metadata.val_best_threshold` и завершает экспорт ошибкой, если threshold в checkpoint отсутствует. `sample_size`
-берется из `metadata.sample_size`; для старых checkpoint без этого поля frontend показывает popup и повторяет
-запрос с ручным `sample_size`. Backend экспортирует binary segmentation модель в ONNX с uint8 mask output,
+берется из `metadata.sample_size`, а если его нет, запрос может передать ручной `sample_size`. Backend экспортирует binary segmentation модель в ONNX с uint8 mask output,
 совместимый со старым Triton CPU service (`opset 17`, `IR version 8`), создает `config.pbtxt` с
 динамическим batch для output mask (`dims: [ -1, 1, -1, -1 ]`), `instance_group KIND_CPU` и возвращает внешний архив `<model_name>_export.zip`. В корне
 внешнего архива лежит `export_metadata.json`, pipeline YAML лежит в `pipelines/<model_name>_triton.yaml`, а
 чистый архив для `models-serving-service` лежит в `models-serving-service/<model_name>.zip`. Внутренний архив
 содержит только каталог `<model_name>` с Triton model repository файлами, поэтому после распаковки проходит
 проверка `models-serving-service` по наличию каталога модели и туда не попадают pipeline или metadata.
+Страница `Экспорт моделей` берет варианты `Класс\вариант` из bootstrap, для каждого варианта читает последний
+успешный training result через `/results/classes/{class_key}`, по умолчанию отмечает `main`, позволяет задать имя
+и optional `sample_size` на модель и отправляет выбранные строки в `POST /api/v1/results/training/triton-zip`.
+Общий архив содержит `models-serving-service/<model_name>.zip`, `pipelines/<model_name>_triton.yaml`,
+`metadata/<model_name>_export_metadata.json` и корневой `export_metadata.json`.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в
 `POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через
