@@ -341,15 +341,18 @@ function HomePage({ bootstrap, run, showJobLog }: RoutedPageProps) {
         <ToolCard link={links.grafana} fallbackTitle="Grafana" icon={<BarChart3 size={20} />} />
         <ToolCard link={links.mlflow} fallbackTitle="MLflow" icon={<Activity size={20} />} />
         <ToolCard link={links.minio} fallbackTitle="MinIO" icon={<Database size={20} />} />
-        <a className="tool-card" href="#/start">
+        <a className="tool-card" href="/projects">
           <div>
             <div className="card-title">
-              <Play size={20} />
-              Запуск обучения
+              <Layers3 size={20} />
+              Mapflow
             </div>
-            <p className="muted">Создать training job из текущих шаблонов.</p>
+            <p className="muted">Открыть интерфейс ПМО и результаты обработок.</p>
           </div>
-          <span className="secondary compact-action">Открыть</span>
+          <span className="secondary compact-action">
+            <ExternalLink size={14} />
+            Открыть
+          </span>
         </a>
       </section>
       <section className="panel">
