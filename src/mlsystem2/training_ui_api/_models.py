@@ -414,6 +414,7 @@ class TestSampleBatchRow(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     active_slot: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
     tile_size: Mapped[int] = mapped_column(Integer)
+    min_image_count: Mapped[int] = mapped_column(Integer)
     image_count: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

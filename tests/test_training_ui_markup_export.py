@@ -51,6 +51,7 @@ from mlsystem2.training_ui_api.contracts import (
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
+    TestSampleBatchCreate as _TestSampleBatchCreate,
     TestSampleOptimizeRequest as _TestSampleOptimizeRequest,
     TestSamplePrimaryUpdate as _TestSamplePrimaryUpdate,
     TestSampleTileUpdate as _TestSampleTileUpdate,
@@ -425,6 +426,47 @@ def test_candidate_selection_counts_one_long_object_in_separate_tiles() -> None:
     assert sum(candidates[index].object_count for index in selected) == 2
 
 
+def test_candidate_pool_accepts_final_subset_in_image_count_range() -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate(
+            crs,
+            index=index,
+            territory=f"region-{index}",
+            source=f"region-{index}/scene.tif",
+            count=1,
+        )
+        for index in range(7)
+    ]
+    request = MarkupExportRequest(
+        dataset_key="test\\main",
+        tile_width=16,
+        tile_height=16,
+        image_count=7,
+        object_count=15,
+    )
+
+    selected = _markup_export._select_candidates(
+        candidates,
+        request,
+        allow_touching=False,
+        min_final_image_count=5,
+        max_final_image_count=10,
+        min_final_object_count=5,
+    )
+    impossible = _markup_export._select_candidates(
+        candidates,
+        request,
+        allow_touching=False,
+        min_final_image_count=8,
+        max_final_image_count=10,
+        min_final_object_count=5,
+    )
+
+    assert selected == list(range(7))
+    assert impossible is None
+
+
 def test_candidate_selection_prioritizes_territories_then_sources_deterministically() -> None:
     crs = CRS.from_epsg(3857)
     candidates = [
@@ -669,12 +711,12 @@ def test_test_sample_batch_latest_preserves_next_form_defaults(
             "/api/v1/test-sample-batches",
             json={
                 "tile_size": 2048,
+                "min_image_count": 5,
                 "image_count": 7,
                 "items": [
                     {
                         "dataset_key": "Вырубки\\main",
                         "min_object_count": 41,
-                        "metric": "pixel",
                     }
                 ],
             },
@@ -687,9 +729,27 @@ def test_test_sample_batch_latest_preserves_next_form_defaults(
         payload = latest.json()
         assert payload["id"] == created.json()["id"]
         assert payload["tile_size"] == 2048
+        assert payload["min_image_count"] == 5
         assert payload["image_count"] == 7
         assert payload["items"][0]["min_object_count"] == 41
         assert payload["items"][0]["metric"] == "pixel"
+
+
+def test_test_sample_batch_request_keeps_exact_legacy_image_count() -> None:
+    request = _TestSampleBatchCreate(
+        image_count=3,
+        items=[{"dataset_key": "Вырубки\\main"}],
+    )
+
+    assert request.min_image_count == 3
+    assert request.items[0].metric == "pixel"
+
+    with pytest.raises(ValueError, match="Минимальное число снимков"):
+        _TestSampleBatchCreate(
+            min_image_count=4,
+            image_count=3,
+            items=[{"dataset_key": "Вырубки\\main"}],
+        )
 
 
 def test_persistent_test_sample_metrics_and_stale_revision(
@@ -1049,6 +1109,41 @@ def test_test_sample_optimizer_prioritizes_aggregate_f1_before_diversity() -> No
     )
 
     assert selected == [1, 2]
+
+
+def test_test_sample_optimizer_selects_best_count_inside_range() -> None:
+    from mlsystem2.training_ui_api._test_samples import _select_optimized_tile_indices
+
+    tiles = [
+        _TestSampleTileRow(
+            tile_index=index,
+            source_name=f"source-{index}.tif",
+            territory=f"territory-{index}",
+            object_count=1,
+            enabled=True,
+        )
+        for index in range(1, 4)
+    ]
+    perfect = _test_samples_metric_counts(10, 0, 0)
+    false_positive = _test_samples_metric_counts(0, 10, 0)
+    metrics = {
+        1: (perfect, perfect),
+        2: (false_positive, false_positive),
+        3: (false_positive, false_positive),
+    }
+
+    selected = _select_optimized_tile_indices(
+        tiles,
+        metrics,
+        _TestSampleOptimizeRequest(
+            min_tile_count=1,
+            max_tile_count=3,
+            min_object_count=1,
+            metric="pixel",
+        ),
+    )
+
+    assert selected == [1]
 
 
 def test_test_sample_optimizer_uses_requested_metric() -> None:

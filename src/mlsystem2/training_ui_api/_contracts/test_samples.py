@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TestSampleCreate(BaseModel):
@@ -144,15 +144,36 @@ class TestSampleBatchItemCreate(BaseModel):
 
     dataset_key: str = Field(min_length=1)
     min_object_count: int = Field(default=150, gt=0)
-    metric: Literal["pixel", "objects"] = "objects"
+    metric: Literal["pixel", "objects"] = "pixel"
 
 
 class TestSampleBatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tile_size: Literal[512, 768, 1024, 1536, 2048] = 1536
-    image_count: int = Field(default=10, gt=0)
+    min_image_count: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Минимальное число включённых тайлов; без поля используется image_count."
+        ),
+    )
+    image_count: int = Field(
+        default=10,
+        gt=0,
+        description="Максимальное число включённых тайлов.",
+    )
     items: list[TestSampleBatchItemCreate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_image_count_range(self) -> Self:
+        if self.min_image_count is None:
+            self.min_image_count = self.image_count
+        if self.min_image_count > self.image_count:
+            raise ValueError(
+                "Минимальное число снимков не может быть больше максимального."
+            )
+        return self
 
 
 class TestSampleBatchItemInfo(BaseModel):
@@ -185,6 +206,7 @@ class TestSampleBatchInfo(BaseModel):
     id: UUID
     status: Literal["queued", "running", "ok", "partial", "error"]
     tile_size: int = Field(gt=0)
+    min_image_count: int = Field(gt=0)
     image_count: int = Field(gt=0)
     completed_count: int = Field(ge=0)
     total_count: int = Field(gt=0)

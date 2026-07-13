@@ -241,6 +241,7 @@ def create_test_sample_batch(
         status="queued",
         active_slot=1,
         tile_size=request.tile_size,
+        min_image_count=request.min_image_count,
         image_count=request.image_count,
     )
     rows: list[TestSampleBatchItemRow] = []
@@ -442,7 +443,8 @@ def _create_grouped_test_sample(
         generated = generate_markup_pool_files(
             dataset_key=item.dataset_key,
             tile_size=batch.tile_size,
-            final_image_count=batch.image_count,
+            min_final_image_count=batch.min_image_count,
+            max_final_image_count=batch.image_count,
             min_object_count=item.min_object_count,
             config=config,
             output_root=building_root,
@@ -454,8 +456,8 @@ def _create_grouped_test_sample(
         _optimize_test_sample_row(
             row,
             TestSampleOptimizeRequest(
-                min_tile_count=batch.image_count,
-                max_tile_count=batch.image_count,
+                min_tile_count=batch.min_image_count,
+                max_tile_count=min(batch.image_count, row.image_count),
                 min_object_count=item.min_object_count,
                 metric=item.metric,
             ),
@@ -505,6 +507,7 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
         id=row.id,
         status=row.status,
         tile_size=row.tile_size,
+        min_image_count=row.min_image_count,
         image_count=row.image_count,
         completed_count=finished,
         total_count=len(row.items),

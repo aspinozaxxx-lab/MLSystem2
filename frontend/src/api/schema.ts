@@ -1752,7 +1752,13 @@ export interface components {
              */
             tile_size: 512 | 768 | 1024 | 1536 | 2048;
             /**
+             * Min Image Count
+             * @description Минимальное число включённых тайлов; без поля используется image_count.
+             */
+            min_image_count?: number | null;
+            /**
              * Image Count
+             * @description Максимальное число включённых тайлов.
              * @default 10
              */
             image_count: number;
@@ -1773,6 +1779,8 @@ export interface components {
             status: "queued" | "running" | "ok" | "partial" | "error";
             /** Tile Size */
             tile_size: number;
+            /** Min Image Count */
+            min_image_count: number;
             /** Image Count */
             image_count: number;
             /** Completed Count */
@@ -1804,7 +1812,7 @@ export interface components {
             min_object_count: number;
             /**
              * Metric
-             * @default objects
+             * @default pixel
              * @enum {string}
              */
             metric: "pixel" | "objects";

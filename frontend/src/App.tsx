@@ -855,9 +855,10 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
     [bootstrap.datasets],
   );
   const [tileSize, setTileSize] = useState(1536);
-  const [imageCount, setImageCount] = useState(10);
+  const [minImageCount, setMinImageCount] = useState(5);
+  const [maxImageCount, setMaxImageCount] = useState(10);
   const [rows, setRows] = useState<TestSampleBatchFormRow[]>(() =>
-    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150, metric: "objects" as const })),
+    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150, metric: "pixel" as const })),
   );
   const [busy, setBusy] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -877,7 +878,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
     setRows((current) =>
       datasets.map((dataset) => {
         const existing = current.find((item) => item.dataset.key === dataset.key);
-        return existing || { dataset, selected: false, minObjectCount: 150, metric: "objects" as const };
+        return existing || { dataset, selected: false, minObjectCount: 150, metric: "pixel" as const };
       }),
     );
   }, [datasets]);
@@ -889,7 +890,8 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
         if (cancelled) return;
         setBatch(latest);
         setTileSize(latest.tile_size);
-        setImageCount(latest.image_count);
+        setMinImageCount(latest.min_image_count);
+        setMaxImageCount(latest.image_count);
         setRows((current) =>
           current.map((row) => {
             const previous = (latest.items || []).find((item) => item.dataset_key === row.dataset.key);
@@ -936,7 +938,8 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
     try {
       const request: TestSampleBatchCreate = {
         tile_size: tileSize as TestSampleBatchCreate["tile_size"],
-        image_count: imageCount,
+        min_image_count: minImageCount,
+        image_count: maxImageCount,
         items: rows
           .filter((row) => row.selected)
           .map((row) => ({
@@ -1002,7 +1005,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
         <section className="panel">
           <PanelHeader
             title="Групповое создание тестовых выборок"
-            subtitle="Для каждой выбранной строки будет создан расширенный пул и оптимизирован итоговый состав"
+            subtitle="Пул содержит до тройного максимума тайлов, итоговый состав выбирается в заданном диапазоне"
           />
           {datasets.length ? (
             <>
@@ -1014,41 +1017,49 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
                   </select>
                 </label>
                 <label className="field">
-                  <span>Итоговое количество снимков</span>
-                  <input type="number" min="1" step="1" required value={imageCount} disabled={busy || batchActive} onChange={(event) => setImageCount(Number(event.target.value))} />
+                  <span>Минимум снимков в итоге</span>
+                  <input type="number" min="1" max={maxImageCount} step="1" required value={minImageCount} disabled={busy || batchActive} onChange={(event) => setMinImageCount(Number(event.target.value))} />
+                </label>
+                <label className="field">
+                  <span>Максимум снимков в итоге</span>
+                  <input type="number" min={minImageCount} step="1" required value={maxImageCount} disabled={busy || batchActive} onChange={(event) => setMaxImageCount(Number(event.target.value))} />
                 </label>
               </div>
+              <p className="muted test-sample-batch-pool-hint">
+                До оптимизации будет сформирован пул до {Math.max(0, maxImageCount * 3)} тайлов на подкласс.
+              </p>
               <div className="button-row test-sample-batch-select-actions">
                 <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: true })))}>Выбрать все</button>
                 <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: false })))}>Снять все</button>
               </div>
-              <div className="table-wrap">
-                <table className="test-sample-batch-table">
-                  <thead><tr><th aria-label="Участие" /><th>Класс → подкласс</th><th>Минимум объектов</th><th>Оптимизировать F1</th></tr></thead>
-                  <tbody>
-                    {rows.map((row, index) => {
-                      const showClass = row.dataset.class_name !== rows[index - 1]?.dataset.class_name;
-                      return (
-                        <tr className={row.selected ? "" : "disabled-row"} key={row.dataset.key}>
-                          <td><input type="checkbox" checked={row.selected} disabled={busy || batchActive} aria-label={`Создать выборку ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })} /></td>
-                          <td><span className="source-lines"><strong>{showClass ? row.dataset.class_name || row.dataset.name : ""}</strong><span>{row.dataset.variant_name || row.dataset.variant_key || row.dataset.name}</span></span></td>
-                          <td><input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive} aria-label={`Минимум объектов ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { minObjectCount: Number(event.target.value) })} /></td>
-                          <td>
-                            <select value={row.metric} disabled={busy || batchActive} aria-label={`Метрика ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { metric: event.target.value as "pixel" | "objects" })}>
-                              <option value="objects">Объектовый</option><option value="pixel">Пиксельный</option>
-                            </select>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="test-sample-batch-grid">
+                {rows.map((row) => (
+                  <div className={`test-sample-batch-row ${row.selected ? "" : "disabled-row"}`} key={row.dataset.key}>
+                    <label className="test-sample-batch-choice">
+                      <input type="checkbox" checked={row.selected} disabled={busy || batchActive} aria-label={`Создать выборку ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })} />
+                      <span className="source-lines">
+                        <strong>{row.dataset.class_name || row.dataset.name}</strong>
+                        <span>{row.dataset.variant_name || row.dataset.variant_key || row.dataset.name}</span>
+                      </span>
+                    </label>
+                    <label className="test-sample-batch-field">
+                      <span>Мин. объектов</span>
+                      <input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive} aria-label={`Минимум объектов ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { minObjectCount: Number(event.target.value) })} />
+                    </label>
+                    <label className="test-sample-batch-field">
+                      <span>F1</span>
+                      <select value={row.metric} disabled={busy || batchActive} aria-label={`Метрика ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { metric: event.target.value as "pixel" | "objects" })}>
+                        <option value="pixel">Пиксельный</option><option value="objects">Объектовый</option>
+                      </select>
+                    </label>
+                  </div>
+                ))}
               </div>
             </>
           ) : <div className="empty-state">Нет датасетов с однозначными файлами сцен и положительной разметки.</div>}
         </section>
         <div className="button-row">
-          <button className="primary" type="submit" disabled={busy || batchActive || !rows.some((row) => row.selected)}>
+          <button className="primary" type="submit" disabled={busy || batchActive || minImageCount > maxImageCount || !rows.some((row) => row.selected)}>
             <Layers3 size={16} />
             {batchActive ? "Формирование..." : "Создать выбранные выборки"}
           </button>
@@ -1080,7 +1091,7 @@ function TestSampleBatchProgress({ batch }: { batch: TestSampleBatchInfo }) {
     <section className="panel test-sample-batch-progress">
       <PanelHeader
         title="Ход группового создания"
-        subtitle={`${batch.completed_count} / ${batch.total_count} · прошло ${formatElapsedSeconds(batch.elapsed_seconds)}`}
+        subtitle={`${batch.completed_count} / ${batch.total_count} · итог ${batch.min_image_count}–${batch.image_count} тайлов · прошло ${formatElapsedSeconds(batch.elapsed_seconds)}`}
         aside={<span className={`badge ${batch.status === "ok" ? "ok" : batch.status === "error" ? "error" : batch.status === "partial" ? "warning" : "neutral"}`}>{batchStatusLabel(batch.status)}</span>}
       />
       <div className="batch-progress-track" aria-label={`Выполнено ${percent}%`}><span style={{ width: `${percent}%` }} /></div>

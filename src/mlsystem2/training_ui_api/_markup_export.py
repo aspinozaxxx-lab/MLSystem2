@@ -300,7 +300,8 @@ def generate_markup_pool_files(
     *,
     dataset_key: str,
     tile_size: int,
-    final_image_count: int,
+    min_final_image_count: int,
+    max_final_image_count: int,
     min_object_count: int,
     config: TrainingUIAPIConfig,
     output_root: Path,
@@ -325,7 +326,11 @@ def generate_markup_pool_files(
             "Для датасета не найдены TIFF в MLSYSTEM2_IMAGES_ROOT."
         )
     annotations = _load_annotations(Path(dataset.annotation_file))
-    requested_pool_count = final_image_count * 3
+    if min_final_image_count > max_final_image_count:
+        raise TrainingUIAPIError(
+            "Минимальное число итоговых тайлов не может быть больше максимального."
+        )
+    requested_pool_count = max_final_image_count * 3
     requested_pool_objects = min_object_count * 3
     candidates = _build_candidates(
         source_paths=source_paths,
@@ -335,10 +340,11 @@ def generate_markup_pool_files(
         tile_height=tile_size,
         max_grid_origins=max(32, requested_pool_count * 8),
     )
-    if len(candidates) < final_image_count:
+    if len(candidates) < min_final_image_count:
         raise TrainingUIAPIError(
             "Недостаточно полностью валидных тайлов с объектами: "
-            f"найдено {len(candidates)}, для итоговой выборки требуется {final_image_count}."
+            f"найдено {len(candidates)}, для итоговой выборки требуется минимум "
+            f"{min_final_image_count}."
         )
 
     selected_indices: list[int] | None = None
@@ -346,7 +352,7 @@ def generate_markup_pool_files(
     touching_allowed = False
     maximum_pool_count = min(requested_pool_count, len(candidates))
     for allow_touching in (False, True):
-        for pool_count in range(maximum_pool_count, final_image_count - 1, -1):
+        for pool_count in range(maximum_pool_count, min_final_image_count - 1, -1):
             request = MarkupExportRequest(
                 dataset_key=dataset_key,
                 tile_width=tile_size,
@@ -358,7 +364,8 @@ def generate_markup_pool_files(
                 candidates,
                 request,
                 allow_touching=allow_touching,
-                final_image_count=final_image_count,
+                min_final_image_count=min_final_image_count,
+                max_final_image_count=min(max_final_image_count, pool_count),
                 min_final_object_count=min_object_count,
             )
             if selected_indices is not None:
@@ -370,13 +377,16 @@ def generate_markup_pool_files(
 
     if selected_indices is None or selected_pool_count is None:
         maximum_objects = sum(
-            sorted((item.object_count for item in candidates), reverse=True)[:final_image_count]
+            sorted((item.object_count for item in candidates), reverse=True)[
+                :max_final_image_count
+            ]
         )
         raise TrainingUIAPIError(
             "Невозможно сформировать итоговую выборку без перекрытий: "
-            f"требуется {final_image_count} тайлов и минимум {min_object_count} объектов; "
+            f"требуется от {min_final_image_count} до {max_final_image_count} тайлов "
+            f"и минимум {min_object_count} объектов; "
             f"валидных кандидатов {len(candidates)}, верхняя оценка объектов в "
-            f"{final_image_count} самых плотных кандидатах — {maximum_objects}."
+            f"{max_final_image_count} самых плотных кандидатах — {maximum_objects}."
         )
 
     selected = [candidates[index] for index in selected_indices]
@@ -857,7 +867,8 @@ def _select_candidates(
     request: MarkupExportRequest,
     *,
     allow_touching: bool,
-    final_image_count: int | None = None,
+    min_final_image_count: int | None = None,
+    max_final_image_count: int | None = None,
     min_final_object_count: int | None = None,
 ) -> list[int] | None:
     candidate_count = len(candidates)
@@ -869,7 +880,11 @@ def _select_candidates(
     source_offset = territory_offset + len(territories)
     deviation_index = source_offset + len(sources)
     final_offset = deviation_index + 1
-    has_final_subset = final_image_count is not None and min_final_object_count is not None
+    has_final_subset = (
+        min_final_image_count is not None
+        and max_final_image_count is not None
+        and min_final_object_count is not None
+    )
     variable_count = final_offset + (candidate_count if has_final_subset else 0)
 
     rows: list[int] = []
@@ -898,12 +913,13 @@ def _select_candidates(
         maximum=request.image_count,
     )
     if has_final_subset:
-        assert final_image_count is not None
+        assert min_final_image_count is not None
+        assert max_final_image_count is not None
         assert min_final_object_count is not None
         add_constraint(
             [(final_offset + index, 1.0) for index in range(candidate_count)],
-            minimum=final_image_count,
-            maximum=final_image_count,
+            minimum=min_final_image_count,
+            maximum=max_final_image_count,
         )
         for index in range(candidate_count):
             add_constraint(

@@ -331,6 +331,11 @@
 }
 
 .test-sample-batch-settings {
+  grid-template-columns: repeat(3, minmax(0, 220px));
+  margin-bottom: 6px;
+}
+
+.test-sample-batch-pool-hint {
   margin-bottom: 12px;
 }
 
@@ -338,13 +343,69 @@
   margin-bottom: 10px;
 }
 
-.test-sample-batch-table {
-  min-width: 720px;
+.test-sample-batch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.test-sample-batch-table input[type="number"],
-.test-sample-batch-table select {
-  min-width: 135px;
+.test-sample-batch-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 100px 118px;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.test-sample-batch-row.disabled-row {
+  opacity: 0.62;
+}
+
+.test-sample-batch-choice {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.test-sample-batch-choice input {
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+}
+
+.test-sample-batch-choice .source-lines {
+  min-width: 0;
+  gap: 1px;
+}
+
+.test-sample-batch-choice .source-lines strong,
+.test-sample-batch-choice .source-lines span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-sample-batch-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.test-sample-batch-field input,
+.test-sample-batch-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
 }
 
 .test-sample-batch-progress {
@@ -569,5 +630,30 @@
 
   .test-sample-metric-card dl {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .test-sample-batch-settings,
+  .test-sample-batch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .test-sample-batch-row {
+    grid-template-columns: minmax(130px, 1fr) 92px 110px;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 900px) {
+  .test-sample-batch-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 500px) {
+  .test-sample-batch-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .test-sample-batch-choice {
+    grid-column: 1 / -1;
   }
 }

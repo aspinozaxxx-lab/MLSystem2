@@ -4706,10 +4706,24 @@
             "title": "Tile Size",
             "default": 1536
           },
+          "min_image_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Image Count",
+            "description": "Минимальное число включённых тайлов; без поля используется image_count."
+          },
           "image_count": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Image Count",
+            "description": "Максимальное число включённых тайлов.",
             "default": 10
           },
           "items": {
@@ -4750,6 +4764,11 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Tile Size"
+          },
+          "min_image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Image Count"
           },
           "image_count": {
             "type": "integer",
@@ -4814,6 +4833,7 @@
           "id",
           "status",
           "tile_size",
+          "min_image_count",
           "image_count",
           "completed_count",
           "total_count",
@@ -4842,7 +4862,7 @@
               "objects"
             ],
             "title": "Metric",
-            "default": "objects"
+            "default": "pixel"
           }
         },
         "additionalProperties": false,
