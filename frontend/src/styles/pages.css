@@ -110,7 +110,7 @@
 
 .training-summary-table,
 .pseudo-table {
-  min-width: 920px;
+  min-width: 760px;
   table-layout: fixed;
 }
 
@@ -153,24 +153,27 @@
 }
 
 .training-summary-table .result-col-model {
-  width: 22%;
+  width: 18%;
 }
 
 .training-summary-table .result-col-status {
-  width: 17%;
+  width: 13%;
 }
 
-.training-summary-table .result-col-score,
+.training-summary-table .result-col-score {
+  width: 8%;
+}
+
 .training-summary-table .result-col-epoch {
-  width: 9%;
+  width: 7%;
 }
 
 .training-summary-table .result-col-created {
-  width: 20%;
+  width: 18%;
 }
 
 .training-summary-table .result-col-actions {
-  width: 23%;
+  width: 28%;
 }
 
 .pseudo-table .result-col-source {
@@ -194,7 +197,18 @@
 }
 
 .training-summary-table td:first-child {
-  min-width: 180px;
+  min-width: 0;
+}
+
+.training-summary-table th,
+.training-summary-table td {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.training-summary-table .action-cell {
+  min-width: 0;
+  white-space: normal;
 }
 
 .pseudo-subtable-wrap {
@@ -205,7 +219,7 @@
 
 .pseudo-table th:first-child,
 .pseudo-table td:first-child {
-  min-width: 220px;
+  min-width: 180px;
 }
 
 .result-group h3 {

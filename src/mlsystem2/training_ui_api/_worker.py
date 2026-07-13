@@ -559,6 +559,8 @@ def _build_test_sample_f1_config(
         "checkpoint_f1_score": checkpoint.f1_score,
         "checkpoint_epoch": checkpoint.epoch,
         "postprocess_config": row.config.get("inference_template_config") or {},
+        "postprocess_profile": row.config.get("postprocess_profile"),
+        "test_f1_evaluator_version": row.config.get("test_f1_evaluator_version"),
         "threshold": checkpoint.threshold,
         "tile_size": inference_tile_size,
         "stride": _int_value(flat, "tile_preparation.stride", inference_tile_size),

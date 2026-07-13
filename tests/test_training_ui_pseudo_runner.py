@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
@@ -20,6 +22,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _find_images,
     _filter_compact_features,
     _image_index,
+    _infer_test_tile_mask,
     _merge_overlapping_features,
     _postprocess_mask,
     _postprocess_profile_from_config,
@@ -296,6 +299,109 @@ def test_filter_compact_features_removes_lake_like_objects() -> None:
     assert [item["properties"]["scene_id"] for item in filtered] == ["river"]
 
 
+@pytest.mark.parametrize(
+    ("rows", "columns"),
+    [
+        (slice(0, 12), slice(8, 20)),
+        (slice(20, 32), slice(8, 20)),
+        (slice(8, 20), slice(0, 12)),
+        (slice(8, 20), slice(20, 32)),
+    ],
+)
+def test_test_tile_keeps_compact_prediction_touching_raster_boundary(
+    tmp_path,
+    monkeypatch,
+    rows,
+    columns,
+) -> None:
+    prediction = np.zeros((32, 32), dtype=np.uint8)
+    prediction[rows, columns] = 1
+    result = _infer_fixed_test_prediction(
+        tmp_path,
+        monkeypatch,
+        prediction,
+        _compact_filter_profile(),
+    )
+
+    assert np.array_equal(result, prediction)
+
+
+def test_test_tile_filters_same_compact_prediction_inside_raster(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prediction = np.zeros((32, 32), dtype=np.uint8)
+    prediction[8:20, 8:20] = 1
+    result = _infer_fixed_test_prediction(
+        tmp_path,
+        monkeypatch,
+        prediction,
+        _compact_filter_profile(),
+    )
+
+    assert not np.any(result)
+
+
+def test_test_tile_keeps_small_prediction_touching_raster_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prediction = np.zeros((32, 32), dtype=np.uint8)
+    prediction[:3, :3] = 1
+    profile = replace(
+        _select_postprocess_profile(6),
+        min_area_m2=1000.0,
+        min_hole_area_m2=None,
+        simplify_m=None,
+    )
+    result = _infer_fixed_test_prediction(tmp_path, monkeypatch, prediction, profile)
+
+    assert np.array_equal(result, prediction)
+
+
+def _compact_filter_profile():
+    return replace(
+        _postprocess_profile_from_config(
+            _select_postprocess_profile(6),
+            {
+                "postprocess.filter_compact_objects.enabled": True,
+                "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+                "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+            },
+        ),
+        min_area_m2=1.0,
+        min_hole_area_m2=None,
+        simplify_m=None,
+    )
+
+
+def _infer_fixed_test_prediction(tmp_path, monkeypatch, prediction, profile) -> np.ndarray:
+    image_path = tmp_path / "tile.tif"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=32,
+        height=32,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 32, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((4, 32, 32), dtype=np.uint8))
+    monkeypatch.setattr(_pseudo_runner, "_predict_tile", lambda *args, **kwargs: prediction)
+    return _infer_test_tile_mask(
+        torch=object(),
+        model=object(),
+        image_path=image_path,
+        tile_size=32,
+        stride=32,
+        threshold=0.5,
+        device="cpu",
+        postprocess_profile=profile,
+    )
+
+
 def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) -> None:
     profile = _select_postprocess_profile(51)
 
@@ -452,6 +558,8 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
             "tile_size": 4,
             "stride": 4,
             "device": "cuda",
+            "postprocess_profile": "strong",
+            "test_f1_evaluator_version": 2,
             "tiles": tiles,
         }
     )
@@ -461,6 +569,9 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert report["true_positive"] == 2
     assert report["false_positive"] == 1
     assert report["false_negative"] == 1
+    assert report["postprocess_profile"] == "strong"
+    assert report["test_f1_evaluator_version"] == 2
+    assert report["preserve_boundary_components"] is True
     assert fake_torch.cuda.empty_cache_calls == 1
 
 

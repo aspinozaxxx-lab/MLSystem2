@@ -27,6 +27,7 @@ from mlsystem2.training_ui_api._models import (
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
+    TestSampleRow as _TestSampleRow,
     TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
     TrainingResultTestMetricRow,
@@ -43,6 +44,7 @@ from mlsystem2.training_ui_api._test_samples import (
     optimize_test_sample,
     queue_training_result_test_f1,
     test_sample_detail as _test_sample_detail,
+    training_result_test_f1_info,
     update_test_sample_primary,
     update_test_sample_tile,
 )
@@ -946,6 +948,19 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
             status="ok",
         )
         session.add(training)
+        pseudo = PseudoMarkupResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            source_dataset_name="Вырубки\\main",
+            image_count=63,
+            status="ok",
+        )
+        session.add(pseudo)
+        session.flush()
+        sample_row = session.get(_TestSampleRow, sample.id)
+        assert sample_row is not None
+        sample_row.evaluation_pseudo_result_id = pseudo.id
         session.flush()
 
         assert queue_training_result_test_f1(session, training, config) is True
@@ -958,6 +973,19 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         assert job is not None
         assert job.config["operation"] == "test_sample_f1"
         assert job.config["test_sample_tile_indices"] == [1, 2]
+        assert job.config["postprocess_profile"] == "strong"
+        assert job.config["test_f1_evaluator_version"] == 2
+
+        current_hash = metric.inference_config_hash
+        metric.status = "current"
+        metric.f1 = 0.5
+        metric.inference_config_hash = "legacy-evaluator-hash"
+        info = training_result_test_f1_info(session, training, config)
+        assert info is not None
+        assert info.status == "stale"
+        metric.status = "queued"
+        metric.f1 = None
+        metric.inference_config_hash = current_hash
 
         update_test_sample_tile(
             session,

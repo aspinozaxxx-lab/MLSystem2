@@ -54,6 +54,7 @@ from ._models import (
     TrainingResultTestMetricRow,
 )
 from ._processes import terminate_job_process
+from ._pseudo_runner import postprocess_profile_name
 from ._queueing import next_queue_position
 from ._templates import sanitize_inference_template_config
 from .contracts import (
@@ -86,6 +87,7 @@ from .contracts import (
 TEST_SAMPLE_ROOT_NAME = "test-samples"
 TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
+TEST_SAMPLE_F1_EVALUATOR_VERSION = 2
 OBJECT_IOU_THRESHOLD = 0.5
 _TILE_SUFFIXES = (".tif", ".geojson", "_mask.png", "_preview.png")
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
@@ -1666,10 +1668,12 @@ def queue_training_result_test_f1(
     sample = _primary_sample(session, result.class_key)
     if sample is None or not any(tile.enabled for tile in sample.tiles):
         return False
+    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
     template, template_config, config_hash = _effective_inference_template(
         session,
         result.architecture,
         result.class_key,
+        postprocess_profile,
     )
     metric = session.get(TrainingResultTestMetricRow, result.id)
     if metric is not None and _metric_matches(
@@ -1733,6 +1737,8 @@ def queue_training_result_test_f1(
             "inference_template_version": template.version if template is not None else None,
             "inference_template_config": template_config,
             "inference_config_hash": config_hash,
+            "postprocess_profile": postprocess_profile,
+            "test_f1_evaluator_version": TEST_SAMPLE_F1_EVALUATOR_VERSION,
             "mlflow_run_id": result.mlflow_run_id,
         },
     )
@@ -1768,10 +1774,12 @@ def training_result_test_f1_info(
             sample_revision=sample.content_revision,
             error="Для сети ещё не рассчитан F1 на основной тестовой выборке.",
         )
+    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
     template, _, config_hash = _effective_inference_template(
         session,
         result.architecture,
         result.class_key,
+        postprocess_profile,
     )
     status = metric.status
     if not _metric_matches(metric, sample, template, config_hash):
@@ -1822,6 +1830,7 @@ def _effective_inference_template(
     session: Session,
     architecture: str,
     dataset_key: str,
+    postprocess_profile: str,
 ) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
     template = session.scalar(
         select(InferenceTemplateRow).where(
@@ -1842,12 +1851,41 @@ def _effective_inference_template(
         else {}
     )
     serialized = json.dumps(
-        template_config,
+        {
+            "evaluator_version": TEST_SAMPLE_F1_EVALUATOR_VERSION,
+            "postprocess_profile": postprocess_profile,
+            "template_config": template_config,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
     return template, template_config, hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _test_f1_postprocess_profile_name(
+    session: Session,
+    sample: TestSampleRow,
+    config: TrainingUIAPIConfig,
+) -> str:
+    source = (
+        session.get(PseudoMarkupResultRow, sample.evaluation_pseudo_result_id)
+        if sample.evaluation_pseudo_result_id is not None
+        else None
+    )
+    if source is None or source.image_count is None:
+        source = _latest_pseudo_markup(session, sample.dataset_key)
+    image_count = source.image_count if source is not None else None
+    if image_count is None:
+        dataset = find_dataset(
+            config.mlmarkup_root,
+            sample.dataset_key,
+            config.images_root,
+        )
+        image_count = dataset.image_count if dataset is not None else None
+    if image_count is None:
+        image_count = len({tile.source_name for tile in sample.tiles})
+    return postprocess_profile_name(max(0, int(image_count)))
 
 
 def _metric_matches(

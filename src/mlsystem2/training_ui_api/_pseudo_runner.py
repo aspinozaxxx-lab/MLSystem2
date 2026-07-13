@@ -21,7 +21,7 @@ from rasterio.errors import NotGeoreferencedWarning
 from rasterio.warp import transform_geom
 from rasterio.windows import Window
 from scipy import ndimage
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, mapping, shape
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 from shapely.ops import unary_union
@@ -114,7 +114,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     stride = int(config.get("stride") or inference_tile_size)
     device = str(config.get("device") or "cpu")
     profile = _postprocess_profile_from_config(
-        _select_postprocess_profile(len(tiles)),
+        _configured_postprocess_profile(config, len(tiles)),
         config.get("postprocess_config"),
     )
     counts = {"true_positive": 0, "false_positive": 0, "false_negative": 0}
@@ -209,9 +209,11 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "test_sample_id": config.get("test_sample_id"),
         "test_sample_revision": config.get("test_sample_revision"),
         "training_result_id": config.get("training_result_id"),
+        "test_f1_evaluator_version": config.get("test_f1_evaluator_version"),
         "postprocess_profile": profile.name,
         "postprocess_level": profile.level,
         "postprocess_params": _postprocess_profile_params(profile),
+        "preserve_boundary_components": True,
         "tiles": reports,
         "elapsed_sec": round(time.time() - started, 3),
     }
@@ -504,7 +506,11 @@ def _infer_test_tile_mask(
                 mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
                 predicted[:crop_h, :crop_w],
             )
-        mask = _postprocess_mask(mask, postprocess_profile)
+        mask = _postprocess_mask(
+            mask,
+            postprocess_profile,
+            preserve_border_objects=True,
+        )
         if not _has_vector_postprocess(postprocess_profile) or not np.any(mask):
             return mask
         if dataset.crs is None:
@@ -512,6 +518,7 @@ def _infer_test_tile_mask(
                 "Для профильной постобработки тестового тайла нужен CRS снимка."
             )
         geometries: list[BaseGeometry] = []
+        raster_boundary = box(*dataset.bounds).boundary
         for geometry, value in rasterio_features.shapes(
             mask,
             mask=mask > 0,
@@ -519,10 +526,12 @@ def _infer_test_tile_mask(
         ):
             if int(value) != 1:
                 continue
+            source_geometry = shape(geometry)
             processed = _postprocess_geometry(
-                shape(geometry),
+                source_geometry,
                 dataset.crs,
                 postprocess_profile,
+                preserve_boundary_fragment=source_geometry.intersects(raster_boundary),
             )
             if not processed.is_empty:
                 geometries.append(processed)
@@ -735,6 +744,30 @@ def _select_postprocess_profile(unique_image_count: int) -> _PostprocessProfile:
     return _POSTPROCESS_STRONG
 
 
+def postprocess_profile_name(unique_image_count: int) -> str:
+    """Возвращает имя автоматического профиля для заданного числа снимков."""
+
+    return _select_postprocess_profile(unique_image_count).name
+
+
+def _configured_postprocess_profile(
+    config: dict[str, Any],
+    fallback_image_count: int,
+) -> _PostprocessProfile:
+    name = config.get("postprocess_profile")
+    if name is None:
+        return _select_postprocess_profile(fallback_image_count)
+    profiles = {
+        _POSTPROCESS_NONE.name: _POSTPROCESS_NONE,
+        _POSTPROCESS_DETAIL_V2.name: _POSTPROCESS_DETAIL_V2,
+        _POSTPROCESS_STRONG.name: _POSTPROCESS_STRONG,
+    }
+    try:
+        return profiles[str(name)]
+    except KeyError as exc:
+        raise RuntimeError(f"Неизвестный профиль постобработки: {name}") from exc
+
+
 def _postprocess_profile_from_config(
     base: _PostprocessProfile,
     config: object,
@@ -786,10 +819,19 @@ def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float
     return params
 
 
-def _postprocess_mask(mask: np.ndarray, profile: _PostprocessProfile) -> np.ndarray:
+def _postprocess_mask(
+    mask: np.ndarray,
+    profile: _PostprocessProfile,
+    *,
+    preserve_border_objects: bool = False,
+) -> np.ndarray:
     processed = mask > 0
     if profile.mask_min_object_pixels is not None:
-        processed = _remove_small_mask_objects(processed, profile.mask_min_object_pixels)
+        processed = _remove_small_mask_objects(
+            processed,
+            profile.mask_min_object_pixels,
+            preserve_border_objects=preserve_border_objects,
+        )
     if profile.mask_min_hole_pixels is not None:
         processed = _remove_small_mask_holes(processed, profile.mask_min_hole_pixels)
     if profile.binary_closing_radius is not None:
@@ -800,13 +842,21 @@ def _postprocess_mask(mask: np.ndarray, profile: _PostprocessProfile) -> np.ndar
     return processed.astype(np.uint8)
 
 
-def _remove_small_mask_objects(mask: np.ndarray, min_size: int) -> np.ndarray:
+def _remove_small_mask_objects(
+    mask: np.ndarray,
+    min_size: int,
+    *,
+    preserve_border_objects: bool = False,
+) -> np.ndarray:
     labels, count = ndimage.label(mask, structure=_label_structure())
     if count == 0:
         return mask
     sizes = np.bincount(labels.ravel())
     keep = sizes >= min_size
     keep[0] = False
+    if preserve_border_objects:
+        border_labels = _border_labels(labels)
+        keep[border_labels[border_labels != 0]] = True
     return keep[labels]
 
 
@@ -862,10 +912,12 @@ def _postprocess_geometry(
     geometry: BaseGeometry,
     crs,
     profile: _PostprocessProfile,
+    *,
+    preserve_boundary_fragment: bool = False,
 ) -> BaseGeometry:
     metric_geometry, metric_to_source = _geometry_to_metric(geometry, crs)
     metric_geometry = _make_valid(metric_geometry)
-    if profile.min_area_m2 is not None:
+    if profile.min_area_m2 is not None and not preserve_boundary_fragment:
         metric_geometry = _filter_small_polygons(metric_geometry, profile.min_area_m2)
     if metric_geometry.is_empty:
         return metric_geometry
@@ -875,7 +927,8 @@ def _postprocess_geometry(
     if profile.simplify_m is not None and profile.simplify_m > 0:
         metric_geometry = metric_geometry.simplify(profile.simplify_m, preserve_topology=True)
         metric_geometry = _make_valid(metric_geometry)
-    metric_geometry = _filter_compact_geometry(metric_geometry, profile)
+    if not preserve_boundary_fragment:
+        metric_geometry = _filter_compact_geometry(metric_geometry, profile)
     if metric_to_source is not None and not metric_geometry.is_empty:
         return shapely_transform(metric_to_source, metric_geometry)
     return metric_geometry
