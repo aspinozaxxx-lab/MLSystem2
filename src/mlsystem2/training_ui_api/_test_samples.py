@@ -435,7 +435,8 @@ def cleanup_test_sample_storage(
         ignore_errors=True,
     )
     root = _test_sample_root(config)
-    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        return
     for child in root.iterdir():
         if child.name.startswith((".building-", ".deleting-")):
             if child.is_dir() and not child.is_symlink():
