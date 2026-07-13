@@ -327,6 +327,135 @@
         }
       }
     },
+    "/api/v1/markup-export": {
+      "post": {
+        "summary": "Post Markup Export",
+        "operationId": "post_markup_export_api_v1_markup_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkupExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkupExportInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/markup-export/{export_id}/tiles/{tile_index}/preview": {
+      "get": {
+        "summary": "Get Markup Export Preview",
+        "operationId": "get_markup_export_preview_api_v1_markup_export__export_id__tiles__tile_index__preview_get",
+        "parameters": [
+          {
+            "name": "export_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Export Id"
+            }
+          },
+          {
+            "name": "tile_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tile Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PNG-превью тайла с наложенной маской.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/markup-export/{export_id}/download": {
+      "get": {
+        "summary": "Get Markup Export Download",
+        "operationId": "get_markup_export_download_api_v1_markup_export__export_id__download_get",
+        "parameters": [
+          {
+            "name": "export_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Export Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP-архив набора тестовой разметки.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/model-export/triton-zip": {
       "post": {
         "summary": "Post Model Export Triton Zip",
@@ -3051,6 +3180,179 @@
           "name"
         ],
         "title": "MLflowExperimentInfo"
+      },
+      "MarkupExportInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "tile_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Width"
+          },
+          "tile_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Height"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "requested_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Requested Object Count"
+          },
+          "actual_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Actual Object Count"
+          },
+          "territory_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Territory Count"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/MarkupExportTileInfo"
+            },
+            "type": "array",
+            "title": "Tiles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "dataset_key",
+          "dataset_name",
+          "tile_width",
+          "tile_height",
+          "image_count",
+          "requested_object_count",
+          "actual_object_count",
+          "territory_count",
+          "expires_at",
+          "download_url",
+          "tiles"
+        ],
+        "title": "MarkupExportInfo"
+      },
+      "MarkupExportRequest": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Dataset Key"
+          },
+          "tile_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Width",
+            "default": 1024
+          },
+          "tile_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Height",
+            "default": 1024
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count",
+            "default": 10
+          },
+          "object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Object Count",
+            "default": 150
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key"
+        ],
+        "title": "MarkupExportRequest"
+      },
+      "MarkupExportTileInfo": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Index"
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "territory": {
+            "type": "string",
+            "title": "Territory"
+          },
+          "object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Object Count"
+          },
+          "preview_url": {
+            "type": "string",
+            "title": "Preview Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "source_name",
+          "territory",
+          "object_count",
+          "preview_url"
+        ],
+        "title": "MarkupExportTileInfo"
       },
       "ModelInfo": {
         "properties": {

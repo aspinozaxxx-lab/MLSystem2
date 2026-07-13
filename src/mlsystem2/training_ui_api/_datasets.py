@@ -90,6 +90,28 @@ def build_image_index(images_root: Path) -> dict[str, list[Path]]:
     return _image_index(images_root)
 
 
+def resolve_scenes_file_images(scenes_file: Path, images_root: Path) -> list[Path]:
+    index = _image_index(images_root)
+    try:
+        scenes = [
+            line.strip()
+            for line in Path(scenes_file).read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()
+        ]
+    except OSError:
+        return []
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for scene in scenes:
+        for path in _find_images(scene, index):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            found.append(resolved)
+    return found
+
+
 def count_scenes_file_images(
     scenes_file: Path | None,
     images_root: Path,

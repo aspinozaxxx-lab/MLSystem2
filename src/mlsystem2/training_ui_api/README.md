@@ -69,6 +69,9 @@
 - `GET /api/v1/results/classes/{class_key}`
 - `POST /api/v1/results/classes/{class_key}/pseudo-markup`
 - `POST /api/v1/results/training/{result_id}/triton-zip`
+- `POST /api/v1/markup-export`
+- `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
+- `GET /api/v1/markup-export/{export_id}/download`
 - `DELETE /api/v1/results/pseudo-markup/{result_id}`
 - `GET /api/v1/files/{file_id}/download`
 
@@ -86,6 +89,16 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 для дедупликации jobs по конкретной версии датасета. `image_count` у варианта считается по txt-списку сцен через
 индекс подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT`: строки-папки разворачиваются в фактические TIFF, повторы
 удаляются.
+
+`POST /api/v1/markup-export` формирует самостоятельный набор тестовой разметки и не создает job или запись в БД.
+Доступны только однозначные варианты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и
+`hard_negative.geojson` не участвуют. TIFF читаются только из `MLSYSTEM2_IMAGES_ROOT`, в рабочей конфигурации это
+`/data/mlsystem2/prepared_images`. Окна обязаны целиком находиться внутри растра, иметь полностью валидную
+`dataset_mask` и не содержать пикселей без данных или полностью чёрных пикселей. Выбор через `scipy.optimize.milp` сначала
+максимизирует число территорий и исходных TIFF, затем минимизирует отклонение от целевого числа уникальных
+GeoJSON-объектов; перекрытие и повтор объекта запрещены. Результат содержит по четыре файла на тайл: COG TIFF,
+обрезанный GeoJSON, бинарную `_mask.png` и `_overlay.png`. Плоский ZIP и превью хранятся один час в
+`scratch_root/markup-exports`, после истечения срока возвращается `404`.
 
 `GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
 имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.

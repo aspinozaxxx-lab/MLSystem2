@@ -8,6 +8,7 @@ _MODULES = (
     "bootstrap",
     "catalog",
     "common",
+    "exports",
     "jobs",
     "results",
     "templates",

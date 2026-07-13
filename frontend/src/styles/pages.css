@@ -274,6 +274,60 @@
   gap: 2px;
 }
 
+.markup-export-result {
+  margin-top: 22px;
+}
+
+.markup-export-summary {
+  margin-bottom: 14px;
+}
+
+.markup-export-warnings {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.markup-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.markup-preview-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.markup-preview-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: #17212b;
+}
+
+.markup-preview-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 11px;
+}
+
+.markup-preview-meta span:not(.badge),
+.markup-preview-meta small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 700px) {
   .tool-card,
   .class-card,

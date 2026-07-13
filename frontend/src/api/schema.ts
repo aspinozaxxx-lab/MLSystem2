@@ -209,6 +209,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markup-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Markup Export */
+        post: operations["post_markup_export_api_v1_markup_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markup-export/{export_id}/tiles/{tile_index}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Markup Export Preview */
+        get: operations["get_markup_export_preview_api_v1_markup_export__export_id__tiles__tile_index__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markup-export/{export_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Markup Export Download */
+        get: operations["get_markup_export_download_api_v1_markup_export__export_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-export/triton-zip": {
         parameters: {
             query?: never;
@@ -1155,6 +1206,81 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** MarkupExportInfo */
+        MarkupExportInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Tile Width */
+            tile_width: number;
+            /** Tile Height */
+            tile_height: number;
+            /** Image Count */
+            image_count: number;
+            /** Requested Object Count */
+            requested_object_count: number;
+            /** Actual Object Count */
+            actual_object_count: number;
+            /** Territory Count */
+            territory_count: number;
+            /** Warnings */
+            warnings?: string[];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Download Url */
+            download_url: string;
+            /** Tiles */
+            tiles: components["schemas"]["MarkupExportTileInfo"][];
+        };
+        /** MarkupExportRequest */
+        MarkupExportRequest: {
+            /** Dataset Key */
+            dataset_key: string;
+            /**
+             * Tile Width
+             * @default 1024
+             */
+            tile_width: number;
+            /**
+             * Tile Height
+             * @default 1024
+             */
+            tile_height: number;
+            /**
+             * Image Count
+             * @default 10
+             */
+            image_count: number;
+            /**
+             * Object Count
+             * @default 150
+             */
+            object_count: number;
+        };
+        /** MarkupExportTileInfo */
+        MarkupExportTileInfo: {
+            /** Index */
+            index: number;
+            /** Source Name */
+            source_name: string;
+            /** Territory */
+            territory: string;
+            /** Object Count */
+            object_count: number;
+            /** Preview Url */
+            preview_url: string;
+        };
         /** ModelInfo */
         ModelInfo: {
             /** Architecture */
@@ -1478,6 +1604,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -1782,6 +1912,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomDatasetInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_markup_export_api_v1_markup_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkupExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkupExportInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_markup_export_preview_api_v1_markup_export__export_id__tiles__tile_index__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                export_id: string;
+                tile_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PNG-превью тайла с наложенной маской. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_markup_export_download_api_v1_markup_export__export_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP-архив набора тестовой разметки. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

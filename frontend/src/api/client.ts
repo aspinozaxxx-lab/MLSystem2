@@ -17,7 +17,7 @@ type JsonOptions = {
 };
 
 export async function apiJson<T>(path: string, options: JsonOptions = {}): Promise<T> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: options.method || "GET",
     credentials: "same-origin",
     headers: options.body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -36,7 +36,7 @@ export async function apiJson<T>(path: string, options: JsonOptions = {}): Promi
 }
 
 export async function apiForm<T>(path: string, form: FormData): Promise<T> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "same-origin",
     body: form,
@@ -48,7 +48,7 @@ export async function apiForm<T>(path: string, form: FormData): Promise<T> {
 }
 
 export async function apiDownload(path: string, form: FormData): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "same-origin",
     body: form,
@@ -63,11 +63,25 @@ export async function apiDownload(path: string, form: FormData): Promise<{ blob:
 }
 
 export async function apiDownloadJson(path: string, body: unknown): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response), response.status);
+  }
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response),
+  };
+}
+
+export async function apiDownloadGet(path: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(apiUrl(path), {
+    method: "GET",
+    credentials: "same-origin",
   });
   if (!response.ok) {
     throw new ApiError(await errorMessage(response), response.status);
@@ -101,6 +115,10 @@ export function downloadFilename(response: Response): string {
   }
   const match = header.match(/filename="?([^";]+)"?/i);
   return match ? match[1] : "";
+}
+
+function apiUrl(path: string): string {
+  return path === API_PREFIX || path.startsWith(`${API_PREFIX}/`) ? path : `${API_PREFIX}${path}`;
 }
 
 async function errorMessage(response: Response): Promise<string> {

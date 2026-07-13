@@ -63,6 +63,42 @@
   border-color: var(--border);
 }
 
+.nav-dropdown {
+  position: relative;
+}
+
+.nav-dropdown-chevron {
+  transition: transform 140ms ease;
+}
+
+.nav-dropdown.open .nav-dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.nav-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: none;
+  min-width: 210px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.nav-dropdown.open .nav-dropdown-menu {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-dropdown-menu a {
+  width: 100%;
+  white-space: nowrap;
+}
+
 .page {
   width: min(1360px, 100%);
   margin: 0 auto;
@@ -116,6 +152,11 @@
 
   .nav {
     justify-content: flex-start;
+  }
+
+  .nav-dropdown-menu {
+    right: auto;
+    left: 0;
   }
 
   .page {

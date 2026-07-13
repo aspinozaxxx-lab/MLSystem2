@@ -30,6 +30,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания; `TrainingResultInfo.sample_size_hint` передает tile size из связанного job, если он известен.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
+- `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
@@ -38,6 +39,9 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/results/training/triton-zip` - JSON endpoint для сборки общего zip-архива нескольких успешных
   результатов обучения; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД.
+- `POST /api/v1/markup-export` - синхронно формирует временный набор тестовой разметки для варианта MLMarkup.
+- `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview` - возвращает PNG-превью тайла с контуром маски.
+- `GET /api/v1/markup-export/{export_id}/download` - возвращает плоский ZIP сформированного набора.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -93,6 +97,16 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 и optional `sample_size` на модель и отправляет выбранные строки в `POST /api/v1/results/training/triton-zip`.
 Общий архив содержит `models-serving-service/<model_name>.zip`, `pipelines/<model_name>_triton.yaml`,
 `metadata/<model_name>_export_metadata.json` и корневой `export_metadata.json`.
+
+Экспорт тестовой разметки работает отдельно от worker, очередей, Postgres, MLflow, S3 и конвейера обучения.
+По TXT выбранного варианта он сопоставляет сцены с TIFF только внутри `MLSYSTEM2_IMAGES_ROOT`, исключает окна за
+границами растра, с невалидной `dataset_mask`, пикселями без данных или полностью чёрными пикселями и детерминированно выбирает
+заданное число тайлов через `scipy.optimize.milp`. Приоритеты выбора: максимальное число родительских папок,
+максимальное число исходных TIFF, минимальное отклонение от целевого числа уникальных объектов; пересечения и
+повторное использование объекта запрещены, а касание разрешается только как явно отмеченный запасной режим.
+Для тайла создаются COG TIFF без ресэмплинга, обрезанный GeoJSON с исходными свойствами и CRS, бинарная
+`_mask.png` и `_overlay.png`. Набор хранится один час в `scratch_root/markup-exports`, после чего endpoints
+превью и скачивания возвращают `404`; схема БД не изменяется.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в
 `POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через

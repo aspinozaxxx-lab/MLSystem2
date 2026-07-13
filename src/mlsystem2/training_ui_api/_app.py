@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ._auth import require_user
 from ._config import get_config
 from ._database import Base, configure_schema, create_session_factory, session_scope
+from ._markup_export import cleanup_expired_markup_exports
 from ._routes.auth import register_auth_routes
 from ._routes.automation import register_automation_routes
 from ._routes.catalog import register_catalog_routes
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        cleanup_expired_markup_exports(config, remove_incomplete=True)
         with session_factory() as session:
             ensure_seed_templates(session)
             session.commit()

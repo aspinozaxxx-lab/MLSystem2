@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
-import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownload, apiDownloadGet, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import type {
   AnyTemplate,
   AutomationRuleInfo,
@@ -39,6 +39,8 @@ import type {
   JobLogInfo,
   JobSummary,
   JsonRecord,
+  MarkupExportInfo,
+  MarkupExportRequest,
   MLflowExperimentInfo,
   ModelInfo,
   PseudoMarkupResultInfo,
@@ -212,6 +214,7 @@ function RoutedPage(props: {
   if (head === "templates") return <TemplatesPage {...props} />;
   if (head === "automation") return <AutomationPage {...props} />;
   if (head === "model-export") return <ModelExportPage {...props} />;
+  if (head === "markup-export") return <MarkupExportPage {...props} />;
   if (head === "results" && second) return <ClassResultsPage {...props} classKey={decodeURIComponent(second)} />;
   if (head === "results") return <ResultsPage {...props} />;
   if (head === "jobs" && second) return <JobPage {...props} jobId={second} />;
@@ -229,13 +232,13 @@ function Shell({
   onLogout: () => void;
   children: ReactNode;
 }) {
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportRouteActive = route[0] === "model-export" || route[0] === "markup-export";
   const navItems = [
     { href: "#/start", key: "start", label: "Запуск", icon: Play },
     { href: "#/queue", key: "queue", label: "Очередь", icon: ListChecks },
     { href: "#/templates", key: "templates", label: "Шаблоны", icon: Settings },
     { href: "#/automation", key: "automation", label: "Автоматизация", icon: Activity },
-    { href: "#/model-export", key: "model-export", label: "Экспорт моделей", icon: Archive },
-    { href: "#/results", key: "results", label: "Результаты", icon: BarChart3 },
   ];
   return (
     <div className="app-shell">
@@ -254,6 +257,50 @@ function Shell({
               </a>
             );
           })}
+          <div
+            className={`nav-dropdown ${exportMenuOpen ? "open" : ""}`}
+            onBlur={(event) => {
+              if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+                setExportMenuOpen(false);
+              }
+            }}
+          >
+            <button
+              className={exportRouteActive ? "active" : ""}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={exportMenuOpen}
+              onClick={() => setExportMenuOpen((current) => !current)}
+            >
+              <Download size={16} />
+              Экспорт
+              <ChevronDown className="nav-dropdown-chevron" size={14} />
+            </button>
+            <div className="nav-dropdown-menu" role="menu">
+              <a
+                className={route[0] === "model-export" ? "active" : ""}
+                href="#/model-export"
+                role="menuitem"
+                onClick={() => setExportMenuOpen(false)}
+              >
+                <Archive size={16} />
+                Экспорт моделей
+              </a>
+              <a
+                className={route[0] === "markup-export" ? "active" : ""}
+                href="#/markup-export"
+                role="menuitem"
+                onClick={() => setExportMenuOpen(false)}
+              >
+                <Layers3 size={16} />
+                Экспорт разметки
+              </a>
+            </div>
+          </div>
+          <a className={route[0] === "results" ? "active" : ""} href="#/results">
+            <BarChart3 size={16} />
+            Результаты
+          </a>
           <button type="button" title={`Выйти: ${user}`} onClick={onLogout}>
             <LogOut size={16} />
             Выйти
@@ -773,6 +820,200 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
       </form>
     </>
   );
+}
+
+function MarkupExportPage({ bootstrap, run }: RoutedPageProps) {
+  const datasets = useMemo(
+    () =>
+      bootstrap.datasets.filter(
+        (dataset) =>
+          !dataset.is_custom &&
+          Boolean(dataset.scenes_file) &&
+          Boolean(dataset.annotation_file) &&
+          !(dataset.diagnostics || []).length,
+      ),
+    [bootstrap.datasets],
+  );
+  const [datasetKey, setDatasetKey] = useState(datasets[0]?.key || "");
+  const [tileWidth, setTileWidth] = useState(1024);
+  const [tileHeight, setTileHeight] = useState(1024);
+  const [imageCount, setImageCount] = useState(10);
+  const [objectCount, setObjectCount] = useState(150);
+  const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [result, setResult] = useState<MarkupExportInfo | null>(null);
+
+  useEffect(() => {
+    if (!datasets.some((dataset) => dataset.key === datasetKey)) {
+      setDatasetKey(datasets[0]?.key || "");
+    }
+  }, [datasetKey, datasets]);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setResult(null);
+    try {
+      const request: MarkupExportRequest = {
+        dataset_key: datasetKey,
+        tile_width: tileWidth,
+        tile_height: tileHeight,
+        image_count: imageCount,
+        object_count: objectCount,
+      };
+      const payload = await run(() => apiJson<MarkupExportInfo>("/markup-export", { method: "POST", body: request }));
+      if (payload) setResult(payload);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = async () => {
+    if (!result) return;
+    setDownloading(true);
+    try {
+      const response = await run(() => apiDownloadGet(result.download_url));
+      if (response) downloadBlob(response.blob, response.filename || "test_markup.zip");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Экспорт разметки"
+        subtitle="Формирование набора тестовых тайлов из локальных подготовленных снимков"
+      />
+      <form className="form-stack" onSubmit={submit}>
+        <section className="panel">
+          <PanelHeader
+            title="Параметры набора"
+            subtitle="Тайлы выбираются в плотных областях разметки без чёрных пикселей и областей без данных"
+          />
+          {datasets.length ? (
+            <div className="form-grid">
+              <label className="field">
+                <span>Класс и вариант датасета</span>
+                <select value={datasetKey} disabled={busy} onChange={(event) => setDatasetKey(event.target.value)}>
+                  {datasets.map((dataset) => (
+                    <option key={dataset.key} value={dataset.key}>
+                      {markupExportDatasetLabel(dataset)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Ширина тайла, пиксели</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={tileWidth}
+                  disabled={busy}
+                  onChange={(event) => setTileWidth(Number(event.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Высота тайла, пиксели</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={tileHeight}
+                  disabled={busy}
+                  onChange={(event) => setTileHeight(Number(event.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Количество снимков</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={imageCount}
+                  disabled={busy}
+                  onChange={(event) => setImageCount(Number(event.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Целевое количество объектов</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={objectCount}
+                  disabled={busy}
+                  onChange={(event) => setObjectCount(Number(event.target.value))}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="empty-state">Нет датасетов с однозначными файлами сцен и положительной разметки.</div>
+          )}
+        </section>
+        <div className="button-row">
+          <button className="primary" type="submit" disabled={busy || !datasetKey}>
+            <Layers3 size={16} />
+            {busy ? "Формирование..." : "Сформировать"}
+          </button>
+        </div>
+      </form>
+
+      {result ? (
+        <section className="panel markup-export-result">
+          <PanelHeader
+            title="Набор сформирован"
+            subtitle={`${result.dataset_name} · доступен до ${formatDateTime(result.expires_at)}`}
+            aside={
+              <button className="primary" type="button" disabled={downloading} onClick={download}>
+                <Download size={16} />
+                {downloading ? "Скачивание..." : "Скачать ZIP"}
+              </button>
+            }
+          />
+          <div className="metric-grid markup-export-summary">
+            <Metric label="Объекты, цель / факт" value={`${result.requested_object_count} / ${result.actual_object_count}`} />
+            <Metric label="Тайлы" value={result.image_count} />
+            <Metric label="Территории" value={result.territory_count} />
+            <Metric label="Размер тайла" value={`${result.tile_width} × ${result.tile_height}`} />
+          </div>
+          {(result.warnings || []).length ? (
+            <div className="markup-export-warnings">
+              {(result.warnings || []).map((warning) => (
+                <div className="info-box" key={warning}>
+                  {warning}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="markup-preview-grid">
+            {result.tiles.map((tile) => (
+              <article className="markup-preview-card" key={tile.index}>
+                <img src={tile.preview_url} alt={`Тайл ${tile.index}: ${tile.source_name}`} loading="lazy" />
+                <div className="markup-preview-meta">
+                  <strong>Тайл {tile.index}</strong>
+                  <span title={tile.source_name}>{tile.source_name}</span>
+                  <small>{tile.territory}</small>
+                  <span className="badge neutral">Объектов: {tile.object_count}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function markupExportDatasetLabel(dataset: DatasetInfo): string {
+  const className = dataset.class_name || dataset.class_key || dataset.name;
+  const variantName = dataset.variant_name || dataset.variant_key;
+  return variantName ? `${className}\\${variantName}` : className;
 }
 
 function latestSuccessfulTrainingResult(results: TrainingResultInfo[]): TrainingResultInfo | null {
