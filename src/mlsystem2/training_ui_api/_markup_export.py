@@ -191,8 +191,11 @@ def build_markup_export(
             tile_width=request.tile_width,
             tile_height=request.tile_height,
         )
-        annotation_stem = _safe_name(Path(dataset.annotation_file).stem, fallback="markup")
-        archive_filename = f"{annotation_stem}_test_markup.zip"
+        dataset_stem = _safe_name(
+            (dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]).casefold(),
+            fallback="markup",
+        )
+        archive_filename = f"{dataset_stem}_test_markup.zip"
         _zip_tile_files(building_root, building_root / ARCHIVE_NAME)
         expires_at = _utc_now() + EXPORT_TTL
         info = MarkupExportInfo(
@@ -831,14 +834,11 @@ def _write_selected_tiles(
     tile_infos: list[MarkupExportTileInfo] = []
     preview_files: dict[int, str] = {}
     for index, candidate in enumerate(selected, start=1):
-        source_stem = _safe_name(candidate.source_path.stem, fallback="image")
-        base_name = (
-            f"tile_{index:03d}_{source_stem}_x{candidate.column}_y{candidate.row}"
-        )
+        base_name = f"tile_{index:03d}"
         tif_path = output_root / f"{base_name}.tif"
         geojson_path = output_root / f"{base_name}.geojson"
         mask_path = output_root / f"{base_name}_mask.png"
-        overlay_path = output_root / f"{base_name}_overlay.png"
+        preview_path = output_root / f"{base_name}_preview.png"
         window = Window(candidate.column, candidate.row, tile_width, tile_height)
         with rasterio.open(candidate.source_path) as source:
             image = source.read(window=window)
@@ -875,8 +875,8 @@ def _write_selected_tiles(
         )
         overlay = _overlay_image(image, mask)
         _write_png(mask_path, mask[np.newaxis, :, :])
-        _write_png(overlay_path, overlay.transpose(2, 0, 1))
-        preview_files[index] = overlay_path.name
+        _write_png(preview_path, overlay.transpose(2, 0, 1))
+        preview_files[index] = preview_path.name
         tile_infos.append(
             MarkupExportTileInfo(
                 index=index,
@@ -903,6 +903,8 @@ def _clipped_features(
         )
         if clipped is None or clipped.is_empty or clipped.area <= 0.0:
             continue
+        if isinstance(clipped, Polygon):
+            clipped = MultiPolygon([clipped])
         payload: dict[str, Any] = {
             "type": "Feature",
             "properties": feature.properties,
@@ -1020,7 +1022,7 @@ def _overlay_image(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     preview = _preview_rgb(image)
     edge = _mask_edge(mask)
     result = preview.copy()
-    result[edge] = np.asarray([255, 0, 0], dtype=np.uint8)
+    result[edge] = np.asarray([255, 255, 0], dtype=np.uint8)
     return result
 
 
@@ -1060,8 +1062,19 @@ def _mask_edge(mask: np.ndarray) -> np.ndarray:
     positive = mask > 0
     if not bool(np.any(positive)):
         return np.zeros(mask.shape, dtype=bool)
+    edge = np.zeros(mask.shape, dtype=bool)
+    for _ in range(2):
+        if not bool(np.any(positive)):
+            break
+        interior = _mask_interior(positive)
+        edge |= positive & ~interior
+        positive = interior
+    return edge
+
+
+def _mask_interior(positive: np.ndarray) -> np.ndarray:
     padded = np.pad(positive, 1, mode="constant", constant_values=False)
-    interior = (
+    return (
         padded[1:-1, 1:-1]
         & padded[:-2, 1:-1]
         & padded[2:, 1:-1]
@@ -1072,7 +1085,6 @@ def _mask_edge(mask: np.ndarray) -> np.ndarray:
         & padded[2:, :-2]
         & padded[2:, 2:]
     )
-    return positive & ~interior
 
 
 def _zip_tile_files(output_root: Path, archive_path: Path) -> None:

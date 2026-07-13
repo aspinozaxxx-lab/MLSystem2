@@ -5,6 +5,7 @@ import os
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 import numpy as np
 import pytest
@@ -55,13 +56,14 @@ def test_markup_export_builds_black_free_georeferenced_archive(
         "kanopus/region_b",
     }
     artifact = _markup_export.load_markup_export(info.id, config)
+    assert artifact.archive_filename == "вырубки_test_markup.zip"
     with zipfile.ZipFile(artifact.archive_path) as archive:
         names = archive.namelist()
-    assert len(names) == 8
-    assert sum(name.endswith(".tif") for name in names) == 2
-    assert sum(name.endswith(".geojson") for name in names) == 2
-    assert sum(name.endswith("_mask.png") for name in names) == 2
-    assert sum(name.endswith("_overlay.png") for name in names) == 2
+    assert set(names) == {
+        f"tile_{index:03d}{suffix}"
+        for index in range(1, 3)
+        for suffix in (".tif", ".geojson", "_mask.png", "_preview.png")
+    }
 
     output_root = config.scratch_root / _markup_export.EXPORT_ROOT_NAME / str(info.id)
     output_tiffs = sorted(output_root.glob("*.tif"))
@@ -109,6 +111,9 @@ def test_markup_export_builds_black_free_georeferenced_archive(
         assert payload["features"]
         assert all("kind" in feature["properties"] for feature in payload["features"])
         assert all("id" in feature for feature in payload["features"])
+        assert {
+            feature["geometry"]["type"] for feature in payload["features"]
+        } == {"MultiPolygon"}
     for path in output_root.glob("*_mask.png"):
         with rasterio.open(path) as dataset:
             values = set(np.unique(dataset.read(1)).tolist())
@@ -117,11 +122,26 @@ def test_markup_export_builds_black_free_georeferenced_archive(
             assert dataset.height == 16
             assert values <= {0, 255}
             assert 255 in values
-    for path in output_root.glob("*_overlay.png"):
+    for path in output_root.glob("*_preview.png"):
         with rasterio.open(path) as dataset:
             assert dataset.count == 3
             assert dataset.width == 16
             assert dataset.height == 16
+
+
+def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
+    image = np.full((3, 9, 9), 100, dtype=np.uint8)
+    mask = np.zeros((9, 9), dtype=np.uint8)
+    mask[1:8, 1:8] = 255
+
+    preview = _markup_export._overlay_image(image, mask)
+    yellow = np.all(preview == np.asarray([255, 255, 0]), axis=2)
+
+    assert int(yellow.sum()) == 40
+    assert yellow[1, 1]
+    assert yellow[2, 2]
+    assert not yellow[3, 3]
+    assert not bool(np.any(np.all(preview == np.asarray([255, 0, 0]), axis=2)))
 
 
 def test_markup_export_reports_nearest_object_count(tmp_path: Path, monkeypatch) -> None:
@@ -381,7 +401,8 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
         download = client.get(payload["download_url"])
         assert download.status_code == 200
         assert download.headers["content-type"] == "application/zip"
-        assert "deforestation_test_markup.zip" in download.headers["content-disposition"]
+        content_disposition = unquote(download.headers["content-disposition"])
+        assert "вырубки_test_markup.zip" in content_disposition.casefold()
         assert client.get(
             f"/api/v1/markup-export/{payload['id']}/tiles/99/preview"
         ).status_code == 404
