@@ -311,6 +311,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Samples */
+        get: operations["get_test_samples_api_v1_test_samples_get"];
+        put?: never;
+        /** Post Test Sample */
+        post: operations["post_test_sample_api_v1_test_samples_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample */
+        get: operations["get_test_sample_api_v1_test_samples__sample_id__get"];
+        put?: never;
+        post?: never;
+        /** Remove Test Sample */
+        delete: operations["remove_test_sample_api_v1_test_samples__sample_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Test Sample */
+        patch: operations["patch_test_sample_api_v1_test_samples__sample_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Test Sample Tile */
+        patch: operations["patch_test_sample_tile_api_v1_test_samples__sample_id__tiles__tile_index__patch"];
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Evaluation */
+        post: operations["post_test_sample_evaluation_api_v1_test_samples__sample_id__evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Preview */
+        get: operations["get_test_sample_preview_api_v1_test_samples__sample_id__tiles__tile_index__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Test Sample */
+        get: operations["download_test_sample_api_v1_test_samples__sample_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/automation": {
         parameters: {
             query?: never;
@@ -1442,6 +1547,224 @@ export interface components {
          * @enum {string}
          */
         TemplateSource: "hpo_best" | "analogy" | "manual";
+        /** TestSampleCatalogResponse */
+        TestSampleCatalogResponse: {
+            /** Classes */
+            classes?: components["schemas"]["TestSampleClassGroup"][];
+        };
+        /** TestSampleClassGroup */
+        TestSampleClassGroup: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Variants */
+            variants?: components["schemas"]["TestSampleVariantGroup"][];
+        };
+        /** TestSampleCreate */
+        TestSampleCreate: {
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /**
+             * Tile Width
+             * @default 1024
+             */
+            tile_width: number;
+            /**
+             * Tile Height
+             * @default 1024
+             */
+            tile_height: number;
+            /**
+             * Image Count
+             * @default 10
+             */
+            image_count: number;
+            /**
+             * Object Count
+             * @default 150
+             */
+            object_count: number;
+        };
+        /** TestSampleDetail */
+        TestSampleDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Variant Key */
+            variant_key: string;
+            /** Variant Name */
+            variant_name: string;
+            /** Image Count */
+            image_count: number;
+            /** Enabled Image Count */
+            enabled_image_count: number;
+            /** Actual Object Count */
+            actual_object_count: number;
+            /** Enabled Object Count */
+            enabled_object_count: number;
+            evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Tile Width */
+            tile_width: number;
+            /** Tile Height */
+            tile_height: number;
+            /** Requested Object Count */
+            requested_object_count: number;
+            /** Territory Count */
+            territory_count: number;
+            /** Warnings */
+            warnings?: string[];
+            /** Download Url */
+            download_url: string;
+            /** Tiles */
+            tiles?: components["schemas"]["TestSampleTileInfo"][];
+        };
+        /** TestSampleEvaluationInfo */
+        TestSampleEvaluationInfo: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "current" | "stale" | "unavailable" | "error";
+            pixel?: components["schemas"]["TestSampleMetric"] | null;
+            objects?: components["schemas"]["TestSampleMetric"] | null;
+            /**
+             * Object Iou Threshold
+             * @default 0.5
+             */
+            object_iou_threshold: number;
+            /** Pseudo Markup Result Id */
+            pseudo_markup_result_id?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Markup Created At */
+            markup_created_at?: string | null;
+            /** Evaluated At */
+            evaluated_at?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** TestSampleMetric */
+        TestSampleMetric: {
+            /** Precision */
+            precision: number;
+            /** Recall */
+            recall: number;
+            /** F1 */
+            f1: number;
+            /** True Positive */
+            true_positive: number;
+            /** False Positive */
+            false_positive: number;
+            /** False Negative */
+            false_negative: number;
+        };
+        /** TestSampleSummary */
+        TestSampleSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Variant Key */
+            variant_key: string;
+            /** Variant Name */
+            variant_name: string;
+            /** Image Count */
+            image_count: number;
+            /** Enabled Image Count */
+            enabled_image_count: number;
+            /** Actual Object Count */
+            actual_object_count: number;
+            /** Enabled Object Count */
+            enabled_object_count: number;
+            evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** TestSampleTileInfo */
+        TestSampleTileInfo: {
+            /** Index */
+            index: number;
+            /** Source Name */
+            source_name: string;
+            /** Territory */
+            territory: string;
+            /** Object Count */
+            object_count: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Preview Url */
+            preview_url: string;
+        };
+        /** TestSampleTileUpdate */
+        TestSampleTileUpdate: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** TestSampleUpdate */
+        TestSampleUpdate: {
+            /** Name */
+            name: string;
+        };
+        /** TestSampleVariantGroup */
+        TestSampleVariantGroup: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Samples */
+            samples?: components["schemas"]["TestSampleSummary"][];
+        };
         /** TrainingJobCreate */
         TrainingJobCreate: {
             /** Mlflow Experiment Id */
@@ -2109,6 +2432,284 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_samples_api_v1_test_samples_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleCatalogResponse"];
+                };
+            };
+        };
+    };
+    post_test_sample_api_v1_test_samples_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_api_v1_test_samples__sample_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_test_sample_api_v1_test_samples__sample_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_test_sample_api_v1_test_samples__sample_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_test_sample_tile_api_v1_test_samples__sample_id__tiles__tile_index__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+                tile_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleTileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_sample_evaluation_api_v1_test_samples__sample_id__evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_preview_api_v1_test_samples__sample_id__tiles__tile_index__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+                tile_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Постоянное PNG-превью тестового тайла. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_test_sample_api_v1_test_samples__sample_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP включённых тайлов постоянной тестовой выборки. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

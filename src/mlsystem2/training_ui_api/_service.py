@@ -68,6 +68,7 @@ from ._templates import (
     sanitize_inference_template_config,
     sanitize_template_config,
 )
+from ._test_samples import mark_test_samples_stale_for_pseudo_markup
 from .contracts import (
     AppLink,
     AppLinksResponse,
@@ -1077,6 +1078,7 @@ def delete_pseudo_markup_result(
     job = session.get(JobRow, row.job_id) if row.job_id is not None else None
     if job is not None and job.status == JobStatus.RUNNING.value:
         _stop_process_and_cleanup(job)
+    mark_test_samples_stale_for_pseudo_markup(session, row.id)
     stored_files = [row.scenes_file, row.geojson_file]
     session.delete(row)
     session.flush()

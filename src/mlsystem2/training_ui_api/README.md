@@ -11,7 +11,7 @@
 - `MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA` — отдельная схема Postgres, default `training_ui`.
 - `MLSYSTEM2_MLMARKUP_ROOT` — путь к MLMarkup, default `/data/MLMarkup`.
 - `MLSYSTEM2_IMAGES_ROOT` — путь к подготовленным снимкам, default `/data/mlsystem2/prepared_images`.
-- `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT` — корень загруженных txt/geojson.
+- `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT` — корень загруженных txt/geojson и постоянных тестовых выборок.
 - `MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT` — временные файлы jobs.
 - `MLSYSTEM2_TRAINING_UI_FRONTEND_DIST` — каталог собранного frontend, default `/opt/mlsystem2/frontend`.
 - `MLSYSTEM2_TRAINING_SETTINGS_PATH` — путь к стабильному `settings.yml`, default `configs/settings.server.yaml`
@@ -72,6 +72,15 @@
 - `POST /api/v1/markup-export`
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
 - `GET /api/v1/markup-export/{export_id}/download`
+- `GET /api/v1/test-samples`
+- `POST /api/v1/test-samples`
+- `GET /api/v1/test-samples/{sample_id}`
+- `PATCH /api/v1/test-samples/{sample_id}`
+- `DELETE /api/v1/test-samples/{sample_id}`
+- `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}`
+- `POST /api/v1/test-samples/{sample_id}/evaluate`
+- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview`
+- `GET /api/v1/test-samples/{sample_id}/download`
 - `DELETE /api/v1/results/pseudo-markup/{result_id}`
 - `GET /api/v1/files/{file_id}/download`
 
@@ -101,6 +110,14 @@ GeoJSON-объектов; перекрытие и повтор объекта з
 единому типу `MultiPolygon`, поэтому файл открывается в QGIS одним слоем. Плоский ZIP получает имя вида
 `вырубки_test_markup.zip` по русскому имени класса и вместе с превью хранится один час в
 `scratch_root/markup-exports`, после истечения срока возвращается `404`.
+
+`POST /api/v1/test-samples` использует ту же нарезку, но сохраняет готовые файлы без TTL в
+`MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT/test-samples/{uuid}`, а описание и состояния тайлов — в Postgres.
+Каталог группирует выборки как `класс → вариант`. Выключенные тайлы остаются доступными для возврата, но не входят
+в скачиваемый ZIP и расчет F1; полное удаление выборки удаляет запись и весь каталог файлов. Сервис считает
+пиксельную и объектную F1 по последней успешной псевдоразметке с точным совпадением `class_key` и входного
+`dataset_key`; порог объектного сопоставления равен `IoU ≥ 0,5`. После переключения прежние значения видны как
+устаревшие до ручного пересчета, а новый подходящий результат псевдоразметки запускает автоматический пересчет.
 
 `GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
 имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.
@@ -134,6 +151,8 @@ process получает SIGTERM, а известный MLflow run помеча�
 - `automation_rules`
 - `training_results`
 - `pseudo_markup_results`
+- `test_samples`
+- `test_sample_tiles`
 
 Шаблон хранит `config_schema` и `default_config` в JSONB. `default_config` использует ключи вида
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.

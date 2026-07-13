@@ -31,6 +31,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания; `TrainingResultInfo.sample_size_hint` передает tile size из связанного job, если он известен.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
+- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate` - создание постоянной выборки, переименование и изменение состояния тайла.
+- `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail` - метрики, иерархический каталог и редакторское описание постоянных тестовых выборок.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
@@ -42,6 +44,11 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/markup-export` - синхронно формирует временный набор тестовой разметки для варианта MLMarkup.
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview` - возвращает PNG-превью тайла с контуром маски.
 - `GET /api/v1/markup-export/{export_id}/download` - возвращает плоский ZIP сформированного набора.
+- `GET /api/v1/test-samples` и `POST /api/v1/test-samples` - иерархический каталог и создание постоянной тестовой выборки.
+- `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, переименование и полное удаление выборки.
+- `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
+- `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
+- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP включенных тайлов.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -98,7 +105,7 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 Общий архив содержит `models-serving-service/<model_name>.zip`, `pipelines/<model_name>_triton.yaml`,
 `metadata/<model_name>_export_metadata.json` и корневой `export_metadata.json`.
 
-Экспорт тестовой разметки работает отдельно от worker, очередей, Postgres, MLflow, S3 и конвейера обучения.
+Нарезка тестовой разметки работает отдельно от worker, очередей, MLflow, S3 и конвейера обучения.
 По TXT выбранного варианта он сопоставляет сцены с TIFF только внутри `MLSYSTEM2_IMAGES_ROOT`, исключает окна за
 границами растра, с невалидной `dataset_mask`, пикселями без данных или полностью чёрными пикселями и детерминированно выбирает
 заданное число тайлов через `scipy.optimize.milp`. Приоритеты выбора: максимальное число родительских папок,
@@ -107,8 +114,13 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 Для тайла создаются `tile_001.tif`, `tile_001.geojson`, `tile_001_mask.png` и `tile_001_preview.png`: COG TIFF без
 ресэмплинга, бинарная маска и превью, а геометрии обрезанного GeoJSON с исходными свойствами и CRS нормализуются
 до `MultiPolygon` для открытия в QGIS одним слоем. Архив именуется по русскому имени класса, например
-`вырубки_test_markup.zip`. Набор хранится один час в `scratch_root/markup-exports`, после чего endpoints
-превью и скачивания возвращают `404`; схема БД не изменяется.
+`вырубки_test_markup.zip`. Совместимый временный экспорт хранится один час в `scratch_root/markup-exports`.
+Постоянные выборки хранят метаданные в `test_samples` и `test_sample_tiles`, а файлы без TTL — в
+`stored_files_root/test-samples/{uuid}`. Выключение тайла сохраняет файлы, исключает его из ZIP и помечает прежние
+метрики устаревшими. Пиксельный F1 считается по TP/FP/FN растрированных масок, объектный — по максимальному
+взаимно-однозначному сопоставлению с `IoU ≥ 0,5`. Источник — последняя успешная псевдоразметка, у которой
+`class_key` и входной `dataset_key` точно равны ключу варианта выборки; новый подходящий результат запускает
+автоматический пересчет.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в
 `POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через

@@ -29,6 +29,12 @@ export type TrainingResultBatchExportRequest = components["schemas"]["TrainingRe
 export type TrainingResultExportItem = components["schemas"]["TrainingResultExportItem"];
 export type TrainingResultInfo = components["schemas"]["TrainingResultInfo"];
 export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
+export type TestSampleCatalogResponse = components["schemas"]["TestSampleCatalogResponse"];
+export type TestSampleCreate = components["schemas"]["TestSampleCreate"];
+export type TestSampleDetail = components["schemas"]["TestSampleDetail"];
+export type TestSampleEvaluationInfo = components["schemas"]["TestSampleEvaluationInfo"];
+export type TestSampleMetric = components["schemas"]["TestSampleMetric"];
+export type TestSampleSummary = components["schemas"]["TestSampleSummary"];
 
 export type AnyTemplate = TrainingTemplate | InferenceTemplate;
 export type JsonRecord = Record<string, unknown>;

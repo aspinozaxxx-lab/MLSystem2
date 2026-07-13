@@ -39,8 +39,6 @@ import type {
   JobLogInfo,
   JobSummary,
   JsonRecord,
-  MarkupExportInfo,
-  MarkupExportRequest,
   MLflowExperimentInfo,
   ModelInfo,
   PseudoMarkupResultInfo,
@@ -50,6 +48,12 @@ import type {
   TrainingResultBatchExportRequest,
   TrainingResultInfo,
   TrainingTemplate,
+  TestSampleCatalogResponse,
+  TestSampleCreate,
+  TestSampleDetail,
+  TestSampleEvaluationInfo,
+  TestSampleMetric,
+  TestSampleSummary,
 } from "./api/types";
 import {
   displayStoredFileName,
@@ -214,6 +218,9 @@ function RoutedPage(props: {
   if (head === "templates") return <TemplatesPage {...props} />;
   if (head === "automation") return <AutomationPage {...props} />;
   if (head === "model-export") return <ModelExportPage {...props} />;
+  if (head === "markup-export" && second) {
+    return <TestSampleEditorPage {...props} sampleId={second} />;
+  }
   if (head === "markup-export") return <MarkupExportPage {...props} />;
   if (head === "results" && second) return <ClassResultsPage {...props} classKey={decodeURIComponent(second)} />;
   if (head === "results") return <ResultsPage {...props} />;
@@ -822,7 +829,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
   );
 }
 
-function MarkupExportPage({ bootstrap, run }: RoutedPageProps) {
+function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageProps) {
   const datasets = useMemo(
     () =>
       bootstrap.datasets.filter(
@@ -835,13 +842,22 @@ function MarkupExportPage({ bootstrap, run }: RoutedPageProps) {
     [bootstrap.datasets],
   );
   const [datasetKey, setDatasetKey] = useState(datasets[0]?.key || "");
+  const [sampleName, setSampleName] = useState(() => defaultTestSampleName(datasets[0]));
   const [tileWidth, setTileWidth] = useState(1024);
   const [tileHeight, setTileHeight] = useState(1024);
   const [imageCount, setImageCount] = useState(10);
   const [objectCount, setObjectCount] = useState(150);
   const [busy, setBusy] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [result, setResult] = useState<MarkupExportInfo | null>(null);
+  const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
+
+  const loadCatalog = useCallback(async () => {
+    const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
+    if (payload) setCatalog(payload);
+  }, [run]);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
 
   useEffect(() => {
     if (!datasets.some((dataset) => dataset.key === datasetKey)) {
@@ -852,50 +868,81 @@ function MarkupExportPage({ bootstrap, run }: RoutedPageProps) {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
-    setResult(null);
     try {
-      const request: MarkupExportRequest = {
+      const request: TestSampleCreate = {
+        name: sampleName,
         dataset_key: datasetKey,
         tile_width: tileWidth,
         tile_height: tileHeight,
         image_count: imageCount,
         object_count: objectCount,
       };
-      const payload = await run(() => apiJson<MarkupExportInfo>("/markup-export", { method: "POST", body: request }));
-      if (payload) setResult(payload);
+      const payload = await run(() => apiJson<TestSampleDetail>("/test-samples", { method: "POST", body: request }));
+      if (payload) navigate(`markup-export/${payload.id}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const download = async () => {
-    if (!result) return;
-    setDownloading(true);
-    try {
-      const response = await run(() => apiDownloadGet(result.download_url));
-      if (response) downloadBlob(response.blob, response.filename || "test_markup.zip");
-    } finally {
-      setDownloading(false);
-    }
+  const selectDataset = (nextKey: string) => {
+    setDatasetKey(nextKey);
+    setSampleName(defaultTestSampleName(datasets.find((dataset) => dataset.key === nextKey)));
+  };
+
+  const removeSample = (sample: TestSampleSummary) => {
+    showModal({
+      title: "Удалить тестовую выборку",
+      body: <p>Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.</p>,
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button
+            className="danger"
+            type="button"
+            onClick={async () => {
+              const deleted = await run(() => apiJson<null>(`/test-samples/${sample.id}`, { method: "DELETE" }));
+              if (deleted !== undefined) {
+                closeModal();
+                await loadCatalog();
+              }
+            }}
+          >
+            <Trash2 size={16} />
+            Удалить
+          </button>
+        </>
+      ),
+    });
   };
 
   return (
     <>
       <PageHeader
         title="Экспорт разметки"
-        subtitle="Формирование набора тестовых тайлов из локальных подготовленных снимков"
+        subtitle="Создание, хранение и проверка постоянных тестовых выборок"
       />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
           <PanelHeader
-            title="Параметры набора"
+            title="Создать тестовую выборку"
             subtitle="Тайлы выбираются в плотных областях разметки без чёрных пикселей и областей без данных"
           />
           {datasets.length ? (
             <div className="form-grid">
+              <label className="field test-sample-name-field">
+                <span>Название выборки</span>
+                <input
+                  type="text"
+                  required
+                  maxLength={180}
+                  value={sampleName}
+                  disabled={busy}
+                  onChange={(event) => setSampleName(event.target.value)}
+                />
+              </label>
               <label className="field">
                 <span>Класс и вариант датасета</span>
-                <select value={datasetKey} disabled={busy} onChange={(event) => setDatasetKey(event.target.value)}>
+                <select value={datasetKey} disabled={busy} onChange={(event) => selectDataset(event.target.value)}>
                   {datasets.map((dataset) => (
                     <option key={dataset.key} value={dataset.key}>
                       {markupExportDatasetLabel(dataset)}
@@ -959,55 +1006,392 @@ function MarkupExportPage({ bootstrap, run }: RoutedPageProps) {
         <div className="button-row">
           <button className="primary" type="submit" disabled={busy || !datasetKey}>
             <Layers3 size={16} />
-            {busy ? "Формирование..." : "Сформировать"}
+            {busy ? "Формирование..." : "Создать выборку"}
           </button>
         </div>
       </form>
 
-      {result ? (
-        <section className="panel markup-export-result">
-          <PanelHeader
-            title="Набор сформирован"
-            subtitle={`${result.dataset_name} · доступен до ${formatDateTime(result.expires_at)}`}
-            aside={
-              <button className="primary" type="button" disabled={downloading} onClick={download}>
+      <section className="panel test-sample-catalog">
+        <PanelHeader
+          title="Каталог тестовых выборок"
+          subtitle="Выборки сгруппированы по классу и подклассу датасета"
+          aside={
+            <button className="secondary compact-action" type="button" onClick={() => void loadCatalog()}>
+              <RefreshCw size={15} />
+              Обновить
+            </button>
+          }
+        />
+        {catalog ? <TestSampleCatalog catalog={catalog} onDelete={removeSample} /> : <div className="empty-state">Загрузка каталога...</div>}
+      </section>
+    </>
+  );
+}
+
+function TestSampleCatalog({
+  catalog,
+  onDelete,
+}: {
+  catalog: TestSampleCatalogResponse;
+  onDelete: (sample: TestSampleSummary) => void;
+}) {
+  if (!(catalog.classes || []).length) {
+    return <div className="empty-state">Тестовые выборки ещё не созданы.</div>;
+  }
+  return (
+    <div className="test-sample-class-list">
+      {(catalog.classes || []).map((classGroup) => (
+        <section className="test-sample-class" key={classGroup.key}>
+          <h3>{classGroup.name}</h3>
+          {(classGroup.variants || []).map((variant) => (
+            <div className="test-sample-variant" key={variant.key}>
+              <h4>{variant.name}</h4>
+              <div className="table-wrap">
+                <table className="test-sample-table">
+                  <thead>
+                    <tr>
+                      <th>Название</th>
+                      <th>Тайлы</th>
+                      <th>Пиксельный F1</th>
+                      <th>Объектный F1</th>
+                      <th>Состояние</th>
+                      <th>Создана</th>
+                      <th aria-label="Действия" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(variant.samples || []).map((sample) => (
+                      <tr key={sample.id}>
+                        <td>
+                          <a className="test-sample-link" href={`#/markup-export/${sample.id}`}>{sample.name}</a>
+                        </td>
+                        <td>{sample.enabled_image_count} / {sample.image_count}</td>
+                        <td>{formatF1Score(sample.evaluation.pixel?.f1)}</td>
+                        <td>{formatF1Score(sample.evaluation.objects?.f1)}</td>
+                        <td><TestSampleEvaluationBadge evaluation={sample.evaluation} /></td>
+                        <td>{formatDateTime(sample.created_at)}</td>
+                        <td className="action-cell test-sample-delete-cell">
+                          <button
+                            className="danger icon-button"
+                            type="button"
+                            aria-label={`Удалить выборку ${sample.name}`}
+                            title="Удалить выборку"
+                            onClick={() => onDelete(sample)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function TestSampleEditorPage({
+  sampleId,
+  run,
+  showModal,
+  closeModal,
+}: RoutedPageProps & { sampleId: string }) {
+  const [sample, setSample] = useState<TestSampleDetail | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [busyTile, setBusyTile] = useState<number | null>(null);
+
+  const loadSample = useCallback(async () => {
+    setLoaded(false);
+    const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
+    if (payload) setSample(payload);
+    setLoaded(true);
+  }, [run, sampleId]);
+
+  useEffect(() => {
+    void loadSample();
+  }, [loadSample]);
+
+  const evaluate = async () => {
+    setEvaluating(true);
+    try {
+      const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}/evaluate`, { method: "POST" }));
+      if (payload) setSample(payload);
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
+  const download = async () => {
+    if (!sample) return;
+    setDownloading(true);
+    try {
+      const payload = await run(() => apiDownloadGet(sample.download_url));
+      if (payload) downloadBlob(payload.blob, payload.filename || "test_markup.zip");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const toggleTile = async (tileIndex: number, enabled: boolean) => {
+    setBusyTile(tileIndex);
+    try {
+      const payload = await run(() =>
+        apiJson<TestSampleDetail>(`/test-samples/${sampleId}/tiles/${tileIndex}`, {
+          method: "PATCH",
+          body: { enabled },
+        }),
+      );
+      if (payload) setSample(payload);
+    } finally {
+      setBusyTile(null);
+    }
+  };
+
+  const rename = () => {
+    if (!sample) return;
+    showModal({
+      title: "Переименовать тестовую выборку",
+      body: (
+        <RenameTestSampleForm
+          initialName={sample.name}
+          onCancel={closeModal}
+          onSubmit={async (name) => {
+            const payload = await run(() =>
+              apiJson<TestSampleDetail>(`/test-samples/${sample.id}`, { method: "PATCH", body: { name } }),
+            );
+            if (payload) {
+              setSample(payload);
+              closeModal();
+            }
+          }}
+        />
+      ),
+      footer: <></>,
+    });
+  };
+
+  const remove = () => {
+    if (!sample) return;
+    showModal({
+      title: "Удалить тестовую выборку",
+      body: <p>Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.</p>,
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button
+            className="danger"
+            type="button"
+            onClick={async () => {
+              const deleted = await run(() => apiJson<null>(`/test-samples/${sample.id}`, { method: "DELETE" }));
+              if (deleted !== undefined) {
+                closeModal();
+                navigate("markup-export");
+              }
+            }}
+          >
+            <Trash2 size={16} />
+            Удалить
+          </button>
+        </>
+      ),
+    });
+  };
+
+  if (!loaded) return <LoadingPage text="Загрузка тестовой выборки" />;
+  if (!sample) {
+    return (
+      <>
+        <PageHeader title="Тестовая выборка не найдена" />
+        <a className="secondary" href="#/markup-export">Вернуться в каталог</a>
+      </>
+    );
+  }
+
+  const hasEnabledTiles = sample.enabled_image_count > 0;
+  return (
+    <>
+      <PageHeader
+        title={sample.name}
+        subtitle={`${sample.class_name} → ${sample.variant_name} · создана ${formatDateTime(sample.created_at)}`}
+        actions={
+          <>
+            <a className="secondary" href="#/markup-export">Каталог</a>
+            <button className="secondary" type="button" onClick={rename}>Переименовать</button>
+            <button className="danger" type="button" onClick={remove}><Trash2 size={16} />Удалить</button>
+          </>
+        }
+      />
+
+      <section className="panel">
+        <PanelHeader
+          title="Состав выборки"
+          subtitle={`${sample.dataset_name}${sample.dataset_version ? ` · версия ${sample.dataset_version}` : ""}`}
+          aside={
+            <div className="button-row">
+              <button className="secondary" type="button" disabled={evaluating || !hasEnabledTiles} onClick={() => void evaluate()}>
+                <RefreshCw size={16} />
+                {evaluating ? "Расчёт..." : "Пересчитать F1"}
+              </button>
+              <button className="primary" type="button" disabled={downloading || !hasEnabledTiles} onClick={() => void download()}>
                 <Download size={16} />
                 {downloading ? "Скачивание..." : "Скачать ZIP"}
               </button>
-            }
-          />
-          <div className="metric-grid markup-export-summary">
-            <Metric label="Объекты, цель / факт" value={`${result.requested_object_count} / ${result.actual_object_count}`} />
-            <Metric label="Тайлы" value={result.image_count} />
-            <Metric label="Территории" value={result.territory_count} />
-            <Metric label="Размер тайла" value={`${result.tile_width} × ${result.tile_height}`} />
-          </div>
-          {(result.warnings || []).length ? (
-            <div className="markup-export-warnings">
-              {(result.warnings || []).map((warning) => (
-                <div className="info-box" key={warning}>
-                  {warning}
-                </div>
-              ))}
             </div>
-          ) : null}
-          <div className="markup-preview-grid">
-            {result.tiles.map((tile) => (
-              <article className="markup-preview-card" key={tile.index}>
-                <img src={tile.preview_url} alt={`Тайл ${tile.index}: ${tile.source_name}`} loading="lazy" />
-                <div className="markup-preview-meta">
-                  <strong>Тайл {tile.index}</strong>
-                  <span title={tile.source_name}>{tile.source_name}</span>
-                  <small>{tile.territory}</small>
-                  <span className="badge neutral">Объектов: {tile.object_count}</span>
-                </div>
-              </article>
-            ))}
+          }
+        />
+        <div className="metric-grid markup-export-summary">
+          <Metric label="Тайлы, включено / всего" value={`${sample.enabled_image_count} / ${sample.image_count}`} />
+          <Metric label="Объекты, включено / всего" value={`${sample.enabled_object_count} / ${sample.actual_object_count}`} />
+          <Metric label="Объекты, цель / факт" value={`${sample.requested_object_count} / ${sample.actual_object_count}`} />
+          <Metric label="Размер тайла" value={`${sample.tile_width} × ${sample.tile_height}`} />
+          <Metric label="Территории" value={sample.territory_count} />
+        </div>
+        {!hasEnabledTiles ? <div className="info-box">Включите хотя бы один тайл, чтобы скачать выборку или рассчитать F1.</div> : null}
+        {(sample.warnings || []).length ? (
+          <div className="markup-export-warnings test-sample-warnings">
+            {(sample.warnings || []).map((warning) => <div className="info-box" key={warning}>{warning}</div>)}
           </div>
-        </section>
-      ) : null}
+        ) : null}
+      </section>
+
+      <TestSampleEvaluationPanel evaluation={sample.evaluation} />
+
+      <section className="panel">
+        <PanelHeader
+          title="Тайлы"
+          subtitle="Выключенный тайл остаётся на сервере и его можно включить обратно"
+        />
+        <div className="markup-preview-grid">
+          {(sample.tiles || []).map((tile) => (
+            <article className={`markup-preview-card ${tile.enabled ? "" : "disabled"}`} key={tile.index}>
+              <img src={tile.preview_url} alt={`Тайл ${tile.index}: ${tile.source_name}`} loading="lazy" />
+              <div className="markup-preview-meta">
+                <div className="test-sample-tile-heading">
+                  <strong>Тайл {String(tile.index).padStart(3, "0")}</strong>
+                  <label className="test-sample-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tile.enabled}
+                      disabled={busyTile !== null}
+                      onChange={(event) => void toggleTile(tile.index, event.target.checked)}
+                    />
+                    <span>{tile.enabled ? "Включён" : "Выключен"}</span>
+                  </label>
+                </div>
+                <span title={tile.source_name}>{tile.source_name}</span>
+                <small>{tile.territory}</small>
+                <span className="badge neutral">Объектов: {tile.object_count}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </>
   );
+}
+
+function RenameTestSampleForm({
+  initialName,
+  onSubmit,
+  onCancel,
+}: {
+  initialName: string;
+  onSubmit: (name: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="form-stack"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        try {
+          await onSubmit(name.trim());
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <label className="field">
+        <span>Название</span>
+        <input autoFocus required maxLength={180} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <div className="button-row">
+        <button className="secondary" type="button" disabled={busy} onClick={onCancel}>Отмена</button>
+        <button className="primary" type="submit" disabled={busy || !name.trim()}>{busy ? "Сохранение..." : "Сохранить"}</button>
+      </div>
+    </form>
+  );
+}
+
+function TestSampleEvaluationPanel({ evaluation }: { evaluation: TestSampleEvaluationInfo }) {
+  return (
+    <section className="panel test-sample-evaluation">
+      <PanelHeader
+        title="Качество разметки"
+        subtitle="Пиксельная и объектная метрики рассчитаны по последней разметке этого класса и варианта"
+        aside={<TestSampleEvaluationBadge evaluation={evaluation} />}
+      />
+      <div className="test-sample-metric-grid">
+        <TestSampleMetricCard title="Пиксельная метрика" metric={evaluation.pixel} />
+        <TestSampleMetricCard
+          title={`Объектная метрика · IoU ≥ ${evaluation.object_iou_threshold}`}
+          metric={evaluation.objects}
+        />
+      </div>
+      <div className="test-sample-evaluation-source">
+        <span><strong>Источник:</strong> {evaluation.model_name || "нет подходящей разметки"}</span>
+        {evaluation.markup_created_at ? <span><strong>Разметка:</strong> {formatDateTime(evaluation.markup_created_at)}</span> : null}
+        {evaluation.evaluated_at ? <span><strong>Расчёт:</strong> {formatDateTime(evaluation.evaluated_at)}</span> : null}
+      </div>
+      {evaluation.error ? <div className="info-box">{evaluation.error}</div> : null}
+    </section>
+  );
+}
+
+function TestSampleMetricCard({ title, metric }: { title: string; metric: TestSampleMetric | null | undefined }) {
+  return (
+    <div className="test-sample-metric-card">
+      <h3>{title}</h3>
+      <strong className="test-sample-f1">F1 {formatF1Score(metric?.f1)}</strong>
+      <dl>
+        <div><dt>Precision</dt><dd>{formatF1Score(metric?.precision)}</dd></div>
+        <div><dt>Recall</dt><dd>{formatF1Score(metric?.recall)}</dd></div>
+        <div><dt>TP</dt><dd>{metric?.true_positive ?? "—"}</dd></div>
+        <div><dt>FP</dt><dd>{metric?.false_positive ?? "—"}</dd></div>
+        <div><dt>FN</dt><dd>{metric?.false_negative ?? "—"}</dd></div>
+      </dl>
+    </div>
+  );
+}
+
+function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvaluationInfo }) {
+  const labels: Record<TestSampleEvaluationInfo["status"], string> = {
+    current: "актуально",
+    stale: "требует пересчёта",
+    unavailable: "нет разметки",
+    error: "ошибка расчёта",
+  };
+  const classes: Record<TestSampleEvaluationInfo["status"], string> = {
+    current: "ok",
+    stale: "warning",
+    unavailable: "neutral",
+    error: "error",
+  };
+  return <span className={`badge ${classes[evaluation.status]}`}>{labels[evaluation.status]}</span>;
+}
+
+function defaultTestSampleName(dataset: DatasetInfo | undefined): string {
+  const datasetName = dataset ? markupExportDatasetLabel(dataset) : "Тестовая выборка";
+  return `${datasetName} — ${formatDateTime(new Date().toISOString())}`;
 }
 
 function markupExportDatasetLabel(dataset: DatasetInfo): string {

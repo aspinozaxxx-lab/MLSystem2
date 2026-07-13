@@ -25,7 +25,9 @@ from ._routes.frontend import register_frontend_routes
 from ._routes.jobs import register_job_routes
 from ._routes.results import register_result_routes
 from ._routes.templates import register_template_routes
+from ._routes.test_samples import register_test_sample_routes
 from ._service import ensure_seed_templates
+from ._test_samples import cleanup_test_sample_storage
 from ._worker import run_queue_worker
 from .contracts import TrainingUIAPIError
 
@@ -39,6 +41,7 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         cleanup_expired_markup_exports(config, remove_incomplete=True)
         with session_factory() as session:
+            cleanup_test_sample_storage(session, config)
             ensure_seed_templates(session)
             session.commit()
         worker_task: asyncio.Task[None] | None = None
@@ -91,6 +94,7 @@ def create_app() -> FastAPI:
     register_auth_routes(app, route_context)
     register_catalog_routes(app, route_context)
     register_export_routes(app, route_context)
+    register_test_sample_routes(app, route_context)
     register_automation_routes(app, route_context)
     register_template_routes(app, route_context)
     register_job_routes(app, route_context)

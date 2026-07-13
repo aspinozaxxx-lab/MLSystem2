@@ -11,6 +11,7 @@ _MODULES = (
     "exports",
     "jobs",
     "results",
+    "test_samples",
     "templates",
 )
 

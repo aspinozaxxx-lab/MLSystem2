@@ -40,6 +40,7 @@ from ._models import (
 )
 from ._queueing import dispatch_sort_key, ensure_queue_positions
 from ._templates import normalize_tile_factors
+from ._test_samples import evaluate_test_samples_for_pseudo_markup
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
 
@@ -644,12 +645,24 @@ def _finish_inference_job(
     for result in pseudo_results:
         result.status = ResultStatus.OK.value if file_row is not None else ResultStatus.ERROR.value
         result.geojson_file_id = file_row.id if file_row is not None else result.geojson_file_id
+        if file_row is not None:
+            result.geojson_file = file_row
         if result.image_count is None:
             result.image_count = _stored_scenes_image_count(result.scenes_file, config)
         result.updated_at = _now()
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
     session.flush()
+    for result in pseudo_results:
+        if result.status != ResultStatus.OK.value:
+            continue
+        try:
+            evaluate_test_samples_for_pseudo_markup(session, result, config)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception(
+                "Не удалось автоматически пересчитать тестовые выборки для разметки %s",
+                result.id,
+            )
     _cleanup_inference_scratch(row)
     LOGGER.info(
         "Finished pseudo-markup job %s with status %s report=%s",

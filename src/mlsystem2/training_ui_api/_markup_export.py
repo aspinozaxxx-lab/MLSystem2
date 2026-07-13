@@ -72,6 +72,33 @@ class MarkupExportArtifact:
 
 
 @dataclass(frozen=True)
+class GeneratedMarkupTile:
+    index: int
+    source_name: str
+    territory: str
+    object_count: int
+    preview_filename: str
+
+
+@dataclass(frozen=True)
+class GeneratedMarkupFiles:
+    dataset_key: str
+    dataset_name: str
+    dataset_version: str | None
+    class_key: str
+    class_name: str
+    variant_key: str
+    variant_name: str
+    tile_width: int
+    tile_height: int
+    requested_object_count: int
+    actual_object_count: int
+    territory_count: int
+    warnings: tuple[str, ...]
+    tiles: tuple[GeneratedMarkupTile, ...]
+
+
+@dataclass(frozen=True)
 class _AnnotationFeature:
     source_index: int
     geometry: BaseGeometry
@@ -116,6 +143,73 @@ def build_markup_export(
     config: TrainingUIAPIConfig,
 ) -> MarkupExportInfo:
     cleanup_expired_markup_exports(config)
+    export_id = uuid.uuid4()
+    export_root = _export_root(config)
+    export_root.mkdir(parents=True, exist_ok=True)
+    building_root = export_root / f".building-{export_id}"
+    final_root = export_root / str(export_id)
+    building_root.mkdir(parents=False, exist_ok=False)
+    try:
+        generated = generate_markup_files(request, config, building_root)
+        tile_infos = [
+            MarkupExportTileInfo(
+                index=tile.index,
+                source_name=tile.source_name,
+                territory=tile.territory,
+                object_count=tile.object_count,
+                preview_url=(
+                    f"/api/v1/markup-export/{export_id}/tiles/{tile.index}/preview"
+                ),
+            )
+            for tile in generated.tiles
+        ]
+        preview_files = {
+            tile.index: tile.preview_filename for tile in generated.tiles
+        }
+        dataset_stem = _safe_name(
+            generated.class_name.casefold(),
+            fallback="markup",
+        )
+        archive_filename = f"{dataset_stem}_test_markup.zip"
+        _zip_tile_files(building_root, building_root / ARCHIVE_NAME)
+        expires_at = _utc_now() + EXPORT_TTL
+        info = MarkupExportInfo(
+            id=export_id,
+            dataset_key=generated.dataset_key,
+            dataset_name=generated.dataset_name,
+            dataset_version=generated.dataset_version,
+            tile_width=generated.tile_width,
+            tile_height=generated.tile_height,
+            image_count=len(tile_infos),
+            requested_object_count=generated.requested_object_count,
+            actual_object_count=generated.actual_object_count,
+            territory_count=generated.territory_count,
+            warnings=list(generated.warnings),
+            expires_at=expires_at,
+            download_url=f"/api/v1/markup-export/{export_id}/download",
+            tiles=tile_infos,
+        )
+        _write_manifest(
+            building_root / MANIFEST_NAME,
+            info=info,
+            archive_filename=archive_filename,
+            preview_files=preview_files,
+        )
+        building_root.replace(final_root)
+        return info
+    except TrainingUIAPIError:
+        shutil.rmtree(building_root, ignore_errors=True)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(building_root, ignore_errors=True)
+        raise TrainingUIAPIError(f"Не удалось сформировать экспорт разметки: {exc}") from exc
+
+
+def generate_markup_files(
+    request: MarkupExportRequest,
+    config: TrainingUIAPIConfig,
+    output_root: Path,
+) -> GeneratedMarkupFiles:
     dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError("Для экспорта разметки нужен существующий датасет MLMarkup.")
@@ -176,58 +270,31 @@ def build_markup_export(
             "перекрытий между тайлами нет."
         )
 
-    export_id = uuid.uuid4()
-    export_root = _export_root(config)
-    export_root.mkdir(parents=True, exist_ok=True)
-    building_root = export_root / f".building-{export_id}"
-    final_root = export_root / str(export_id)
-    building_root.mkdir(parents=False, exist_ok=False)
-    try:
-        tile_infos, preview_files = _write_selected_tiles(
-            output_root=building_root,
-            export_id=export_id,
-            selected=selected,
-            annotations=annotations,
-            tile_width=request.tile_width,
-            tile_height=request.tile_height,
-        )
-        dataset_stem = _safe_name(
-            (dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]).casefold(),
-            fallback="markup",
-        )
-        archive_filename = f"{dataset_stem}_test_markup.zip"
-        _zip_tile_files(building_root, building_root / ARCHIVE_NAME)
-        expires_at = _utc_now() + EXPORT_TTL
-        info = MarkupExportInfo(
-            id=export_id,
-            dataset_key=dataset.key,
-            dataset_name=dataset.name,
-            dataset_version=dataset.version,
-            tile_width=request.tile_width,
-            tile_height=request.tile_height,
-            image_count=len(tile_infos),
-            requested_object_count=request.object_count,
-            actual_object_count=actual_object_count,
-            territory_count=len({item.territory for item in selected}),
-            warnings=warnings,
-            expires_at=expires_at,
-            download_url=f"/api/v1/markup-export/{export_id}/download",
-            tiles=tile_infos,
-        )
-        _write_manifest(
-            building_root / MANIFEST_NAME,
-            info=info,
-            archive_filename=archive_filename,
-            preview_files=preview_files,
-        )
-        building_root.replace(final_root)
-        return info
-    except TrainingUIAPIError:
-        shutil.rmtree(building_root, ignore_errors=True)
-        raise
-    except Exception as exc:  # noqa: BLE001
-        shutil.rmtree(building_root, ignore_errors=True)
-        raise TrainingUIAPIError(f"Не удалось сформировать экспорт разметки: {exc}") from exc
+    tile_files = _write_selected_tiles(
+        output_root=output_root,
+        selected=selected,
+        annotations=annotations,
+        tile_width=request.tile_width,
+        tile_height=request.tile_height,
+    )
+    class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
+    variant_name = dataset.variant_name or dataset.variant_key or "main"
+    return GeneratedMarkupFiles(
+        dataset_key=dataset.key,
+        dataset_name=dataset.name,
+        dataset_version=dataset.version,
+        class_key=dataset.class_key or class_name,
+        class_name=class_name,
+        variant_key=dataset.variant_key or variant_name,
+        variant_name=variant_name,
+        tile_width=request.tile_width,
+        tile_height=request.tile_height,
+        requested_object_count=request.object_count,
+        actual_object_count=actual_object_count,
+        territory_count=len({item.territory for item in selected}),
+        warnings=tuple(warnings),
+        tiles=tuple(tile_files),
+    )
 
 
 def load_markup_export(
@@ -825,14 +892,12 @@ def _single_constraint(
 def _write_selected_tiles(
     *,
     output_root: Path,
-    export_id: uuid.UUID,
     selected: list[_Candidate],
     annotations: _AnnotationSet,
     tile_width: int,
     tile_height: int,
-) -> tuple[list[MarkupExportTileInfo], dict[int, str]]:
-    tile_infos: list[MarkupExportTileInfo] = []
-    preview_files: dict[int, str] = {}
+) -> list[GeneratedMarkupTile]:
+    tile_infos: list[GeneratedMarkupTile] = []
     for index, candidate in enumerate(selected, start=1):
         base_name = f"tile_{index:03d}"
         tif_path = output_root / f"{base_name}.tif"
@@ -876,19 +941,16 @@ def _write_selected_tiles(
         overlay = _overlay_image(image, mask)
         _write_png(mask_path, mask[np.newaxis, :, :])
         _write_png(preview_path, overlay.transpose(2, 0, 1))
-        preview_files[index] = preview_path.name
         tile_infos.append(
-            MarkupExportTileInfo(
+            GeneratedMarkupTile(
                 index=index,
                 source_name=candidate.source_name,
                 territory=candidate.territory,
                 object_count=candidate.object_count,
-                preview_url=(
-                    f"/api/v1/markup-export/{export_id}/tiles/{index}/preview"
-                ),
+                preview_filename=preview_path.name,
             )
         )
-    return tile_infos, preview_files
+    return tile_infos
 
 
 def _clipped_features(

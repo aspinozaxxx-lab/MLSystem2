@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import zipfile
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
@@ -11,17 +12,41 @@ import numpy as np
 import pytest
 import rasterio
 from fastapi.testclient import TestClient
-from pyproj import CRS
+from pyproj import CRS, Transformer
 from rasterio.enums import ColorInterp
 from rasterio.features import rasterize
 from rasterio.shutil import copy as raster_copy
 from rasterio.transform import from_origin
-from shapely.geometry import box, shape
+from shapely.geometry import box, mapping, shape
+from shapely.ops import transform as transform_geometry
 
 from mlsystem2.training_ui_api import _markup_export
 from mlsystem2.training_ui_api._config import get_config
+from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
+from mlsystem2.training_ui_api._models import (
+    PseudoMarkupResultRow,
+    StoredFileRow,
+    TrainingResultRow,
+)
+from mlsystem2.training_ui_api._test_samples import (
+    _object_counts,
+    build_test_sample_download,
+    cleanup_test_sample_storage,
+    create_test_sample,
+    evaluate_test_sample_by_id,
+    evaluate_test_samples_for_pseudo_markup,
+    mark_test_samples_stale_for_pseudo_markup,
+    test_sample_detail as _test_sample_detail,
+    update_test_sample_tile,
+)
 from mlsystem2.training_ui_api.api import create_app
-from mlsystem2.training_ui_api.contracts import MarkupExportRequest, TrainingUIAPIError
+from mlsystem2.training_ui_api.contracts import (
+    MarkupExportRequest,
+    StoredFileKind,
+    TestSampleCreate as _TestSampleCreate,
+    TestSampleTileUpdate as _TestSampleTileUpdate,
+    TrainingUIAPIError,
+)
 
 
 pytestmark = pytest.mark.filterwarnings(
@@ -419,6 +444,301 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
         assert client.get(payload["download_url"]).status_code == 404
 
 
+def test_persistent_test_sample_http_catalog_editor_and_delete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+
+    with TestClient(create_app()) as client:
+        assert client.get("/api/v1/test-samples").status_code == 401
+        assert client.post("/api/v1/test-samples", json={}).status_code == 401
+        _login(client)
+        openapi = client.get("/openapi.json").json()
+        assert "TestSampleDetail" in openapi["components"]["schemas"]
+        assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
+        response = client.post(
+            "/api/v1/test-samples",
+            json={
+                "name": "Контрольная выборка",
+                "dataset_key": "Вырубки\\main",
+                "tile_width": 16,
+                "tile_height": 16,
+                "image_count": 2,
+                "object_count": 4,
+            },
+        )
+        assert response.status_code == 200
+        sample = response.json()
+        sample_id = sample["id"]
+        assert sample["evaluation"]["status"] == "unavailable"
+        assert sample["enabled_image_count"] == 2
+        assert [tile["enabled"] for tile in sample["tiles"]] == [True, True]
+
+        catalog = client.get("/api/v1/test-samples").json()
+        assert catalog["classes"][0]["name"] == "Вырубки"
+        assert catalog["classes"][0]["variants"][0]["name"] == "main"
+        assert catalog["classes"][0]["variants"][0]["samples"][0]["name"] == (
+            "Контрольная выборка"
+        )
+
+        preview = client.get(sample["tiles"][0]["preview_url"])
+        assert preview.status_code == 200
+        assert preview.headers["content-type"] == "image/png"
+        renamed = client.patch(
+            f"/api/v1/test-samples/{sample_id}",
+            json={"name": "Переименованная выборка"},
+        ).json()
+        assert renamed["name"] == "Переименованная выборка"
+        toggled = client.patch(
+            f"/api/v1/test-samples/{sample_id}/tiles/1",
+            json={"enabled": False},
+        ).json()
+        assert toggled["enabled_image_count"] == 1
+        assert toggled["tiles"][0]["enabled"] is False
+        assert client.patch(
+            f"/api/v1/test-samples/{sample_id}/tiles/99",
+            json={"enabled": False},
+        ).status_code == 404
+
+        archive_response = client.get(toggled["download_url"])
+        assert archive_response.status_code == 200
+        with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
+            assert set(archive.namelist()) == {
+                "tile_002.tif",
+                "tile_002.geojson",
+                "tile_002_mask.png",
+                "tile_002_preview.png",
+            }
+        disabled = client.patch(
+            f"/api/v1/test-samples/{sample_id}/tiles/2",
+            json={"enabled": False},
+        ).json()
+        assert disabled["enabled_image_count"] == 0
+        assert client.get(disabled["download_url"]).status_code == 400
+        unavailable = client.post(
+            f"/api/v1/test-samples/{sample_id}/evaluate"
+        ).json()
+        assert unavailable["evaluation"]["status"] == "unavailable"
+        client.patch(
+            f"/api/v1/test-samples/{sample_id}/tiles/2",
+            json={"enabled": True},
+        ).raise_for_status()
+
+    with TestClient(create_app()) as client:
+        _login(client)
+        persisted = client.get(f"/api/v1/test-samples/{sample_id}")
+        assert persisted.status_code == 200
+        assert persisted.json()["name"] == "Переименованная выборка"
+        assert persisted.json()["tiles"][0]["enabled"] is False
+        sample_root = (
+            config.stored_files_root
+            / "test-samples"
+            / sample_id
+        )
+        assert sample_root.is_dir()
+        assert client.delete(f"/api/v1/test-samples/{sample_id}").status_code == 204
+        assert not sample_root.exists()
+        assert client.get(f"/api/v1/test-samples/{sample_id}").status_code == 404
+
+
+def test_persistent_test_sample_metrics_and_stale_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Метрики",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        session.commit()
+        sample_id = sample.id
+
+    prediction_path = tmp_path / "prediction.geojson"
+    _write_prediction_from_sample(config, sample_id, prediction_path)
+    with session_factory() as session:
+        training = TrainingResultRow(
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="segformer b2",
+            status="ok",
+        )
+        stored = StoredFileRow(
+            kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+            original_name="prediction.geojson",
+            content_type="application/geo+json",
+            path=str(prediction_path),
+            size_bytes=prediction_path.stat().st_size,
+        )
+        session.add_all([training, stored])
+        session.flush()
+        mismatched = PseudoMarkupResultRow(
+            dataset_key="Вырубки\\other",
+            training_result_id=training.id,
+            class_key="Вырубки\\main",
+            source_dataset_name="Вырубки\\other",
+            geojson_file_id=stored.id,
+            status="ok",
+        )
+        mismatched.geojson_file = stored
+        mismatched.training_result = training
+        session.add(mismatched)
+        session.flush()
+        evaluate_test_samples_for_pseudo_markup(session, mismatched, config)
+        assert _test_sample_detail(session, sample_id).evaluation.status == "unavailable"
+
+        pseudo = PseudoMarkupResultRow(
+            dataset_key="Вырубки\\main",
+            training_result_id=training.id,
+            class_key="Вырубки\\main",
+            source_dataset_name="Вырубки\\main",
+            geojson_file_id=stored.id,
+            status="ok",
+        )
+        pseudo.geojson_file = stored
+        pseudo.training_result = training
+        session.add(pseudo)
+        session.flush()
+
+        evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
+        detail = _test_sample_detail(session, sample_id)
+        assert detail.evaluation.status == "current"
+        assert detail.evaluation.pixel is not None
+        assert detail.evaluation.objects is not None
+        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+        assert detail.evaluation.objects.f1 == pytest.approx(1.0)
+        expected_pixels = 0
+        source_root = config.stored_files_root / "test-samples" / str(sample_id)
+        for mask_path in source_root.glob("tile_*_mask.png"):
+            with rasterio.open(mask_path) as mask_dataset:
+                expected_pixels += int((mask_dataset.read(1) > 0).sum())
+        assert detail.evaluation.pixel.true_positive == expected_pixels
+        assert detail.evaluation.pixel.false_positive == 0
+        assert detail.evaluation.pixel.false_negative == 0
+        assert detail.evaluation.objects.true_positive == detail.actual_object_count
+        assert detail.evaluation.objects.false_positive == 0
+        assert detail.evaluation.objects.false_negative == 0
+        assert detail.evaluation.pseudo_markup_result_id == pseudo.id
+
+        detail = update_test_sample_tile(
+            session,
+            sample_id,
+            1,
+            _TestSampleTileUpdate(enabled=False),
+        )
+        assert detail.evaluation.status == "stale"
+        assert detail.evaluation.pixel is not None
+        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+
+        detail = evaluate_test_sample_by_id(session, sample_id, config)
+        assert detail.evaluation.status == "current"
+        assert detail.evaluation.pixel is not None
+        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+
+        artifact = build_test_sample_download(session, sample_id, config)
+        try:
+            with zipfile.ZipFile(artifact.path) as archive:
+                assert all(name.startswith("tile_002") for name in archive.namelist())
+                assert len(archive.namelist()) == 4
+        finally:
+            artifact.cleanup()
+
+        mark_test_samples_stale_for_pseudo_markup(session, pseudo.id)
+        detail = _test_sample_detail(session, sample_id)
+        assert detail.evaluation.status == "stale"
+        assert detail.evaluation.pseudo_markup_result_id is None
+
+
+def test_object_f1_matching_uses_inclusive_half_iou() -> None:
+    truth = [box(0, 0, 2, 2)]
+
+    matched = _object_counts(truth, [box(0, 0, 1, 2)], 0.5)
+    missed = _object_counts(truth, [box(0, 0, 0.99, 2)], 0.5)
+
+    assert matched == _test_samples_metric_counts(1, 0, 0)
+    assert missed == _test_samples_metric_counts(0, 1, 1)
+
+
+def test_test_sample_cleanup_keeps_ready_directories(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    root = config.stored_files_root / "test-samples"
+    ready = root / "00000000-0000-0000-0000-000000000001"
+    building = root / ".building-00000000-0000-0000-0000-000000000002"
+    deleting = root / ".deleting-00000000-0000-0000-0000-000000000003"
+    download = config.scratch_root / "test-sample-downloads" / "unfinished.zip"
+    ready.mkdir(parents=True)
+    building.mkdir()
+    deleting.mkdir()
+    download.parent.mkdir(parents=True)
+    download.write_bytes(b"unfinished")
+
+    with session_factory() as session:
+        cleanup_test_sample_storage(session, config)
+
+    assert ready.is_dir()
+    assert not building.exists()
+    assert not deleting.exists()
+    assert not download.exists()
+
+
+def _test_samples_metric_counts(true_positive: int, false_positive: int, false_negative: int):
+    from mlsystem2.training_ui_api._test_samples import _MetricCounts
+
+    return _MetricCounts(true_positive, false_positive, false_negative)
+
+
+def _login(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "mluser", "password": "secret"},
+    )
+    assert response.status_code == 200
+
+
+def _write_prediction_from_sample(config, sample_id, output_path: Path) -> None:
+    source_root = config.stored_files_root / "test-samples" / str(sample_id)
+    transformer = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    features = []
+    for geojson_path in sorted(source_root.glob("tile_*.geojson")):
+        payload = json.loads(geojson_path.read_text(encoding="utf-8"))
+        for feature in payload["features"]:
+            geometry = transform_geometry(transformer.transform, shape(feature["geometry"]))
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": mapping(geometry),
+                }
+            )
+    output_path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": features}),
+        encoding="utf-8",
+    )
+
+
 def _configure_export_environment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
@@ -431,6 +751,10 @@ def _configure_export_environment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SESSION_SECRET", "test-session-secret")
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "MLMarkup"))
     monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "prepared_images"))
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT",
+        str(tmp_path / "stored_files"),
+    )
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
     return get_config()
 

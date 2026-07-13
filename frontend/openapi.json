@@ -574,6 +574,369 @@
         }
       }
     },
+    "/api/v1/test-samples": {
+      "get": {
+        "summary": "Get Test Samples",
+        "operationId": "get_test_samples_api_v1_test_samples_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleCatalogResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Test Sample",
+        "operationId": "post_test_sample_api_v1_test_samples_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}": {
+      "get": {
+        "summary": "Get Test Sample",
+        "operationId": "get_test_sample_api_v1_test_samples__sample_id__get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch Test Sample",
+        "operationId": "patch_test_sample_api_v1_test_samples__sample_id__patch",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove Test Sample",
+        "operationId": "remove_test_sample_api_v1_test_samples__sample_id__delete",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}": {
+      "patch": {
+        "summary": "Patch Test Sample Tile",
+        "operationId": "patch_test_sample_tile_api_v1_test_samples__sample_id__tiles__tile_index__patch",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "tile_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tile Index"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleTileUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/evaluate": {
+      "post": {
+        "summary": "Post Test Sample Evaluation",
+        "operationId": "post_test_sample_evaluation_api_v1_test_samples__sample_id__evaluate_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview": {
+      "get": {
+        "summary": "Get Test Sample Preview",
+        "operationId": "get_test_sample_preview_api_v1_test_samples__sample_id__tiles__tile_index__preview_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "tile_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tile Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Постоянное PNG-превью тестового тайла.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/download": {
+      "get": {
+        "summary": "Download Test Sample",
+        "operationId": "download_test_sample_api_v1_test_samples__sample_id__download_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP включённых тайлов постоянной тестовой выборки.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/automation": {
       "get": {
         "summary": "Get Automation",
@@ -3824,6 +4187,586 @@
           "manual"
         ],
         "title": "TemplateSource"
+      },
+      "TestSampleCatalogResponse": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleClassGroup"
+            },
+            "type": "array",
+            "title": "Classes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TestSampleCatalogResponse"
+      },
+      "TestSampleClassGroup": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleVariantGroup"
+            },
+            "type": "array",
+            "title": "Variants"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "TestSampleClassGroup"
+      },
+      "TestSampleCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 180,
+            "title": "Name",
+            "default": ""
+          },
+          "dataset_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Dataset Key"
+          },
+          "tile_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Width",
+            "default": 1024
+          },
+          "tile_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Height",
+            "default": 1024
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count",
+            "default": 10
+          },
+          "object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Object Count",
+            "default": 150
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key"
+        ],
+        "title": "TestSampleCreate"
+      },
+      "TestSampleDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "variant_key": {
+            "type": "string",
+            "title": "Variant Key"
+          },
+          "variant_name": {
+            "type": "string",
+            "title": "Variant Name"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "enabled_image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Image Count"
+          },
+          "actual_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Actual Object Count"
+          },
+          "enabled_object_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Object Count"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/TestSampleEvaluationInfo"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "tile_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Width"
+          },
+          "tile_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Height"
+          },
+          "requested_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Requested Object Count"
+          },
+          "territory_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Territory Count"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleTileInfo"
+            },
+            "type": "array",
+            "title": "Tiles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "dataset_key",
+          "dataset_name",
+          "class_key",
+          "class_name",
+          "variant_key",
+          "variant_name",
+          "image_count",
+          "enabled_image_count",
+          "actual_object_count",
+          "enabled_object_count",
+          "evaluation",
+          "created_at",
+          "updated_at",
+          "tile_width",
+          "tile_height",
+          "requested_object_count",
+          "territory_count",
+          "download_url"
+        ],
+        "title": "TestSampleDetail"
+      },
+      "TestSampleEvaluationInfo": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "unavailable",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "pixel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TestSampleMetric"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TestSampleMetric"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "object_iou_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Object Iou Threshold",
+            "default": 0.5
+          },
+          "pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pseudo Markup Result Id"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "markup_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markup Created At"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "TestSampleEvaluationInfo"
+      },
+      "TestSampleMetric": {
+        "properties": {
+          "precision": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Precision"
+          },
+          "recall": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Recall"
+          },
+          "f1": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "F1"
+          },
+          "true_positive": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "True Positive"
+          },
+          "false_positive": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "False Positive"
+          },
+          "false_negative": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "False Negative"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "precision",
+          "recall",
+          "f1",
+          "true_positive",
+          "false_positive",
+          "false_negative"
+        ],
+        "title": "TestSampleMetric"
+      },
+      "TestSampleSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "variant_key": {
+            "type": "string",
+            "title": "Variant Key"
+          },
+          "variant_name": {
+            "type": "string",
+            "title": "Variant Name"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "enabled_image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Image Count"
+          },
+          "actual_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Actual Object Count"
+          },
+          "enabled_object_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Object Count"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/TestSampleEvaluationInfo"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "dataset_key",
+          "dataset_name",
+          "class_key",
+          "class_name",
+          "variant_key",
+          "variant_name",
+          "image_count",
+          "enabled_image_count",
+          "actual_object_count",
+          "enabled_object_count",
+          "evaluation",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TestSampleSummary"
+      },
+      "TestSampleTileInfo": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Index"
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "territory": {
+            "type": "string",
+            "title": "Territory"
+          },
+          "object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Object Count"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "preview_url": {
+            "type": "string",
+            "title": "Preview Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "source_name",
+          "territory",
+          "object_count",
+          "enabled",
+          "preview_url"
+        ],
+        "title": "TestSampleTileInfo"
+      },
+      "TestSampleTileUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "TestSampleTileUpdate"
+      },
+      "TestSampleUpdate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TestSampleUpdate"
+      },
+      "TestSampleVariantGroup": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleSummary"
+            },
+            "type": "array",
+            "title": "Samples"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "TestSampleVariantGroup"
       },
       "TrainingJobCreate": {
         "properties": {

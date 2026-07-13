@@ -286,3 +286,97 @@ class PseudoMarkupResultRow(Base):
     automation_rule: Mapped[AutomationRuleRow | None] = relationship()
     scenes_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[scenes_file_id])
     geojson_file: Mapped[StoredFileRow | None] = relationship(foreign_keys=[geojson_file_id])
+
+
+class TestSampleRow(Base):
+    __tablename__ = "test_samples"
+    __table_args__ = (
+        Index("ix_test_samples_dataset_key", "dataset_key"),
+        Index("ix_test_samples_class_variant", "class_key", "variant_key"),
+        Index("ix_test_samples_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(180))
+    dataset_key: Mapped[str] = mapped_column(String(180))
+    dataset_name: Mapped[str] = mapped_column(String(240))
+    dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    class_key: Mapped[str] = mapped_column(String(180))
+    class_name: Mapped[str] = mapped_column(String(240))
+    variant_key: Mapped[str] = mapped_column(String(180))
+    variant_name: Mapped[str] = mapped_column(String(240))
+    tile_width: Mapped[int] = mapped_column(Integer)
+    tile_height: Mapped[int] = mapped_column(Integer)
+    image_count: Mapped[int] = mapped_column(Integer)
+    requested_object_count: Mapped[int] = mapped_column(Integer)
+    actual_object_count: Mapped[int] = mapped_column(Integer)
+    territory_count: Mapped[int] = mapped_column(Integer)
+    warnings: Mapped[list[str]] = mapped_column(_json_type(), default=list)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1)
+    evaluated_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metric_status: Mapped[str] = mapped_column(String(32), default="unavailable")
+    object_iou_threshold: Mapped[float] = mapped_column(default=0.5)
+    pixel_precision: Mapped[float | None] = mapped_column(nullable=True)
+    pixel_recall: Mapped[float | None] = mapped_column(nullable=True)
+    pixel_f1: Mapped[float | None] = mapped_column(nullable=True)
+    pixel_true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pixel_false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pixel_false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_precision: Mapped[float | None] = mapped_column(nullable=True)
+    object_recall: Mapped[float | None] = mapped_column(nullable=True)
+    object_f1: Mapped[float | None] = mapped_column(nullable=True)
+    object_true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    evaluation_pseudo_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("pseudo_markup_results.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    evaluation_model_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    evaluation_markup_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evaluation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    evaluation_pseudo_result: Mapped[PseudoMarkupResultRow | None] = relationship()
+    tiles: Mapped[list["TestSampleTileRow"]] = relationship(
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        order_by="TestSampleTileRow.tile_index",
+    )
+
+
+class TestSampleTileRow(Base):
+    __tablename__ = "test_sample_tiles"
+    __table_args__ = (
+        UniqueConstraint("test_sample_id", "tile_index", name="uq_test_sample_tiles_sample_index"),
+        Index("ix_test_sample_tiles_sample_id", "test_sample_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    test_sample_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("test_samples.id", ondelete="CASCADE"),
+    )
+    tile_index: Mapped[int] = mapped_column(Integer)
+    source_name: Mapped[str] = mapped_column(String(512))
+    territory: Mapped[str] = mapped_column(String(512))
+    object_count: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    sample: Mapped[TestSampleRow] = relationship(back_populates="tiles")
