@@ -8,10 +8,8 @@ import shutil
 import uuid
 import warnings
 import zipfile
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -230,6 +228,7 @@ def generate_markup_files(
         annotations=annotations,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
+        max_grid_origins=max(32, request.image_count * 8),
     )
     if len(candidates) < request.image_count:
         raise TrainingUIAPIError(
@@ -245,7 +244,7 @@ def generate_markup_files(
     if selected_indices is None:
         raise TrainingUIAPIError(
             "Невозможно сформировать заданное количество непересекающихся тайлов "
-            "без повторного использования объектов."
+            "с полностью валидными данными."
         )
 
     selected = [candidates[index] for index in selected_indices]
@@ -455,6 +454,7 @@ def _build_candidates(
     annotations: _AnnotationSet,
     tile_width: int,
     tile_height: int,
+    max_grid_origins: int,
 ) -> list[_Candidate]:
     transformed_cache: dict[str, _TransformedAnnotations] = {}
     candidates: dict[tuple[Path, int, int], _Candidate] = {}
@@ -486,24 +486,22 @@ def _build_candidates(
                     )
                     if clipped_to_image.is_empty:
                         continue
-                    point = clipped_to_image.representative_point()
-                    pixel_column, pixel_row = (~dataset.transform) * (point.x, point.y)
-                    for x_fraction, y_fraction in _ORIGIN_FRACTIONS:
-                        column = _clamped_origin(
-                            pixel_column - tile_width * x_fraction,
-                            dataset.width - tile_width,
-                        )
-                        row = _clamped_origin(
-                            pixel_row - tile_height * y_fraction,
-                            dataset.height - tile_height,
-                        )
+                    for column, row in _candidate_origins(
+                        dataset,
+                        clipped_to_image,
+                        tile_width=tile_width,
+                        tile_height=tile_height,
+                        max_grid_origins=max_grid_origins,
+                    ):
                         key = (Path(source_path).resolve(), column, row)
                         if key in candidates:
-                            break
+                            continue
                         window = Window(column, row, tile_width, tile_height)
+                        raster_footprint = box(*window_bounds(window, dataset.transform))
+                        if clipped_to_image.intersection(raster_footprint).area <= 0.0:
+                            continue
                         if not _window_is_fully_valid(dataset, window):
                             continue
-                        raster_footprint = box(*window_bounds(window, dataset.transform))
                         object_indices = tuple(
                             sorted(
                                 int(index)
@@ -539,7 +537,6 @@ def _build_candidates(
                             annotation_footprint=annotation_footprint,
                             feature_positions=object_indices,
                         )
-                        break
         except (OSError, rasterio.errors.RasterioError):
             continue
     return sorted(
@@ -584,6 +581,121 @@ def _transform_between_crs(
 
 def _clamped_origin(value: float, maximum: int) -> int:
     return max(0, min(maximum, int(round(value))))
+
+
+def _candidate_origins(
+    dataset: rasterio.io.DatasetReader,
+    geometry: BaseGeometry,
+    *,
+    tile_width: int,
+    tile_height: int,
+    max_grid_origins: int,
+) -> list[tuple[int, int]]:
+    maximum_column = dataset.width - tile_width
+    maximum_row = dataset.height - tile_height
+    point = geometry.representative_point()
+    pixel_column, pixel_row = (~dataset.transform) * (point.x, point.y)
+    origins = {
+        (
+            _clamped_origin(
+                pixel_column - tile_width * x_fraction,
+                maximum_column,
+            ),
+            _clamped_origin(
+                pixel_row - tile_height * y_fraction,
+                maximum_row,
+            ),
+        )
+        for x_fraction, y_fraction in _ORIGIN_FRACTIONS
+    }
+
+    min_column, min_row, max_column, max_row = _geometry_pixel_bounds(
+        dataset,
+        geometry,
+    )
+    phases = ((0, 0), (tile_width // 2, tile_height // 2))
+    grid_origins: set[tuple[int, int]] = set()
+    for column_phase, row_phase in phases:
+        columns = _grid_axis_origins(
+            minimum=min_column,
+            maximum=max_column,
+            tile_size=tile_width,
+            image_size=dataset.width,
+            phase=column_phase,
+        )
+        rows = _grid_axis_origins(
+            minimum=min_row,
+            maximum=max_row,
+            tile_size=tile_height,
+            image_size=dataset.height,
+            phase=row_phase,
+        )
+        for row in rows:
+            for column in columns:
+                window = Window(column, row, tile_width, tile_height)
+                footprint = box(*window_bounds(window, dataset.transform))
+                if geometry.intersection(footprint).area > 0.0:
+                    grid_origins.add((column, row))
+    origins.update(_spread_origins(grid_origins, max_grid_origins))
+    return sorted(origins, key=lambda item: (item[1], item[0]))
+
+
+def _spread_origins(
+    origins: set[tuple[int, int]],
+    limit: int,
+) -> list[tuple[int, int]]:
+    ordered = sorted(origins, key=lambda item: (item[1], item[0]))
+    if len(ordered) <= limit:
+        return ordered
+    coordinates = np.asarray(ordered, dtype=float)
+    selected = [0]
+    selected_mask = np.zeros(len(ordered), dtype=bool)
+    selected_mask[0] = True
+    minimum_distances = np.full(len(ordered), np.inf, dtype=float)
+    while len(selected) < limit:
+        delta = coordinates - coordinates[selected[-1]]
+        distances = np.sum(delta * delta, axis=1)
+        minimum_distances = np.minimum(minimum_distances, distances)
+        minimum_distances[selected_mask] = -1.0
+        next_index = int(np.argmax(minimum_distances))
+        selected.append(next_index)
+        selected_mask[next_index] = True
+    return [ordered[index] for index in selected]
+
+
+def _geometry_pixel_bounds(
+    dataset: rasterio.io.DatasetReader,
+    geometry: BaseGeometry,
+) -> tuple[float, float, float, float]:
+    left, bottom, right, top = geometry.bounds
+    pixel_corners = [
+        (~dataset.transform) * (x, y)
+        for x, y in ((left, bottom), (left, top), (right, bottom), (right, top))
+    ]
+    columns = [float(column) for column, _ in pixel_corners]
+    rows = [float(row) for _, row in pixel_corners]
+    return min(columns), min(rows), max(columns), max(rows)
+
+
+def _grid_axis_origins(
+    *,
+    minimum: float,
+    maximum: float,
+    tile_size: int,
+    image_size: int,
+    phase: int,
+) -> list[int]:
+    maximum_origin = image_size - tile_size
+    if maximum_origin < 0 or phase > maximum_origin:
+        return []
+    stride = tile_size + 1
+    first_step = int(np.floor((minimum - tile_size - phase) / stride))
+    last_step = int(np.ceil((maximum - phase) / stride))
+    return [
+        origin
+        for step in range(first_step, last_step + 1)
+        if 0 <= (origin := phase + step * stride) <= maximum_origin
+    ]
 
 
 def _window_is_fully_valid(
@@ -826,14 +938,6 @@ def _candidate_conflicts(
     allow_touching: bool,
 ) -> set[tuple[int, int]]:
     conflicts: set[tuple[int, int]] = set()
-    by_feature: dict[int, list[int]] = defaultdict(list)
-    for candidate_index, candidate in enumerate(candidates):
-        for feature_index in candidate.feature_positions:
-            by_feature[feature_index].append(candidate_index)
-    for candidate_indices in by_feature.values():
-        for left, right in combinations(candidate_indices, 2):
-            conflicts.add((min(left, right), max(left, right)))
-
     footprints = [item.annotation_footprint for item in candidates]
     tree = STRtree(footprints)
     for left, footprint in enumerate(footprints):

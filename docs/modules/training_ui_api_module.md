@@ -31,7 +31,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания; `TrainingResultInfo.sample_size_hint` передает tile size из связанного job, если он известен.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
-- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate` - создание постоянной выборки, переименование и изменение состояния тайла.
+- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest` - создание постоянной выборки, переименование, изменение состояния тайла и ограничения оптимизации состава.
 - `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail` - метрики, иерархический каталог и редакторское описание постоянных тестовых выборок.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
@@ -48,6 +48,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, переименование и полное удаление выборки.
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
+- `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов с максимальным пиксельным или объектным F1.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP включенных тайлов.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -109,8 +110,9 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 По TXT выбранного варианта он сопоставляет сцены с TIFF только внутри `MLSYSTEM2_IMAGES_ROOT`, исключает окна за
 границами растра, с невалидной `dataset_mask`, пикселями без данных или полностью чёрными пикселями и детерминированно выбирает
 заданное число тайлов через `scipy.optimize.milp`. Приоритеты выбора: максимальное число родительских папок,
-максимальное число исходных TIFF, минимальное отклонение от целевого числа уникальных объектов; пересечения и
-повторное использование объекта запрещены, а касание разрешается только как явно отмеченный запасной режим.
+максимальное число исходных TIFF и минимальное отклонение от целевого числа объектов. Кандидаты строятся также
+вдоль протяжённой геометрии: один объект разрешено использовать в разных тайлах и считать в каждом отдельно;
+пересечения запрещены, а касание разрешается только как явно отмеченный запасной режим.
 Для тайла создаются `tile_001.tif`, `tile_001.geojson`, `tile_001_mask.png` и `tile_001_preview.png`: COG TIFF без
 ресэмплинга, бинарная маска и превью, а геометрии обрезанного GeoJSON с исходными свойствами и CRS нормализуются
 до `MultiPolygon` для открытия в QGIS одним слоем. Архив именуется по русскому имени класса, например
@@ -120,7 +122,8 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 метрики устаревшими. Пиксельный F1 считается по TP/FP/FN растрированных масок, объектный — по максимальному
 взаимно-однозначному сопоставлению с `IoU ≥ 0,5`. Источник — последняя успешная псевдоразметка, у которой
 `class_key` и входной `dataset_key` точно равны ключу варианта выборки; новый подходящий результат запускает
-автоматический пересчет.
+автоматический пересчет. Ручной оптимизатор рассматривает все тайлы независимо от текущего состояния, максимизирует
+агрегированный F1 и при равенстве предпочитает территории, число объектов, исходные снимки и меньший состав.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в
 `POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через

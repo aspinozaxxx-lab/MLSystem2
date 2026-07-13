@@ -14,8 +14,8 @@ class TestSampleCreate(BaseModel):
 
     name: str = Field(default="", max_length=180)
     dataset_key: str = Field(min_length=1)
-    tile_width: int = Field(default=1024, gt=0)
-    tile_height: int = Field(default=1024, gt=0)
+    tile_width: int = Field(default=1536, gt=0)
+    tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
     object_count: int = Field(default=150, gt=0)
 
@@ -30,6 +30,15 @@ class TestSampleTileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class TestSampleOptimizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_tile_count: int = Field(gt=0)
+    max_tile_count: int = Field(gt=0)
+    min_object_count: int = Field(gt=0)
+    metric: Literal["pixel", "objects"]
 
 
 class TestSampleMetric(BaseModel):
@@ -130,6 +139,7 @@ __all__ = [
     "TestSampleDetail",
     "TestSampleEvaluationInfo",
     "TestSampleMetric",
+    "TestSampleOptimizeRequest",
     "TestSampleSummary",
     "TestSampleTileInfo",
     "TestSampleTileUpdate",

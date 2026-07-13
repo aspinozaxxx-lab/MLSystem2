@@ -12,8 +12,8 @@ class MarkupExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset_key: str = Field(min_length=1)
-    tile_width: int = Field(default=1024, gt=0)
-    tile_height: int = Field(default=1024, gt=0)
+    tile_width: int = Field(default=1536, gt=0)
+    tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
     object_count: int = Field(default=150, gt=0)
 

@@ -382,6 +382,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/optimize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Optimization */
+        post: operations["post_test_sample_optimization_api_v1_test_samples__sample_id__optimize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview": {
         parameters: {
             query?: never;
@@ -1354,12 +1371,12 @@ export interface components {
             dataset_key: string;
             /**
              * Tile Width
-             * @default 1024
+             * @default 1536
              */
             tile_width: number;
             /**
              * Tile Height
-             * @default 1024
+             * @default 1536
              */
             tile_height: number;
             /**
@@ -1572,12 +1589,12 @@ export interface components {
             dataset_key: string;
             /**
              * Tile Width
-             * @default 1024
+             * @default 1536
              */
             tile_width: number;
             /**
              * Tile Height
-             * @default 1024
+             * @default 1536
              */
             tile_height: number;
             /**
@@ -1687,6 +1704,20 @@ export interface components {
             false_positive: number;
             /** False Negative */
             false_negative: number;
+        };
+        /** TestSampleOptimizeRequest */
+        TestSampleOptimizeRequest: {
+            /** Min Tile Count */
+            min_tile_count: number;
+            /** Max Tile Count */
+            max_tile_count: number;
+            /** Min Object Count */
+            min_object_count: number;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "pixel" | "objects";
         };
         /** TestSampleSummary */
         TestSampleSummary: {
@@ -2639,6 +2670,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_sample_optimization_api_v1_test_samples__sample_id__optimize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleOptimizeRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

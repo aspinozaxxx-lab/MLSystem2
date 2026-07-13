@@ -11,6 +11,7 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import gcd
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from pyproj import CRS as PyprojCRS
 from pyproj import Transformer
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import rasterize
+from scipy.optimize import Bounds, LinearConstraint
+from scipy.sparse import coo_matrix
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
@@ -29,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ._config import TrainingUIAPIConfig
-from ._markup_export import generate_markup_files
+from ._markup_export import _run_milp, _single_constraint, generate_markup_files
 from ._models import PseudoMarkupResultRow, TestSampleRow, TestSampleTileRow
 from .contracts import (
     MarkupExportRequest,
@@ -39,6 +42,7 @@ from .contracts import (
     TestSampleDetail,
     TestSampleEvaluationInfo,
     TestSampleMetric,
+    TestSampleOptimizeRequest,
     TestSampleSummary,
     TestSampleTileInfo,
     TestSampleTileUpdate,
@@ -276,6 +280,49 @@ def evaluate_test_sample_by_id(
     return _detail(row)
 
 
+def optimize_test_sample(
+    session: Session,
+    sample_id: uuid.UUID,
+    request: TestSampleOptimizeRequest,
+    config: TrainingUIAPIConfig,
+) -> TestSampleDetail:
+    row = _sample_row(session, sample_id)
+    _validate_optimization_request(row, request)
+    source = _latest_pseudo_markup(session, row.dataset_key)
+    if source is None or source.geojson_file is None:
+        raise TrainingUIAPIError(
+            "Нет успешной разметки для этого подкласса и варианта датасета; "
+            "оптимизация состава недоступна."
+        )
+    source_path = Path(source.geojson_file.path)
+    if not source_path.is_file():
+        raise TrainingUIAPIError(
+            "Файл последней разметки не найден на сервере; состав выборки не изменён."
+        )
+
+    tile_metrics = _calculate_tile_metrics(row, source_path, config)
+    selected_indices = _select_optimized_tile_indices(
+        row.tiles,
+        tile_metrics,
+        request,
+    )
+    selected = set(selected_indices)
+    pixel_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=0)
+    object_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=1)
+
+    now = _utc_now()
+    for tile in row.tiles:
+        enabled = tile.tile_index in selected
+        if tile.enabled != enabled:
+            tile.enabled = enabled
+            tile.updated_at = now
+    row.content_revision += 1
+    row.updated_at = now
+    _apply_evaluation(row, source, pixel_counts, object_counts)
+    session.flush()
+    return _detail(row)
+
+
 def evaluate_test_sample(
     session: Session,
     row: TestSampleRow,
@@ -302,6 +349,15 @@ def evaluate_test_sample(
     except Exception as exc:  # noqa: BLE001
         _evaluation_error(row, f"Не удалось рассчитать F1: {exc}")
         return
+    _apply_evaluation(row, source, pixel_counts, object_counts)
+
+
+def _apply_evaluation(
+    row: TestSampleRow,
+    source: PseudoMarkupResultRow,
+    pixel_counts: _MetricCounts,
+    object_counts: _MetricCounts,
+) -> None:
     pixel = pixel_counts.info()
     objects = object_counts.info()
     row.pixel_precision = pixel.precision
@@ -328,6 +384,324 @@ def evaluate_test_sample(
     row.evaluated_at = _utc_now()
     row.evaluation_error = None
     row.updated_at = _utc_now()
+
+
+def _validate_optimization_request(
+    row: TestSampleRow,
+    request: TestSampleOptimizeRequest,
+) -> None:
+    if request.min_tile_count > request.max_tile_count:
+        raise TrainingUIAPIError(
+            "Минимальное число тайлов не может быть больше максимального."
+        )
+    if request.max_tile_count > len(row.tiles):
+        raise TrainingUIAPIError(
+            "Максимальное число тайлов превышает число тайлов в выборке."
+        )
+    maximum_objects = sum(
+        sorted((tile.object_count for tile in row.tiles), reverse=True)[
+            : request.max_tile_count
+        ]
+    )
+    if request.min_object_count > maximum_objects:
+        raise TrainingUIAPIError(
+            "Минимальное число объектов недостижимо при заданном максимуме тайлов."
+        )
+
+
+def _select_optimized_tile_indices(
+    tiles: list[TestSampleTileRow],
+    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+    request: TestSampleOptimizeRequest,
+) -> list[int]:
+    ordered_tiles = sorted(tiles, key=lambda tile: tile.tile_index)
+    tile_count = len(ordered_tiles)
+    metric_index = 0 if request.metric == "pixel" else 1
+    counts = [tile_metrics[tile.tile_index][metric_index] for tile in ordered_tiles]
+    numerators = np.asarray(
+        [2 * item.true_positive for item in counts],
+        dtype=float,
+    )
+    denominators = np.asarray(
+        [
+            2 * item.true_positive + item.false_positive + item.false_negative
+            for item in counts
+        ],
+        dtype=float,
+    )
+    object_counts = np.asarray(
+        [tile.object_count for tile in ordered_tiles],
+        dtype=float,
+    )
+    territories = sorted({tile.territory for tile in ordered_tiles}, key=str.casefold)
+    sources = sorted({tile.source_name for tile in ordered_tiles}, key=str.casefold)
+    territory_offset = tile_count
+    source_offset = territory_offset + len(territories)
+    variable_count = source_offset + len(sources)
+
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[float] = []
+    lower: list[float] = []
+    upper: list[float] = []
+
+    def add_constraint(
+        coefficients: list[tuple[int, float]],
+        *,
+        minimum: float = -np.inf,
+        maximum: float = np.inf,
+    ) -> None:
+        row_index = len(lower)
+        lower.append(minimum)
+        upper.append(maximum)
+        for column, value in coefficients:
+            rows.append(row_index)
+            columns.append(column)
+            values.append(float(value))
+
+    add_constraint(
+        [(index, 1.0) for index in range(tile_count)],
+        minimum=request.min_tile_count,
+        maximum=request.max_tile_count,
+    )
+    add_constraint(
+        [(index, object_counts[index]) for index in range(tile_count)],
+        minimum=request.min_object_count,
+    )
+
+    for territory_index, territory in enumerate(territories):
+        selected_indices = [
+            index
+            for index, tile in enumerate(ordered_tiles)
+            if tile.territory == territory
+        ]
+        variable_index = territory_offset + territory_index
+        add_constraint(
+            [(variable_index, 1.0)]
+            + [(index, -1.0) for index in selected_indices],
+            maximum=0.0,
+        )
+        add_constraint(
+            [(index, 1.0) for index in selected_indices]
+            + [(variable_index, -float(request.max_tile_count))],
+            maximum=0.0,
+        )
+
+    for source_index, source in enumerate(sources):
+        selected_indices = [
+            index
+            for index, tile in enumerate(ordered_tiles)
+            if tile.source_name == source
+        ]
+        variable_index = source_offset + source_index
+        add_constraint(
+            [(variable_index, 1.0)]
+            + [(index, -1.0) for index in selected_indices],
+            maximum=0.0,
+        )
+        add_constraint(
+            [(index, 1.0) for index in selected_indices]
+            + [(variable_index, -float(request.max_tile_count))],
+            maximum=0.0,
+        )
+
+    matrix = coo_matrix(
+        (values, (rows, columns)),
+        shape=(len(lower), variable_count),
+        dtype=float,
+    ).tocsr()
+    constraints: list[LinearConstraint] = [
+        LinearConstraint(matrix, np.asarray(lower), np.asarray(upper))
+    ]
+    bounds = Bounds(
+        np.zeros(variable_count, dtype=float),
+        np.ones(variable_count, dtype=float),
+    )
+    integrality = np.ones(variable_count, dtype=int)
+
+    numerator_objective = np.zeros(variable_count, dtype=float)
+    numerator_objective[:tile_count] = -numerators
+    numerator_result = _run_milp(
+        numerator_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+        allow_infeasible=True,
+    )
+    if numerator_result is None:
+        raise TrainingUIAPIError(
+            "Невозможно подобрать состав выборки с заданными ограничениями."
+        )
+
+    optimal_result = numerator_result
+    optimal_numerator = _selected_sum(optimal_result, numerators, tile_count)
+    optimal_denominator = _selected_sum(optimal_result, denominators, tile_count)
+    if optimal_numerator > 0:
+        for _ in range(64):
+            ratio = optimal_numerator / optimal_denominator
+            ratio_objective = np.zeros(variable_count, dtype=float)
+            ratio_objective[:tile_count] = ratio * denominators - numerators
+            next_result = _run_milp(
+                ratio_objective,
+                integrality=integrality,
+                bounds=bounds,
+                constraints=constraints,
+            )
+            next_numerator = _selected_sum(next_result, numerators, tile_count)
+            next_denominator = _selected_sum(next_result, denominators, tile_count)
+            improvement = (
+                next_numerator * optimal_denominator
+                - optimal_numerator * next_denominator
+            )
+            if improvement <= 0:
+                break
+            optimal_result = next_result
+            optimal_numerator = next_numerator
+            optimal_denominator = next_denominator
+        else:
+            raise TrainingUIAPIError(
+                "Оптимизатор F1 не сошёлся за допустимое число итераций."
+            )
+
+        divisor = gcd(optimal_numerator, optimal_denominator)
+        reduced_numerator = optimal_numerator // divisor
+        reduced_denominator = optimal_denominator // divisor
+        ratio_coefficients = [
+            (
+                index,
+                reduced_denominator * int(numerators[index])
+                - reduced_numerator * int(denominators[index]),
+            )
+            for index in range(tile_count)
+        ]
+        constraints.append(
+            _single_constraint(
+                variable_count,
+                ratio_coefficients,
+                minimum=0.0,
+                maximum=0.0,
+            )
+        )
+
+    territory_objective = np.zeros(variable_count, dtype=float)
+    territory_objective[territory_offset:source_offset] = -1.0
+    territory_result = _run_milp(
+        territory_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+    )
+    territory_optimum = int(
+        round(float(np.sum(territory_result[territory_offset:source_offset])))
+    )
+    constraints.append(
+        _single_constraint(
+            variable_count,
+            [
+                (index, 1.0)
+                for index in range(territory_offset, source_offset)
+            ],
+            minimum=territory_optimum,
+            maximum=territory_optimum,
+        )
+    )
+
+    object_objective = np.zeros(variable_count, dtype=float)
+    object_objective[:tile_count] = -object_counts
+    object_result = _run_milp(
+        object_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+    )
+    object_optimum = _selected_sum(object_result, object_counts, tile_count)
+    constraints.append(
+        _single_constraint(
+            variable_count,
+            [(index, object_counts[index]) for index in range(tile_count)],
+            minimum=object_optimum,
+            maximum=object_optimum,
+        )
+    )
+
+    source_objective = np.zeros(variable_count, dtype=float)
+    source_objective[source_offset:] = -1.0
+    source_result = _run_milp(
+        source_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+    )
+    source_optimum = int(round(float(np.sum(source_result[source_offset:]))))
+    constraints.append(
+        _single_constraint(
+            variable_count,
+            [(index, 1.0) for index in range(source_offset, variable_count)],
+            minimum=source_optimum,
+            maximum=source_optimum,
+        )
+    )
+
+    tile_count_objective = np.zeros(variable_count, dtype=float)
+    tile_count_objective[:tile_count] = 1.0
+    tile_count_result = _run_milp(
+        tile_count_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+    )
+    selected_count = int(
+        round(float(np.sum(tile_count_result[:tile_count])))
+    )
+    constraints.append(
+        _single_constraint(
+            variable_count,
+            [(index, 1.0) for index in range(tile_count)],
+            minimum=selected_count,
+            maximum=selected_count,
+        )
+    )
+
+    stable_objective = np.zeros(variable_count, dtype=float)
+    stable_objective[:tile_count] = np.arange(1, tile_count + 1, dtype=float)
+    stable_result = _run_milp(
+        stable_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=constraints,
+    )
+    selected = [
+        ordered_tiles[index].tile_index
+        for index in range(tile_count)
+        if stable_result[index] > 0.5
+    ]
+    if not request.min_tile_count <= len(selected) <= request.max_tile_count:
+        raise TrainingUIAPIError("Оптимизатор вернул некорректное число тайлов.")
+    return selected
+
+
+def _selected_sum(result: np.ndarray, values: np.ndarray, tile_count: int) -> int:
+    return int(
+        round(
+            sum(
+                float(values[index])
+                for index in range(tile_count)
+                if result[index] > 0.5
+            )
+        )
+    )
+
+
+def _sum_tile_metrics(
+    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+    tile_indices: set[int],
+    *,
+    metric_index: int,
+) -> _MetricCounts:
+    total = _MetricCounts(0, 0, 0)
+    for tile_index in sorted(tile_indices):
+        total += tile_metrics[tile_index][metric_index]
+    return total
 
 
 def evaluate_test_samples_for_pseudo_markup(
@@ -450,12 +824,31 @@ def _calculate_metrics(
     prediction_path: Path,
     config: TrainingUIAPIConfig,
 ) -> tuple[_MetricCounts, _MetricCounts]:
+    enabled = {tile.tile_index for tile in row.tiles if tile.enabled}
+    tile_metrics = _calculate_tile_metrics(
+        row,
+        prediction_path,
+        config,
+        tile_indices=enabled,
+    )
+    return (
+        _sum_tile_metrics(tile_metrics, enabled, metric_index=0),
+        _sum_tile_metrics(tile_metrics, enabled, metric_index=1),
+    )
+
+
+def _calculate_tile_metrics(
+    row: TestSampleRow,
+    prediction_path: Path,
+    config: TrainingUIAPIConfig,
+    *,
+    tile_indices: set[int] | None = None,
+) -> dict[int, tuple[_MetricCounts, _MetricCounts]]:
     predictions = _load_geometries(prediction_path, default_crs="EPSG:4326")
-    pixel_total = _MetricCounts(0, 0, 0)
-    object_total = _MetricCounts(0, 0, 0)
+    result: dict[int, tuple[_MetricCounts, _MetricCounts]] = {}
     sample_root = _sample_root(config, row.id)
     for tile in row.tiles:
-        if not tile.enabled:
+        if tile_indices is not None and tile.tile_index not in tile_indices:
             continue
         base_name = f"tile_{tile.tile_index:03d}"
         tif_path = sample_root / f"{base_name}.tif"
@@ -491,7 +884,7 @@ def _calculate_metrics(
                 true_mask = mask_dataset.read(1) > 0
         if true_mask.shape != predicted_mask.shape:
             raise TrainingUIAPIError(f"Размер маски не совпадает с TIFF для {base_name}.")
-        pixel_total += _pixel_counts(true_mask, predicted_mask > 0)
+        pixel_counts = _pixel_counts(true_mask, predicted_mask > 0)
         ground_truth = _load_geometries(geojson_path, default_crs=str(raster_crs))
         ground_truth_geometries = _geometries_for_tile(
             ground_truth.geometries,
@@ -499,12 +892,15 @@ def _calculate_metrics(
             raster_crs,
             tile_footprint,
         )
-        object_total += _object_counts(
-            ground_truth_geometries,
-            predicted_geometries,
-            row.object_iou_threshold,
+        result[tile.tile_index] = (
+            pixel_counts,
+            _object_counts(
+                ground_truth_geometries,
+                predicted_geometries,
+                row.object_iou_threshold,
+            ),
         )
-    return pixel_total, object_total
+    return result
 
 
 def _prediction_geometries_for_tile(
@@ -856,6 +1252,7 @@ __all__ = [
     "evaluate_test_sample_by_id",
     "evaluate_test_samples_for_pseudo_markup",
     "mark_test_samples_stale_for_pseudo_markup",
+    "optimize_test_sample",
     "test_sample_catalog",
     "test_sample_detail",
     "test_sample_preview_path",

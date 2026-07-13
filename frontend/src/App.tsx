@@ -53,6 +53,7 @@ import type {
   TestSampleDetail,
   TestSampleEvaluationInfo,
   TestSampleMetric,
+  TestSampleOptimizeRequest,
   TestSampleSummary,
 } from "./api/types";
 import {
@@ -72,6 +73,7 @@ import {
 } from "./utils/format";
 
 const PROGRESS_REFRESH_MS = 10_000;
+const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048] as const;
 
 type ModalState = {
   title: string;
@@ -843,8 +845,8 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
   );
   const [datasetKey, setDatasetKey] = useState(datasets[0]?.key || "");
   const [sampleName, setSampleName] = useState(() => defaultTestSampleName(datasets[0]));
-  const [tileWidth, setTileWidth] = useState(1024);
-  const [tileHeight, setTileHeight] = useState(1024);
+  const [tileWidth, setTileWidth] = useState(1536);
+  const [tileHeight, setTileHeight] = useState(1536);
   const [imageCount, setImageCount] = useState(10);
   const [objectCount, setObjectCount] = useState(150);
   const [busy, setBusy] = useState(false);
@@ -952,27 +954,23 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
               </label>
               <label className="field">
                 <span>Ширина тайла, пиксели</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
+                <select
                   value={tileWidth}
                   disabled={busy}
                   onChange={(event) => setTileWidth(Number(event.target.value))}
-                />
+                >
+                  {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
               </label>
               <label className="field">
                 <span>Высота тайла, пиксели</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
+                <select
                   value={tileHeight}
                   disabled={busy}
                   onChange={(event) => setTileHeight(Number(event.target.value))}
-                />
+                >
+                  {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
               </label>
               <label className="field">
                 <span>Количество снимков</span>
@@ -1103,13 +1101,30 @@ function TestSampleEditorPage({
   const [sample, setSample] = useState<TestSampleDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [busyTile, setBusyTile] = useState<number | null>(null);
+  const [minTileCount, setMinTileCount] = useState(1);
+  const [maxTileCount, setMaxTileCount] = useState(1);
+  const [minObjectCount, setMinObjectCount] = useState(1);
+  const [optimizationMetric, setOptimizationMetric] = useState<TestSampleOptimizeRequest["metric"]>("objects");
 
   const loadSample = useCallback(async () => {
     setLoaded(false);
     const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
-    if (payload) setSample(payload);
+    if (payload) {
+      setSample(payload);
+      if (payload.enabled_image_count > 0) {
+        setMinTileCount(payload.enabled_image_count);
+        setMaxTileCount(payload.enabled_image_count);
+        setMinObjectCount(Math.max(1, payload.enabled_object_count));
+      } else {
+        setMinTileCount(1);
+        setMaxTileCount(payload.image_count);
+        setMinObjectCount(1);
+      }
+      setOptimizationMetric("objects");
+    }
     setLoaded(true);
   }, [run, sampleId]);
 
@@ -1124,6 +1139,28 @@ function TestSampleEditorPage({
       if (payload) setSample(payload);
     } finally {
       setEvaluating(false);
+    }
+  };
+
+  const optimize = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setOptimizing(true);
+    try {
+      const request: TestSampleOptimizeRequest = {
+        min_tile_count: minTileCount,
+        max_tile_count: maxTileCount,
+        min_object_count: minObjectCount,
+        metric: optimizationMetric,
+      };
+      const payload = await run(() =>
+        apiJson<TestSampleDetail>(`/test-samples/${sampleId}/optimize`, {
+          method: "POST",
+          body: request,
+        }),
+      );
+      if (payload) setSample(payload);
+    } finally {
+      setOptimizing(false);
     }
   };
 
@@ -1214,6 +1251,11 @@ function TestSampleEditorPage({
   }
 
   const hasEnabledTiles = sample.enabled_image_count > 0;
+  const optimizationValid =
+    minTileCount > 0 &&
+    maxTileCount >= minTileCount &&
+    maxTileCount <= sample.image_count &&
+    minObjectCount > 0;
   return (
     <>
       <PageHeader
@@ -1258,6 +1300,72 @@ function TestSampleEditorPage({
             {(sample.warnings || []).map((warning) => <div className="info-box" key={warning}>{warning}</div>)}
           </div>
         ) : null}
+      </section>
+
+      <section className="panel test-sample-optimizer">
+        <PanelHeader
+          title="Оптимизация состава"
+          subtitle="Оптимизатор рассматривает все тайлы выборки, включая выключенные, и подбирает состав с максимальным агрегированным F1"
+        />
+        <form className="form-stack" onSubmit={optimize}>
+          <div className="form-grid">
+            <label className="field">
+              <span>Минимум тайлов</span>
+              <input
+                type="number"
+                min="1"
+                max={sample.image_count}
+                step="1"
+                required
+                value={minTileCount}
+                disabled={optimizing}
+                onChange={(event) => setMinTileCount(Number(event.target.value))}
+              />
+            </label>
+            <label className="field">
+              <span>Максимум тайлов</span>
+              <input
+                type="number"
+                min="1"
+                max={sample.image_count}
+                step="1"
+                required
+                value={maxTileCount}
+                disabled={optimizing}
+                onChange={(event) => setMaxTileCount(Number(event.target.value))}
+              />
+            </label>
+            <label className="field">
+              <span>Минимум объектов</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                required
+                value={minObjectCount}
+                disabled={optimizing}
+                onChange={(event) => setMinObjectCount(Number(event.target.value))}
+              />
+            </label>
+            <label className="field">
+              <span>Оптимизировать F1</span>
+              <select
+                value={optimizationMetric}
+                disabled={optimizing}
+                onChange={(event) => setOptimizationMetric(event.target.value as TestSampleOptimizeRequest["metric"])}
+              >
+                <option value="objects">Объектовый</option>
+                <option value="pixel">Пиксельный</option>
+              </select>
+            </label>
+          </div>
+          <div className="button-row">
+            <button className="primary" type="submit" disabled={optimizing || !optimizationValid}>
+              <BarChart3 size={16} />
+              {optimizing ? "Оптимизация..." : "Оптимизировать"}
+            </button>
+          </div>
+        </form>
       </section>
 
       <TestSampleEvaluationPanel evaluation={sample.evaluation} />

@@ -846,6 +846,56 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/optimize": {
+      "post": {
+        "summary": "Post Test Sample Optimization",
+        "operationId": "post_test_sample_optimization_api_v1_test_samples__sample_id__optimize_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleOptimizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview": {
       "get": {
         "summary": "Get Test Sample Preview",
@@ -3653,13 +3703,13 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Tile Width",
-            "default": 1024
+            "default": 1536
           },
           "tile_height": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Tile Height",
-            "default": 1024
+            "default": 1536
           },
           "image_count": {
             "type": "integer",
@@ -4245,13 +4295,13 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Tile Width",
-            "default": 1024
+            "default": 1536
           },
           "tile_height": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Tile Height",
-            "default": 1024
+            "default": 1536
           },
           "image_count": {
             "type": "integer",
@@ -4569,6 +4619,42 @@
           "false_negative"
         ],
         "title": "TestSampleMetric"
+      },
+      "TestSampleOptimizeRequest": {
+        "properties": {
+          "min_tile_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Tile Count"
+          },
+          "max_tile_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Max Tile Count"
+          },
+          "min_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Object Count"
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Metric"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "min_tile_count",
+          "max_tile_count",
+          "min_object_count",
+          "metric"
+        ],
+        "title": "TestSampleOptimizeRequest"
       },
       "TestSampleSummary": {
         "properties": {

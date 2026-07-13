@@ -1280,6 +1280,10 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "Экспорт моделей" in app_tsx
     assert "Каталог тестовых выборок" in app_tsx
     assert "Пересчитать F1" in app_tsx
+    assert "Оптимизация состава" in app_tsx
+    assert "/optimize" in app_tsx
+    assert "[512, 768, 1024, 1536, 2048]" in app_tsx
+    assert "useState(1536)" in app_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx
@@ -1298,6 +1302,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert 'pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"' in app_tsx
     assert "components[\"schemas\"][\"BootstrapInfo\"]" in api_types
     assert "components[\"schemas\"][\"TestSampleDetail\"]" in api_types
+    assert "components[\"schemas\"][\"TestSampleOptimizeRequest\"]" in api_types
     assert "credentials: \"same-origin\"" in api_client
 
 

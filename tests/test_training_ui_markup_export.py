@@ -26,6 +26,7 @@ from mlsystem2.training_ui_api._database import Base, configure_schema, create_s
 from mlsystem2.training_ui_api._models import (
     PseudoMarkupResultRow,
     StoredFileRow,
+    TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
 )
 from mlsystem2.training_ui_api._test_samples import (
@@ -36,6 +37,7 @@ from mlsystem2.training_ui_api._test_samples import (
     evaluate_test_sample_by_id,
     evaluate_test_samples_for_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
+    optimize_test_sample,
     test_sample_detail as _test_sample_detail,
     update_test_sample_tile,
 )
@@ -44,6 +46,7 @@ from mlsystem2.training_ui_api.contracts import (
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
+    TestSampleOptimizeRequest as _TestSampleOptimizeRequest,
     TestSampleTileUpdate as _TestSampleTileUpdate,
     TrainingUIAPIError,
 )
@@ -186,6 +189,48 @@ def test_markup_export_reports_nearest_object_count(tmp_path: Path, monkeypatch)
 
     assert info.actual_object_count == 4
     assert any("запрошено 5, сформировано 4" in warning for warning in info.warnings)
+
+
+def test_markup_export_counts_long_object_once_per_selected_tile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    dataset_root = config.mlmarkup_root / "Реки" / "main"
+    dataset_root.mkdir(parents=True)
+    (dataset_root / "scenes.txt").write_text("region_river\n", encoding="utf-8")
+    _write_geojson(
+        dataset_root / "rivers.geojson",
+        [(1, box(2, 24, 62, 40), "river")],
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "region_river" / "river.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+
+    info = _markup_export.build_markup_export(
+        MarkupExportRequest(
+            dataset_key="Реки\\main",
+            tile_width=16,
+            tile_height=16,
+            image_count=2,
+            object_count=2,
+        ),
+        config,
+    )
+
+    assert info.actual_object_count == 2
+    assert [tile.object_count for tile in info.tiles] == [1, 1]
+    output_root = config.scratch_root / _markup_export.EXPORT_ROOT_NAME / str(info.id)
+    footprints = []
+    for tif_path in sorted(output_root.glob("*.tif")):
+        with rasterio.open(tif_path) as raster:
+            footprints.append(box(*raster.bounds))
+        payload = json.loads(tif_path.with_suffix(".geojson").read_text(encoding="utf-8"))
+        assert [feature["id"] for feature in payload["features"]] == [1]
+    assert not footprints[0].intersects(footprints[1])
 
 
 def test_markup_export_rejects_empty_positive_markup(tmp_path: Path, monkeypatch) -> None:
@@ -454,10 +499,26 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
     with TestClient(create_app()) as client:
         assert client.get("/api/v1/test-samples").status_code == 401
         assert client.post("/api/v1/test-samples", json={}).status_code == 401
+        assert client.post(
+            "/api/v1/test-samples/00000000-0000-0000-0000-000000000000/optimize",
+            json={
+                "min_tile_count": 1,
+                "max_tile_count": 1,
+                "min_object_count": 1,
+                "metric": "objects",
+            },
+        ).status_code == 401
         _login(client)
         openapi = client.get("/openapi.json").json()
         assert "TestSampleDetail" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
+        assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
+        assert (
+            openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
+                "tile_width"
+            ]["default"]
+            == 1536
+        )
         response = client.post(
             "/api/v1/test-samples",
             json={
@@ -475,6 +536,18 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert sample["evaluation"]["status"] == "unavailable"
         assert sample["enabled_image_count"] == 2
         assert [tile["enabled"] for tile in sample["tiles"]] == [True, True]
+        unavailable_optimization = client.post(
+            f"/api/v1/test-samples/{sample_id}/optimize",
+            json={
+                "min_tile_count": 1,
+                "max_tile_count": 2,
+                "min_object_count": 1,
+                "metric": "objects",
+            },
+        )
+        assert unavailable_optimization.status_code == 400
+        unchanged = client.get(f"/api/v1/test-samples/{sample_id}").json()
+        assert [tile["enabled"] for tile in unchanged["tiles"]] == [True, True]
 
         catalog = client.get("/api/v1/test-samples").json()
         assert catalog["classes"][0]["name"] == "Вырубки"
@@ -637,6 +710,29 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert detail.evaluation.objects.false_negative == 0
         assert detail.evaluation.pseudo_markup_result_id == pseudo.id
 
+        update_test_sample_tile(
+            session,
+            sample_id,
+            1,
+            _TestSampleTileUpdate(enabled=False),
+        )
+        optimized = optimize_test_sample(
+            session,
+            sample_id,
+            _TestSampleOptimizeRequest(
+                min_tile_count=2,
+                max_tile_count=2,
+                min_object_count=4,
+                metric="objects",
+            ),
+            config,
+        )
+        assert optimized.enabled_image_count == 2
+        assert all(tile.enabled for tile in optimized.tiles)
+        assert optimized.evaluation.status == "current"
+        assert optimized.evaluation.objects is not None
+        assert optimized.evaluation.objects.f1 == pytest.approx(1.0)
+
         detail = update_test_sample_tile(
             session,
             sample_id,
@@ -674,6 +770,126 @@ def test_object_f1_matching_uses_inclusive_half_iou() -> None:
 
     assert matched == _test_samples_metric_counts(1, 0, 0)
     assert missed == _test_samples_metric_counts(0, 1, 1)
+
+
+def test_test_sample_optimizer_uses_all_tiles_and_resolves_equal_f1_by_territory() -> None:
+    from mlsystem2.training_ui_api._test_samples import _select_optimized_tile_indices
+
+    tiles = [
+        _TestSampleTileRow(
+            tile_index=1,
+            source_name="a/one.tif",
+            territory="a",
+            object_count=5,
+            enabled=True,
+        ),
+        _TestSampleTileRow(
+            tile_index=2,
+            source_name="a/two.tif",
+            territory="a",
+            object_count=10,
+            enabled=False,
+        ),
+        _TestSampleTileRow(
+            tile_index=3,
+            source_name="b/one.tif",
+            territory="b",
+            object_count=2,
+            enabled=False,
+        ),
+        _TestSampleTileRow(
+            tile_index=4,
+            source_name="c/one.tif",
+            territory="c",
+            object_count=1,
+            enabled=True,
+        ),
+    ]
+    perfect = _test_samples_metric_counts(5, 0, 0)
+    metrics = {tile.tile_index: (perfect, perfect) for tile in tiles}
+    request = _TestSampleOptimizeRequest(
+        min_tile_count=2,
+        max_tile_count=2,
+        min_object_count=1,
+        metric="objects",
+    )
+
+    first = _select_optimized_tile_indices(tiles, metrics, request)
+    second = _select_optimized_tile_indices(tiles, metrics, request)
+
+    assert first == second == [2, 3]
+
+
+def test_test_sample_optimizer_prioritizes_aggregate_f1_before_diversity() -> None:
+    from mlsystem2.training_ui_api._test_samples import _select_optimized_tile_indices
+
+    tiles = [
+        _TestSampleTileRow(
+            tile_index=index,
+            source_name=f"source-{index}.tif",
+            territory="a" if index <= 2 else chr(96 + index),
+            object_count=1,
+            enabled=index % 2 == 0,
+        )
+        for index in range(1, 5)
+    ]
+    perfect = _test_samples_metric_counts(10, 0, 0)
+    weak = _test_samples_metric_counts(5, 5, 5)
+    metrics = {
+        1: (perfect, perfect),
+        2: (perfect, perfect),
+        3: (weak, weak),
+        4: (weak, weak),
+    }
+
+    selected = _select_optimized_tile_indices(
+        tiles,
+        metrics,
+        _TestSampleOptimizeRequest(
+            min_tile_count=2,
+            max_tile_count=2,
+            min_object_count=2,
+            metric="pixel",
+        ),
+    )
+
+    assert selected == [1, 2]
+
+
+def test_test_sample_optimizer_uses_requested_metric() -> None:
+    from mlsystem2.training_ui_api._test_samples import _select_optimized_tile_indices
+
+    tiles = [
+        _TestSampleTileRow(
+            tile_index=index,
+            source_name=f"source-{index}.tif",
+            territory=f"territory-{index}",
+            object_count=1,
+            enabled=True,
+        )
+        for index in (1, 2)
+    ]
+    perfect = _test_samples_metric_counts(10, 0, 0)
+    weak = _test_samples_metric_counts(5, 5, 5)
+    metrics = {
+        1: (perfect, weak),
+        2: (weak, perfect),
+    }
+
+    def selected(metric: str) -> list[int]:
+        return _select_optimized_tile_indices(
+            tiles,
+            metrics,
+            _TestSampleOptimizeRequest(
+                min_tile_count=1,
+                max_tile_count=1,
+                min_object_count=1,
+                metric=metric,
+            ),
+        )
+
+    assert selected("pixel") == [1]
+    assert selected("objects") == [2]
 
 
 def test_test_sample_cleanup_keeps_ready_directories(

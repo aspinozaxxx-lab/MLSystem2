@@ -15,6 +15,7 @@ from mlsystem2.training_ui_api._test_samples import (
     create_test_sample,
     delete_test_sample,
     evaluate_test_sample_by_id,
+    optimize_test_sample,
     test_sample_catalog,
     test_sample_detail,
     test_sample_preview_path,
@@ -25,6 +26,7 @@ from mlsystem2.training_ui_api.contracts import (
     TestSampleCatalogResponse,
     TestSampleCreate,
     TestSampleDetail,
+    TestSampleOptimizeRequest,
     TestSampleTileUpdate,
     TestSampleUpdate,
 )
@@ -107,6 +109,22 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
     ) -> TestSampleDetail:
         detail = _sample_or_404(
             lambda: evaluate_test_sample_by_id(db, sample_id, ctx.config)
+        )
+        db.commit()
+        return detail
+
+    @app.post(
+        "/api/v1/test-samples/{sample_id}/optimize",
+        response_model=TestSampleDetail,
+    )
+    def post_test_sample_optimization(
+        sample_id: uuid.UUID,
+        request: TestSampleOptimizeRequest,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleDetail:
+        detail = _sample_or_404(
+            lambda: optimize_test_sample(db, sample_id, request, ctx.config)
         )
         db.commit()
         return detail

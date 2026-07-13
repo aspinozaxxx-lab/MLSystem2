@@ -34,6 +34,7 @@ export type TestSampleCreate = components["schemas"]["TestSampleCreate"];
 export type TestSampleDetail = components["schemas"]["TestSampleDetail"];
 export type TestSampleEvaluationInfo = components["schemas"]["TestSampleEvaluationInfo"];
 export type TestSampleMetric = components["schemas"]["TestSampleMetric"];
+export type TestSampleOptimizeRequest = components["schemas"]["TestSampleOptimizeRequest"];
 export type TestSampleSummary = components["schemas"]["TestSampleSummary"];
 
 export type AnyTemplate = TrainingTemplate | InferenceTemplate;
