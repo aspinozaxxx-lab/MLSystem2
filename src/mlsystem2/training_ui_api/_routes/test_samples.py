@@ -46,7 +46,9 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return create_test_sample(db, request, ctx.config)
+        detail = create_test_sample(db, request, ctx.config)
+        db.commit()
+        return detail
 
     @app.get("/api/v1/test-samples/{sample_id}", response_model=TestSampleDetail)
     def get_test_sample(
@@ -63,7 +65,9 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return _sample_or_404(lambda: update_test_sample(db, sample_id, request))
+        detail = _sample_or_404(lambda: update_test_sample(db, sample_id, request))
+        db.commit()
+        return detail
 
     @app.delete("/api/v1/test-samples/{sample_id}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_test_sample(
@@ -72,6 +76,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> Response:
         _sample_or_404(lambda: delete_test_sample(db, sample_id, ctx.config))
+        db.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.patch(
@@ -85,9 +90,11 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return _sample_or_404(
+        detail = _sample_or_404(
             lambda: update_test_sample_tile(db, sample_id, tile_index, request)
         )
+        db.commit()
+        return detail
 
     @app.post(
         "/api/v1/test-samples/{sample_id}/evaluate",
@@ -98,9 +105,11 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return _sample_or_404(
+        detail = _sample_or_404(
             lambda: evaluate_test_sample_by_id(db, sample_id, ctx.config)
         )
+        db.commit()
+        return detail
 
     @app.get(
         "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview",
