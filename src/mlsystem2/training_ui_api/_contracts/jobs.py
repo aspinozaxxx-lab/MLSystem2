@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,6 +42,7 @@ class JobSummary(BaseModel):
 
     id: UUID
     type: JobType
+    purpose: Literal["training", "pseudo_markup", "test_sample_f1"]
     source: JobSource = JobSource.MANUAL
     status: JobStatus
     queue_position: int
@@ -74,6 +75,7 @@ class JobDetail(BaseModel):
 
     id: UUID
     type: JobType
+    purpose: Literal["training", "pseudo_markup", "test_sample_f1"]
     source: JobSource = JobSource.MANUAL
     status: JobStatus
     queue_position: int

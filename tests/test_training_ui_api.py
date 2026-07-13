@@ -1284,6 +1284,11 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/optimize" in app_tsx
     assert "[512, 768, 1024, 1536, 2048]" in app_tsx
     assert "useState(1536)" in app_tsx
+    assert '"/test-sample-batches/latest"' in app_tsx
+    assert "setTileSize(latest.tile_size)" in app_tsx
+    assert "setImageCount(latest.image_count)" in app_tsx
+    assert "minObjectCount: previous.min_object_count" in app_tsx
+    assert "metric: previous.metric" in app_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx

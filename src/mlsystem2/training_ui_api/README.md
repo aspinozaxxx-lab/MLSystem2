@@ -68,18 +68,24 @@
 - `GET /api/v1/results/changes`
 - `GET /api/v1/results/classes/{class_key}`
 - `POST /api/v1/results/classes/{class_key}/pseudo-markup`
+- `POST /api/v1/results/classes/{class_key}/test-f1`
 - `POST /api/v1/results/training/{result_id}/triton-zip`
 - `POST /api/v1/markup-export`
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
 - `GET /api/v1/markup-export/{export_id}/download`
 - `GET /api/v1/test-samples`
 - `POST /api/v1/test-samples`
+- `POST /api/v1/test-sample-batches`
+- `GET /api/v1/test-sample-batches/latest`
+- `GET /api/v1/test-sample-batches/{batch_id}`
 - `GET /api/v1/test-samples/{sample_id}`
 - `PATCH /api/v1/test-samples/{sample_id}`
 - `DELETE /api/v1/test-samples/{sample_id}`
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}`
 - `POST /api/v1/test-samples/{sample_id}/evaluate`
 - `POST /api/v1/test-samples/{sample_id}/optimize`
+- `PUT /api/v1/test-samples/{sample_id}/primary`
+- `GET /api/v1/test-samples/primary/download`
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview`
 - `GET /api/v1/test-samples/{sample_id}/download`
 - `DELETE /api/v1/results/pseudo-markup/{result_id}`
@@ -123,6 +129,22 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 `POST /api/v1/test-samples/{sample_id}/optimize` рассматривает включённые и выключенные тайлы, соблюдает минимум и
 максимум тайлов и минимум объектов, затем атомарно применяет состав с максимальным агрегированным пиксельным либо
 объектным F1. При равном F1 приоритетны территории, число объектов, исходные снимки и меньший состав.
+
+`POST /api/v1/test-sample-batches` создаёт один последовательный групповой запуск. Для каждой строки сервис
+строит непересекающийся пул до тройного числа итоговых тайлов с целью тройного минимума объектов, проверяет
+достижимость итоговых ограничений и по последней точной псевдоразметке включает ровно заданное число тайлов с
+максимальным выбранным F1. Статусы группы и строк сохраняются в Postgres и восстанавливаются после перезапуска.
+`GET /api/v1/test-sample-batches/latest` одновременно является источником последних значений формы: размера,
+числа тайлов, минимального числа объектов и метрики каждого участвовавшего варианта.
+
+У каждого точного `dataset_key` может быть одна основная выборка. Назначение выполняется через
+`PUT /api/v1/test-samples/{sample_id}/primary`, а общий ZIP основных выборок возвращает
+`GET /api/v1/test-samples/primary/download`. Для каждой успешной сети таблица
+`training_result_test_metrics` хранит отдельный пиксельный F1 на основной выборке. Задание
+`purpose=test_sample_f1` использует общую inference-очередь, best checkpoint и активный inference-шаблон,
+обрабатывает каждый включённый TIFF независимо и суммирует TP/FP/FN. Метрика устаревает при смене выборки,
+ревизии состава или эффективного шаблона; успешная новая сеть ставится на оценку автоматически, а массовый
+ручной запуск выполняет `POST /api/v1/results/classes/{class_key}/test-f1`. В MLflow эти метрики не записываются.
 
 `GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
 имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.

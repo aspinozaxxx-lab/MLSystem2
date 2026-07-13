@@ -574,6 +574,102 @@
         }
       }
     },
+    "/api/v1/test-sample-batches": {
+      "post": {
+        "summary": "Post Test Sample Batch",
+        "operationId": "post_test_sample_batch_api_v1_test_sample_batches_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleBatchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/latest": {
+      "get": {
+        "summary": "Get Latest Test Sample Batch",
+        "operationId": "get_latest_test_sample_batch_api_v1_test_sample_batches_latest_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/{batch_id}": {
+      "get": {
+        "summary": "Get Test Sample Batch",
+        "operationId": "get_test_sample_batch_api_v1_test_sample_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples": {
       "get": {
         "summary": "Get Test Samples",
@@ -621,6 +717,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/primary/download": {
+      "get": {
+        "summary": "Download Primary Test Samples",
+        "operationId": "download_primary_test_samples_api_v1_test_samples_primary_download_get",
+        "responses": {
+          "200": {
+            "description": "ZIP всех основных тестовых выборок.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -733,6 +848,56 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/primary": {
+      "put": {
+        "summary": "Put Test Sample Primary",
+        "operationId": "put_test_sample_primary_api_v1_test_samples__sample_id__primary_put",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSamplePrimaryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1977,7 +2142,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ClassListResponse"
+                  "$ref": "#/components/schemas/ResultClassListResponse"
                 }
               }
             }
@@ -2073,6 +2238,45 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JobDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/classes/{class_key}/test-f1": {
+      "post": {
+        "summary": "Post Test F1",
+        "operationId": "post_test_f1_api_v1_results_classes__class_key__test_f1_post",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Class Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassResultsResponse"
                 }
               }
             }
@@ -2666,6 +2870,27 @@
             ],
             "title": "Dataset Updated At"
           },
+          "primary_test_sample": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrimaryTestSampleInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "test_f1_status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "running",
+              "unavailable"
+            ],
+            "title": "Test F1 Status",
+            "default": "unavailable"
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/TrainingResultInfo"
@@ -3177,6 +3402,15 @@
           "type": {
             "$ref": "#/components/schemas/JobType"
           },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "training",
+              "pseudo_markup",
+              "test_sample_f1"
+            ],
+            "title": "Purpose"
+          },
           "source": {
             "$ref": "#/components/schemas/JobSource",
             "default": "manual"
@@ -3332,6 +3566,7 @@
         "required": [
           "id",
           "type",
+          "purpose",
           "status",
           "queue_position",
           "dataset_name",
@@ -3405,6 +3640,15 @@
           },
           "type": {
             "$ref": "#/components/schemas/JobType"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "training",
+              "pseudo_markup",
+              "test_sample_f1"
+            ],
+            "title": "Purpose"
           },
           "source": {
             "$ref": "#/components/schemas/JobSource",
@@ -3524,6 +3768,7 @@
         "required": [
           "id",
           "type",
+          "purpose",
           "status",
           "queue_position",
           "dataset_name",
@@ -3817,6 +4062,44 @@
           "models"
         ],
         "title": "ModelListResponse"
+      },
+      "PrimaryTestSampleInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "content_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Content Revision"
+          },
+          "enabled_image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Image Count"
+          },
+          "enabled_object_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Object Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "content_revision",
+          "enabled_image_count",
+          "enabled_object_count"
+        ],
+        "title": "PrimaryTestSampleInfo"
       },
       "PseudoMarkupResultInfo": {
         "properties": {
@@ -4119,6 +4402,63 @@
         ],
         "title": "ResultChangesResponse"
       },
+      "ResultClassInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/ResultVariantInfo"
+            },
+            "type": "array",
+            "title": "Variants"
+          },
+          "is_custom": {
+            "type": "boolean",
+            "title": "Is Custom",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "ResultClassInfo"
+      },
+      "ResultClassListResponse": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/ResultClassInfo"
+            },
+            "type": "array",
+            "title": "Classes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ResultClassListResponse"
+      },
       "ResultStatus": {
         "type": "string",
         "enum": [
@@ -4128,6 +4468,120 @@
           "cancelled"
         ],
         "title": "ResultStatus"
+      },
+      "ResultVariantInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "class_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Key"
+          },
+          "class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Name"
+          },
+          "variant_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Key"
+          },
+          "variant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Name"
+          },
+          "image_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Count"
+          },
+          "test_f1": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test F1"
+          },
+          "test_f1_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "stale"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test F1 Status"
+          },
+          "test_f1_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test F1 Training Result Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "ResultVariantInfo"
       },
       "RuntimeProgress": {
         "properties": {
@@ -4237,6 +4691,336 @@
           "manual"
         ],
         "title": "TemplateSource"
+      },
+      "TestSampleBatchCreate": {
+        "properties": {
+          "tile_size": {
+            "type": "integer",
+            "enum": [
+              512,
+              768,
+              1024,
+              1536,
+              2048
+            ],
+            "title": "Tile Size",
+            "default": 1536
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count",
+            "default": 10
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleBatchItemCreate"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TestSampleBatchCreate"
+      },
+      "TestSampleBatchInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "ok",
+              "partial",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "tile_size": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Tile Size"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "completed_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Completed Count"
+          },
+          "total_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Total Count"
+          },
+          "elapsed_seconds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Elapsed Seconds"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleBatchItemInfo"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "tile_size",
+          "image_count",
+          "completed_count",
+          "total_count",
+          "elapsed_seconds",
+          "created_at"
+        ],
+        "title": "TestSampleBatchInfo"
+      },
+      "TestSampleBatchItemCreate": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Dataset Key"
+          },
+          "min_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Object Count",
+            "default": 150
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Metric",
+            "default": "objects"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key"
+        ],
+        "title": "TestSampleBatchItemCreate"
+      },
+      "TestSampleBatchItemInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Position"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "variant_key": {
+            "type": "string",
+            "title": "Variant Key"
+          },
+          "variant_name": {
+            "type": "string",
+            "title": "Variant Name"
+          },
+          "min_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Object Count"
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Metric"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "ok",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "pool_tile_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Tile Count"
+          },
+          "pool_object_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Object Count"
+          },
+          "sample_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Id"
+          },
+          "sample_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Name"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "position",
+          "dataset_key",
+          "dataset_name",
+          "class_key",
+          "class_name",
+          "variant_key",
+          "variant_name",
+          "min_object_count",
+          "metric",
+          "status"
+        ],
+        "title": "TestSampleBatchItemInfo"
       },
       "TestSampleCatalogResponse": {
         "properties": {
@@ -4388,6 +5172,11 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Enabled Object Count"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
           },
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
@@ -4656,6 +5445,20 @@
         ],
         "title": "TestSampleOptimizeRequest"
       },
+      "TestSamplePrimaryUpdate": {
+        "properties": {
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "is_primary"
+        ],
+        "title": "TestSamplePrimaryUpdate"
+      },
       "TestSampleSummary": {
         "properties": {
           "id": {
@@ -4721,6 +5524,11 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Enabled Object Count"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
           },
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
@@ -5110,6 +5918,16 @@
               }
             ]
           },
+          "test_f1": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingResultTestF1Info"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pseudo_markup_results": {
             "items": {
               "$ref": "#/components/schemas/PseudoMarkupResultInfo"
@@ -5128,6 +5946,183 @@
           "status"
         ],
         "title": "TrainingResultInfo"
+      },
+      "TrainingResultTestF1Info": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "queued",
+              "running",
+              "error",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "f1": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F1"
+          },
+          "true_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "True Positive"
+          },
+          "false_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "False Positive"
+          },
+          "false_negative": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "False Negative"
+          },
+          "sample_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Id"
+          },
+          "sample_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Name"
+          },
+          "sample_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Revision"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "TrainingResultTestF1Info"
       },
       "TrainingTemplate": {
         "properties": {

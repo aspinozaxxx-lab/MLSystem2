@@ -10,23 +10,32 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._test_samples import (
+    TestSampleBatchUnavailable,
     TestSampleUnavailable,
+    build_primary_test_samples_download,
     build_test_sample_download,
+    create_test_sample_batch,
     create_test_sample,
     delete_test_sample,
     evaluate_test_sample_by_id,
+    latest_test_sample_batch,
     optimize_test_sample,
+    test_sample_batch_detail,
     test_sample_catalog,
     test_sample_detail,
     test_sample_preview_path,
     update_test_sample,
+    update_test_sample_primary,
     update_test_sample_tile,
 )
 from mlsystem2.training_ui_api.contracts import (
+    TestSampleBatchCreate,
+    TestSampleBatchInfo,
     TestSampleCatalogResponse,
     TestSampleCreate,
     TestSampleDetail,
     TestSampleOptimizeRequest,
+    TestSamplePrimaryUpdate,
     TestSampleTileUpdate,
     TestSampleUpdate,
 )
@@ -35,6 +44,31 @@ from .common import RouteContext
 
 
 def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.post("/api/v1/test-sample-batches", response_model=TestSampleBatchInfo)
+    def post_test_sample_batch(
+        request: TestSampleBatchCreate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchInfo:
+        detail = create_test_sample_batch(db, request, ctx.config)
+        db.commit()
+        return detail
+
+    @app.get("/api/v1/test-sample-batches/latest", response_model=TestSampleBatchInfo)
+    def get_latest_test_sample_batch(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchInfo:
+        return _batch_or_404(lambda: latest_test_sample_batch(db))
+
+    @app.get("/api/v1/test-sample-batches/{batch_id}", response_model=TestSampleBatchInfo)
+    def get_test_sample_batch(
+        batch_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchInfo:
+        return _batch_or_404(lambda: test_sample_batch_detail(db, batch_id))
+
     @app.get("/api/v1/test-samples", response_model=TestSampleCatalogResponse)
     def get_test_samples(
         db: Session = Depends(ctx.get_db),
@@ -52,6 +86,32 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db.commit()
         return detail
 
+    @app.get(
+        "/api/v1/test-samples/primary/download",
+        response_class=FileResponse,
+        responses={
+            200: {
+                "description": "ZIP всех основных тестовых выборок.",
+                "content": {
+                    "application/zip": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                },
+            }
+        },
+    )
+    def download_primary_test_samples(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> FileResponse:
+        artifact = build_primary_test_samples_download(db, ctx.config)
+        return FileResponse(
+            artifact.path,
+            filename=artifact.filename,
+            media_type="application/zip",
+            background=BackgroundTask(artifact.cleanup),
+        )
+
     @app.get("/api/v1/test-samples/{sample_id}", response_model=TestSampleDetail)
     def get_test_sample(
         sample_id: uuid.UUID,
@@ -68,6 +128,22 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
         detail = _sample_or_404(lambda: update_test_sample(db, sample_id, request))
+        db.commit()
+        return detail
+
+    @app.put(
+        "/api/v1/test-samples/{sample_id}/primary",
+        response_model=TestSampleDetail,
+    )
+    def put_test_sample_primary(
+        sample_id: uuid.UUID,
+        request: TestSamplePrimaryUpdate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleDetail:
+        detail = _sample_or_404(
+            lambda: update_test_sample_primary(db, sample_id, request)
+        )
         db.commit()
         return detail
 
@@ -189,6 +265,16 @@ def _sample_or_404(operation):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Тестовая выборка или её файл не найдены.",
+        ) from exc
+
+
+def _batch_or_404(operation):
+    try:
+        return operation()
+    except TestSampleBatchUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Групповой запуск тестовых выборок не найден.",
         ) from exc
 
 

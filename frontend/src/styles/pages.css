@@ -247,6 +247,54 @@
   white-space: nowrap;
 }
 
+.result-card-f1 {
+  margin-left: auto;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.result-card-f1.current {
+  color: var(--ok);
+}
+
+.result-card-f1.stale {
+  color: var(--warn);
+}
+
+.status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.status-banner > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.status-banner.ok {
+  border-color: #9fd2b5;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.status-banner.error {
+  border-color: #efb5af;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.status-banner.neutral {
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
 .job-config {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -280,6 +328,48 @@
 
 .test-sample-catalog {
   margin-top: 22px;
+}
+
+.test-sample-batch-settings {
+  margin-bottom: 12px;
+}
+
+.test-sample-batch-select-actions {
+  margin-bottom: 10px;
+}
+
+.test-sample-batch-table {
+  min-width: 720px;
+}
+
+.test-sample-batch-table input[type="number"],
+.test-sample-batch-table select {
+  min-width: 135px;
+}
+
+.test-sample-batch-progress {
+  margin-top: 22px;
+}
+
+.batch-progress-track {
+  height: 9px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-strong);
+}
+
+.batch-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+
+.error-text {
+  color: var(--danger);
+  font-weight: 650;
 }
 
 .test-sample-name-field {

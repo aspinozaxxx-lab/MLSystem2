@@ -57,6 +57,7 @@ from ._models import (
     PseudoMarkupResultRow,
     QueueControlRow,
     StoredFileRow,
+    TrainingResultTestMetricRow,
     TrainingResultRow,
     TrainingTemplateRow,
 )
@@ -68,7 +69,13 @@ from ._templates import (
     sanitize_inference_template_config,
     sanitize_template_config,
 )
-from ._test_samples import mark_test_samples_stale_for_pseudo_markup
+from ._test_samples import (
+    TEST_SAMPLE_F1_OPERATION,
+    mark_test_samples_stale_for_pseudo_markup,
+    primary_test_sample,
+    queue_class_test_f1,
+    training_result_test_f1_info,
+)
 from .contracts import (
     AppLink,
     AppLinksResponse,
@@ -99,8 +106,12 @@ from .contracts import (
     MLflowExperimentInfo,
     ModelListResponse,
     PseudoMarkupResultInfo,
+    PrimaryTestSampleInfo,
     QueueEnabledUpdate,
     QueueSnapshot,
+    ResultClassInfo,
+    ResultClassListResponse,
+    ResultVariantInfo,
     ResultStatus,
     ResultChangeInfo,
     ResultChangesResponse,
@@ -159,6 +170,69 @@ def datasets(config: TrainingUIAPIConfig) -> DatasetListResponse:
 
 def classes(config: TrainingUIAPIConfig) -> ClassListResponse:
     return ClassListResponse(classes=list_classes(config.mlmarkup_root, config.images_root))
+
+
+def result_classes(
+    session: Session,
+    config: TrainingUIAPIConfig,
+) -> ResultClassListResponse:
+    catalog = list_classes(config.mlmarkup_root, config.images_root)
+    output: list[ResultClassInfo] = []
+    for class_info in catalog:
+        variants: list[ResultVariantInfo] = []
+        for variant in class_info.variants:
+            test_f1 = None
+            test_f1_status = None
+            test_f1_training_result_id = None
+            if primary_test_sample(session, variant.key) is not None:
+                result = session.scalar(
+                    select(TrainingResultRow)
+                    .join(
+                        TrainingResultTestMetricRow,
+                        TrainingResultTestMetricRow.training_result_id
+                        == TrainingResultRow.id,
+                    )
+                    .where(
+                        TrainingResultRow.class_key == variant.key,
+                        TrainingResultRow.status == ResultStatus.OK.value,
+                        TrainingResultTestMetricRow.f1.is_not(None),
+                    )
+                    .order_by(
+                        TrainingResultRow.created_at.desc(),
+                        TrainingResultRow.id.desc(),
+                    )
+                    .limit(1)
+                )
+                if result is not None:
+                    info = training_result_test_f1_info(session, result, config)
+                    if info is not None and info.f1 is not None:
+                        test_f1 = info.f1
+                        test_f1_status = "current" if info.status == "current" else "stale"
+                        test_f1_training_result_id = result.id
+            variants.append(
+                ResultVariantInfo(
+                    key=variant.key,
+                    name=variant.name,
+                    class_key=variant.class_key,
+                    class_name=variant.class_name,
+                    variant_key=variant.variant_key,
+                    variant_name=variant.variant_name,
+                    image_count=variant.image_count,
+                    test_f1=test_f1,
+                    test_f1_status=test_f1_status,
+                    test_f1_training_result_id=test_f1_training_result_id,
+                )
+            )
+        output.append(
+            ResultClassInfo(
+                key=class_info.key,
+                name=class_info.name,
+                updated_at=class_info.updated_at,
+                variants=variants,
+                is_custom=class_info.is_custom,
+            )
+        )
+    return ResultClassListResponse(classes=output)
 
 
 def image_folders(config: TrainingUIAPIConfig) -> ImageFolderListResponse:
@@ -831,20 +905,64 @@ def class_results(
             if job_id is not None
         ],
     )
+    primary = primary_test_sample(session, class_key)
+    result_infos = [
+        _training_result_info(
+            session,
+            row,
+            config=config,
+            pseudo_rows=pseudo_by_training_id.get(row.id, []),
+            jobs_by_id=job_rows,
+        )
+        for row in rows
+    ]
+    successful_test_statuses = [
+        info.test_f1.status
+        for row, info in zip(rows, result_infos, strict=True)
+        if row.status == ResultStatus.OK.value and info.test_f1 is not None
+    ]
+    if primary is None:
+        test_f1_status = "unavailable"
+    elif successful_test_statuses and all(
+        item == "current" for item in successful_test_statuses
+    ) and len(successful_test_statuses) == sum(
+        row.status == ResultStatus.OK.value for row in rows
+    ):
+        test_f1_status = "current"
+    elif any(item in {"queued", "running"} for item in successful_test_statuses):
+        test_f1_status = "running"
+    else:
+        test_f1_status = "stale"
     return ClassResultsResponse(
         class_key=dataset_info.key,
         class_name=dataset_info.name,
         dataset_updated_at=dataset_info.updated_at,
-        results=[
-            _training_result_info(
-                session,
-                row,
-                pseudo_rows=pseudo_by_training_id.get(row.id, []),
-                jobs_by_id=job_rows,
+        primary_test_sample=(
+            PrimaryTestSampleInfo(
+                id=primary.id,
+                name=primary.name,
+                content_revision=primary.content_revision,
+                enabled_image_count=sum(tile.enabled for tile in primary.tiles),
+                enabled_object_count=sum(
+                    tile.object_count for tile in primary.tiles if tile.enabled
+                ),
             )
-            for row in rows
-        ],
+            if primary is not None
+            else None
+        ),
+        test_f1_status=test_f1_status,
+        results=result_infos,
     )
+
+
+def recalculate_class_test_f1(
+    session: Session,
+    class_key: str,
+    config: TrainingUIAPIConfig,
+) -> ClassResultsResponse:
+    queue_class_test_f1(session, class_key, config)
+    session.flush()
+    return class_results(session, class_key, config)
 
 
 def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
@@ -932,10 +1050,20 @@ def _job_class_key(row: JobRow) -> str:
     return row.dataset_key or row.training_dataset_name or row.dataset_name
 
 
+def _job_purpose(row: JobRow) -> str:
+    if row.type == JobType.TRAINING.value:
+        return "training"
+    if (row.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION:
+        return "test_sample_f1"
+    return "pseudo_markup"
+
+
 def _job_change_action(row: JobRow) -> str:
     running = row.status == JobStatus.RUNNING.value
     if row.type == JobType.TRAINING.value:
         return "идёт обучение" if running else "запланировано обучение"
+    if _job_purpose(row) == "test_sample_f1":
+        return "считается тестовый F1" if running else "запланирован тестовый F1"
     return "идёт псевдоразметка" if running else "запланирована псевдоразметка"
 
 
@@ -1547,6 +1675,19 @@ def _stop_process_and_cleanup(row: JobRow) -> None:
 
 
 def _delete_job_rows(session: Session, row: JobRow) -> None:
+    if _job_purpose(row) == "test_sample_f1":
+        metric = session.scalar(
+            select(TrainingResultTestMetricRow).where(
+                TrainingResultTestMetricRow.job_id == row.id
+            )
+        )
+        if metric is not None:
+            metric.status = "stale" if metric.f1 is not None else "unavailable"
+            metric.error = "Расчёт тестового F1 отменён."
+            metric.job_id = None
+            metric.updated_at = _now()
+        session.delete(row)
+        return
     training_results = session.scalars(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)).all()
     training_result_ids = [item.id for item in training_results]
     pseudo_results = {
@@ -1716,6 +1857,7 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
     return JobSummary(
         id=row.id,
         type=JobType(row.type),
+        purpose=_job_purpose(row),
         source=JobSource(row.source),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
@@ -1738,6 +1880,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
     return JobDetail(
         id=row.id,
         type=JobType(row.type),
+        purpose=_job_purpose(row),
         source=JobSource(row.source),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
@@ -1779,6 +1922,12 @@ def _job_run_dir(row: JobRow, config: TrainingUIAPIConfig) -> Path | None:
 
 def _job_log_candidates(row: JobRow, run_dir: Path) -> list[Path]:
     if row.type == JobType.INFERENCE.value:
+        if _job_purpose(row) == "test_sample_f1":
+            return [
+                run_dir / "worker_error.txt",
+                run_dir / "logs" / "test_sample_f1.log",
+                run_dir / "scratch" / "report.json",
+            ]
         return [
             run_dir / "worker_error.txt",
             run_dir / "logs" / "pseudo_markup.log",
@@ -1931,6 +2080,7 @@ def _training_result_info(
     session: Session,
     row: TrainingResultRow,
     *,
+    config: TrainingUIAPIConfig,
     pseudo_rows: list[PseudoMarkupResultRow] | None = None,
     jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
 ) -> TrainingResultInfo:
@@ -1962,6 +2112,7 @@ def _training_result_info(
         sample_size_hint=job.tile_size if job is not None else None,
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         progress=_training_result_progress(session, row, jobs_by_id),
+        test_f1=training_result_test_f1_info(session, row, config),
         pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],
     )
 

@@ -311,6 +311,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-sample-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Batch */
+        post: operations["post_test_sample_batch_api_v1_test_sample_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Latest Test Sample Batch */
+        get: operations["get_latest_test_sample_batch_api_v1_test_sample_batches_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Batch */
+        get: operations["get_test_sample_batch_api_v1_test_sample_batches__batch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples": {
         parameters: {
             query?: never;
@@ -323,6 +374,23 @@ export interface paths {
         put?: never;
         /** Post Test Sample */
         post: operations["post_test_sample_api_v1_test_samples_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/primary/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Primary Test Samples */
+        get: operations["download_primary_test_samples_api_v1_test_samples_primary_download_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -346,6 +414,23 @@ export interface paths {
         head?: never;
         /** Patch Test Sample */
         patch: operations["patch_test_sample_api_v1_test_samples__sample_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Test Sample Primary */
+        put: operations["put_test_sample_primary_api_v1_test_samples__sample_id__primary_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/test-samples/{sample_id}/tiles/{tile_index}": {
@@ -831,6 +916,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/classes/{class_key}/test-f1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test F1 */
+        post: operations["post_test_f1_api_v1_results_classes__class_key__test_f1_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/pseudo-markup/{result_id}": {
         parameters: {
             query?: never;
@@ -1026,6 +1128,13 @@ export interface components {
             class_name: string;
             /** Dataset Updated At */
             dataset_updated_at?: string | null;
+            primary_test_sample?: components["schemas"]["PrimaryTestSampleInfo"] | null;
+            /**
+             * Test F1 Status
+             * @default unavailable
+             * @enum {string}
+             */
+            test_f1_status: "current" | "stale" | "running" | "unavailable";
             /** Results */
             results: components["schemas"]["TrainingResultInfo"][];
         };
@@ -1190,6 +1299,11 @@ export interface components {
              */
             id: string;
             type: components["schemas"]["JobType"];
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "training" | "pseudo_markup" | "test_sample_f1";
             /** @default manual */
             source: components["schemas"]["JobSource"];
             status: components["schemas"]["JobStatus"];
@@ -1272,6 +1386,11 @@ export interface components {
              */
             id: string;
             type: components["schemas"]["JobType"];
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "training" | "pseudo_markup" | "test_sample_f1";
             /** @default manual */
             source: components["schemas"]["JobSource"];
             status: components["schemas"]["JobStatus"];
@@ -1421,6 +1540,22 @@ export interface components {
             /** Models */
             models: components["schemas"]["ModelInfo"][];
         };
+        /** PrimaryTestSampleInfo */
+        PrimaryTestSampleInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Content Revision */
+            content_revision: number;
+            /** Enabled Image Count */
+            enabled_image_count: number;
+            /** Enabled Object Count */
+            enabled_object_count: number;
+        };
         /** PseudoMarkupResultInfo */
         PseudoMarkupResultInfo: {
             /**
@@ -1518,11 +1653,55 @@ export interface components {
             /** Changes */
             changes: components["schemas"]["ResultChangeInfo"][];
         };
+        /** ResultClassInfo */
+        ResultClassInfo: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Variants */
+            variants?: components["schemas"]["ResultVariantInfo"][];
+            /**
+             * Is Custom
+             * @default false
+             */
+            is_custom: boolean;
+        };
+        /** ResultClassListResponse */
+        ResultClassListResponse: {
+            /** Classes */
+            classes?: components["schemas"]["ResultClassInfo"][];
+        };
         /**
          * ResultStatus
          * @enum {string}
          */
         ResultStatus: "running" | "ok" | "error" | "cancelled";
+        /** ResultVariantInfo */
+        ResultVariantInfo: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Class Key */
+            class_key?: string | null;
+            /** Class Name */
+            class_name?: string | null;
+            /** Variant Key */
+            variant_key?: string | null;
+            /** Variant Name */
+            variant_name?: string | null;
+            /** Image Count */
+            image_count?: number | null;
+            /** Test F1 */
+            test_f1?: number | null;
+            /** Test F1 Status */
+            test_f1_status?: ("current" | "stale") | null;
+            /** Test F1 Training Result Id */
+            test_f1_training_result_id?: string | null;
+        };
         /** RuntimeProgress */
         RuntimeProgress: {
             /** Current */
@@ -1564,6 +1743,122 @@ export interface components {
          * @enum {string}
          */
         TemplateSource: "hpo_best" | "analogy" | "manual";
+        /** TestSampleBatchCreate */
+        TestSampleBatchCreate: {
+            /**
+             * Tile Size
+             * @default 1536
+             * @enum {integer}
+             */
+            tile_size: 512 | 768 | 1024 | 1536 | 2048;
+            /**
+             * Image Count
+             * @default 10
+             */
+            image_count: number;
+            /** Items */
+            items: components["schemas"]["TestSampleBatchItemCreate"][];
+        };
+        /** TestSampleBatchInfo */
+        TestSampleBatchInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "ok" | "partial" | "error";
+            /** Tile Size */
+            tile_size: number;
+            /** Image Count */
+            image_count: number;
+            /** Completed Count */
+            completed_count: number;
+            /** Total Count */
+            total_count: number;
+            /** Elapsed Seconds */
+            elapsed_seconds: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Items */
+            items?: components["schemas"]["TestSampleBatchItemInfo"][];
+        };
+        /** TestSampleBatchItemCreate */
+        TestSampleBatchItemCreate: {
+            /** Dataset Key */
+            dataset_key: string;
+            /**
+             * Min Object Count
+             * @default 150
+             */
+            min_object_count: number;
+            /**
+             * Metric
+             * @default objects
+             * @enum {string}
+             */
+            metric: "pixel" | "objects";
+        };
+        /** TestSampleBatchItemInfo */
+        TestSampleBatchItemInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Position */
+            position: number;
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Variant Key */
+            variant_key: string;
+            /** Variant Name */
+            variant_name: string;
+            /** Min Object Count */
+            min_object_count: number;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "pixel" | "objects";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "ok" | "error";
+            /** Pool Tile Count */
+            pool_tile_count?: number | null;
+            /** Pool Object Count */
+            pool_object_count?: number | null;
+            /** Sample Id */
+            sample_id?: string | null;
+            /** Sample Name */
+            sample_name?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+        };
         /** TestSampleCatalogResponse */
         TestSampleCatalogResponse: {
             /** Classes */
@@ -1639,6 +1934,11 @@ export interface components {
             actual_object_count: number;
             /** Enabled Object Count */
             enabled_object_count: number;
+            /**
+             * Is Primary
+             * @default false
+             */
+            is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
             /**
              * Created At
@@ -1719,6 +2019,11 @@ export interface components {
              */
             metric: "pixel" | "objects";
         };
+        /** TestSamplePrimaryUpdate */
+        TestSamplePrimaryUpdate: {
+            /** Is Primary */
+            is_primary: boolean;
+        };
         /** TestSampleSummary */
         TestSampleSummary: {
             /**
@@ -1750,6 +2055,11 @@ export interface components {
             actual_object_count: number;
             /** Enabled Object Count */
             enabled_object_count: number;
+            /**
+             * Is Primary
+             * @default false
+             */
+            is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
             /**
              * Created At
@@ -1874,8 +2184,42 @@ export interface components {
              */
             status: "queued" | "running" | "ok" | "error" | "cancelled";
             progress?: components["schemas"]["RuntimeProgress"] | null;
+            test_f1?: components["schemas"]["TrainingResultTestF1Info"] | null;
             /** Pseudo Markup Results */
             pseudo_markup_results?: components["schemas"]["PseudoMarkupResultInfo"][];
+        };
+        /** TrainingResultTestF1Info */
+        TrainingResultTestF1Info: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "current" | "stale" | "queued" | "running" | "error" | "unavailable";
+            /** Precision */
+            precision?: number | null;
+            /** Recall */
+            recall?: number | null;
+            /** F1 */
+            f1?: number | null;
+            /** True Positive */
+            true_positive?: number | null;
+            /** False Positive */
+            false_positive?: number | null;
+            /** False Negative */
+            false_negative?: number | null;
+            /** Sample Id */
+            sample_id?: string | null;
+            /** Sample Name */
+            sample_name?: string | null;
+            /** Sample Revision */
+            sample_revision?: number | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Evaluated At */
+            evaluated_at?: string | null;
+            /** Error */
+            error?: string | null;
+            progress?: components["schemas"]["RuntimeProgress"] | null;
         };
         /** TrainingTemplate */
         TrainingTemplate: {
@@ -2476,6 +2820,90 @@ export interface operations {
             };
         };
     };
+    post_test_sample_batch_api_v1_test_sample_batches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleBatchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_test_sample_batch_api_v1_test_sample_batches_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+        };
+    };
+    get_test_sample_batch_api_v1_test_sample_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_test_samples_api_v1_test_samples_get: {
         parameters: {
             query?: never;
@@ -2525,6 +2953,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_primary_test_samples_api_v1_test_samples_primary_download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP всех основных тестовых выборок. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
         };
@@ -2601,6 +3049,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TestSampleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_test_sample_primary_api_v1_test_samples__sample_id__primary_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSamplePrimaryUpdate"];
             };
         };
         responses: {
@@ -3604,7 +4087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ClassListResponse"];
+                    "application/json": components["schemas"]["ResultClassListResponse"];
                 };
             };
         };
@@ -3682,6 +4165,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_f1_api_v1_results_classes__class_key__test_f1_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassResultsResponse"];
                 };
             };
             /** @description Validation Error */

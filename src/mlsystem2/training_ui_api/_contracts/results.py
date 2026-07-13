@@ -40,6 +40,35 @@ class PseudoMarkupResultInfo(BaseModel):
     progress: RuntimeProgress | None = None
 
 
+class TrainingResultTestF1Info(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["current", "stale", "queued", "running", "error", "unavailable"]
+    precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    true_positive: int | None = Field(default=None, ge=0)
+    false_positive: int | None = Field(default=None, ge=0)
+    false_negative: int | None = Field(default=None, ge=0)
+    sample_id: UUID | None = None
+    sample_name: str | None = None
+    sample_revision: int | None = Field(default=None, ge=1)
+    job_id: UUID | None = None
+    evaluated_at: datetime | None = None
+    error: str | None = None
+    progress: RuntimeProgress | None = None
+
+
+class PrimaryTestSampleInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    name: str
+    content_revision: int = Field(ge=1)
+    enabled_image_count: int = Field(ge=0)
+    enabled_object_count: int = Field(ge=0)
+
+
 class TrainingResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +88,7 @@ class TrainingResultInfo(BaseModel):
     sample_size_hint: int | None = None
     status: Literal["queued", "running", "ok", "error", "cancelled"]
     progress: RuntimeProgress | None = None
+    test_f1: TrainingResultTestF1Info | None = None
     pseudo_markup_results: list[PseudoMarkupResultInfo] = Field(default_factory=list)
 
 
@@ -82,7 +112,40 @@ class ClassResultsResponse(BaseModel):
     class_key: str
     class_name: str
     dataset_updated_at: datetime | None = None
+    primary_test_sample: PrimaryTestSampleInfo | None = None
+    test_f1_status: Literal["current", "stale", "running", "unavailable"] = "unavailable"
     results: list[TrainingResultInfo]
+
+
+class ResultVariantInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    class_key: str | None = None
+    class_name: str | None = None
+    variant_key: str | None = None
+    variant_name: str | None = None
+    image_count: int | None = None
+    test_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    test_f1_status: Literal["current", "stale"] | None = None
+    test_f1_training_result_id: UUID | None = None
+
+
+class ResultClassInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    updated_at: datetime | None = None
+    variants: list[ResultVariantInfo] = Field(default_factory=list)
+    is_custom: bool = False
+
+
+class ResultClassListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    classes: list[ResultClassInfo] = Field(default_factory=list)
 
 
 class ResultChangeInfo(BaseModel):
@@ -153,10 +216,15 @@ __all__ = [
     "AutomationSnapshot",
     "ClassResultsResponse",
     "CustomDatasetInfo",
+    "PrimaryTestSampleInfo",
     "PseudoMarkupResultInfo",
+    "ResultClassInfo",
+    "ResultClassListResponse",
     "ResultChangeInfo",
     "ResultChangesResponse",
+    "ResultVariantInfo",
     "TrainingResultBatchExportRequest",
     "TrainingResultExportItem",
     "TrainingResultInfo",
+    "TrainingResultTestF1Info",
 ]

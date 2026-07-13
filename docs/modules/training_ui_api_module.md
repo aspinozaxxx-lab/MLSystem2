@@ -28,11 +28,12 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
 - `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
-- `TrainingResultInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, псевдоразметки и последние изменения; активные DTO результата содержат необязательный `job_id` и показывают фактический статус `queued`/`running` связанного задания; `TrainingResultInfo.sample_size_hint` передает tile size из связанного job, если он известен.
+- `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultClassInfo`, `ResultVariantInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, отдельный тестовый F1 сети, основная выборка и карточки классов; активные DTO содержат `job_id` и прогресс связанного задания.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
-- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest` - создание постоянной выборки, переименование, изменение состояния тайла и ограничения оптимизации состава.
+- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate` - создание постоянной выборки, переименование, изменение состояния тайла, ограничения оптимизации и назначение основной выборки.
 - `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail` - метрики, иерархический каталог и редакторское описание постоянных тестовых выборок.
+- `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; последний запуск хранит применённые настройки формы.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
@@ -50,6 +51,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов с максимальным пиксельным или объектным F1.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP включенных тайлов.
+- `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
+- `PUT /api/v1/test-samples/{sample_id}/primary` - атомарно назначает, заменяет или снимает основную выборку точного варианта.
+- `GET /api/v1/test-samples/primary/download` - ZIP основных выборок с отдельной папкой `Класс_вариант`.
+- `POST /api/v1/results/classes/{class_key}/test-f1` - ставит в inference-очередь отсутствующие, ошибочные и устаревшие оценки успешных сетей варианта.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -106,7 +111,7 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 Общий архив содержит `models-serving-service/<model_name>.zip`, `pipelines/<model_name>_triton.yaml`,
 `metadata/<model_name>_export_metadata.json` и корневой `export_metadata.json`.
 
-Нарезка тестовой разметки работает отдельно от worker, очередей, MLflow, S3 и конвейера обучения.
+Алгоритм нарезки тестовой разметки не входит в training/inference-очередь, MLflow, S3 или конвейер обучения.
 По TXT выбранного варианта он сопоставляет сцены с TIFF только внутри `MLSYSTEM2_IMAGES_ROOT`, исключает окна за
 границами растра, с невалидной `dataset_mask`, пикселями без данных или полностью чёрными пикселями и детерминированно выбирает
 заданное число тайлов через `scipy.optimize.milp`. Приоритеты выбора: максимальное число родительских папок,
@@ -124,6 +129,21 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 `class_key` и входной `dataset_key` точно равны ключу варианта выборки; новый подходящий результат запускает
 автоматический пересчет. Ручной оптимизатор рассматривает все тайлы независимо от текущего состояния, максимизирует
 агрегированный F1 и при равенстве предпочитает территории, число объектов, исходные снимки и меньший состав.
+Групповой запуск хранится в `test_sample_batches` и `test_sample_batch_items` и обрабатывается отдельным
+последовательным исполнителем нарезки, а не очередью обучения или инференса. Для итоговых `N` тайлов и минимума
+`M` объектов он ищет максимально достижимый непересекающийся пул от `3N` до `N`, целится в `3M` появлений
+объектов и после оптимизации сохраняет ровно `N` тайлов включёнными. Неуспешная строка не оставляет выборку или
+файлы, а после перезапуска текущая строка запускается повторно. Последний запуск возвращает размер, число тайлов,
+минимумы объектов и метрики как следующие значения формы по умолчанию.
+
+Флаг `test_samples.is_primary` уникален по точному `dataset_key`. Общий ZIP включает только основные выборки и
+только включённые тайлы. Таблица `training_result_test_metrics` хранит пиксельные TP/FP/FN каждой успешной сети.
+Задание `test_sample_f1` использует общую inference-очередь и тот же `_pseudo_runner`, но запускает checkpoint
+непосредственно на TIFF основной выборки: каждый тайл обрабатывается независимо, применяется threshold checkpoint
+и актуальный inference-шаблон, после чего маска сравнивается с `tile_NNN_mask.png`. Результат применяется только
+при совпадении основной выборки и ревизии состава; смена выборки, состава или эффективного шаблона делает его
+устаревшим. Новая успешная сеть ставится на оценку автоматически. Этот расчёт не пишет данные в MLflow и не
+изменяет `train_pipeline`.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в
 `POST /api/v1/results/training/{result_id}/triton-zip`, а backend скачивает `checkpoints/best.pt` через

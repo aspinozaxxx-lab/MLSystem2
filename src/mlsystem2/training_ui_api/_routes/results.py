@@ -9,16 +9,17 @@ from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
     class_results,
-    classes,
     create_pseudo_markup_job,
     delete_pseudo_markup_result,
+    recalculate_class_test_f1,
     result_changes,
+    result_classes,
 )
 from mlsystem2.training_ui_api.contracts import (
-    ClassListResponse,
     ClassResultsResponse,
     JobDetail,
     PseudoMarkupResultInfo,
+    ResultClassListResponse,
     ResultChangesResponse,
 )
 
@@ -26,9 +27,12 @@ from .common import RouteContext
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
-    @app.get("/api/v1/results/classes", response_model=ClassListResponse)
-    def get_result_classes(_: str = Depends(ctx.authenticated)) -> ClassListResponse:
-        return classes(ctx.config)
+    @app.get("/api/v1/results/classes", response_model=ResultClassListResponse)
+    def get_result_classes(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> ResultClassListResponse:
+        return result_classes(db, ctx.config)
 
     @app.get("/api/v1/results/changes", response_model=ResultChangesResponse)
     def get_result_changes(
@@ -69,6 +73,17 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
             scenes_bytes=scenes_bytes,
             config=ctx.config,
         )
+
+    @app.post(
+        "/api/v1/results/classes/{class_key}/test-f1",
+        response_model=ClassResultsResponse,
+    )
+    def post_test_f1(
+        class_key: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> ClassResultsResponse:
+        return recalculate_class_test_f1(db, class_key, ctx.config)
 
     @app.delete("/api/v1/results/pseudo-markup/{result_id}", response_model=PseudoMarkupResultInfo)
     def delete_pseudo_markup(

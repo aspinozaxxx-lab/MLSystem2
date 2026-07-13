@@ -32,6 +32,12 @@ class TestSampleTileUpdate(BaseModel):
     enabled: bool
 
 
+class TestSamplePrimaryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_primary: bool
+
+
 class TestSampleOptimizeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -82,6 +88,7 @@ class TestSampleSummary(BaseModel):
     enabled_image_count: int = Field(ge=0)
     actual_object_count: int = Field(gt=0)
     enabled_object_count: int = Field(ge=0)
+    is_primary: bool = False
     evaluation: TestSampleEvaluationInfo
     created_at: datetime
     updated_at: datetime
@@ -132,7 +139,67 @@ class TestSampleDetail(TestSampleSummary):
     tiles: list[TestSampleTileInfo] = Field(default_factory=list)
 
 
+class TestSampleBatchItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str = Field(min_length=1)
+    min_object_count: int = Field(default=150, gt=0)
+    metric: Literal["pixel", "objects"] = "objects"
+
+
+class TestSampleBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tile_size: Literal[512, 768, 1024, 1536, 2048] = 1536
+    image_count: int = Field(default=10, gt=0)
+    items: list[TestSampleBatchItemCreate] = Field(min_length=1)
+
+
+class TestSampleBatchItemInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    position: int = Field(ge=1)
+    dataset_key: str
+    dataset_name: str
+    dataset_version: str | None = None
+    class_key: str
+    class_name: str
+    variant_key: str
+    variant_name: str
+    min_object_count: int = Field(gt=0)
+    metric: Literal["pixel", "objects"]
+    status: Literal["queued", "running", "ok", "error"]
+    pool_tile_count: int | None = Field(default=None, gt=0)
+    pool_object_count: int | None = Field(default=None, gt=0)
+    sample_id: UUID | None = None
+    sample_name: str | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class TestSampleBatchInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    status: Literal["queued", "running", "ok", "partial", "error"]
+    tile_size: int = Field(gt=0)
+    image_count: int = Field(gt=0)
+    completed_count: int = Field(ge=0)
+    total_count: int = Field(gt=0)
+    elapsed_seconds: int = Field(ge=0)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    items: list[TestSampleBatchItemInfo] = Field(default_factory=list)
+
+
 __all__ = [
+    "TestSampleBatchCreate",
+    "TestSampleBatchInfo",
+    "TestSampleBatchItemCreate",
+    "TestSampleBatchItemInfo",
     "TestSampleCatalogResponse",
     "TestSampleClassGroup",
     "TestSampleCreate",
@@ -140,6 +207,7 @@ __all__ = [
     "TestSampleEvaluationInfo",
     "TestSampleMetric",
     "TestSampleOptimizeRequest",
+    "TestSamplePrimaryUpdate",
     "TestSampleSummary",
     "TestSampleTileInfo",
     "TestSampleTileUpdate",

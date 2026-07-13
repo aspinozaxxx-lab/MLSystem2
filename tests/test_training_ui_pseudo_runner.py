@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
@@ -26,6 +27,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _summary,
     _write_pseudo_progress,
     run_pseudo_markup,
+    run_test_sample_f1,
 )
 
 
@@ -382,6 +384,84 @@ def test_run_pseudo_markup_releases_cuda_on_checkpoint_error(tmp_path, monkeypat
     assert fake_torch.cuda.empty_cache_calls == 1
     output = json.loads((tmp_path / "pseudo_markup.geojson").read_text(encoding="utf-8"))
     assert output == {"type": "FeatureCollection", "features": []}
+
+
+def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independently(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = tmp_path / "best.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    transform = from_origin(0, 4, 1, 1)
+    tiles = []
+    true_masks = [
+        np.asarray([[1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], dtype=np.uint8),
+        np.asarray([[0, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], dtype=np.uint8),
+    ]
+    predictions = [
+        np.asarray([[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], dtype=np.uint8),
+        np.asarray([[0, 0, 0, 0], [0, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]], dtype=np.uint8),
+    ]
+    for index, true_mask in enumerate(true_masks, start=1):
+        image_path = tmp_path / f"tile_{index:03d}.tif"
+        mask_path = tmp_path / f"tile_{index:03d}_mask.png"
+        with rasterio.open(
+            image_path,
+            "w",
+            driver="GTiff",
+            width=4,
+            height=4,
+            count=4,
+            dtype="uint8",
+            crs="EPSG:3857",
+            transform=transform,
+        ) as dataset:
+            dataset.write(np.ones((4, 4, 4), dtype=np.uint8))
+        with rasterio.open(
+            mask_path,
+            "w",
+            driver="PNG",
+            width=4,
+            height=4,
+            count=1,
+            dtype="uint8",
+        ) as dataset:
+            dataset.write(true_mask * 255, 1)
+        tiles.append({"index": index, "image_path": str(image_path), "mask_path": str(mask_path)})
+
+    fake_torch = _FakeTorch()
+    fake_model = _FakeModel()
+    monkeypatch.setattr(_pseudo_runner, "_torch", lambda: fake_torch)
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "load_checkpoint",
+        lambda request: SimpleNamespace(model=SimpleNamespace(model=fake_model)),
+    )
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "_infer_test_tile_mask",
+        lambda **kwargs: predictions[int(Path(kwargs["image_path"]).stem[-3:]) - 1],
+    )
+
+    report = run_test_sample_f1(
+        {
+            "operation": "test_sample_f1",
+            "run_root": str(tmp_path / "run"),
+            "local_checkpoint_path": str(checkpoint_path),
+            "threshold": 0.5,
+            "tile_size": 4,
+            "stride": 4,
+            "device": "cuda",
+            "tiles": tiles,
+        }
+    )
+
+    assert report["status"] == "ok"
+    assert report["processed"] == 2
+    assert report["true_positive"] == 2
+    assert report["false_positive"] == 1
+    assert report["false_negative"] == 1
+    assert fake_torch.cuda.empty_cache_calls == 1
 
 
 def test_pseudo_runner_keeps_triton_registration_out_of_one_off_path() -> None:

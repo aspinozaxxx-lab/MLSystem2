@@ -6,7 +6,20 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -294,6 +307,13 @@ class TestSampleRow(Base):
         Index("ix_test_samples_dataset_key", "dataset_key"),
         Index("ix_test_samples_class_variant", "class_key", "variant_key"),
         Index("ix_test_samples_created_at", "created_at"),
+        Index(
+            "uq_test_samples_primary_dataset_key",
+            "dataset_key",
+            unique=True,
+            postgresql_where=text("is_primary"),
+            sqlite_where=text("is_primary = 1"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -311,6 +331,7 @@ class TestSampleRow(Base):
     requested_object_count: Mapped[int] = mapped_column(Integer)
     actual_object_count: Mapped[int] = mapped_column(Integer)
     territory_count: Mapped[int] = mapped_column(Integer)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     warnings: Mapped[list[str]] = mapped_column(_json_type(), default=list)
     content_revision: Mapped[int] = mapped_column(Integer, default=1)
     evaluated_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -380,3 +401,128 @@ class TestSampleTileRow(Base):
     )
 
     sample: Mapped[TestSampleRow] = relationship(back_populates="tiles")
+
+
+class TestSampleBatchRow(Base):
+    __tablename__ = "test_sample_batches"
+    __table_args__ = (
+        UniqueConstraint("active_slot", name="uq_test_sample_batches_active_slot"),
+        Index("ix_test_sample_batches_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    active_slot: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
+    tile_size: Mapped[int] = mapped_column(Integer)
+    image_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    items: Mapped[list["TestSampleBatchItemRow"]] = relationship(
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="TestSampleBatchItemRow.position",
+    )
+
+
+class TestSampleBatchItemRow(Base):
+    __tablename__ = "test_sample_batch_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "position", name="uq_test_sample_batch_items_position"),
+        UniqueConstraint("batch_id", "dataset_key", name="uq_test_sample_batch_items_dataset"),
+        Index("ix_test_sample_batch_items_batch_id", "batch_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("test_sample_batches.id", ondelete="CASCADE"),
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    dataset_key: Mapped[str] = mapped_column(String(180))
+    dataset_name: Mapped[str] = mapped_column(String(240))
+    dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    class_key: Mapped[str] = mapped_column(String(180))
+    class_name: Mapped[str] = mapped_column(String(240))
+    variant_key: Mapped[str] = mapped_column(String(180))
+    variant_name: Mapped[str] = mapped_column(String(240))
+    min_object_count: Mapped[int] = mapped_column(Integer)
+    metric: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    pool_tile_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pool_object_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sample_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("test_samples.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    batch: Mapped[TestSampleBatchRow] = relationship(back_populates="items")
+    sample: Mapped[TestSampleRow | None] = relationship()
+
+
+class TrainingResultTestMetricRow(Base):
+    __tablename__ = "training_result_test_metrics"
+    __table_args__ = (
+        Index("ix_training_result_test_metrics_sample_id", "sample_id"),
+        Index("ix_training_result_test_metrics_status", "status"),
+    )
+
+    training_result_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_results.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    sample_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("test_samples.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sample_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="unavailable")
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    precision: Mapped[float | None] = mapped_column(nullable=True)
+    recall: Mapped[float | None] = mapped_column(nullable=True)
+    f1: Mapped[float | None] = mapped_column(nullable=True)
+    true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    inference_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("inference_templates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    inference_template_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inference_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    threshold: Mapped[float | None] = mapped_column(nullable=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    training_result: Mapped[TrainingResultRow] = relationship()
+    sample: Mapped[TestSampleRow | None] = relationship()
+    job: Mapped[JobRow | None] = relationship()

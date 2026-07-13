@@ -24,13 +24,16 @@ from mlsystem2.training_ui_api import _markup_export
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._models import (
+    JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
+    TrainingResultTestMetricRow,
 )
 from mlsystem2.training_ui_api._test_samples import (
     _object_counts,
+    build_primary_test_samples_download,
     build_test_sample_download,
     cleanup_test_sample_storage,
     create_test_sample,
@@ -38,7 +41,9 @@ from mlsystem2.training_ui_api._test_samples import (
     evaluate_test_samples_for_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
     optimize_test_sample,
+    queue_training_result_test_f1,
     test_sample_detail as _test_sample_detail,
+    update_test_sample_primary,
     update_test_sample_tile,
 )
 from mlsystem2.training_ui_api.api import create_app
@@ -47,6 +52,7 @@ from mlsystem2.training_ui_api.contracts import (
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
     TestSampleOptimizeRequest as _TestSampleOptimizeRequest,
+    TestSamplePrimaryUpdate as _TestSamplePrimaryUpdate,
     TestSampleTileUpdate as _TestSampleTileUpdate,
     TrainingUIAPIError,
 )
@@ -385,6 +391,40 @@ def test_candidate_selection_allows_only_touching_as_fallback() -> None:
     assert _markup_export._select_candidates(candidates, request, allow_touching=True) == [0, 1]
 
 
+def test_candidate_selection_counts_one_long_object_in_separate_tiles() -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _markup_export._Candidate(
+            source_path=Path("river.tif"),
+            source_name="region/river.tif",
+            territory="region",
+            column=index * 32,
+            row=0,
+            raster_crs=crs,
+            raster_footprint=box(index * 32, 0, index * 32 + 16, 16),
+            annotation_footprint=box(index * 32, 0, index * 32 + 16, 16),
+            feature_positions=(0,),
+        )
+        for index in range(2)
+    ]
+    request = MarkupExportRequest(
+        dataset_key="Реки\\main",
+        tile_width=16,
+        tile_height=16,
+        image_count=2,
+        object_count=2,
+    )
+
+    selected = _markup_export._select_candidates(
+        candidates,
+        request,
+        allow_touching=False,
+    )
+
+    assert selected == [0, 1]
+    assert sum(candidates[index].object_count for index in selected) == 2
+
+
 def test_candidate_selection_prioritizes_territories_then_sources_deterministically() -> None:
     crs = CRS.from_epsg(3857)
     candidates = [
@@ -616,6 +656,42 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert client.get(f"/api/v1/test-samples/{sample_id}").status_code == 404
 
 
+def test_test_sample_batch_latest_preserves_next_form_defaults(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+
+    with TestClient(create_app()) as client:
+        _login(client)
+        created = client.post(
+            "/api/v1/test-sample-batches",
+            json={
+                "tile_size": 2048,
+                "image_count": 7,
+                "items": [
+                    {
+                        "dataset_key": "Вырубки\\main",
+                        "min_object_count": 41,
+                        "metric": "pixel",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 200
+
+        latest = client.get("/api/v1/test-sample-batches/latest")
+
+        assert latest.status_code == 200
+        payload = latest.json()
+        assert payload["id"] == created.json()["id"]
+        assert payload["tile_size"] == 2048
+        assert payload["image_count"] == 7
+        assert payload["items"][0]["min_object_count"] == 41
+        assert payload["items"][0]["metric"] == "pixel"
+
+
 def test_persistent_test_sample_metrics_and_stale_revision(
     tmp_path: Path,
     monkeypatch,
@@ -770,6 +846,125 @@ def test_object_f1_matching_uses_inclusive_half_iou() -> None:
 
     assert matched == _test_samples_metric_counts(1, 0, 0)
     assert missed == _test_samples_metric_counts(0, 1, 1)
+
+
+def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        update_test_sample_primary(
+            session,
+            sample.id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        training = TrainingResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="segformer b2",
+            mlflow_run_id="run-123",
+            status="ok",
+        )
+        session.add(training)
+        session.flush()
+
+        assert queue_training_result_test_f1(session, training, config) is True
+        metric = session.get(TrainingResultTestMetricRow, training.id)
+        assert metric is not None
+        assert metric.status == "queued"
+        assert metric.sample_id == sample.id
+        assert metric.sample_revision == 1
+        job = session.get(JobRow, metric.job_id)
+        assert job is not None
+        assert job.config["operation"] == "test_sample_f1"
+        assert job.config["test_sample_tile_indices"] == [1, 2]
+
+        update_test_sample_tile(
+            session,
+            sample.id,
+            1,
+            _TestSampleTileUpdate(enabled=False),
+        )
+
+        assert job.status == "cancelled"
+        assert metric.job_id is None
+        assert metric.status == "unavailable"
+        assert "изменён" in (metric.error or "")
+
+
+def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        samples = [
+            create_test_sample(
+                session,
+                _TestSampleCreate(
+                    name=f"Выборка {index}",
+                    dataset_key="Вырубки\\main",
+                    tile_width=16,
+                    tile_height=16,
+                    image_count=2,
+                    object_count=4,
+                ),
+                config,
+            )
+            for index in (1, 2)
+        ]
+        update_test_sample_primary(
+            session,
+            samples[0].id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        update_test_sample_primary(
+            session,
+            samples[1].id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        update_test_sample_tile(
+            session,
+            samples[1].id,
+            1,
+            _TestSampleTileUpdate(enabled=False),
+        )
+
+        assert _test_sample_detail(session, samples[0].id).is_primary is False
+        assert _test_sample_detail(session, samples[1].id).is_primary is True
+        artifact = build_primary_test_samples_download(session, config)
+        try:
+            with zipfile.ZipFile(artifact.path) as archive:
+                names = archive.namelist()
+            assert len(names) == 4
+            assert all(name.startswith("Вырубки_main/tile_002") for name in names)
+        finally:
+            artifact.cleanup()
 
 
 def test_test_sample_optimizer_uses_all_tiles_and_resolves_equal_f1_by_territory() -> None:

@@ -27,7 +27,6 @@ import type {
   AutomationRuleInfo,
   AutomationSnapshot,
   BootstrapInfo,
-  ClassInfo,
   ClassResultsResponse,
   ConfigField,
   ConfigSchema,
@@ -45,11 +44,14 @@ import type {
   QueueSnapshot,
   ResultChangeInfo,
   ResultChangesResponse,
+  ResultClassInfo,
+  ResultClassListResponse,
   TrainingResultBatchExportRequest,
   TrainingResultInfo,
   TrainingTemplate,
   TestSampleCatalogResponse,
-  TestSampleCreate,
+  TestSampleBatchCreate,
+  TestSampleBatchInfo,
   TestSampleDetail,
   TestSampleEvaluationInfo,
   TestSampleMetric,
@@ -83,6 +85,13 @@ type ModalState = {
 };
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
+
+type TestSampleBatchFormRow = {
+  dataset: DatasetInfo;
+  selected: boolean;
+  minObjectCount: number;
+  metric: "pixel" | "objects";
+};
 
 export function App() {
   const [route, setRoute] = useState(currentRoute());
@@ -834,23 +843,26 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
 function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageProps) {
   const datasets = useMemo(
     () =>
-      bootstrap.datasets.filter(
-        (dataset) =>
-          !dataset.is_custom &&
-          Boolean(dataset.scenes_file) &&
-          Boolean(dataset.annotation_file) &&
-          !(dataset.diagnostics || []).length,
-      ),
+      bootstrap.datasets
+        .filter(
+          (dataset) =>
+            !dataset.is_custom &&
+            Boolean(dataset.scenes_file) &&
+            Boolean(dataset.annotation_file) &&
+            !(dataset.diagnostics || []).length,
+        )
+        .sort((left, right) => markupExportDatasetLabel(left).localeCompare(markupExportDatasetLabel(right), "ru")),
     [bootstrap.datasets],
   );
-  const [datasetKey, setDatasetKey] = useState(datasets[0]?.key || "");
-  const [sampleName, setSampleName] = useState(() => defaultTestSampleName(datasets[0]));
-  const [tileWidth, setTileWidth] = useState(1536);
-  const [tileHeight, setTileHeight] = useState(1536);
+  const [tileSize, setTileSize] = useState(1536);
   const [imageCount, setImageCount] = useState(10);
-  const [objectCount, setObjectCount] = useState(150);
+  const [rows, setRows] = useState<TestSampleBatchFormRow[]>(() =>
+    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150, metric: "objects" as const })),
+  );
   const [busy, setBusy] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
   const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
+  const [batch, setBatch] = useState<TestSampleBatchInfo | null>(null);
 
   const loadCatalog = useCallback(async () => {
     const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
@@ -862,39 +874,105 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (!datasets.some((dataset) => dataset.key === datasetKey)) {
-      setDatasetKey(datasets[0]?.key || "");
-    }
-  }, [datasetKey, datasets]);
+    setRows((current) =>
+      datasets.map((dataset) => {
+        const existing = current.find((item) => item.dataset.key === dataset.key);
+        return existing || { dataset, selected: false, minObjectCount: 150, metric: "objects" as const };
+      }),
+    );
+  }, [datasets]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiJson<TestSampleBatchInfo>("/test-sample-batches/latest")
+      .then((latest) => {
+        if (cancelled) return;
+        setBatch(latest);
+        setTileSize(latest.tile_size);
+        setImageCount(latest.image_count);
+        setRows((current) =>
+          current.map((row) => {
+            const previous = (latest.items || []).find((item) => item.dataset_key === row.dataset.key);
+            return previous
+              ? { ...row, selected: false, minObjectCount: previous.min_object_count, metric: previous.metric }
+              : row;
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof ApiError) || error.status !== 404) {
+          void run(() => Promise.reject(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [run]);
+
+  const batchActive = batch?.status === "queued" || batch?.status === "running";
+  const primarySamples = (catalog?.classes || []).flatMap((classGroup) =>
+    (classGroup.variants || []).flatMap((variant) => (variant.samples || []).filter((sample) => sample.is_primary)),
+  );
+  const canDownloadAll = primarySamples.length > 0 && primarySamples.every((sample) => sample.enabled_image_count > 0);
+  useEffect(() => {
+    if (!batchActive || !batch) return undefined;
+    const timer = window.setTimeout(() => {
+      void run(() => apiJson<TestSampleBatchInfo>(`/test-sample-batches/${batch.id}`)).then((updated) => {
+        if (!updated) return;
+        setBatch(updated);
+        if (updated.status !== "queued" && updated.status !== "running") void loadCatalog();
+      });
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [batch, batchActive, loadCatalog, run]);
+
+  const updateRow = (datasetKey: string, update: Partial<(typeof rows)[number]>) => {
+    setRows((current) => current.map((row) => (row.dataset.key === datasetKey ? { ...row, ...update } : row)));
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
     try {
-      const request: TestSampleCreate = {
-        name: sampleName,
-        dataset_key: datasetKey,
-        tile_width: tileWidth,
-        tile_height: tileHeight,
+      const request: TestSampleBatchCreate = {
+        tile_size: tileSize as TestSampleBatchCreate["tile_size"],
         image_count: imageCount,
-        object_count: objectCount,
+        items: rows
+          .filter((row) => row.selected)
+          .map((row) => ({
+            dataset_key: row.dataset.key,
+            min_object_count: row.minObjectCount,
+            metric: row.metric,
+          })),
       };
-      const payload = await run(() => apiJson<TestSampleDetail>("/test-samples", { method: "POST", body: request }));
-      if (payload) navigate(`markup-export/${payload.id}`);
+      const payload = await run(() =>
+        apiJson<TestSampleBatchInfo>("/test-sample-batches", { method: "POST", body: request }),
+      );
+      if (payload) setBatch(payload);
     } finally {
       setBusy(false);
     }
   };
 
-  const selectDataset = (nextKey: string) => {
-    setDatasetKey(nextKey);
-    setSampleName(defaultTestSampleName(datasets.find((dataset) => dataset.key === nextKey)));
+  const downloadAll = async () => {
+    setDownloadingAll(true);
+    try {
+      const payload = await run(() => apiDownloadGet("/test-samples/primary/download"));
+      if (payload) downloadBlob(payload.blob, payload.filename || "основные_тестовые_выборки.zip");
+    } finally {
+      setDownloadingAll(false);
+    }
   };
 
   const removeSample = (sample: TestSampleSummary) => {
     showModal({
       title: "Удалить тестовую выборку",
-      body: <p>Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.</p>,
+      body: (
+        <p>
+          Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.
+          {sample.is_primary ? " Она назначена основной, поэтому тестовый F1 сетей станет неактуальным." : ""}
+        </p>
+      ),
       footer: (
         <>
           <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
@@ -919,111 +997,125 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
 
   return (
     <>
-      <PageHeader
-        title="Экспорт разметки"
-        subtitle="Создание, хранение и проверка постоянных тестовых выборок"
-      />
+      <PageHeader title="Экспорт разметки" subtitle="Создание, хранение и проверка постоянных тестовых выборок" />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
           <PanelHeader
-            title="Создать тестовую выборку"
-            subtitle="Тайлы выбираются в плотных областях разметки без чёрных пикселей и областей без данных"
+            title="Групповое создание тестовых выборок"
+            subtitle="Для каждой выбранной строки будет создан расширенный пул и оптимизирован итоговый состав"
           />
           {datasets.length ? (
-            <div className="form-grid">
-              <label className="field test-sample-name-field">
-                <span>Название выборки</span>
-                <input
-                  type="text"
-                  required
-                  maxLength={180}
-                  value={sampleName}
-                  disabled={busy}
-                  onChange={(event) => setSampleName(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Класс и вариант датасета</span>
-                <select value={datasetKey} disabled={busy} onChange={(event) => selectDataset(event.target.value)}>
-                  {datasets.map((dataset) => (
-                    <option key={dataset.key} value={dataset.key}>
-                      {markupExportDatasetLabel(dataset)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Ширина тайла, пиксели</span>
-                <select
-                  value={tileWidth}
-                  disabled={busy}
-                  onChange={(event) => setTileWidth(Number(event.target.value))}
-                >
-                  {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>Высота тайла, пиксели</span>
-                <select
-                  value={tileHeight}
-                  disabled={busy}
-                  onChange={(event) => setTileHeight(Number(event.target.value))}
-                >
-                  {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>Количество снимков</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  value={imageCount}
-                  disabled={busy}
-                  onChange={(event) => setImageCount(Number(event.target.value))}
-                />
-              </label>
-              <label className="field">
-                <span>Целевое количество объектов</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  value={objectCount}
-                  disabled={busy}
-                  onChange={(event) => setObjectCount(Number(event.target.value))}
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="empty-state">Нет датасетов с однозначными файлами сцен и положительной разметки.</div>
-          )}
+            <>
+              <div className="form-grid test-sample-batch-settings">
+                <label className="field">
+                  <span>Размер квадратного тайла, пиксели</span>
+                  <select value={tileSize} disabled={busy || batchActive} onChange={(event) => setTileSize(Number(event.target.value))}>
+                    {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size} × {size}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Итоговое количество снимков</span>
+                  <input type="number" min="1" step="1" required value={imageCount} disabled={busy || batchActive} onChange={(event) => setImageCount(Number(event.target.value))} />
+                </label>
+              </div>
+              <div className="button-row test-sample-batch-select-actions">
+                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: true })))}>Выбрать все</button>
+                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: false })))}>Снять все</button>
+              </div>
+              <div className="table-wrap">
+                <table className="test-sample-batch-table">
+                  <thead><tr><th aria-label="Участие" /><th>Класс → подкласс</th><th>Минимум объектов</th><th>Оптимизировать F1</th></tr></thead>
+                  <tbody>
+                    {rows.map((row, index) => {
+                      const showClass = row.dataset.class_name !== rows[index - 1]?.dataset.class_name;
+                      return (
+                        <tr className={row.selected ? "" : "disabled-row"} key={row.dataset.key}>
+                          <td><input type="checkbox" checked={row.selected} disabled={busy || batchActive} aria-label={`Создать выборку ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })} /></td>
+                          <td><span className="source-lines"><strong>{showClass ? row.dataset.class_name || row.dataset.name : ""}</strong><span>{row.dataset.variant_name || row.dataset.variant_key || row.dataset.name}</span></span></td>
+                          <td><input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive} aria-label={`Минимум объектов ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { minObjectCount: Number(event.target.value) })} /></td>
+                          <td>
+                            <select value={row.metric} disabled={busy || batchActive} aria-label={`Метрика ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { metric: event.target.value as "pixel" | "objects" })}>
+                              <option value="objects">Объектовый</option><option value="pixel">Пиксельный</option>
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : <div className="empty-state">Нет датасетов с однозначными файлами сцен и положительной разметки.</div>}
         </section>
         <div className="button-row">
-          <button className="primary" type="submit" disabled={busy || !datasetKey}>
+          <button className="primary" type="submit" disabled={busy || batchActive || !rows.some((row) => row.selected)}>
             <Layers3 size={16} />
-            {busy ? "Формирование..." : "Создать выборку"}
+            {batchActive ? "Формирование..." : "Создать выбранные выборки"}
           </button>
         </div>
       </form>
+
+      {batch ? <TestSampleBatchProgress batch={batch} /> : null}
 
       <section className="panel test-sample-catalog">
         <PanelHeader
           title="Каталог тестовых выборок"
           subtitle="Выборки сгруппированы по классу и подклассу датасета"
           aside={
-            <button className="secondary compact-action" type="button" onClick={() => void loadCatalog()}>
-              <RefreshCw size={15} />
-              Обновить
-            </button>
+            <div className="button-row">
+              <button className="secondary compact-action" type="button" disabled={downloadingAll || !canDownloadAll} title={canDownloadAll ? "Скачать все основные выборки" : "Назначьте основные выборки с включёнными тайлами"} onClick={() => void downloadAll()}><Download size={15} />{downloadingAll ? "Скачивание..." : "Скачать все основные"}</button>
+              <button className="secondary compact-action" type="button" onClick={() => void loadCatalog()}><RefreshCw size={15} />Обновить</button>
+            </div>
           }
         />
         {catalog ? <TestSampleCatalog catalog={catalog} onDelete={removeSample} /> : <div className="empty-state">Загрузка каталога...</div>}
       </section>
     </>
   );
+}
+
+function TestSampleBatchProgress({ batch }: { batch: TestSampleBatchInfo }) {
+  const percent = batch.total_count ? Math.round((batch.completed_count / batch.total_count) * 100) : 0;
+  return (
+    <section className="panel test-sample-batch-progress">
+      <PanelHeader
+        title="Ход группового создания"
+        subtitle={`${batch.completed_count} / ${batch.total_count} · прошло ${formatElapsedSeconds(batch.elapsed_seconds)}`}
+        aside={<span className={`badge ${batch.status === "ok" ? "ok" : batch.status === "error" ? "error" : batch.status === "partial" ? "warning" : "neutral"}`}>{batchStatusLabel(batch.status)}</span>}
+      />
+      <div className="batch-progress-track" aria-label={`Выполнено ${percent}%`}><span style={{ width: `${percent}%` }} /></div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Подкласс</th><th>Статус</th><th>Пул</th><th>Результат</th></tr></thead>
+          <tbody>
+            {(batch.items || []).map((item) => (
+              <tr key={item.id} title={item.error || undefined}>
+                <td>{item.position}</td><td>{item.class_name} → {item.variant_name}</td>
+                <td><span className={`badge ${item.status === "ok" ? "ok" : item.status === "error" ? "error" : "neutral"}`}>{batchItemStatusLabel(item.status)}</span></td>
+                <td>{item.pool_tile_count ?? "—"} тайлов · {item.pool_object_count ?? "—"} объектов</td>
+                <td>{item.sample_id ? <a href={`#/markup-export/${item.sample_id}`}>{item.sample_name || "Открыть выборку"}</a> : item.error ? <span className="error-text">Ошибка — наведите для подробностей</span> : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function formatElapsedSeconds(value: number): string {
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const seconds = value % 60;
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function batchStatusLabel(status: TestSampleBatchInfo["status"]): string {
+  return { queued: "в очереди", running: "выполняется", ok: "готово", partial: "частично", error: "ошибка" }[status];
+}
+
+function batchItemStatusLabel(status: NonNullable<TestSampleBatchInfo["items"]>[number]["status"]): string {
+  return { queued: "в очереди", running: "выполняется", ok: "готово", error: "ошибка" }[status];
 }
 
 function TestSampleCatalog({
@@ -1061,7 +1153,10 @@ function TestSampleCatalog({
                     {(variant.samples || []).map((sample) => (
                       <tr key={sample.id}>
                         <td>
-                          <a className="test-sample-link" href={`#/markup-export/${sample.id}`}>{sample.name}</a>
+                          <span className="inline-row">
+                            <a className="test-sample-link" href={`#/markup-export/${sample.id}`}>{sample.name}</a>
+                            {sample.is_primary ? <span className="badge ok">Основная</span> : null}
+                          </span>
                         </td>
                         <td>{sample.enabled_image_count} / {sample.image_count}</td>
                         <td>{formatF1Score(sample.evaluation.pixel?.f1)}</td>
@@ -1213,11 +1308,54 @@ function TestSampleEditorPage({
     });
   };
 
+  const changePrimary = () => {
+    if (!sample) return;
+    const makePrimary = !sample.is_primary;
+    showModal({
+      title: makePrimary ? "Назначить основную выборку" : "Снять признак основной",
+      body: (
+        <p>
+          {makePrimary
+            ? "Эта выборка заменит текущую основную выборку подкласса, если она назначена. Метрики сетей потребуется пересчитать."
+            : "Подкласс останется без основной тестовой выборки, а его тестовые метрики станут неактуальными."}
+        </p>
+      ),
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button
+            className={makePrimary ? "primary" : "danger"}
+            type="button"
+            onClick={async () => {
+              const payload = await run(() =>
+                apiJson<TestSampleDetail>(`/test-samples/${sample.id}/primary`, {
+                  method: "PUT",
+                  body: { is_primary: makePrimary },
+                }),
+              );
+              if (payload) {
+                setSample(payload);
+                closeModal();
+              }
+            }}
+          >
+            Подтвердить
+          </button>
+        </>
+      ),
+    });
+  };
+
   const remove = () => {
     if (!sample) return;
     showModal({
       title: "Удалить тестовую выборку",
-      body: <p>Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.</p>,
+      body: (
+        <p>
+          Выборка «{sample.name}» и все её файлы будут удалены без возможности восстановления.
+          {sample.is_primary ? " Это основная выборка: тестовый F1 всех сетей подкласса станет неактуальным." : ""}
+        </p>
+      ),
       footer: (
         <>
           <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
@@ -1264,6 +1402,9 @@ function TestSampleEditorPage({
         actions={
           <>
             <a className="secondary" href="#/markup-export">Каталог</a>
+            <button className={sample.is_primary ? "danger" : "secondary"} type="button" onClick={changePrimary}>
+              {sample.is_primary ? "Снять основную" : "Сделать основной"}
+            </button>
             <button className="secondary" type="button" onClick={rename}>Переименовать</button>
             <button className="danger" type="button" onClick={remove}><Trash2 size={16} />Удалить</button>
           </>
@@ -1288,6 +1429,7 @@ function TestSampleEditorPage({
           }
         />
         <div className="metric-grid markup-export-summary">
+          <Metric label="Назначение" value={sample.is_primary ? <span className="badge ok">Основная</span> : "Обычная"} />
           <Metric label="Тайлы, включено / всего" value={`${sample.enabled_image_count} / ${sample.image_count}`} />
           <Metric label="Объекты, включено / всего" value={`${sample.enabled_object_count} / ${sample.actual_object_count}`} />
           <Metric label="Объекты, цель / факт" value={`${sample.requested_object_count} / ${sample.actual_object_count}`} />
@@ -1497,15 +1639,14 @@ function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvalu
   return <span className={`badge ${classes[evaluation.status]}`}>{labels[evaluation.status]}</span>;
 }
 
-function defaultTestSampleName(dataset: DatasetInfo | undefined): string {
-  const datasetName = dataset ? markupExportDatasetLabel(dataset) : "Тестовая выборка";
-  return `${datasetName} — ${formatDateTime(new Date().toISOString())}`;
-}
-
 function markupExportDatasetLabel(dataset: DatasetInfo): string {
   const className = dataset.class_name || dataset.class_key || dataset.name;
   const variantName = dataset.variant_name || dataset.variant_key;
   return variantName ? `${className}\\${variantName}` : className;
+}
+
+function formatTestF1Percent(value: number): string {
+  return (value * 100).toFixed(1);
 }
 
 function latestSuccessfulTrainingResult(results: TrainingResultInfo[]): TrainingResultInfo | null {
@@ -1891,7 +2032,7 @@ function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string })
       <section className="panel">
         <div className="metric-grid">
           <Metric label="Статус" value={statusBadge(job.status, job.type, job.progress)} />
-          <Metric label="Тип" value={job.type} />
+          <Metric label="Тип" value={job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение"} />
           <Metric label="Источник" value={sourceBadge(job.source)} />
           <Metric label="Создано" value={formatDateTime(job.created_at)} />
           <Metric label="Старт" value={formatDateTime(job.started_at)} />
@@ -1916,9 +2057,13 @@ function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string })
   );
 }
 
-function ResultsPage({ bootstrap, run, showJobLog }: RoutedPageProps) {
+function ResultsPage({ run, showJobLog }: RoutedPageProps) {
+  const [classes, setClasses] = useState<ResultClassInfo[] | null>(null);
   const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
   useEffect(() => {
+    void run(() => apiJson<ResultClassListResponse>("/results/classes")).then((payload) => {
+      if (payload) setClasses(payload.classes || []);
+    });
     void run(() => apiJson<ResultChangesResponse>("/results/changes")).then((payload) => {
       if (payload) setChanges(payload.changes || []);
     });
@@ -1928,9 +2073,10 @@ function ResultsPage({ bootstrap, run, showJobLog }: RoutedPageProps) {
     <>
       <PageHeader title="Результаты" subtitle="Классы, варианты датасетов и последние изменения" />
       <section className="content-grid">
-        {bootstrap.classes.map((item) => (
+        {(classes || []).map((item) => (
           <ResultClassCard item={item} key={item.key} />
         ))}
+        {classes === null ? <div className="empty-state">Загрузка классов...</div> : null}
       </section>
       <section className="panel">
         <PanelHeader title="Последние изменения" />
@@ -2015,6 +2161,15 @@ function ClassResultsPage({
     });
   };
 
+  const recalculateTestF1 = async () => {
+    const updated = await run(() =>
+      apiJson<ClassResultsResponse>(`/results/classes/${encodeURIComponent(classKey)}/test-f1`, {
+        method: "POST",
+      }),
+    );
+    if (updated) setPayload(updated);
+  };
+
   return (
     <>
       <PageHeader
@@ -2022,6 +2177,22 @@ function ClassResultsPage({
         subtitle={`Обновление датасета: ${formatDate(payload.dataset_updated_at)}`}
         actions={<a className="secondary" href="#/results">Все классы</a>}
       />
+      {payload.primary_test_sample ? (
+        <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
+          <div>
+            <strong>{payload.test_f1_status === "current" ? "F1 score актуален" : payload.test_f1_status === "running" ? "Идёт пересчёт F1 score" : "F1 score не актуален"}</strong>
+            <span>Основная выборка: {payload.primary_test_sample.name} · {payload.primary_test_sample.enabled_image_count} тайлов</span>
+          </div>
+          {payload.test_f1_status !== "current" ? (
+            <button className="primary" type="button" disabled={payload.test_f1_status === "running"} onClick={() => void recalculateTestF1()}>
+              <RefreshCw size={16} />
+              {payload.test_f1_status === "running" ? "Пересчёт..." : "Запустить пересчёт"}
+            </button>
+          ) : null}
+        </section>
+      ) : (
+        <section className="status-banner neutral"><strong>Основная тестовая выборка не назначена</strong></section>
+      )}
       <section className="panel">
         <ResultsTable
           payload={payload}
@@ -2356,7 +2527,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
             <tr className="clickable-row" key={job.id} onClick={() => navigate(`jobs/${job.id}`)}>
               <td>{job.queue_position}</td>
               <td>{statusBadge(job.status, job.type, job.progress)}</td>
-              <td>{jobTypeBadge(job.type)}</td>
+              <td>{jobTypeBadge(job)}</td>
               <td>{queueDatasetCell(job)}</td>
               <td>{queueModelCell(job)}</td>
               <td>{formatDateTime(job.created_at)}</td>
@@ -2381,7 +2552,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
   );
 }
 
-function ResultClassCard({ item }: { item: ClassInfo }) {
+function ResultClassCard({ item }: { item: ResultClassInfo }) {
   const variants = item.variants?.length ? item.variants : [];
   return (
     <div className="class-card">
@@ -2395,7 +2566,10 @@ function ResultClassCard({ item }: { item: ClassInfo }) {
           variants.map((variant) => (
             <a className="variant-link" href={`#/results/${encodeURIComponent(variant.key)}`} key={variant.key}>
               <span>{variant.variant_name || variant.name}</span>
-              <small>{integerOrNull(variant.image_count) ?? "—"} img</small>
+              {variant.test_f1 !== null && variant.test_f1 !== undefined ? (
+                <strong className={`result-card-f1 ${variant.test_f1_status === "current" ? "current" : "stale"}`}>F1 {formatTestF1Percent(variant.test_f1)}</strong>
+              ) : null}
+              <small>{integerOrNull(variant.image_count) ?? "—"} снимков</small>
             </a>
           ))
         ) : (
@@ -2478,6 +2652,7 @@ function ResultsTable({
                 <col className="result-col-model" />
                 <col className="result-col-status" />
                 <col className="result-col-score" />
+                <col className="result-col-score" />
                 <col className="result-col-epoch" />
                 <col className="result-col-created" />
                 <col className="result-col-actions" />
@@ -2487,6 +2662,7 @@ function ResultsTable({
                   <th>МОДЕЛЬ</th>
                   <th>Статус</th>
                   <th>F1</th>
+                  <th>Тестовый F1</th>
                   <th>Epoch</th>
                   <th>Создано</th>
                   <th aria-label="Действия"></th>
@@ -2507,6 +2683,15 @@ function ResultsTable({
                     </span>
                   </td>
                   <td title="F1">{formatF1Score(result.f1_score)}</td>
+                  <td title="Тестовый F1">
+                    {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
+                      <span className={`badge ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
+                        {formatTestF1Percent(result.test_f1.f1)}
+                      </span>
+                    ) : result.test_f1?.status === "queued" || result.test_f1?.status === "running" ? (
+                      <span className="badge neutral">расчёт</span>
+                    ) : "—"}
+                  </td>
                   <td title="Epoch">{result.epoch ?? "—"}</td>
                   <td title="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
@@ -2833,8 +3018,9 @@ function sourceBadge(source: string) {
   return <span className={`badge source-badge ${automated ? "auto" : "manual"}`}>{automated ? "auto" : "manual"}</span>;
 }
 
-function jobTypeBadge(type: string) {
-  return <span className={`badge ${type === "inference" ? "warning" : "neutral"}`}>{type}</span>;
+function jobTypeBadge(job: JobSummary) {
+  const label = job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение";
+  return <span className={`badge ${job.type === "inference" ? "warning" : "neutral"}`}>{label}</span>;
 }
 
 function statusClass(status: string): string {
@@ -2868,7 +3054,10 @@ function isActiveStatus(status: string): boolean {
 
 function hasActiveClassResults(payload: ClassResultsResponse): boolean {
   return payload.results.some(
-    (item) => isActiveStatus(item.status) || (item.pseudo_markup_results || []).some((pseudo) => isActiveStatus(pseudo.status)),
+    (item) =>
+      isActiveStatus(item.status) ||
+      isActiveStatus(item.test_f1?.status || "") ||
+      (item.pseudo_markup_results || []).some((pseudo) => isActiveStatus(pseudo.status)),
   );
 }
 

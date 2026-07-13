@@ -36,11 +36,17 @@ from ._models import (
     PseudoMarkupResultRow,
     QueueControlRow,
     StoredFileRow,
+    TestSampleRow,
     TrainingResultRow,
+    TrainingResultTestMetricRow,
 )
 from ._queueing import dispatch_sort_key, ensure_queue_positions
 from ._templates import normalize_tile_factors
-from ._test_samples import evaluate_test_samples_for_pseudo_markup
+from ._test_samples import (
+    TEST_SAMPLE_F1_OPERATION,
+    evaluate_test_samples_for_pseudo_markup,
+    queue_training_result_test_f1,
+)
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
 
@@ -53,6 +59,10 @@ class _StartedProcess(Protocol):
 
 
 ProcessLauncher = Callable[..., _StartedProcess]
+
+
+def _is_test_sample_f1_job(row: JobRow) -> bool:
+    return (row.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION
 
 
 async def run_queue_worker(
@@ -158,7 +168,11 @@ def _next_dispatch_job(session: Session, job_type: JobType | None = None) -> Job
 
 
 def _dispatch_allowed(session: Session, row: JobRow, automation_enabled: bool) -> bool:
-    if row.source == JobSource.AUTOMATION.value and not automation_enabled:
+    if (
+        row.source == JobSource.AUTOMATION.value
+        and not automation_enabled
+        and not _is_test_sample_f1_job(row)
+    ):
         return False
     control = session.get(QueueControlRow, row.type)
     if control is not None and not control.enabled:
@@ -280,7 +294,8 @@ def _start_training_job(
     row.finished_at = None
     row.process_pid = process.pid
     row.tmp_path = str(run_dir)
-    for result in _training_results(session, row):
+    training_results = _training_results(session, row)
+    for result in training_results:
         result.status = ResultStatus.RUNNING.value
         result.updated_at = _now()
     session.flush()
@@ -294,26 +309,40 @@ def _start_inference_job(
     *,
     popen_factory: ProcessLauncher,
 ) -> None:
+    is_test_f1 = _is_test_sample_f1_job(row)
     run_dir = config.scratch_root / "jobs" / str(row.id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
     try:
-        config_path = run_dir / "pseudo_config.yaml"
-        payload = _build_pseudo_markup_config(session, row, config, run_dir)
+        config_path = run_dir / ("test_f1_config.yaml" if is_test_f1 else "pseudo_config.yaml")
+        payload = (
+            _build_test_sample_f1_config(session, row, config, run_dir)
+            if is_test_f1
+            else _build_pseudo_markup_config(session, row, config, run_dir)
+        )
         _write_yaml(config_path, payload)
-        script_path = _write_pseudo_run_script(config, run_dir, config_path)
+        script_path = _write_pseudo_run_script(
+            config,
+            run_dir,
+            config_path,
+            test_f1=is_test_f1,
+        )
         process = popen_factory(
             ["bash", str(script_path)],
             cwd=str(config.project_root),
             start_new_session=True,
         )
     except Exception:
-        LOGGER.exception("Failed to start pseudo-markup job %s", row.id)
+        LOGGER.exception("Failed to start inference job %s", row.id)
         _write_worker_error(
             run_dir,
-            "Не удалось запустить псевдоразметку.\n\n"
-            f"{traceback.format_exc()}",
+            (
+                "Не удалось запустить расчёт F1 на тестовой выборке.\n\n"
+                if is_test_f1
+                else "Не удалось запустить псевдоразметку.\n\n"
+            )
+            + traceback.format_exc(),
         )
         _finish_inference_job(session, row, config, succeeded=False)
         return
@@ -323,11 +352,17 @@ def _start_inference_job(
     row.finished_at = None
     row.process_pid = process.pid
     row.tmp_path = str(run_dir)
-    for result in _pseudo_markup_results(session, row):
-        result.status = ResultStatus.RUNNING.value
-        result.updated_at = _now()
+    if is_test_f1:
+        metric = _test_sample_f1_metric(session, row)
+        if metric is not None:
+            metric.status = "running"
+            metric.updated_at = _now()
+    else:
+        for result in _pseudo_markup_results(session, row):
+            result.status = ResultStatus.RUNNING.value
+            result.updated_at = _now()
     session.flush()
-    LOGGER.info("Started pseudo-markup job %s with pid %s", row.id, process.pid)
+    LOGGER.info("Started inference job %s with pid %s", row.id, process.pid)
 
 
 def _build_training_config(
@@ -450,6 +485,88 @@ def _build_pseudo_markup_config(
     }
 
 
+def _build_test_sample_f1_config(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    run_dir: Path,
+) -> dict[str, Any]:
+    try:
+        training_result_id = uuid.UUID(str(row.config.get("training_result_id")))
+        sample_id = uuid.UUID(str(row.config.get("test_sample_id")))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("В задании F1 повреждены идентификаторы сети или выборки.") from exc
+    training_result = session.get(TrainingResultRow, training_result_id)
+    sample = session.get(TestSampleRow, sample_id)
+    if training_result is None or training_result.status != ResultStatus.OK.value:
+        raise RuntimeError("Успешный результат обучения для расчёта F1 не найден.")
+    if sample is None or not sample.is_primary or sample.dataset_key != training_result.class_key:
+        raise RuntimeError("Основная тестовая выборка была заменена или удалена.")
+    expected_revision = int(row.config.get("test_sample_revision") or 0)
+    if sample.content_revision != expected_revision:
+        raise RuntimeError("Состав основной тестовой выборки изменён.")
+    expected_indices = {
+        int(value) for value in (row.config.get("test_sample_tile_indices") or [])
+    }
+    enabled_tiles = [tile for tile in sample.tiles if tile.enabled]
+    if not enabled_tiles or {tile.tile_index for tile in enabled_tiles} != expected_indices:
+        raise RuntimeError("Состав включённых тайлов не совпадает с ревизией задания.")
+    if not training_result.mlflow_run_id:
+        raise RuntimeError("У результата обучения отсутствует MLflow run id.")
+    checkpoint = _best_training_checkpoint(config, training_result.mlflow_run_id)
+    if checkpoint is None:
+        raise RuntimeError("Не удалось получить best checkpoint из MLflow.")
+    if checkpoint.threshold is None:
+        raise RuntimeError("У best checkpoint отсутствует порог val/best_threshold.")
+
+    source_training_job = (
+        session.get(JobRow, training_result.job_id)
+        if training_result.job_id is not None
+        else None
+    )
+    flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
+    inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
+    sample_root = Path(config.stored_files_root) / "test-samples" / str(sample.id)
+    tiles: list[dict[str, Any]] = []
+    for tile in sorted(enabled_tiles, key=lambda item: item.tile_index):
+        base_name = f"tile_{tile.tile_index:03d}"
+        tif_path = sample_root / f"{base_name}.tif"
+        mask_path = sample_root / f"{base_name}_mask.png"
+        if not tif_path.is_file() or not mask_path.is_file():
+            raise RuntimeError(f"Не найдены TIFF или маска тестового тайла {base_name}.")
+        tiles.append(
+            {
+                "index": tile.tile_index,
+                "image_path": str(tif_path),
+                "mask_path": str(mask_path),
+            }
+        )
+    return {
+        "operation": TEST_SAMPLE_F1_OPERATION,
+        "run_root": str(run_dir / "scratch"),
+        "report_path": str(run_dir / "scratch" / "report.json"),
+        "class_key": training_result.class_key,
+        "class_name": training_result.class_display_name,
+        "source_model": training_result.model_name,
+        "training_result_id": str(training_result.id),
+        "test_sample_id": str(sample.id),
+        "test_sample_revision": sample.content_revision,
+        "tiles": tiles,
+        "mlflow_tracking_uri": config.mlflow_tracking_uri,
+        "mlflow_run_id": training_result.mlflow_run_id,
+        "checkpoint_uri": checkpoint.artifact_uri,
+        "checkpoint_artifact_path": checkpoint.artifact_path,
+        "checkpoint_f1_score": checkpoint.f1_score,
+        "checkpoint_epoch": checkpoint.epoch,
+        "postprocess_config": row.config.get("inference_template_config") or {},
+        "threshold": checkpoint.threshold,
+        "tile_size": inference_tile_size,
+        "stride": _int_value(flat, "tile_preparation.stride", inference_tile_size),
+        "batch_size": _int_value(flat, "train.batch_size", 1),
+        "device": "cuda",
+    }
+
+
 def _dataset_config(
     session: Session,
     row: JobRow,
@@ -533,9 +650,11 @@ def _write_pseudo_run_script(
     config: TrainingUIAPIConfig,
     run_dir: Path,
     config_path: Path,
+    *,
+    test_f1: bool = False,
 ) -> Path:
-    script_path = run_dir / "run_pseudo_markup.sh"
-    log_path = run_dir / "logs" / "pseudo_markup.log"
+    script_path = run_dir / ("run_test_f1.sh" if test_f1 else "run_pseudo_markup.sh")
+    log_path = run_dir / "logs" / ("test_sample_f1.log" if test_f1 else "pseudo_markup.log")
     exit_code_path = run_dir / "exit_code"
     command = [
         sys.executable,
@@ -580,7 +699,8 @@ def _finish_training_job(
         if succeeded and mlflow_run_id
         else None
     )
-    for result in _training_results(session, row):
+    training_results = _training_results(session, row)
+    for result in training_results:
         result.status = ResultStatus.OK.value if succeeded else ResultStatus.ERROR.value
         result.trained_at = row.finished_at if succeeded else result.trained_at
         result.mlflow_run_id = mlflow_run_id or result.mlflow_run_id
@@ -594,6 +714,21 @@ def _finish_training_job(
         )
         result.updated_at = _now()
     session.flush()
+    if succeeded:
+        for result in training_results:
+            try:
+                queue_training_result_test_f1(
+                    session,
+                    result,
+                    config,
+                    source=JobSource(result.source),
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "Не удалось поставить автоматический расчёт тестового F1 для сети %s",
+                    result.id,
+                )
+        session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
 
 
@@ -623,6 +758,9 @@ def _finish_inference_job(
     *,
     succeeded: bool,
 ) -> None:
+    if _is_test_sample_f1_job(row):
+        _finish_test_sample_f1_job(session, row, succeeded=succeeded)
+        return
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     row.finished_at = _now()
     row.process_pid = None
@@ -670,6 +808,106 @@ def _finish_inference_job(
         row.status,
         report,
     )
+
+
+def _finish_test_sample_f1_job(
+    session: Session,
+    row: JobRow,
+    *,
+    succeeded: bool,
+) -> None:
+    row.finished_at = _now()
+    row.process_pid = None
+    report = _pseudo_report(row)
+    report_ok = _test_sample_f1_report_allows_success(report)
+    succeeded = succeeded and report_ok
+    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    metric = _test_sample_f1_metric(session, row)
+    if metric is not None:
+        sample = session.get(TestSampleRow, metric.sample_id) if metric.sample_id is not None else None
+        expected_revision = int(row.config.get("test_sample_revision") or 0)
+        still_current = bool(
+            sample
+            and sample.is_primary
+            and sample.dataset_key == row.dataset_key
+            and sample.content_revision == expected_revision
+            and metric.sample_revision == expected_revision
+            and metric.job_id == row.id
+        )
+        if succeeded and still_current and report is not None:
+            true_positive = int(report.get("true_positive") or 0)
+            false_positive = int(report.get("false_positive") or 0)
+            false_negative = int(report.get("false_negative") or 0)
+            precision_denominator = true_positive + false_positive
+            recall_denominator = true_positive + false_negative
+            precision = true_positive / precision_denominator if precision_denominator else 0.0
+            recall = true_positive / recall_denominator if recall_denominator else 0.0
+            denominator = precision + recall
+            metric.precision = precision
+            metric.recall = recall
+            metric.f1 = 2.0 * precision * recall / denominator if denominator else 0.0
+            metric.true_positive = true_positive
+            metric.false_positive = false_positive
+            metric.false_negative = false_negative
+            metric.threshold = float(report.get("threshold"))
+            metric.status = "current"
+            metric.evaluated_at = row.finished_at
+            metric.error = None
+        elif not still_current:
+            metric.status = "stale" if metric.f1 is not None else "unavailable"
+            metric.error = "Основная тестовая выборка изменилась во время расчёта."
+            metric.job_id = None
+        else:
+            metric.status = "stale" if metric.f1 is not None else "error"
+            metric.error = _test_sample_f1_error(report, row)
+        metric.updated_at = _now()
+    session.flush()
+    _cleanup_inference_scratch(row)
+    LOGGER.info(
+        "Finished test-sample F1 job %s with status %s report=%s",
+        row.id,
+        row.status,
+        report,
+    )
+
+
+def _test_sample_f1_metric(
+    session: Session,
+    row: JobRow,
+) -> TrainingResultTestMetricRow | None:
+    return session.scalar(
+        select(TrainingResultTestMetricRow).where(
+            TrainingResultTestMetricRow.job_id == row.id
+        )
+    )
+
+
+def _test_sample_f1_report_allows_success(report: dict[str, Any] | None) -> bool:
+    if report is None or report.get("status") != "ok":
+        return False
+    try:
+        return int(report.get("processed") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _test_sample_f1_error(report: dict[str, Any] | None, row: JobRow) -> str:
+    if report is not None:
+        error = report.get("error")
+        if error:
+            return f"Не удалось рассчитать тестовый F1: {error}"
+        failures = report.get("failures")
+        if failures:
+            return f"Не удалось рассчитать тестовый F1: {failures}"
+    if row.tmp_path:
+        path = Path(row.tmp_path) / "worker_error.txt"
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text:
+            return text[:4000]
+    return "Не удалось рассчитать F1 на основной тестовой выборке."
 
 
 def _pseudo_output_path(row: JobRow) -> Path | None:

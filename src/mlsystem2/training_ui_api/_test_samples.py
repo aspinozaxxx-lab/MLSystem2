@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import logging
 import re
 import shutil
 import uuid
@@ -29,13 +32,39 @@ from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
-from ._markup_export import _run_milp, _single_constraint, generate_markup_files
-from ._models import PseudoMarkupResultRow, TestSampleRow, TestSampleTileRow
+from ._datasets import find_dataset
+from ._markup_export import (
+    _run_milp,
+    _single_constraint,
+    generate_markup_files,
+    generate_markup_pool_files,
+)
+from ._models import (
+    InferenceTemplateRow,
+    JobRow,
+    PseudoMarkupResultRow,
+    TestSampleBatchItemRow,
+    TestSampleBatchRow,
+    TestSampleRow,
+    TestSampleTileRow,
+    TrainingResultRow,
+    TrainingResultTestMetricRow,
+)
+from ._processes import terminate_job_process
+from ._queueing import next_queue_position
+from ._templates import sanitize_inference_template_config
 from .contracts import (
+    JobSource,
+    JobStatus,
+    JobType,
     MarkupExportRequest,
+    RuntimeProgress,
+    TestSampleBatchCreate,
+    TestSampleBatchInfo,
+    TestSampleBatchItemInfo,
     TestSampleCatalogResponse,
     TestSampleClassGroup,
     TestSampleCreate,
@@ -43,23 +72,33 @@ from .contracts import (
     TestSampleEvaluationInfo,
     TestSampleMetric,
     TestSampleOptimizeRequest,
+    TestSamplePrimaryUpdate,
     TestSampleSummary,
     TestSampleTileInfo,
     TestSampleTileUpdate,
     TestSampleUpdate,
     TestSampleVariantGroup,
+    TrainingResultTestF1Info,
     TrainingUIAPIError,
 )
 
 
 TEST_SAMPLE_ROOT_NAME = "test-samples"
 TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
+TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 OBJECT_IOU_THRESHOLD = 0.5
 _TILE_SUFFIXES = (".tif", ".geojson", "_mask.png", "_preview.png")
+_BATCH_ACTIVE_STATUSES = ("queued", "running")
+_BATCH_FINISHED_ITEM_STATUSES = ("ok", "error")
+LOGGER = logging.getLogger(__name__)
 
 
 class TestSampleUnavailable(FileNotFoundError):
     """Тестовая выборка или её постоянный файл не найдены."""
+
+
+class TestSampleBatchUnavailable(FileNotFoundError):
+    """Групповой запуск тестовых выборок не найден."""
 
 
 @dataclass(frozen=True)
@@ -134,37 +173,7 @@ def create_test_sample(
             building_root,
         )
         building_root.replace(final_root)
-        row = TestSampleRow(
-            id=sample_id,
-            name=_sample_name(request.name, generated.dataset_name),
-            dataset_key=generated.dataset_key,
-            dataset_name=generated.dataset_name,
-            dataset_version=generated.dataset_version,
-            class_key=generated.class_key,
-            class_name=generated.class_name,
-            variant_key=generated.variant_key,
-            variant_name=generated.variant_name,
-            tile_width=generated.tile_width,
-            tile_height=generated.tile_height,
-            image_count=len(generated.tiles),
-            requested_object_count=generated.requested_object_count,
-            actual_object_count=generated.actual_object_count,
-            territory_count=generated.territory_count,
-            warnings=list(generated.warnings),
-            content_revision=1,
-            metric_status="unavailable",
-            object_iou_threshold=OBJECT_IOU_THRESHOLD,
-        )
-        row.tiles = [
-            TestSampleTileRow(
-                tile_index=tile.index,
-                source_name=tile.source_name,
-                territory=tile.territory,
-                object_count=tile.object_count,
-                enabled=True,
-            )
-            for tile in generated.tiles
-        ]
+        row = _new_test_sample_row(sample_id, request.name, generated)
         session.add(row)
         session.flush()
         evaluate_test_sample(session, row, config)
@@ -174,6 +183,364 @@ def create_test_sample(
         shutil.rmtree(building_root, ignore_errors=True)
         shutil.rmtree(final_root, ignore_errors=True)
         raise
+
+
+def _new_test_sample_row(sample_id, requested_name: str, generated) -> TestSampleRow:
+    row = TestSampleRow(
+        id=sample_id,
+        name=_sample_name(requested_name, generated.dataset_name),
+        dataset_key=generated.dataset_key,
+        dataset_name=generated.dataset_name,
+        dataset_version=generated.dataset_version,
+        class_key=generated.class_key,
+        class_name=generated.class_name,
+        variant_key=generated.variant_key,
+        variant_name=generated.variant_name,
+        tile_width=generated.tile_width,
+        tile_height=generated.tile_height,
+        image_count=len(generated.tiles),
+        requested_object_count=generated.requested_object_count,
+        actual_object_count=generated.actual_object_count,
+        territory_count=generated.territory_count,
+        is_primary=False,
+        warnings=list(generated.warnings),
+        content_revision=1,
+        metric_status="unavailable",
+        object_iou_threshold=OBJECT_IOU_THRESHOLD,
+    )
+    row.tiles = [
+        TestSampleTileRow(
+            tile_index=tile.index,
+            source_name=tile.source_name,
+            territory=tile.territory,
+            object_count=tile.object_count,
+            enabled=True,
+        )
+        for tile in generated.tiles
+    ]
+    return row
+
+
+def create_test_sample_batch(
+    session: Session,
+    request: TestSampleBatchCreate,
+    config: TrainingUIAPIConfig,
+) -> TestSampleBatchInfo:
+    active = session.scalar(
+        select(TestSampleBatchRow.id).where(TestSampleBatchRow.active_slot == 1).limit(1)
+    )
+    if active is not None:
+        raise TrainingUIAPIError(
+            "Групповое создание тестовых выборок уже выполняется. Дождитесь его завершения."
+        )
+    keys = [item.dataset_key for item in request.items]
+    if len(keys) != len(set(keys)):
+        raise TrainingUIAPIError("Один подкласс нельзя добавить в групповой запуск дважды.")
+
+    batch = TestSampleBatchRow(
+        status="queued",
+        active_slot=1,
+        tile_size=request.tile_size,
+        image_count=request.image_count,
+    )
+    rows: list[TestSampleBatchItemRow] = []
+    for position, item in enumerate(request.items, start=1):
+        dataset = find_dataset(config.mlmarkup_root, item.dataset_key)
+        if dataset is None or dataset.is_custom:
+            raise TrainingUIAPIError(f"Подкласс не найден: {item.dataset_key}")
+        if dataset.diagnostics:
+            raise TrainingUIAPIError(f"{dataset.name}: {'; '.join(dataset.diagnostics)}")
+        if not dataset.scenes_file or not dataset.annotation_file:
+            raise TrainingUIAPIError(
+                f"{dataset.name}: нужны TXT со сценами и один positive GeoJSON."
+            )
+        class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
+        variant_name = dataset.variant_name or dataset.variant_key or "main"
+        rows.append(
+            TestSampleBatchItemRow(
+                position=position,
+                dataset_key=dataset.key,
+                dataset_name=dataset.name,
+                dataset_version=dataset.version,
+                class_key=dataset.class_key or class_name,
+                class_name=class_name,
+                variant_key=dataset.variant_key or variant_name,
+                variant_name=variant_name,
+                min_object_count=item.min_object_count,
+                metric=item.metric,
+                status="queued",
+            )
+        )
+    batch.items = rows
+    session.add(batch)
+    session.flush()
+    return _batch_info(batch)
+
+
+def latest_test_sample_batch(session: Session) -> TestSampleBatchInfo:
+    row = session.scalar(
+        select(TestSampleBatchRow)
+        .options(
+            selectinload(TestSampleBatchRow.items).selectinload(
+                TestSampleBatchItemRow.sample
+            )
+        )
+        .order_by(TestSampleBatchRow.created_at.desc(), TestSampleBatchRow.id.desc())
+        .limit(1)
+    )
+    if row is None:
+        raise TestSampleBatchUnavailable()
+    return _batch_info(row)
+
+
+def test_sample_batch_detail(
+    session: Session,
+    batch_id: uuid.UUID,
+) -> TestSampleBatchInfo:
+    row = session.scalar(
+        select(TestSampleBatchRow)
+        .where(TestSampleBatchRow.id == batch_id)
+        .options(
+            selectinload(TestSampleBatchRow.items).selectinload(
+                TestSampleBatchItemRow.sample
+            )
+        )
+    )
+    if row is None:
+        raise TestSampleBatchUnavailable(str(batch_id))
+    return _batch_info(row)
+
+
+def recover_test_sample_batches(session: Session) -> None:
+    rows = session.scalars(
+        select(TestSampleBatchRow)
+        .where(TestSampleBatchRow.active_slot == 1)
+        .options(selectinload(TestSampleBatchRow.items))
+    ).all()
+    for row in rows:
+        for item in row.items:
+            if item.status == "running":
+                item.status = "queued"
+                item.started_at = None
+                item.error = None
+        if all(item.status in _BATCH_FINISHED_ITEM_STATUSES for item in row.items):
+            _finish_batch(row)
+        else:
+            row.status = "queued"
+            row.updated_at = _utc_now()
+    session.flush()
+
+
+async def run_test_sample_batch_worker(
+    session_factory: sessionmaker[Session],
+    config: TrainingUIAPIConfig,
+) -> None:
+    interval = max(1, config.worker_interval_seconds)
+    LOGGER.info("Исполнитель групповых тестовых выборок запущен")
+    while True:
+        try:
+            await asyncio.to_thread(
+                process_test_sample_batch_once,
+                session_factory,
+                config,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("Ошибка шага группового создания тестовых выборок")
+        await asyncio.sleep(interval)
+
+
+def process_test_sample_batch_once(
+    session_factory: sessionmaker[Session],
+    config: TrainingUIAPIConfig,
+) -> None:
+    item_id: uuid.UUID | None = None
+    with session_factory() as session:
+        batch = session.scalar(
+            select(TestSampleBatchRow)
+            .where(TestSampleBatchRow.active_slot == 1)
+            .options(selectinload(TestSampleBatchRow.items))
+            .order_by(TestSampleBatchRow.created_at, TestSampleBatchRow.id)
+            .limit(1)
+        )
+        if batch is None:
+            return
+        item = next((row for row in batch.items if row.status == "queued"), None)
+        if item is None:
+            if all(row.status in _BATCH_FINISHED_ITEM_STATUSES for row in batch.items):
+                _finish_batch(batch)
+                session.commit()
+            return
+        now = _utc_now()
+        batch.status = "running"
+        batch.started_at = batch.started_at or now
+        batch.updated_at = now
+        item.status = "running"
+        item.started_at = now
+        item.finished_at = None
+        item.error = None
+        item.updated_at = now
+        item_id = item.id
+        session.commit()
+
+    assert item_id is not None
+    try:
+        with session_factory() as session:
+            item = session.get(TestSampleBatchItemRow, item_id)
+            if item is None:
+                return
+            batch = session.get(TestSampleBatchRow, item.batch_id)
+            if batch is None:
+                return
+            detail = _create_grouped_test_sample(session, batch, item, config)
+            item.sample_id = detail.id
+            item.pool_tile_count = detail.image_count
+            item.pool_object_count = detail.actual_object_count
+            item.status = "ok"
+            item.error = None
+            item.finished_at = _utc_now()
+            item.updated_at = item.finished_at
+            _finish_batch_if_complete(session, batch.id)
+            session.commit()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("Не удалось создать тестовую выборку для строки %s", item_id)
+        with session_factory() as session:
+            item = session.get(TestSampleBatchItemRow, item_id)
+            if item is None:
+                return
+            item.status = "error"
+            item.error = str(exc) or exc.__class__.__name__
+            item.finished_at = _utc_now()
+            item.updated_at = item.finished_at
+            _finish_batch_if_complete(session, item.batch_id)
+            session.commit()
+
+
+def _create_grouped_test_sample(
+    session: Session,
+    batch: TestSampleBatchRow,
+    item: TestSampleBatchItemRow,
+    config: TrainingUIAPIConfig,
+) -> TestSampleDetail:
+    source = _latest_pseudo_markup(session, item.dataset_key)
+    if source is None or source.geojson_file is None:
+        raise TrainingUIAPIError(
+            "Нет успешной псевдоразметки точного подкласса для оптимизации состава."
+        )
+    source_path = Path(source.geojson_file.path)
+    if not source_path.is_file():
+        raise TrainingUIAPIError("Файл последней псевдоразметки не найден на сервере.")
+
+    sample_id = uuid.uuid4()
+    root = _test_sample_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    building_root = root / f".building-{sample_id}"
+    final_root = root / str(sample_id)
+    building_root.mkdir(parents=False, exist_ok=False)
+    try:
+        generated = generate_markup_pool_files(
+            dataset_key=item.dataset_key,
+            tile_size=batch.tile_size,
+            final_image_count=batch.image_count,
+            min_object_count=item.min_object_count,
+            config=config,
+            output_root=building_root,
+        )
+        building_root.replace(final_root)
+        row = _new_test_sample_row(sample_id, "", generated)
+        session.add(row)
+        session.flush()
+        _optimize_test_sample_row(
+            row,
+            TestSampleOptimizeRequest(
+                min_tile_count=batch.image_count,
+                max_tile_count=batch.image_count,
+                min_object_count=item.min_object_count,
+                metric=item.metric,
+            ),
+            config,
+            source,
+            source_path,
+        )
+        session.flush()
+        return _detail(row)
+    except Exception:
+        shutil.rmtree(building_root, ignore_errors=True)
+        shutil.rmtree(final_root, ignore_errors=True)
+        raise
+
+
+def _finish_batch_if_complete(session: Session, batch_id: uuid.UUID) -> None:
+    batch = session.scalar(
+        select(TestSampleBatchRow)
+        .where(TestSampleBatchRow.id == batch_id)
+        .options(selectinload(TestSampleBatchRow.items))
+    )
+    if batch is not None and all(
+        item.status in _BATCH_FINISHED_ITEM_STATUSES for item in batch.items
+    ):
+        _finish_batch(batch)
+
+
+def _finish_batch(batch: TestSampleBatchRow) -> None:
+    successful = sum(item.status == "ok" for item in batch.items)
+    if successful == len(batch.items):
+        batch.status = "ok"
+    elif successful:
+        batch.status = "partial"
+    else:
+        batch.status = "error"
+    batch.active_slot = None
+    batch.finished_at = _utc_now()
+    batch.updated_at = batch.finished_at
+
+
+def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
+    finished = sum(item.status in _BATCH_FINISHED_ITEM_STATUSES for item in row.items)
+    end = row.finished_at or _utc_now()
+    start = row.started_at or row.created_at
+    elapsed = max(0, int((_aware_datetime(end) - _aware_datetime(start)).total_seconds()))
+    return TestSampleBatchInfo(
+        id=row.id,
+        status=row.status,
+        tile_size=row.tile_size,
+        image_count=row.image_count,
+        completed_count=finished,
+        total_count=len(row.items),
+        elapsed_seconds=elapsed,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        items=[
+            TestSampleBatchItemInfo(
+                id=item.id,
+                position=item.position,
+                dataset_key=item.dataset_key,
+                dataset_name=item.dataset_name,
+                dataset_version=item.dataset_version,
+                class_key=item.class_key,
+                class_name=item.class_name,
+                variant_key=item.variant_key,
+                variant_name=item.variant_name,
+                min_object_count=item.min_object_count,
+                metric=item.metric,
+                status=item.status,
+                pool_tile_count=item.pool_tile_count,
+                pool_object_count=item.pool_object_count,
+                sample_id=item.sample_id,
+                sample_name=item.sample.name if item.sample is not None else None,
+                error=item.error,
+                started_at=item.started_at,
+                finished_at=item.finished_at,
+            )
+            for item in row.items
+        ],
+    )
+
+
+def _aware_datetime(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
@@ -226,6 +593,40 @@ def update_test_sample(
     return _detail(row)
 
 
+def update_test_sample_primary(
+    session: Session,
+    sample_id: uuid.UUID,
+    request: TestSamplePrimaryUpdate,
+) -> TestSampleDetail:
+    row = _sample_row(session, sample_id)
+    if row.is_primary == request.is_primary:
+        return _detail(row)
+    if request.is_primary:
+        current_rows = session.scalars(
+            select(TestSampleRow).where(
+                TestSampleRow.dataset_key == row.dataset_key,
+                TestSampleRow.is_primary.is_(True),
+                TestSampleRow.id != row.id,
+            )
+        ).all()
+        for current in current_rows:
+            current.is_primary = False
+            current.updated_at = _utc_now()
+        if current_rows:
+            session.flush()
+        row.is_primary = True
+    else:
+        row.is_primary = False
+    row.updated_at = _utc_now()
+    _mark_training_test_metrics_stale(
+        session,
+        row.dataset_key,
+        "Основная тестовая выборка изменена; требуется пересчёт.",
+    )
+    session.flush()
+    return _detail(row)
+
+
 def update_test_sample_tile(
     session: Session,
     sample_id: uuid.UUID,
@@ -243,6 +644,12 @@ def update_test_sample_tile(
         row.metric_status = "stale" if _has_metrics(row) else "unavailable"
         row.evaluation_error = None
         row.updated_at = _utc_now()
+        if row.is_primary:
+            _mark_training_test_metrics_stale(
+                session,
+                row.dataset_key,
+                "Состав основной тестовой выборки изменён; требуется пересчёт.",
+            )
         session.flush()
     return _detail(row)
 
@@ -260,6 +667,13 @@ def delete_test_sample(
     if sample_root.exists():
         sample_root.replace(deleting_root)
     try:
+        if row.is_primary:
+            _mark_training_test_metrics_stale(
+                session,
+                row.dataset_key,
+                "Основная тестовая выборка удалена.",
+                unavailable=True,
+            )
         session.delete(row)
         session.flush()
     except Exception:
@@ -300,27 +714,51 @@ def optimize_test_sample(
             "Файл последней разметки не найден на сервере; состав выборки не изменён."
         )
 
-    tile_metrics = _calculate_tile_metrics(row, source_path, config)
-    selected_indices = _select_optimized_tile_indices(
-        row.tiles,
-        tile_metrics,
-        request,
+    previous_revision = row.content_revision
+    _optimize_test_sample_row(row, request, config, source, source_path)
+    if row.is_primary and row.content_revision != previous_revision:
+        _mark_training_test_metrics_stale(
+            session,
+            row.dataset_key,
+            "Состав основной тестовой выборки оптимизирован; требуется пересчёт.",
+        )
+    session.flush()
+    return _detail(row)
+
+
+def _optimize_test_sample_row(
+    row: TestSampleRow,
+    request: TestSampleOptimizeRequest,
+    config: TrainingUIAPIConfig,
+    source: PseudoMarkupResultRow,
+    source_path: Path | None = None,
+) -> None:
+    _validate_optimization_request(row, request)
+    prediction_path = source_path or (
+        Path(source.geojson_file.path) if source.geojson_file is not None else None
     )
+    if prediction_path is None or not prediction_path.is_file():
+        raise TrainingUIAPIError(
+            "Файл разметки для оптимизации не найден на сервере."
+        )
+    tile_metrics = _calculate_tile_metrics(row, prediction_path, config)
+    selected_indices = _select_optimized_tile_indices(row.tiles, tile_metrics, request)
     selected = set(selected_indices)
     pixel_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=0)
     object_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=1)
 
     now = _utc_now()
+    changed = False
     for tile in row.tiles:
         enabled = tile.tile_index in selected
         if tile.enabled != enabled:
             tile.enabled = enabled
             tile.updated_at = now
-    row.content_revision += 1
+            changed = True
+    if changed:
+        row.content_revision += 1
     row.updated_at = now
     _apply_evaluation(row, source, pixel_counts, object_counts)
-    session.flush()
-    return _detail(row)
 
 
 def evaluate_test_sample(
@@ -799,6 +1237,67 @@ def build_test_sample_download(
     )
 
 
+def build_primary_test_samples_download(
+    session: Session,
+    config: TrainingUIAPIConfig,
+) -> TestSampleDownloadArtifact:
+    rows = session.scalars(
+        select(TestSampleRow)
+        .where(TestSampleRow.is_primary.is_(True))
+        .options(selectinload(TestSampleRow.tiles))
+        .order_by(
+            TestSampleRow.class_name,
+            TestSampleRow.variant_name,
+            TestSampleRow.id,
+        )
+    ).all()
+    if not rows:
+        raise TrainingUIAPIError("Основные тестовые выборки не назначены.")
+    empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
+    if empty:
+        raise TrainingUIAPIError(
+            "В основных тестовых выборках нет включённых тайлов: " + ", ".join(empty)
+        )
+
+    download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    download_root.mkdir(parents=True, exist_ok=True)
+    archive_path = download_root / f"primary-{uuid.uuid4()}.zip"
+    used_folders: set[str] = set()
+    try:
+        with zipfile.ZipFile(
+            archive_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for row in rows:
+                folder = _safe_name(
+                    f"{row.class_name}_{row.variant_name}",
+                    "test_sample",
+                )
+                if folder in used_folders:
+                    folder = f"{folder}_{str(row.id)[:8]}"
+                used_folders.add(folder)
+                source_root = _sample_root(config, row.id)
+                for tile in row.tiles:
+                    if not tile.enabled:
+                        continue
+                    base_name = f"tile_{tile.tile_index:03d}"
+                    for suffix in _TILE_SUFFIXES:
+                        path = source_root / f"{base_name}{suffix}"
+                        if not path.is_file():
+                            raise TrainingUIAPIError(
+                                f"Файл основной тестовой выборки не найден: {path.name}"
+                            )
+                        archive.write(path, f"{folder}/{path.name}")
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
+    return TestSampleDownloadArtifact(
+        path=archive_path,
+        filename="основные_тестовые_выборки.zip",
+    )
+
+
 def cleanup_test_sample_storage(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -1091,6 +1590,336 @@ def _sample_row(session: Session, sample_id: uuid.UUID) -> TestSampleRow:
     return row
 
 
+def _mark_training_test_metrics_stale(
+    session: Session,
+    dataset_key: str,
+    reason: str,
+    *,
+    unavailable: bool = False,
+) -> None:
+    rows = session.scalars(
+        select(TrainingResultTestMetricRow)
+        .join(
+            TrainingResultRow,
+            TrainingResultRow.id == TrainingResultTestMetricRow.training_result_id,
+        )
+        .where(TrainingResultRow.class_key == dataset_key)
+    ).all()
+    for row in rows:
+        _cancel_test_metric_job(session, row)
+        if unavailable and row.f1 is None:
+            row.status = "unavailable"
+        else:
+            row.status = "stale" if row.f1 is not None else "unavailable"
+        row.error = reason
+        row.job_id = None
+        row.updated_at = _utc_now()
+
+
+def queue_class_test_f1(
+    session: Session,
+    dataset_key: str,
+    config: TrainingUIAPIConfig,
+) -> int:
+    """Ставит в общую inference-очередь недостающие оценки успешных сетей."""
+
+    sample = _primary_sample(session, dataset_key)
+    if sample is None:
+        raise TrainingUIAPIError("Для подкласса не назначена основная тестовая выборка.")
+    if not any(tile.enabled for tile in sample.tiles):
+        raise TrainingUIAPIError("В основной тестовой выборке нет включённых тайлов.")
+    results = session.scalars(
+        select(TrainingResultRow)
+        .where(
+            TrainingResultRow.class_key == dataset_key,
+            TrainingResultRow.status == "ok",
+        )
+        .order_by(TrainingResultRow.created_at.desc(), TrainingResultRow.id.desc())
+    ).all()
+    created = 0
+    for result in results:
+        if queue_training_result_test_f1(
+            session,
+            result,
+            config,
+            source=JobSource.MANUAL,
+        ):
+            created += 1
+    session.flush()
+    return created
+
+
+def queue_training_result_test_f1(
+    session: Session,
+    result: TrainingResultRow,
+    config: TrainingUIAPIConfig,
+    *,
+    source: JobSource | None = None,
+) -> bool:
+    """Создаёт задание F1 для одной сети, если её оценка неактуальна."""
+
+    if result.status != "ok":
+        return False
+    sample = _primary_sample(session, result.class_key)
+    if sample is None or not any(tile.enabled for tile in sample.tiles):
+        return False
+    template, template_config, config_hash = _effective_inference_template(
+        session,
+        result.architecture,
+        result.class_key,
+    )
+    metric = session.get(TrainingResultTestMetricRow, result.id)
+    if metric is not None and _metric_matches(
+        metric,
+        sample,
+        template,
+        config_hash,
+    ):
+        if metric.status == "current":
+            return False
+        if metric.status in {"queued", "running"} and _metric_job_is_active(session, metric):
+            return False
+
+    if not result.mlflow_run_id:
+        if metric is None:
+            metric = TrainingResultTestMetricRow(training_result_id=result.id)
+            session.add(metric)
+        _cancel_test_metric_job(session, metric)
+        metric.sample_id = sample.id
+        metric.sample_revision = sample.content_revision
+        metric.status = "error"
+        metric.job_id = None
+        metric.inference_template_id = template.id if template is not None else None
+        metric.inference_template_version = template.version if template is not None else None
+        metric.inference_config_hash = config_hash
+        metric.error = "У результата обучения отсутствует MLflow run id с checkpoint."
+        metric.updated_at = _utc_now()
+        return False
+
+    if metric is None:
+        metric = TrainingResultTestMetricRow(training_result_id=result.id)
+        session.add(metric)
+        session.flush()
+    else:
+        _cancel_test_metric_job(session, metric)
+
+    job_source = source or JobSource(result.source)
+    job = JobRow(
+        type=JobType.INFERENCE.value,
+        source=job_source.value,
+        status=JobStatus.QUEUED.value,
+        queue_position=next_queue_position(session, JobType.INFERENCE, job_source),
+        dataset_key=result.class_key,
+        dataset_version=result.dataset_version,
+        dataset_name=sample.dataset_name,
+        training_dataset_name=result.class_display_name,
+        inference_dataset_name=sample.name,
+        model_name=result.model_name,
+        architecture=result.architecture,
+        tile_size=sample.tile_width,
+        config={
+            "operation": TEST_SAMPLE_F1_OPERATION,
+            "class_key": result.class_key,
+            "training_result_id": str(result.id),
+            "test_sample_id": str(sample.id),
+            "test_sample_revision": sample.content_revision,
+            "test_sample_tile_indices": [
+                tile.tile_index for tile in sample.tiles if tile.enabled
+            ],
+            "inference_template_id": str(template.id) if template is not None else None,
+            "inference_template_version": template.version if template is not None else None,
+            "inference_template_config": template_config,
+            "inference_config_hash": config_hash,
+            "mlflow_run_id": result.mlflow_run_id,
+        },
+    )
+    session.add(job)
+    session.flush()
+    metric.sample_id = sample.id
+    metric.sample_revision = sample.content_revision
+    metric.status = "queued"
+    metric.job_id = job.id
+    metric.inference_template_id = template.id if template is not None else None
+    metric.inference_template_version = template.version if template is not None else None
+    metric.inference_config_hash = config_hash
+    metric.error = None
+    metric.updated_at = _utc_now()
+    session.flush()
+    return True
+
+
+def training_result_test_f1_info(
+    session: Session,
+    result: TrainingResultRow,
+    config: TrainingUIAPIConfig,
+) -> TrainingResultTestF1Info | None:
+    sample = _primary_sample(session, result.class_key)
+    if sample is None:
+        return None
+    metric = session.get(TrainingResultTestMetricRow, result.id)
+    if metric is None:
+        return TrainingResultTestF1Info(
+            status="unavailable",
+            sample_id=sample.id,
+            sample_name=sample.name,
+            sample_revision=sample.content_revision,
+            error="Для сети ещё не рассчитан F1 на основной тестовой выборке.",
+        )
+    template, _, config_hash = _effective_inference_template(
+        session,
+        result.architecture,
+        result.class_key,
+    )
+    status = metric.status
+    if not _metric_matches(metric, sample, template, config_hash):
+        status = "stale" if metric.f1 is not None else "unavailable"
+    elif status in {"queued", "running"} and not _metric_job_is_active(session, metric):
+        status = "stale" if metric.f1 is not None else "error"
+    if status not in {"current", "stale", "queued", "running", "error", "unavailable"}:
+        status = "stale" if metric.f1 is not None else "unavailable"
+    job = session.get(JobRow, metric.job_id) if metric.job_id is not None else None
+    return TrainingResultTestF1Info(
+        status=status,
+        precision=metric.precision,
+        recall=metric.recall,
+        f1=metric.f1,
+        true_positive=metric.true_positive,
+        false_positive=metric.false_positive,
+        false_negative=metric.false_negative,
+        sample_id=metric.sample_id or sample.id,
+        sample_name=metric.sample.name if metric.sample is not None else sample.name,
+        sample_revision=metric.sample_revision,
+        job_id=metric.job_id,
+        evaluated_at=metric.evaluated_at,
+        error=metric.error,
+        progress=_test_f1_progress(job),
+    )
+
+
+def primary_test_sample(
+    session: Session,
+    dataset_key: str,
+) -> TestSampleRow | None:
+    return _primary_sample(session, dataset_key)
+
+
+def _primary_sample(session: Session, dataset_key: str) -> TestSampleRow | None:
+    return session.scalar(
+        select(TestSampleRow)
+        .where(
+            TestSampleRow.dataset_key == dataset_key,
+            TestSampleRow.is_primary.is_(True),
+        )
+        .options(selectinload(TestSampleRow.tiles))
+        .limit(1)
+    )
+
+
+def _effective_inference_template(
+    session: Session,
+    architecture: str,
+    dataset_key: str,
+) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
+    template = session.scalar(
+        select(InferenceTemplateRow).where(
+            InferenceTemplateRow.architecture == architecture,
+            InferenceTemplateRow.dataset_key == dataset_key,
+        )
+    )
+    if template is None or not template.is_active:
+        template = session.scalar(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.architecture == architecture,
+                InferenceTemplateRow.dataset_key.is_(None),
+            )
+        )
+    template_config = (
+        sanitize_inference_template_config(template.default_config)
+        if template is not None
+        else {}
+    )
+    serialized = json.dumps(
+        template_config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return template, template_config, hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _metric_matches(
+    metric: TrainingResultTestMetricRow,
+    sample: TestSampleRow,
+    template: InferenceTemplateRow | None,
+    config_hash: str,
+) -> bool:
+    return (
+        metric.sample_id == sample.id
+        and metric.sample_revision == sample.content_revision
+        and metric.inference_template_id == (template.id if template is not None else None)
+        and metric.inference_template_version
+        == (template.version if template is not None else None)
+        and metric.inference_config_hash == config_hash
+    )
+
+
+def _metric_job_is_active(
+    session: Session,
+    metric: TrainingResultTestMetricRow,
+) -> bool:
+    if metric.job_id is None:
+        return False
+    job = session.get(JobRow, metric.job_id)
+    return bool(job and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value})
+
+
+def _cancel_test_metric_job(
+    session: Session,
+    metric: TrainingResultTestMetricRow,
+) -> None:
+    if metric.job_id is None:
+        return
+    job = session.get(JobRow, metric.job_id)
+    if job is None or (job.config or {}).get("operation") != TEST_SAMPLE_F1_OPERATION:
+        return
+    if job.status == JobStatus.RUNNING.value:
+        terminate_job_process(job)
+        if job.tmp_path:
+            shutil.rmtree(job.tmp_path, ignore_errors=True)
+            job.tmp_path = None
+    if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+        job.status = JobStatus.CANCELLED.value
+        job.finished_at = _utc_now()
+        job.process_pid = None
+    metric.job_id = None
+
+
+def _test_f1_progress(job: JobRow | None) -> RuntimeProgress | None:
+    if job is None or job.status != JobStatus.RUNNING.value or job.tmp_path is None:
+        return None
+    path = Path(job.tmp_path) / "scratch" / "progress.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    current = payload.get("current")
+    total = payload.get("total")
+    try:
+        parsed_current = int(current) if current is not None else None
+        parsed_total = int(total) if total is not None else None
+    except (TypeError, ValueError):
+        return None
+    return RuntimeProgress(
+        current=parsed_current,
+        total=parsed_total,
+        elapsed_minutes=(
+            max(0, int((_utc_now() - _aware_datetime(job.started_at)).total_seconds() // 60))
+            if job.started_at is not None
+            else None
+        ),
+    )
+
+
 def _summary(row: TestSampleRow) -> TestSampleSummary:
     enabled = [tile for tile in row.tiles if tile.enabled]
     return TestSampleSummary(
@@ -1107,6 +1936,7 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         enabled_image_count=len(enabled),
         actual_object_count=row.actual_object_count,
         enabled_object_count=sum(tile.object_count for tile in enabled),
+        is_primary=row.is_primary,
         evaluation=_evaluation_info(row),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -1243,19 +2073,32 @@ def _utc_now() -> datetime:
 
 
 __all__ = [
+    "TestSampleBatchUnavailable",
     "TestSampleDownloadArtifact",
     "TestSampleUnavailable",
+    "build_primary_test_samples_download",
     "build_test_sample_download",
     "cleanup_test_sample_storage",
     "create_test_sample",
+    "create_test_sample_batch",
     "delete_test_sample",
     "evaluate_test_sample_by_id",
     "evaluate_test_samples_for_pseudo_markup",
+    "latest_test_sample_batch",
     "mark_test_samples_stale_for_pseudo_markup",
     "optimize_test_sample",
+    "primary_test_sample",
+    "process_test_sample_batch_once",
+    "queue_class_test_f1",
+    "queue_training_result_test_f1",
+    "recover_test_sample_batches",
+    "run_test_sample_batch_worker",
+    "test_sample_batch_detail",
     "test_sample_catalog",
     "test_sample_detail",
     "test_sample_preview_path",
+    "training_result_test_f1_info",
     "update_test_sample",
+    "update_test_sample_primary",
     "update_test_sample_tile",
 ]

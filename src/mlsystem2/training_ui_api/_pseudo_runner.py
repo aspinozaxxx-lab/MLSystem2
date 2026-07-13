@@ -8,6 +8,7 @@ import json
 import math
 import shutil
 import time
+import warnings
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -16,6 +17,7 @@ import rasterio
 from pyproj import CRS as PyprojCRS
 from pyproj import Transformer
 from rasterio import features as rasterio_features
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.warp import transform_geom
 from rasterio.windows import Window
 from scipy import ndimage
@@ -84,12 +86,135 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", required=True)
     args = parser.parse_args(argv)
     payload = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
-    result = run_pseudo_markup(payload)
+    result = (
+        run_test_sample_f1(payload)
+        if payload.get("operation") == "test_sample_f1"
+        else run_pseudo_markup(payload)
+    )
     report_path = Path(payload["report_path"])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] in {"ok", "partial"} else 1
+
+
+def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
+    """Считает пиксельный F1 сети на независимых TIFF-тайлах выборки."""
+
+    started = time.time()
+    run_root = Path(config["run_root"])
+    if run_root.exists():
+        shutil.rmtree(run_root)
+    run_root.mkdir(parents=True, exist_ok=True)
+    progress_path = run_root / "progress.json"
+    tiles = list(config.get("tiles") or [])
+    _write_test_f1_progress(progress_path, current=0, total=len(tiles), started=started)
+    threshold = float(config.get("threshold"))
+    inference_tile_size = int(config.get("tile_size") or 768)
+    stride = int(config.get("stride") or inference_tile_size)
+    device = str(config.get("device") or "cpu")
+    profile = _postprocess_profile_from_config(
+        _select_postprocess_profile(len(tiles)),
+        config.get("postprocess_config"),
+    )
+    counts = {"true_positive": 0, "false_positive": 0, "false_negative": 0}
+    reports: list[dict[str, Any]] = []
+    torch = None
+    loaded = None
+    model = None
+    try:
+        checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
+        torch = _torch()
+        loaded = load_checkpoint(
+            LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
+        )
+        model = loaded.model.model
+        model.to(torch.device(device))
+        model.eval()
+        for number, tile in enumerate(tiles, start=1):
+            tile_started = time.time()
+            prediction = _infer_test_tile_mask(
+                torch=torch,
+                model=model,
+                image_path=Path(str(tile["image_path"])),
+                tile_size=inference_tile_size,
+                stride=stride,
+                threshold=threshold,
+                device=device,
+                postprocess_profile=profile,
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", NotGeoreferencedWarning)
+                with rasterio.open(Path(str(tile["mask_path"]))) as mask_dataset:
+                    ground_truth = mask_dataset.read(1) > 0
+            if ground_truth.shape != prediction.shape:
+                raise RuntimeError(
+                    f"Размер эталонной маски тайла {tile.get('index')} не совпадает с TIFF."
+                )
+            predicted = prediction > 0
+            true_positive = int(np.count_nonzero(ground_truth & predicted))
+            false_positive = int(np.count_nonzero(~ground_truth & predicted))
+            false_negative = int(np.count_nonzero(ground_truth & ~predicted))
+            counts["true_positive"] += true_positive
+            counts["false_positive"] += false_positive
+            counts["false_negative"] += false_negative
+            reports.append(
+                {
+                    "index": int(tile["index"]),
+                    "true_positive": true_positive,
+                    "false_positive": false_positive,
+                    "false_negative": false_negative,
+                    "elapsed_sec": round(time.time() - tile_started, 3),
+                }
+            )
+            _write_test_f1_progress(
+                progress_path,
+                current=number,
+                total=len(tiles),
+                started=started,
+            )
+    except Exception as exc:  # noqa: BLE001
+        _write_test_f1_progress(
+            progress_path,
+            current=len(reports),
+            total=len(tiles),
+            started=started,
+        )
+        return {
+            "status": "error",
+            "operation": "test_sample_f1",
+            "processed": len(reports),
+            "total": len(tiles),
+            **counts,
+            "threshold": threshold,
+            "error": repr(exc),
+            "tiles": reports,
+            "elapsed_sec": round(time.time() - started, 3),
+        }
+    finally:
+        try:
+            del model
+            del loaded
+        except UnboundLocalError:
+            pass
+        _release_cuda_cache(torch, device)
+
+    return {
+        "status": "ok" if reports else "error",
+        "operation": "test_sample_f1",
+        "processed": len(reports),
+        "total": len(tiles),
+        **counts,
+        "threshold": threshold,
+        "test_sample_id": config.get("test_sample_id"),
+        "test_sample_revision": config.get("test_sample_revision"),
+        "training_result_id": config.get("training_result_id"),
+        "postprocess_profile": profile.name,
+        "postprocess_level": profile.level,
+        "postprocess_params": _postprocess_profile_params(profile),
+        "tiles": reports,
+        "elapsed_sec": round(time.time() - started, 3),
+    }
 
 
 def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
@@ -333,6 +458,83 @@ def _infer_scene(
             scene,
             config,
             postprocess_profile=postprocess_profile,
+        )
+
+
+def _infer_test_tile_mask(
+    *,
+    torch,
+    model,
+    image_path: Path,
+    tile_size: int,
+    stride: int,
+    threshold: float,
+    device: str,
+    postprocess_profile: _PostprocessProfile,
+) -> np.ndarray:
+    with rasterio.open(image_path) as dataset:
+        nodata = _resolve_nodata(dataset)
+        mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
+        for window in _windows(dataset.width, dataset.height, tile_size, stride):
+            image = dataset.read(
+                window=window,
+                boundless=True,
+                fill_value=nodata,
+                out_shape=(dataset.count, tile_size, tile_size),
+                masked=False,
+            )
+            if image.shape[0] > 4:
+                image = image[:4]
+            if image.shape[0] < 4:
+                image = np.pad(image, ((0, 4 - image.shape[0]), (0, 0), (0, 0)))
+            if np.all(_nodata_pixels(image, nodata)):
+                continue
+            predicted = _predict_tile(
+                torch,
+                model,
+                image.astype(np.float32, copy=False),
+                threshold=threshold,
+                device=device,
+            )
+            crop_h = min(tile_size, dataset.height - int(window.row_off))
+            crop_w = min(tile_size, dataset.width - int(window.col_off))
+            y0 = int(window.row_off)
+            x0 = int(window.col_off)
+            mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
+                mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
+                predicted[:crop_h, :crop_w],
+            )
+        mask = _postprocess_mask(mask, postprocess_profile)
+        if not _has_vector_postprocess(postprocess_profile) or not np.any(mask):
+            return mask
+        if dataset.crs is None:
+            raise RuntimeError(
+                "Для профильной постобработки тестового тайла нужен CRS снимка."
+            )
+        geometries: list[BaseGeometry] = []
+        for geometry, value in rasterio_features.shapes(
+            mask,
+            mask=mask > 0,
+            transform=dataset.transform,
+        ):
+            if int(value) != 1:
+                continue
+            processed = _postprocess_geometry(
+                shape(geometry),
+                dataset.crs,
+                postprocess_profile,
+            )
+            if not processed.is_empty:
+                geometries.append(processed)
+        if not geometries:
+            return np.zeros_like(mask)
+        return rasterio_features.rasterize(
+            [(geometry, 1) for geometry in geometries],
+            out_shape=mask.shape,
+            transform=dataset.transform,
+            fill=0,
+            dtype="uint8",
+            all_touched=False,
         )
 
 
@@ -1012,6 +1214,27 @@ def _write_pseudo_progress(
         "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),
         "failed": len(failures),
         "missing": sum(1 for item in scene_reports if item.get("status") == "missing_image"),
+        "elapsed_sec": round(time.time() - started, 3),
+    }
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _write_test_f1_progress(
+    path: Path,
+    *,
+    current: int,
+    total: int,
+    started: float,
+) -> None:
+    payload = {
+        "current": min(max(0, current), max(0, total)),
+        "total": max(0, total),
         "elapsed_sec": round(time.time() - started, 3),
     }
     tmp_path = path.with_name(f".{path.name}.tmp")

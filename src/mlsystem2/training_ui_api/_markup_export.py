@@ -296,6 +296,142 @@ def generate_markup_files(
     )
 
 
+def generate_markup_pool_files(
+    *,
+    dataset_key: str,
+    tile_size: int,
+    final_image_count: int,
+    min_object_count: int,
+    config: TrainingUIAPIConfig,
+    output_root: Path,
+) -> GeneratedMarkupFiles:
+    """Создать максимально широкий пул, содержащий допустимую итоговую выборку."""
+
+    dataset = find_dataset(config.mlmarkup_root, dataset_key)
+    if dataset is None or dataset.is_custom:
+        raise TrainingUIAPIError(
+            "Для группового создания нужен существующий вариант датасета MLMarkup."
+        )
+    if dataset.diagnostics:
+        raise TrainingUIAPIError("; ".join(dataset.diagnostics))
+    if not dataset.scenes_file or not dataset.annotation_file:
+        raise TrainingUIAPIError(
+            "У датасета должны быть TXT со сценами и один positive GeoJSON."
+        )
+
+    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), config.images_root)
+    if not source_paths:
+        raise TrainingUIAPIError(
+            "Для датасета не найдены TIFF в MLSYSTEM2_IMAGES_ROOT."
+        )
+    annotations = _load_annotations(Path(dataset.annotation_file))
+    requested_pool_count = final_image_count * 3
+    requested_pool_objects = min_object_count * 3
+    candidates = _build_candidates(
+        source_paths=source_paths,
+        images_root=config.images_root,
+        annotations=annotations,
+        tile_width=tile_size,
+        tile_height=tile_size,
+        max_grid_origins=max(32, requested_pool_count * 8),
+    )
+    if len(candidates) < final_image_count:
+        raise TrainingUIAPIError(
+            "Недостаточно полностью валидных тайлов с объектами: "
+            f"найдено {len(candidates)}, для итоговой выборки требуется {final_image_count}."
+        )
+
+    selected_indices: list[int] | None = None
+    selected_pool_count: int | None = None
+    touching_allowed = False
+    maximum_pool_count = min(requested_pool_count, len(candidates))
+    for allow_touching in (False, True):
+        for pool_count in range(maximum_pool_count, final_image_count - 1, -1):
+            request = MarkupExportRequest(
+                dataset_key=dataset_key,
+                tile_width=tile_size,
+                tile_height=tile_size,
+                image_count=pool_count,
+                object_count=requested_pool_objects,
+            )
+            selected_indices = _select_candidates(
+                candidates,
+                request,
+                allow_touching=allow_touching,
+                final_image_count=final_image_count,
+                min_final_object_count=min_object_count,
+            )
+            if selected_indices is not None:
+                selected_pool_count = pool_count
+                touching_allowed = allow_touching
+                break
+        if selected_indices is not None:
+            break
+
+    if selected_indices is None or selected_pool_count is None:
+        maximum_objects = sum(
+            sorted((item.object_count for item in candidates), reverse=True)[:final_image_count]
+        )
+        raise TrainingUIAPIError(
+            "Невозможно сформировать итоговую выборку без перекрытий: "
+            f"требуется {final_image_count} тайлов и минимум {min_object_count} объектов; "
+            f"валидных кандидатов {len(candidates)}, верхняя оценка объектов в "
+            f"{final_image_count} самых плотных кандидатах — {maximum_objects}."
+        )
+
+    selected = [candidates[index] for index in selected_indices]
+    selected.sort(
+        key=lambda item: (
+            item.territory.casefold(),
+            item.source_name.casefold(),
+            item.row,
+            item.column,
+        )
+    )
+    actual_object_count = sum(item.object_count for item in selected)
+    warnings = list(annotations.warnings)
+    if selected_pool_count < requested_pool_count:
+        warnings.append(
+            "Расширенный пул уменьшен: "
+            f"запрошено до {requested_pool_count} тайлов, сформировано {selected_pool_count}."
+        )
+    if actual_object_count != requested_pool_objects:
+        warnings.append(
+            "Целевое число объектов расширенного пула недостижимо точно: "
+            f"цель {requested_pool_objects}, сформировано {actual_object_count}."
+        )
+    if touching_allowed:
+        warnings.append(
+            "Для формирования пула разрешено касание границ тайлов; перекрытий между тайлами нет."
+        )
+
+    tile_files = _write_selected_tiles(
+        output_root=output_root,
+        selected=selected,
+        annotations=annotations,
+        tile_width=tile_size,
+        tile_height=tile_size,
+    )
+    class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
+    variant_name = dataset.variant_name or dataset.variant_key or "main"
+    return GeneratedMarkupFiles(
+        dataset_key=dataset.key,
+        dataset_name=dataset.name,
+        dataset_version=dataset.version,
+        class_key=dataset.class_key or class_name,
+        class_name=class_name,
+        variant_key=dataset.variant_key or variant_name,
+        variant_name=variant_name,
+        tile_width=tile_size,
+        tile_height=tile_size,
+        requested_object_count=min_object_count,
+        actual_object_count=actual_object_count,
+        territory_count=len({item.territory for item in selected}),
+        warnings=tuple(warnings),
+        tiles=tuple(tile_files),
+    )
+
+
 def load_markup_export(
     export_id: uuid.UUID,
     config: TrainingUIAPIConfig,
@@ -721,6 +857,8 @@ def _select_candidates(
     request: MarkupExportRequest,
     *,
     allow_touching: bool,
+    final_image_count: int | None = None,
+    min_final_object_count: int | None = None,
 ) -> list[int] | None:
     candidate_count = len(candidates)
     territories = sorted({item.territory for item in candidates}, key=str.casefold)
@@ -730,7 +868,9 @@ def _select_candidates(
     territory_offset = candidate_count
     source_offset = territory_offset + len(territories)
     deviation_index = source_offset + len(sources)
-    variable_count = deviation_index + 1
+    final_offset = deviation_index + 1
+    has_final_subset = final_image_count is not None and min_final_object_count is not None
+    variable_count = final_offset + (candidate_count if has_final_subset else 0)
 
     rows: list[int] = []
     columns: list[int] = []
@@ -757,6 +897,26 @@ def _select_candidates(
         minimum=request.image_count,
         maximum=request.image_count,
     )
+    if has_final_subset:
+        assert final_image_count is not None
+        assert min_final_object_count is not None
+        add_constraint(
+            [(final_offset + index, 1.0) for index in range(candidate_count)],
+            minimum=final_image_count,
+            maximum=final_image_count,
+        )
+        for index in range(candidate_count):
+            add_constraint(
+                [(final_offset + index, 1.0), (index, -1.0)],
+                maximum=0.0,
+            )
+        add_constraint(
+            [
+                (final_offset + index, float(candidates[index].object_count))
+                for index in range(candidate_count)
+            ],
+            minimum=min_final_object_count,
+        )
     for left, right in _candidate_conflicts(candidates, allow_touching=allow_touching):
         add_constraint([(left, 1.0), (right, 1.0)], maximum=1.0)
 
@@ -1306,5 +1466,7 @@ __all__ = [
     "MarkupExportUnavailable",
     "build_markup_export",
     "cleanup_expired_markup_exports",
+    "generate_markup_files",
+    "generate_markup_pool_files",
     "load_markup_export",
 ]

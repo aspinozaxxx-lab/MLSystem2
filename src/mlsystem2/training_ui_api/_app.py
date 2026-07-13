@@ -27,7 +27,11 @@ from ._routes.results import register_result_routes
 from ._routes.templates import register_template_routes
 from ._routes.test_samples import register_test_sample_routes
 from ._service import ensure_seed_templates
-from ._test_samples import cleanup_test_sample_storage
+from ._test_samples import (
+    cleanup_test_sample_storage,
+    recover_test_sample_batches,
+    run_test_sample_batch_worker,
+)
 from ._worker import run_queue_worker
 from .contracts import TrainingUIAPIError
 
@@ -42,16 +46,21 @@ def create_app() -> FastAPI:
         cleanup_expired_markup_exports(config, remove_incomplete=True)
         with session_factory() as session:
             cleanup_test_sample_storage(session, config)
+            recover_test_sample_batches(session)
             ensure_seed_templates(session)
             session.commit()
-        worker_task: asyncio.Task[None] | None = None
+        worker_tasks: list[asyncio.Task[None]] = []
         if config.worker_enabled:
-            worker_task = asyncio.create_task(run_queue_worker(session_factory, config))
+            worker_tasks = [
+                asyncio.create_task(run_queue_worker(session_factory, config)),
+                asyncio.create_task(run_test_sample_batch_worker(session_factory, config)),
+            ]
         try:
             yield
         finally:
-            if worker_task is not None:
+            for worker_task in worker_tasks:
                 worker_task.cancel()
+            for worker_task in worker_tasks:
                 with suppress(asyncio.CancelledError):
                     await worker_task
 
