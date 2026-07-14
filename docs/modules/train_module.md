@@ -11,8 +11,8 @@
 ## Публичные контракты
 
 - `TrainError` - ошибка обучения.
-- `TrainConfig` - поля `task`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `hard_negative_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`, `class_slugs`.
-- `EpochMetrics` - поля `epoch`, `train_loss`, `val_loss`, `val_best_threshold`, `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall`, `epoch_time_sec`.
+- `TrainConfig` - поля `task`, `quality_metric`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `hard_negative_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`, `class_slugs`.
+- `EpochMetrics` - поля эпохи, loss, выбранной `quality_metric`, `val_quality_f1/precision/recall`, лучшего порога, пиксельных и optional объектовых F1/precision/recall.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
@@ -23,6 +23,7 @@
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.
 - `models.api` - сохранить best/final checkpoint через публичный API.
+- `metrics.api` - сопоставить объекты один к одному и рассчитать объектовую F1.
 - `torch` - выполнить обучение, optimizer, scheduler, losses и tensor operations; импортируется лениво.
 
 ## Алгоритм работы и его особенности
@@ -31,11 +32,11 @@
 
 Input batch от `tile_preparation`: `(images, masks)` или `(images, masks, batch_meta)`. `images: torch.float32 [B,C,H,W]` с raw values без нормализации. В binary режиме `masks: torch.float32 [B,1,H,W]`, в multiclass режиме `masks: torch.long [B,H,W]`; это единая supervision mask со значениями `-1=hard negative`, `0=background`, `1` или `1..N=positive`. Train loop декодирует `-1` в target background `0` и отдельную boolean pixel mask. Forward берет `.logits`, если поле есть, и resize logits до mask size при необходимости.
 
-Binary loss поддерживает `bce_dice`, `focal_dice`, `focal_tversky`. Background pixels имеют базовый вес `1`, `pos_weight` усиливает positive pixels через BCE/focal, а `hard_negative_weight` усиливает штраф только на pixels, которые в supervision mask были `-1`. BCE/focal применяют weight map к per-pixel loss; Dice усиливает вклад foreground probability только в hard-negative background pixels; Tversky усиливает только false-positive term. `focal_tversky` соответствует старому MLSystem: это сумма focal loss и tversky loss, а не квадрат tversky loss. Train loop возвращает только общий `train_loss`. Binary validation считает `val_loss` и внутренне проверяет фиксированные threshold candidates `[0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995]`, но наружу передает только лучший threshold и его `F1`/`precision`/`recall` через поля `val_best_threshold`, `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall`.
+Binary loss поддерживает `bce_dice`, `focal_dice`, `focal_tversky`. Background pixels имеют базовый вес `1`, `pos_weight` усиливает positive pixels через BCE/focal, а `hard_negative_weight` усиливает штраф только на pixels, которые в supervision mask были `-1`. BCE/focal применяют weight map к per-pixel loss; Dice усиливает вклад foreground probability только в hard-negative background pixels; Tversky усиливает только false-positive term. `focal_tversky` соответствует старому MLSystem: это сумма focal loss и tversky loss, а не квадрат tversky loss. Train loop возвращает только общий `train_loss`. Binary validation проверяет threshold candidates `[0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995]` и считает на каждом пороге пиксельные и объектовые TP/FP/FN. Предсказанные connected components сопоставляются с instance masks один к одному при `IoU ≥ 0,5`; каждый тайл оценивается отдельно. `quality_metric` выбирает лучший threshold и основную F1, при этом обе группы метрик остаются в `EpochMetrics`.
 
 Multiclass режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`. Logits имеют форму `[B,num_classes,H,W]`, mask - `[B,H,W] long`. Перед loss hard-negative `-1` заменяется на background class `0`; `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. `hard_negative_weight` усиливает только hard-negative pixels: для CE это per-pixel weight, для multiclass Dice - foreground probabilities классов `1..N` в этих pixels. Validation не формирует multiclass/per-class метрики. Для совместимого выбора checkpoint она считает foreground F1 по признаку `class_id > 0` и записывает его в универсальные поля `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall` с `val_best_threshold=0.0`.
 
-Best checkpoint и early stopping используют `val_best_threshold_pixel_f1`. Metadata checkpoint сохраняет `val_best_threshold`, `val_best_threshold_pixel_f1`, `val_best_threshold_precision`, `val_best_threshold_recall`, `val_loss`, `train_loss`, `sample_size` и `train_config`.
+Best checkpoint и early stopping используют `val_quality_f1`. Для `quality_metric=objects` требуется binary val batch с `object_instances`; multiclass с объектовой метрикой отклоняется валидацией. Metadata checkpoint сохраняет выбранную метрику, `val_quality_*`, пиксельные и объектовые F1/precision/recall, лучший threshold, loss, `sample_size` и `train_config`. Старые настройки без `quality_metric` остаются pixel.
 
 `max_train_batches_per_epoch` и `max_val_batches_per_epoch` ограничивают число batch в эпохе только для smoke/debug запусков. `max_training_time_sec` проверяется после каждой эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
 

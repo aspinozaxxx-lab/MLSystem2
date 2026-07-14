@@ -18,6 +18,7 @@ from pyproj import CRS as PyprojCRS
 from pyproj import Transformer
 from rasterio import features as rasterio_features
 from rasterio.errors import NotGeoreferencedWarning
+from scipy.ndimage import label as label_components
 from rasterio.warp import transform_geom
 from rasterio.windows import Window
 from scipy import ndimage
@@ -29,6 +30,8 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid as shapely_make_valid
 import yaml
 
+from mlsystem2.metrics.api import compute_object_f1
+from mlsystem2.metrics.contracts import ObjectF1Request
 from mlsystem2.mlflow_adapter.api import download_run_artifact
 from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
@@ -99,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
-    """Считает пиксельный F1 сети на независимых TIFF-тайлах выборки."""
+    """Считает пиксельный и объектовый F1 на независимых TIFF-тайлах выборки."""
 
     started = time.time()
     run_root = Path(config["run_root"])
@@ -118,6 +121,11 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         config.get("postprocess_config"),
     )
     counts = {"true_positive": 0, "false_positive": 0, "false_negative": 0}
+    object_counts = {
+        "object_true_positive": 0,
+        "object_false_positive": 0,
+        "object_false_negative": 0,
+    }
     reports: list[dict[str, Any]] = []
     torch = None
     loaded = None
@@ -152,18 +160,40 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     f"Размер эталонной маски тайла {tile.get('index')} не совпадает с TIFF."
                 )
             predicted = prediction > 0
+            geojson_path = tile.get("geojson_path")
+            ground_truth_instances = (
+                _test_tile_instance_mask(
+                    Path(str(geojson_path)),
+                    Path(str(tile["image_path"])),
+                    predicted.shape,
+                )
+                if geojson_path
+                else label_components(ground_truth, structure=np.ones((3, 3), dtype=np.uint8))[0]
+            )
+            objects = compute_object_f1(
+                ObjectF1Request(
+                    y_true_instances=ground_truth_instances,
+                    y_pred_mask=predicted,
+                )
+            )
             true_positive = int(np.count_nonzero(ground_truth & predicted))
             false_positive = int(np.count_nonzero(~ground_truth & predicted))
             false_negative = int(np.count_nonzero(ground_truth & ~predicted))
             counts["true_positive"] += true_positive
             counts["false_positive"] += false_positive
             counts["false_negative"] += false_negative
+            object_counts["object_true_positive"] += objects.true_positive
+            object_counts["object_false_positive"] += objects.false_positive
+            object_counts["object_false_negative"] += objects.false_negative
             reports.append(
                 {
                     "index": int(tile["index"]),
                     "true_positive": true_positive,
                     "false_positive": false_positive,
                     "false_negative": false_negative,
+                    "object_true_positive": objects.true_positive,
+                    "object_false_positive": objects.false_positive,
+                    "object_false_negative": objects.false_negative,
                     "elapsed_sec": round(time.time() - tile_started, 3),
                 }
             )
@@ -186,6 +216,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             "processed": len(reports),
             "total": len(tiles),
             **counts,
+            **object_counts,
             "threshold": threshold,
             "error": repr(exc),
             "tiles": reports,
@@ -205,6 +236,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "processed": len(reports),
         "total": len(tiles),
         **counts,
+        **object_counts,
         "threshold": threshold,
         "test_sample_id": config.get("test_sample_id"),
         "test_sample_revision": config.get("test_sample_revision"),
@@ -217,6 +249,61 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "tiles": reports,
         "elapsed_sec": round(time.time() - started, 3),
     }
+
+
+def _test_tile_instance_mask(
+    geojson_path: Path,
+    image_path: Path,
+    out_shape: tuple[int, int],
+) -> np.ndarray:
+    try:
+        payload = json.loads(geojson_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Не удалось прочитать GeoJSON тестового тайла: {geojson_path}") from exc
+    features = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(features, list):
+        raise RuntimeError("GeoJSON тестового тайла должен быть FeatureCollection.")
+    source_crs = _payload_crs(payload)
+    with rasterio.open(image_path) as dataset:
+        target_crs = PyprojCRS.from_user_input(dataset.crs) if dataset.crs is not None else source_crs
+        transform = dataset.transform
+    transformer = (
+        Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        if source_crs != target_crs
+        else None
+    )
+    geometries: list[tuple[BaseGeometry, int]] = []
+    for index, feature in enumerate(features, start=1):
+        geometry_payload = feature.get("geometry") if isinstance(feature, dict) else None
+        if not isinstance(geometry_payload, dict):
+            continue
+        try:
+            geometry = shape(geometry_payload)
+        except Exception:
+            continue
+        if transformer is not None:
+            geometry = shapely_transform(transformer.transform, geometry)
+        if not geometry.is_empty:
+            geometries.append((geometry, index))
+    return rasterio_features.rasterize(
+        geometries,
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        dtype="int32",
+        all_touched=False,
+    ).astype(np.int64, copy=False)
+
+
+def _payload_crs(payload: dict[str, Any]) -> PyprojCRS:
+    raw = payload.get("crs")
+    if isinstance(raw, dict):
+        properties = raw.get("properties")
+        if isinstance(properties, dict):
+            raw = properties.get("name") or properties.get("href")
+        else:
+            raw = raw.get("name")
+    return PyprojCRS.from_user_input(raw or "EPSG:4326")
 
 
 def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:

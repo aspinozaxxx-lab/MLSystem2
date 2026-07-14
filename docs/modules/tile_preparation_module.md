@@ -14,7 +14,7 @@ Batch DataLoader:
 - `images: torch.float32 [B, C, tile_size, tile_size]`;
 - binary `masks: torch.float32 [B, 1, tile_size, tile_size]`, supervision values `-1=hard negative`, `0=background`, `1=positive`;
 - multiclass `masks: torch.long [B, tile_size, tile_size]`, supervision values `-1=hard negative`, `0=background`, `1..N=class id`;
-- `batch_meta: dict` с полями `positive_tile_count`, `hard_negative_tile_count`, `background_tile_count`, `augmented_tile_count`, `augmented_positive_tile_count`, `augmented_hard_negative_tile_count`, `tile_augmented`, `tile_positive`, `tile_hard_negative`, `tile_background`, `tile_category`.
+- `batch_meta: dict` с полями `positive_tile_count`, `hard_negative_tile_count`, `background_tile_count`, `augmented_tile_count`, `augmented_positive_tile_count`, `augmented_hard_negative_tile_count`, `tile_augmented`, `tile_positive`, `tile_hard_negative`, `tile_background`, `tile_category`; binary val request с `include_object_instances=true` дополнительно возвращает `object_instances: torch.long [B,H,W]`.
 
 ## Публичные контракты
 
@@ -22,7 +22,7 @@ Batch DataLoader:
 - `HARD_NEGATIVE_LABEL = -1` - служебное значение hard-negative пикселя в supervision mask; это не class id модели.
 - `TileClassAnnotation` - поля `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileSplitRequest` - поля `val_fraction`, `seed`; задает deterministic split окон общего VRT.
-- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, optional `hard_negative_annotation_file`, `class_annotations`, `batch_size`, `mode`, `tile_split`, `max_batches_per_epoch`. Валидация: либо задан binary `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`; top-level `hard_negative_annotation_file` используется только в binary режиме.
+- `TileDataloaderRequest` - поля `vrt_xml`, `annotation_file`, optional `hard_negative_annotation_file`, `class_annotations`, `batch_size`, `mode`, `tile_split`, `max_batches_per_epoch`, `include_object_instances`. Валидация: либо задан binary `annotation_file` и `class_annotations=[]`, либо задан непустой `class_annotations` и `annotation_file=None`; top-level `hard_negative_annotation_file` используется только в binary режиме, instance masks — только в binary val.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -52,7 +52,7 @@ Train DataLoader получает effective `prefetch_factor`, рассчита�
 
 В `__getitem__` image читается через rasterio с `out_shape=(count, tile_size, tile_size)`, приводится только к `float32` и не нормализуется. Channel order сохраняет порядок каналов raster/VRT.
 
-Dataset строит единую supervision mask одним helper: сначала background `0`, затем hard-negative geometries со служебным значением `-1`, затем positive layers. Positive всегда перезаписывает hard negative в пересечении, а nodata pixels в конце становятся background `0`. Binary mask возвращает shape `1,H,W`, dtype `float32`, значения `-1/0/1`; multiclass mask возвращает `int64 [H,W]`, значения `-1/0/1..N`. Классы применяются по `(priority, class_id)`: меньший priority записывается раньше, больший priority перекрывает его; при равном priority более поздний `class_id` перекрывает более ранний. `-1` является внутренним служебным значением и не является классом модели.
+Dataset строит единую supervision mask одним helper: сначала background `0`, затем hard-negative geometries со служебным значением `-1`, затем positive layers. Positive всегда перезаписывает hard negative в пересечении, а nodata pixels в конце становятся background `0`. Binary mask возвращает shape `1,H,W`, dtype `float32`, значения `-1/0/1`; multiclass mask возвращает `int64 [H,W]`, значения `-1/0/1..N`. Для binary val с `include_object_instances` каждая исходная positive geometry отдельно rasterize в `int64` instance mask; один объект, пересечённый границей тайла, присутствует отдельным фрагментом в каждом тайле. Классы применяются по `(priority, class_id)`: меньший priority записывается раньше, больший priority перекрывает его; при равном priority более поздний `class_id` перекрывает более ранний. `-1` является внутренним служебным значением и не является классом модели.
 
 Аугментация сохраняет raw Geoalert tensor ABI подготовленных снимков: после photometric значения image зажимаются в диапазон `0..255`. Geometric flips/rotations применяются к image и единой supervision mask, поэтому значения `-1`, `0` и positive labels преобразуются вместе; photometric применяется только к image. Модуль не зануляет прямоугольные patch-и в image или mask. Категория tile определяется до аугментации и после нее не меняется. При `mode=train` и `augmentation_level > 0` аугментация применяется к positive и hard_negative tiles; обычный background не аугментируется. Sample meta содержит `augmented`, `category`, `positive`, `hard_negative`, `background`; collate собирает batch `(images, masks, batch_meta)` с category counters и per-tile flags, без отдельной pixel mask в meta.
 

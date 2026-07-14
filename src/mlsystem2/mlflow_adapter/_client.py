@@ -27,6 +27,7 @@ from .contracts import (
 
 
 BEST_CHECKPOINT_METRIC = "val/best_threshold_pixel_f1"
+QUALITY_CHECKPOINT_METRIC = "val/quality_f1"
 BEST_THRESHOLD_METRIC = "val/best_threshold"
 TRAIN_EPOCH_TIME_METRIC = "train/epoch_time_sec"
 BEST_CHECKPOINT_ARTIFACT_PATH = "checkpoints/best.pt"
@@ -76,7 +77,18 @@ def get_best_training_checkpoint(
         mlflow.set_tracking_uri(tracking_uri)
         client = mlflow.tracking.MlflowClient()
         run = client.get_run(run_id)
-        history = client.get_metric_history(run_id, BEST_CHECKPOINT_METRIC)
+        quality_metric = str(
+            getattr(getattr(run, "data", None), "tags", {}).get("quality_metric") or ""
+        )
+        metric_name = (
+            QUALITY_CHECKPOINT_METRIC
+            if quality_metric in {"pixel", "objects"}
+            else BEST_CHECKPOINT_METRIC
+        )
+        history = client.get_metric_history(run_id, metric_name)
+        if not history and metric_name == QUALITY_CHECKPOINT_METRIC:
+            history = client.get_metric_history(run_id, BEST_CHECKPOINT_METRIC)
+            metric_name = BEST_CHECKPOINT_METRIC
         thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось прочитать лучшую метрику training run из MLflow") from exc
@@ -93,7 +105,8 @@ def get_best_training_checkpoint(
     return MLflowBestCheckpoint(
         tracking_uri=tracking_uri,
         run_id=run_id,
-        metric_name=BEST_CHECKPOINT_METRIC,
+        metric_name=metric_name,
+        quality_metric=quality_metric or "pixel",
         f1_score=float(best.value),
         epoch=int(best.step),
         threshold=threshold,
@@ -304,9 +317,26 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
         mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
+        mlflow.log_metric("val/best_pixel_threshold", metrics.val_best_pixel_threshold, step=metrics.epoch)
+        mlflow.log_metric("val/quality_f1", metrics.val_quality_f1, step=metrics.epoch)
+        mlflow.log_metric("val/quality_precision", metrics.val_quality_precision, step=metrics.epoch)
+        mlflow.log_metric("val/quality_recall", metrics.val_quality_recall, step=metrics.epoch)
+        if hasattr(mlflow, "set_tag"):
+            mlflow.set_tag("quality_metric", metrics.quality_metric)
         mlflow.log_metric(
             "val/best_threshold_pixel_f1",
             metrics.val_best_threshold_pixel_f1,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric("val/pixel_f1", metrics.val_best_threshold_pixel_f1, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/pixel_precision",
+            metrics.val_best_threshold_pixel_precision,
+            step=metrics.epoch,
+        )
+        mlflow.log_metric(
+            "val/pixel_recall",
+            metrics.val_best_threshold_pixel_recall,
             step=metrics.epoch,
         )
         mlflow.log_metric(
@@ -319,6 +349,33 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
             metrics.val_best_threshold_recall,
             step=metrics.epoch,
         )
+        if metrics.val_best_threshold_object_f1 is not None:
+            mlflow.log_metric(
+                "val/best_threshold_object_f1",
+                metrics.val_best_threshold_object_f1,
+                step=metrics.epoch,
+            )
+            mlflow.log_metric(
+                "val/best_threshold_object_precision",
+                metrics.val_best_threshold_object_precision or 0.0,
+                step=metrics.epoch,
+            )
+            mlflow.log_metric(
+                "val/best_threshold_object_recall",
+                metrics.val_best_threshold_object_recall or 0.0,
+                step=metrics.epoch,
+            )
+            mlflow.log_metric("val/object_f1", metrics.val_best_threshold_object_f1, step=metrics.epoch)
+            mlflow.log_metric(
+                "val/object_precision",
+                metrics.val_best_threshold_object_precision or 0.0,
+                step=metrics.epoch,
+            )
+            mlflow.log_metric(
+                "val/object_recall",
+                metrics.val_best_threshold_object_recall or 0.0,
+                step=metrics.epoch,
+            )
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
@@ -332,6 +389,10 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         if result.history:
+            mlflow.log_metric(
+                "train/best_quality_f1",
+                max(item.val_quality_f1 for item in result.history),
+            )
             mlflow.log_metric(
                 "train/best_threshold_pixel_f1",
                 max(item.val_best_threshold_pixel_f1 for item in result.history),

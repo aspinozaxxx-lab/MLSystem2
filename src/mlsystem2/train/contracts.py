@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,6 +17,7 @@ class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task: Literal["binary", "multiclass"] = "binary"
+    quality_metric: Literal["pixel", "objects"] = "pixel"
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str
@@ -42,19 +43,63 @@ class TrainConfig(BaseModel):
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
+        if self.task != "binary" and self.quality_metric == "objects":
+            raise ValueError("Объектовая метрика качества поддерживается только для binary train")
         return self
 
 
 class EpochMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def fill_quality_metric_compatibility(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        resolved = dict(data)
+        resolved.setdefault(
+            "val_quality_f1",
+            resolved.get("val_best_threshold_pixel_f1", 0.0),
+        )
+        resolved.setdefault(
+            "val_quality_precision",
+            resolved.get("val_best_threshold_precision", 0.0),
+        )
+        resolved.setdefault(
+            "val_quality_recall",
+            resolved.get("val_best_threshold_recall", 0.0),
+        )
+        resolved.setdefault(
+            "val_best_pixel_threshold",
+            resolved.get("val_best_threshold", 0.0),
+        )
+        resolved.setdefault(
+            "val_best_threshold_pixel_precision",
+            resolved.get("val_best_threshold_precision", 0.0),
+        )
+        resolved.setdefault(
+            "val_best_threshold_pixel_recall",
+            resolved.get("val_best_threshold_recall", 0.0),
+        )
+        return resolved
+
     epoch: int = Field(ge=0)
     train_loss: float = Field(ge=0.0)
     val_loss: float = Field(ge=0.0)
+    quality_metric: Literal["pixel", "objects"] = "pixel"
+    val_quality_f1: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_quality_precision: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_quality_recall: float = Field(default=0.0, ge=0.0, le=1.0)
     val_best_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_pixel_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     val_best_threshold_pixel_f1: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_pixel_precision: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_pixel_recall: float = Field(default=0.0, ge=0.0, le=1.0)
     val_best_threshold_precision: float = Field(default=0.0, ge=0.0, le=1.0)
     val_best_threshold_recall: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_best_threshold_object_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_object_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_object_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     epoch_time_sec: float = Field(ge=0.0)
 
 

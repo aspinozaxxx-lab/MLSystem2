@@ -6,6 +6,8 @@ import warnings
 from math import isfinite
 from time import perf_counter
 
+from mlsystem2.metrics.api import compute_object_f1
+from mlsystem2.metrics.contracts import ObjectF1Request
 from mlsystem2.models.api import save_checkpoint
 from mlsystem2.models.contracts import SaveCheckpointRequest
 from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
@@ -73,10 +75,24 @@ def train_model(
                 epoch=epoch,
                 train_loss=train_epoch["loss"],
                 val_loss=val["loss"],
+                quality_metric=config.quality_metric,
+                val_quality_f1=val["quality_f1"],
+                val_quality_precision=val["quality_precision"],
+                val_quality_recall=val["quality_recall"],
                 val_best_threshold=val["best_threshold"],
+                val_best_pixel_threshold=val["best_pixel_threshold"],
                 val_best_threshold_pixel_f1=val["best_threshold_pixel_f1"],
+                val_best_threshold_pixel_precision=val["best_threshold_pixel_precision"],
+                val_best_threshold_pixel_recall=val["best_threshold_pixel_recall"],
                 val_best_threshold_precision=val["best_threshold_precision"],
                 val_best_threshold_recall=val["best_threshold_recall"],
+                val_best_threshold_object_f1=val.get("best_threshold_object_f1"),
+                val_best_threshold_object_precision=val.get(
+                    "best_threshold_object_precision"
+                ),
+                val_best_threshold_object_recall=val.get(
+                    "best_threshold_object_recall"
+                ),
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -195,7 +211,7 @@ def _validate_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     if config.task == "multiclass":
         return _validate_multiclass_epoch(torch, model, loader, device, config, epoch)
 
@@ -206,9 +222,14 @@ def _validate_epoch(
         threshold: {"tp": 0, "fp": 0, "fn": 0}
         for threshold in THRESHOLD_CANDIDATES
     }
+    object_threshold_counts = {
+        threshold: {"tp": 0, "fp": 0, "fn": 0}
+        for threshold in THRESHOLD_CANDIDATES
+    }
+    object_instances_seen = False
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
-            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
+            images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
             masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
@@ -228,6 +249,23 @@ def _validate_epoch(
                 counts["tp"] += int((threshold_pred & true).sum().item())
                 counts["fp"] += int((threshold_pred & ~true).sum().item())
                 counts["fn"] += int((~threshold_pred & true).sum().item())
+            object_instances = meta.get("object_instances") if isinstance(meta, dict) else None
+            if object_instances is not None:
+                object_instances_seen = True
+                true_instances = _as_numpy_instances(object_instances)
+                probabilities = probs[:, 0, :, :].detach().cpu().numpy()
+                for threshold, counts in object_threshold_counts.items():
+                    predicted = probabilities >= threshold
+                    for tile_index in range(predicted.shape[0]):
+                        result = compute_object_f1(
+                            ObjectF1Request(
+                                y_true_instances=true_instances[tile_index],
+                                y_pred_mask=predicted[tile_index],
+                            )
+                        )
+                        counts["tp"] += result.true_positive
+                        counts["fp"] += result.false_positive
+                        counts["fn"] += result.false_negative
             if (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
@@ -237,13 +275,44 @@ def _validate_epoch(
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
-    best_threshold, best_precision, best_recall, best_f1 = _best_threshold_metrics(threshold_counts)
+    pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = _best_threshold_metrics(
+        threshold_counts
+    )
+    if object_instances_seen:
+        object_threshold, object_precision, object_recall, object_f1 = _best_threshold_metrics(
+            object_threshold_counts
+        )
+    else:
+        object_threshold = object_precision = object_recall = object_f1 = None
+    if config.quality_metric == "objects":
+        if object_f1 is None or object_threshold is None:
+            raise TrainError(
+                "Для объектовой метрики val loader должен передавать маски экземпляров объектов."
+            )
+        quality_threshold = object_threshold
+        quality_precision = float(object_precision)
+        quality_recall = float(object_recall)
+        quality_f1 = float(object_f1)
+    else:
+        quality_threshold = pixel_threshold
+        quality_precision = pixel_precision
+        quality_recall = pixel_recall
+        quality_f1 = pixel_f1
     return {
         "loss": total_loss / batches,
-        "best_threshold": best_threshold,
-        "best_threshold_pixel_f1": best_f1,
-        "best_threshold_precision": best_precision,
-        "best_threshold_recall": best_recall,
+        "best_threshold": quality_threshold,
+        "best_pixel_threshold": pixel_threshold,
+        "best_threshold_pixel_f1": pixel_f1,
+        "best_threshold_pixel_precision": pixel_precision,
+        "best_threshold_pixel_recall": pixel_recall,
+        "best_threshold_precision": quality_precision,
+        "best_threshold_recall": quality_recall,
+        "best_threshold_object_f1": object_f1,
+        "best_threshold_object_precision": object_precision,
+        "best_threshold_object_recall": object_recall,
+        "quality_f1": quality_f1,
+        "quality_precision": quality_precision,
+        "quality_recall": quality_recall,
     }
 
 
@@ -254,7 +323,7 @@ def _validate_multiclass_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     model.eval()
     total_loss = 0.0
     batches = 0
@@ -304,9 +373,18 @@ def _validate_multiclass_epoch(
     return {
         "loss": total_loss / batches,
         "best_threshold": 0.0,
+        "best_pixel_threshold": 0.0,
         "best_threshold_pixel_f1": foreground_f1,
+        "best_threshold_pixel_precision": foreground_precision,
+        "best_threshold_pixel_recall": foreground_recall,
         "best_threshold_precision": foreground_precision,
         "best_threshold_recall": foreground_recall,
+        "best_threshold_object_f1": None,
+        "best_threshold_object_precision": None,
+        "best_threshold_object_recall": None,
+        "quality_f1": foreground_f1,
+        "quality_precision": foreground_precision,
+        "quality_recall": foreground_recall,
     }
 
 
@@ -577,10 +655,20 @@ def _save_training_checkpoint(
             metadata={
                 "label": label,
                 "epoch": metrics.epoch,
+                "quality_metric": metrics.quality_metric,
+                "val_quality_f1": metrics.val_quality_f1,
+                "val_quality_precision": metrics.val_quality_precision,
+                "val_quality_recall": metrics.val_quality_recall,
                 "val_best_threshold": metrics.val_best_threshold,
+                "val_best_pixel_threshold": metrics.val_best_pixel_threshold,
                 "val_best_threshold_pixel_f1": metrics.val_best_threshold_pixel_f1,
+                "val_best_threshold_pixel_precision": metrics.val_best_threshold_pixel_precision,
+                "val_best_threshold_pixel_recall": metrics.val_best_threshold_pixel_recall,
                 "val_best_threshold_precision": metrics.val_best_threshold_precision,
                 "val_best_threshold_recall": metrics.val_best_threshold_recall,
+                "val_best_threshold_object_f1": metrics.val_best_threshold_object_f1,
+                "val_best_threshold_object_precision": metrics.val_best_threshold_object_precision,
+                "val_best_threshold_object_recall": metrics.val_best_threshold_object_recall,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
                 "sample_size": request.sample_size,
@@ -591,7 +679,15 @@ def _save_training_checkpoint(
 
 
 def _checkpoint_score(metrics: EpochMetrics) -> float:
-    return metrics.val_best_threshold_pixel_f1
+    return metrics.val_quality_f1
+
+
+def _as_numpy_instances(value):
+    if hasattr(value, "detach"):
+        return value.detach().cpu().numpy()
+    import numpy as np
+
+    return np.asarray(value)
 
 
 def _checkpoint_dir(path: str):

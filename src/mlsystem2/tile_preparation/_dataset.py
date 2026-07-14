@@ -11,7 +11,7 @@ from rasterio.windows import Window
 
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
-from ._mask import HARD_NEGATIVE_LABEL, build_supervision_mask
+from ._mask import HARD_NEGATIVE_LABEL, build_supervision_mask, rasterize_instance_mask
 from ._valid_footprint import filter_valid_windows
 from ._vrt import open_vrt_reader, open_vrt_xml
 from ._windows import build_vrt_source_windows_with_diagnostics
@@ -41,6 +41,7 @@ class TileDataset:
         background_factor: float = 0.5,
         class_balance: bool = False,
         tile_split: TileSplitRequest | None = None,
+        include_object_instances: bool = False,
     ) -> None:
         self._vrt_xml = vrt_xml
         self._annotation_file = Path(annotation_file) if annotation_file is not None else None
@@ -64,6 +65,7 @@ class TileDataset:
         self._sampling_warnings: list[str] = []
         self._class_balance = class_balance
         self._tile_split = tile_split
+        self._include_object_instances = include_object_instances
         self._tile_split_warnings: list[str] = []
         self._pool_window_count = 0
         self._split_window_count = 0
@@ -151,7 +153,12 @@ class TileDataset:
                 sample_index=index,
             )
 
-        meta = self._sample_meta(category, augmented)
+        object_instances = (
+            self._read_object_instances(dataset, window, nodata_pixels)
+            if self._include_object_instances
+            else None
+        )
+        meta = self._sample_meta(category, augmented, object_instances)
         return (
             np.ascontiguousarray(image),
             np.ascontiguousarray(mask),
@@ -188,6 +195,10 @@ class TileDataset:
     @property
     def uses_multiclass_masks(self) -> bool:
         return bool(self._class_annotations)
+
+    @property
+    def includes_object_instances(self) -> bool:
+        return self._include_object_instances
 
     @property
     def source_rect_count(self) -> int:
@@ -442,6 +453,21 @@ class TileDataset:
             return mask.astype(np.int64, copy=False)
         return mask.astype(np.float32, copy=False)[None, :, :]
 
+    def _read_object_instances(
+        self,
+        dataset: DatasetReader,
+        window: Window,
+        nodata_pixels: np.ndarray,
+    ) -> np.ndarray:
+        bounds = dataset.window_bounds(window)
+        geometries = self._annotation_index_or_load().query_bounds(bounds)
+        return rasterize_instance_mask(
+            geometries,
+            out_shape=(self._tile_size, self._tile_size),
+            transform=dataset.window_transform(window),
+            nodata_pixels=nodata_pixels,
+        )
+
     def _positive_layers(
         self,
         bounds: tuple[float, float, float, float],
@@ -610,14 +636,22 @@ class TileDataset:
                     counts[slug] += 1
         return counts
 
-    def _sample_meta(self, category: str, augmented: bool) -> dict[str, object]:
-        return {
+    def _sample_meta(
+        self,
+        category: str,
+        augmented: bool,
+        object_instances: np.ndarray | None = None,
+    ) -> dict[str, object]:
+        meta: dict[str, object] = {
             "augmented": augmented,
             "category": category,
             "positive": category == TILE_CATEGORY_POSITIVE,
             "hard_negative": category == TILE_CATEGORY_HARD_NEGATIVE,
             "background": category == TILE_CATEGORY_BACKGROUND,
         }
+        if object_instances is not None:
+            meta["object_instances"] = np.ascontiguousarray(object_instances)
+        return meta
 
 
 def _split_tile_indices(

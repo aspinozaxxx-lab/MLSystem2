@@ -23,6 +23,26 @@ def rasterize_window_mask(geometries: list[object], out_shape: tuple[int, int], 
     return (mask > 0).astype(np.uint8)
 
 
+def rasterize_instance_mask(
+    geometries: list[object],
+    out_shape: tuple[int, int],
+    transform,
+    nodata_pixels: np.ndarray,
+) -> np.ndarray:
+    if not geometries:
+        return np.zeros(out_shape, dtype=np.int64)
+    mask = rasterize(
+        [(geometry, index) for index, geometry in enumerate(geometries, start=1)],
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        dtype="int32",
+        all_touched=False,
+    ).astype(np.int64, copy=False)
+    mask[nodata_pixels] = 0
+    return mask
+
+
 def build_supervision_mask(
     *,
     positive_layers: list[tuple[int, list[object]]],

@@ -8,7 +8,7 @@ EXPECTED_API = {
     "dataset_preparing.api": ["prepare_dataset"],
     "tile_preparation.api": ["create_tile_dataloader"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],
-    "metrics.api": ["compute_pixel_f1", "summarize_epoch_metrics"],
+    "metrics.api": ["compute_object_f1", "compute_pixel_f1", "summarize_epoch_metrics"],
     "train.api": ["train_model"],
     "mlflow_adapter.api": [
         "list_experiments",

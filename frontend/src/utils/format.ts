@@ -104,6 +104,15 @@ export function isValidExportModelName(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(value);
 }
 
+export function isPrimaryDatasetVariant(dataset: {
+  key: string;
+  variant_key?: string | null;
+  is_primary?: boolean;
+}): boolean {
+  if (typeof dataset.is_primary === "boolean") return dataset.is_primary;
+  return dataset.variant_key === "main" || /[\\/]main$/.test(dataset.key);
+}
+
 export function runningProgressLabel(type: string | null | undefined, progress: RuntimeProgress | null | undefined): string {
   if (!progress) return type === "inference" ? "Инференс выполняется" : "Выполняется";
   const current = integerOrNull(progress.current);

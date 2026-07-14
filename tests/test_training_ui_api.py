@@ -1289,8 +1289,10 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "setMinImageCount(latest.min_image_count)" in app_tsx
     assert "setMaxImageCount(latest.image_count)" in app_tsx
     assert "minObjectCount: previous.min_object_count" in app_tsx
-    assert "metric: previous.metric" in app_tsx
-    assert 'metric: "pixel" as const' in app_tsx
+    assert "metric: previous.metric" not in app_tsx
+    assert "qualityMetricLabel(row.dataset.quality_metric)" in app_tsx
+    assert 'head === "classes"' in app_tsx
+    assert "/dataset-catalog/sync" in app_tsx
     assert 'className="test-sample-batch-grid"' in app_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
@@ -1402,12 +1404,16 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "training_templates",
             "inference_templates",
         }
-        assert [item["name"] for item in bootstrap["datasets"]] == ["Вырубки\\main", "Custom"]
+        assert [item["name"] for item in bootstrap["datasets"]] == [
+            "Вырубки\\main",
+            "Реки\\main",
+            "Custom",
+        ]
         assert bootstrap["image_folders"][0]["key"] == "kanopus/irkutsk"
         assert len(bootstrap["training_templates"]) == 7
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
-        assert [item["name"] for item in datasets] == ["Вырубки\\main", "Custom"]
+        assert [item["name"] for item in datasets] == ["Вырубки\\main", "Реки\\main", "Custom"]
         assert datasets[0]["image_count"] == 1
         assert datasets[0]["hard_negative_annotation_file"] is None
         image_folders = client.get("/api/v1/image-folders").json()["folders"]
@@ -1428,7 +1434,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         (new_dir / "fires.txt").write_text("scene-2\n", encoding="utf-8")
         (new_dir / "fires.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
         refreshed = client.get("/api/v1/datasets").json()["datasets"]
-        assert [item["name"] for item in refreshed] == ["Вырубки\\main", "Пожары\\main", "Custom"]
+        assert [item["name"] for item in refreshed] == [
+            "Вырубки\\main",
+            "Пожары\\main",
+            "Реки\\main",
+            "Custom",
+        ]
 
         models = client.get("/api/v1/models").json()["models"]
         assert [item["display_name"] for item in models] == [
@@ -1879,7 +1890,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "split_granularity" not in config_yaml
         assert "num_workers" not in config_yaml
         assert "input_channels" not in config_yaml
-        assert "images_dir" not in config_yaml
+        assert f"images_dir: {config.images_root}" in config_yaml
         assert "inference:" not in config_yaml
         assert "hard_negative_annotation_file:" in config_yaml
         assert "positive_factor: 0.5" in config_yaml

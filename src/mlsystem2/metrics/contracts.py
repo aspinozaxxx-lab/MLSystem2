@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -18,6 +20,25 @@ class PixelF1Request(BaseModel):
 
 
 class PixelF1Result(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    precision: float
+    recall: float
+    f1: float
+    true_positive: int = Field(ge=0)
+    false_positive: int = Field(ge=0)
+    false_negative: int = Field(ge=0)
+
+
+class ObjectF1Request(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    y_true_instances: Any
+    y_pred_mask: Any
+    iou_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+
+
+class ObjectF1Result(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     precision: float
@@ -49,6 +70,8 @@ __all__ = [
     "EpochMetrics",
     "MetricsError",
     "MetricsSummary",
+    "ObjectF1Request",
+    "ObjectF1Result",
     "PixelF1Request",
     "PixelF1Result",
 ]

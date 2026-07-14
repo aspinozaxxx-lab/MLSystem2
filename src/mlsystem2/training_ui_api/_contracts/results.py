@@ -50,6 +50,19 @@ class TrainingResultTestF1Info(BaseModel):
     true_positive: int | None = Field(default=None, ge=0)
     false_positive: int | None = Field(default=None, ge=0)
     false_negative: int | None = Field(default=None, ge=0)
+    quality_metric: Literal["pixel", "objects"] = "pixel"
+    pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    pixel_true_positive: int | None = Field(default=None, ge=0)
+    pixel_false_positive: int | None = Field(default=None, ge=0)
+    pixel_false_negative: int | None = Field(default=None, ge=0)
+    object_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    object_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    object_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    object_true_positive: int | None = Field(default=None, ge=0)
+    object_false_positive: int | None = Field(default=None, ge=0)
+    object_false_negative: int | None = Field(default=None, ge=0)
     sample_id: UUID | None = None
     sample_name: str | None = None
     sample_revision: int | None = Field(default=None, ge=1)
@@ -79,6 +92,7 @@ class TrainingResultInfo(BaseModel):
     dataset_version: str | None = None
     model_name: str
     architecture: str
+    quality_metric: Literal["pixel", "objects"] = "pixel"
     f1_score: float | None = None
     epoch: int | None = None
     trained_at: datetime | None = None
@@ -111,6 +125,7 @@ class ClassResultsResponse(BaseModel):
 
     class_key: str
     class_name: str
+    quality_metric: Literal["pixel", "objects"] = "pixel"
     dataset_updated_at: datetime | None = None
     primary_test_sample: PrimaryTestSampleInfo | None = None
     test_f1_status: Literal["current", "stale", "running", "unavailable"] = "unavailable"
@@ -126,6 +141,8 @@ class ResultVariantInfo(BaseModel):
     class_name: str | None = None
     variant_key: str | None = None
     variant_name: str | None = None
+    quality_metric: Literal["pixel", "objects"] = "pixel"
+    is_primary: bool = False
     image_count: int | None = None
     test_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     test_f1_status: Literal["current", "stale"] | None = None
@@ -140,6 +157,7 @@ class ResultClassInfo(BaseModel):
     updated_at: datetime | None = None
     variants: list[ResultVariantInfo] = Field(default_factory=list)
     is_custom: bool = False
+    quality_metric: Literal["pixel", "objects"] = "pixel"
 
 
 class ResultClassListResponse(BaseModel):

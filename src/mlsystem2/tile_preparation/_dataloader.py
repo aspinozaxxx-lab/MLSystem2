@@ -52,6 +52,7 @@ def create_tile_dataloader(
             background_factor=tile_settings.background_factor,
             class_balance=tile_settings.class_balance,
             tile_split=request.tile_split,
+            include_object_instances=request.include_object_instances,
         )
     except TilePreparationError:
         raise
@@ -213,7 +214,12 @@ def _estimate_val_cache_bytes(dataset: TileDataset, *, tile_count: int) -> int:
     image_bytes = tile_count * dataset.channel_count * tile_pixels * np.dtype(np.float32).itemsize
     mask_dtype = np.dtype(np.int64) if dataset.uses_multiclass_masks else np.dtype(np.float32)
     mask_bytes = tile_count * tile_pixels * mask_dtype.itemsize
-    return int((image_bytes + mask_bytes) * VAL_CACHE_ESTIMATE_OVERHEAD)
+    instance_bytes = (
+        tile_count * tile_pixels * np.dtype(np.int64).itemsize
+        if getattr(dataset, "includes_object_instances", False)
+        else 0
+    )
+    return int((image_bytes + mask_bytes + instance_bytes) * VAL_CACHE_ESTIMATE_OVERHEAD)
 
 
 def _available_memory_bytes() -> int | None:
@@ -347,6 +353,13 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
         "tile_background": tile_background,
         "tile_category": tile_categories,
     }
+    if any("object_instances" in meta for meta in metas):
+        if not all("object_instances" in meta for meta in metas):
+            raise TilePreparationError("В batch присутствуют неполные маски объектов.")
+        batch_meta["object_instances"] = torch.stack(
+            [torch.as_tensor(meta["object_instances"], dtype=torch.long) for meta in metas],
+            dim=0,
+        )
     return images, masks, batch_meta
 
 

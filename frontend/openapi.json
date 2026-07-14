@@ -272,6 +272,352 @@
         }
       }
     },
+    "/api/v1/dataset-catalog": {
+      "get": {
+        "summary": "Get Dataset Catalog",
+        "operationId": "get_dataset_catalog_api_v1_dataset_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-catalog/sync": {
+      "post": {
+        "summary": "Post Dataset Catalog Sync",
+        "operationId": "post_dataset_catalog_sync_api_v1_dataset_catalog_sync_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-classes": {
+      "post": {
+        "summary": "Post Dataset Class",
+        "operationId": "post_dataset_class_api_v1_dataset_classes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetClassCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-classes/{class_key}": {
+      "patch": {
+        "summary": "Patch Dataset Class",
+        "operationId": "patch_dataset_class_api_v1_dataset_classes__class_key__patch",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Class Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetClassUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-classes/{class_key}/primary-subclass": {
+      "put": {
+        "summary": "Put Primary Subclass",
+        "operationId": "put_primary_subclass_api_v1_dataset_classes__class_key__primary_subclass_put",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Class Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetPrimarySubclassUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-subclasses": {
+      "post": {
+        "summary": "Post Dataset Subclass",
+        "operationId": "post_dataset_subclass_api_v1_dataset_subclasses_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetSubclassCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-subclasses/{subclass_key}": {
+      "patch": {
+        "summary": "Patch Dataset Subclass",
+        "operationId": "patch_dataset_subclass_api_v1_dataset_subclasses__subclass_key__patch",
+        "parameters": [
+          {
+            "name": "subclass_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subclass Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetSubclassUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/managed-datasets": {
+      "post": {
+        "summary": "Post Managed Dataset",
+        "operationId": "post_managed_dataset_api_v1_managed_datasets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedDatasetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/managed-datasets/{dataset_key}": {
+      "patch": {
+        "summary": "Patch Managed Dataset",
+        "operationId": "patch_managed_dataset_api_v1_managed_datasets__dataset_key__patch",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedDatasetUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/models": {
       "get": {
         "summary": "Get Models",
@@ -2592,7 +2938,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -2604,7 +2950,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -2638,7 +2984,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -2689,7 +3035,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -2817,10 +3163,37 @@
             "type": "array",
             "title": "Variants"
           },
+          "subclasses": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetSubclassInfo"
+            },
+            "type": "array",
+            "title": "Subclasses"
+          },
           "is_custom": {
             "type": "boolean",
             "title": "Is Custom",
             "default": false
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "primary_subclass_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Subclass Key"
           }
         },
         "additionalProperties": false,
@@ -2857,6 +3230,15 @@
           "class_name": {
             "type": "string",
             "title": "Class Name"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
           },
           "dataset_updated_at": {
             "anyOf": [
@@ -3040,6 +3422,80 @@
         ],
         "title": "CustomDatasetInfo"
       },
+      "DatasetCatalogInfo": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/ClassInfo"
+            },
+            "type": "array",
+            "title": "Classes"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetSourceInfo"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "image_types": {
+            "items": {
+              "$ref": "#/components/schemas/ImageTypeInfo"
+            },
+            "type": "array",
+            "title": "Image Types"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DatasetCatalogInfo"
+      },
+      "DatasetClassCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DatasetClassCreate"
+      },
+      "DatasetClassUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "quality_metric": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualityMetric"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DatasetClassUpdate"
+      },
       "DatasetInfo": {
         "properties": {
           "key": {
@@ -3071,6 +3527,17 @@
               }
             ],
             "title": "Class Name"
+          },
+          "subclass_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subclass Key"
           },
           "variant_key": {
             "anyOf": [
@@ -3177,6 +3644,63 @@
             ],
             "title": "Updated At"
           },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "image_type": {
+            "type": "string",
+            "title": "Image Type",
+            "default": "all"
+          },
+          "images_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Images Dir"
+          },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
+          },
+          "source_available": {
+            "type": "boolean",
+            "title": "Source Available",
+            "default": true
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
+          },
           "diagnostics": {
             "items": {
               "type": "string"
@@ -3209,6 +3733,137 @@
           "datasets"
         ],
         "title": "DatasetListResponse"
+      },
+      "DatasetPrimarySubclassUpdate": {
+        "properties": {
+          "subclass_key": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Subclass Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subclass_key"
+        ],
+        "title": "DatasetPrimarySubclassUpdate"
+      },
+      "DatasetSourceInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "assigned_dataset_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Dataset Key"
+          },
+          "diagnostics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Diagnostics"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "path"
+        ],
+        "title": "DatasetSourceInfo"
+      },
+      "DatasetSubclassCreate": {
+        "properties": {
+          "class_key": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Class Key"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "class_key",
+          "name"
+        ],
+        "title": "DatasetSubclassCreate"
+      },
+      "DatasetSubclassInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
+          },
+          "dataset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "DatasetSubclassInfo"
+      },
+      "DatasetSubclassUpdate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DatasetSubclassUpdate"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3268,6 +3923,36 @@
           "folders"
         ],
         "title": "ImageFolderListResponse"
+      },
+      "ImageTypeInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Image Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "path",
+          "image_count"
+        ],
+        "title": "ImageTypeInfo"
       },
       "InferenceTemplate": {
         "properties": {
@@ -3839,6 +4524,59 @@
         ],
         "title": "MLflowExperimentInfo"
       },
+      "ManagedDatasetCreate": {
+        "properties": {
+          "subclass_key": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Subclass Key"
+          },
+          "source_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Source Path"
+          },
+          "image_type": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Image Type",
+            "default": "all"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subclass_key",
+          "source_path"
+        ],
+        "title": "ManagedDatasetCreate"
+      },
+      "ManagedDatasetUpdate": {
+        "properties": {
+          "source_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Source Path"
+          },
+          "image_type": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Image Type",
+            "default": "all"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_path"
+        ],
+        "title": "ManagedDatasetUpdate"
+      },
       "MarkupExportInfo": {
         "properties": {
           "id": {
@@ -4229,6 +4967,14 @@
         ],
         "title": "PseudoMarkupResultInfo"
       },
+      "QualityMetric": {
+        "type": "string",
+        "enum": [
+          "pixel",
+          "objects"
+        ],
+        "title": "QualityMetric"
+      },
       "QueueEnabledUpdate": {
         "properties": {
           "enabled": {
@@ -4435,6 +5181,15 @@
             "type": "boolean",
             "title": "Is Custom",
             "default": false
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
           }
         },
         "additionalProperties": false,
@@ -4522,6 +5277,20 @@
               }
             ],
             "title": "Variant Name"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
           },
           "image_count": {
             "anyOf": [
@@ -5173,6 +5942,15 @@
             "type": "string",
             "title": "Variant Name"
           },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
           "image_count": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
@@ -5452,7 +6230,8 @@
               "pixel",
               "objects"
             ],
-            "title": "Metric"
+            "title": "Metric",
+            "default": "pixel"
           }
         },
         "additionalProperties": false,
@@ -5460,8 +6239,7 @@
         "required": [
           "min_tile_count",
           "max_tile_count",
-          "min_object_count",
-          "metric"
+          "min_object_count"
         ],
         "title": "TestSampleOptimizeRequest"
       },
@@ -5524,6 +6302,15 @@
           "variant_name": {
             "type": "string",
             "title": "Variant Name"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
           },
           "image_count": {
             "type": "integer",
@@ -5844,6 +6631,15 @@
             "type": "string",
             "title": "Architecture"
           },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
           "f1_score": {
             "anyOf": [
               {
@@ -6055,6 +6851,165 @@
               }
             ],
             "title": "False Negative"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "pixel_precision": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel Precision"
+          },
+          "pixel_recall": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel Recall"
+          },
+          "pixel_f1": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel F1"
+          },
+          "pixel_true_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel True Positive"
+          },
+          "pixel_false_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel False Positive"
+          },
+          "pixel_false_negative": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel False Negative"
+          },
+          "object_precision": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Precision"
+          },
+          "object_recall": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Recall"
+          },
+          "object_f1": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object F1"
+          },
+          "object_true_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object True Positive"
+          },
+          "object_false_positive": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object False Positive"
+          },
+          "object_false_negative": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object False Negative"
           },
           "sample_id": {
             "anyOf": [
@@ -6362,13 +7317,6 @@
           "type": {
             "type": "string",
             "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
           }
         },
         "type": "object",

@@ -24,7 +24,8 @@ from mlsystem2.mlflow_adapter.contracts import (
 
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig
-from ._datasets import CUSTOM_KEY, count_scenes_file_images, list_datasets
+from ._dataset_catalog import list_managed_datasets
+from ._datasets import CUSTOM_KEY, count_scenes_file_images
 from ._models import (
     AutomationControlRow,
     AutomationRuleRow,
@@ -71,7 +72,7 @@ def ensure_automation_control(session: Session) -> AutomationControlRow:
 
 def automation_snapshot(session: Session, config: TrainingUIAPIConfig) -> AutomationSnapshot:
     control = ensure_automation_control(session)
-    datasets = _automation_datasets(config)
+    datasets = _automation_datasets(session, config)
     models = ui_model_infos()
     rules = {
         (row.dataset_key, row.architecture): row
@@ -127,7 +128,7 @@ def update_automation_rule(
     request: AutomationRuleUpdate,
     config: TrainingUIAPIConfig,
 ) -> AutomationRuleInfo:
-    dataset = _resolve_automation_dataset(config, request.dataset_key)
+    dataset = _resolve_automation_dataset(session, config, request.dataset_key)
     if request.architecture not in UI_ARCHITECTURES:
         raise TrainingUIAPIError(f"Модель не найдена: {request.architecture}")
 
@@ -189,7 +190,7 @@ def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
     control = ensure_automation_control(session)
     if not control.enabled:
         return
-    datasets = {item.key: item for item in _automation_datasets(config)}
+    datasets = {item.key: item for item in _automation_datasets(session, config)}
     rules = session.scalars(
         select(AutomationRuleRow).where(
             (AutomationRuleRow.training_enabled.is_(True))
@@ -207,16 +208,27 @@ def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
             _ensure_pseudo_markup_for_rule(session, rule, dataset, config)
 
 
-def _automation_datasets(config: TrainingUIAPIConfig) -> list[DatasetInfo]:
+def _automation_datasets(session: Session, config: TrainingUIAPIConfig) -> list[DatasetInfo]:
     return [
         item
-        for item in list_datasets(config.mlmarkup_root)
-        if item.key != CUSTOM_KEY and item.scenes_file and item.annotation_file
+        for item in list_managed_datasets(session, config, include_custom=False)
+        if item.key != CUSTOM_KEY
+        and item.scenes_file
+        and item.annotation_file
+        and item.source_available
+        and item.images_dir is not None
     ]
 
 
-def _resolve_automation_dataset(config: TrainingUIAPIConfig, dataset_key: str) -> DatasetInfo:
-    dataset = next((item for item in _automation_datasets(config) if item.key == dataset_key), None)
+def _resolve_automation_dataset(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+) -> DatasetInfo:
+    dataset = next(
+        (item for item in _automation_datasets(session, config) if item.key == dataset_key),
+        None,
+    )
     if dataset is None:
         raise TrainingUIAPIError(f"Датасет не найден или неполный: {dataset_key}")
     return dataset
@@ -252,6 +264,7 @@ def _ensure_training_for_rule(
         )
     )
     job_config = sanitize_template_config(template.default_config)
+    job_config["train.quality_metric"] = dataset.quality_metric
     model_name = MODEL_DISPLAY_NAMES.get(rule.architecture, rule.architecture)
     row = JobRow(
         type=JobType.TRAINING.value,
@@ -283,6 +296,7 @@ def _ensure_training_for_rule(
             class_display_name=dataset.name,
             architecture=rule.architecture,
             model_name=model_name,
+            quality_metric=dataset.quality_metric,
             status=ResultStatus.RUNNING.value,
             job_id=row.id,
         )
@@ -328,7 +342,8 @@ def _ensure_pseudo_markup_for_rule(
         else {}
     )
     scenes_row = _store_existing_file(session, kind=StoredFileKind.SCENES_TXT, path=Path(dataset.scenes_file))
-    image_count = count_scenes_file_images(Path(scenes_row.path), config.images_root)
+    images_root = Path(dataset.images_dir or config.images_root)
+    image_count = count_scenes_file_images(Path(scenes_row.path), images_root)
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.AUTOMATION.value,
@@ -348,6 +363,7 @@ def _ensure_pseudo_markup_for_rule(
             "training_result_id": str(training_result.id),
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
+            "images_root": str(images_root),
             **_checkpoint_config(training_result, config),
         },
     )
@@ -595,7 +611,7 @@ def _process_group_alive(process_pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
     return True
 
@@ -607,7 +623,7 @@ def _pid_alive(process_pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
     return True
 
@@ -618,9 +634,9 @@ def _kill_process_group(process_pid: int) -> None:
     except AttributeError:
         try:
             os.kill(process_pid, signal.SIGKILL)
-        except OSError:
+        except (OSError, SystemError):
             return
-    except OSError:
+    except (OSError, SystemError):
         return
 
 

@@ -17,7 +17,7 @@
 - `DatasetClassSettings` - поля `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` - поля `images_dir`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` - поля `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, `positive_factor`, `hard_negative_factor`, `background_factor`, `val_positive_factor`, `class_balance`.
-- `TrainSettings` - поля `task`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `hard_negative_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
+- `TrainSettings` - поля `task`, `quality_metric`, `model_name`, `input_channels`, `output_channels`, `pretrained`, `initial_checkpoint_uri`, `epochs`, `batch_size`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `hard_negative_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec`.
 - `InferenceSettings`, `MLflowSettings` - настройки соответствующих модулей конвейера.
 - `SystemSettings` - корневой DTO настроек.
 
@@ -31,7 +31,7 @@
 
 `settings.yml` хранит параметры приложения, которые не должны меняться между запусками обычным оператором: `runtime.project_root`, базовые директории, `dataset.images_dir`, `tile_preparation.num_workers`, `prefetch_epochs`, `seed`, `val_positive_factor`, `class_balance`, `train.task`, `input_channels`, `output_channels`, `pretrained`, `device`, а также `mlflow.enabled` и `mlflow.tracking_uri`.
 
-`run.yml` хранит задание конкретного обучения: пути positive-разметки, optional hard-negative разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, train sampling factors, модель, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. Параметры inference задаются отдельно при создании задания псевдоразметки.
+`run.yml` хранит задание конкретного обучения: пути positive-разметки, optional hard-negative разметки, `dataset.val_fraction`, `tile_size`, `stride`, аугментации, train sampling factors, модель, `quality_metric`, гиперпараметры обучения, `max_train_batches_per_epoch`, `max_val_batches_per_epoch`, `max_training_time_sec` и имя MLflow experiment. CLI использует `quality_metric=pixel` по умолчанию; объектовая метрика допустима только для binary. Параметры inference задаются отдельно при создании задания псевдоразметки.
 
 Основные train-поля использовались в tuning runs или необходимы реальному SegFormer train loop. Background имеет фиксированный вес `1`, `pos_weight` усиливает positive pixels в binary loss, а `hard_negative_weight` усиливает штраф за ложноположительные pixels внутри hard-negative тайлов в binary и multiclass train. Optimizer фиксирован как AdamW, scheduler фиксирован как cosine и не выносится в settings, пока нет необходимости менять их как гиперпараметры.
 
@@ -73,4 +73,4 @@ dataset:
 
 Валидация `DatasetSettings`: либо заданы `classes`, либо заданы `scenes_file` + `annotation_file`; смешивать режимы нельзя. `hard_negative_annotation_file` в верхнем уровне относится только к binary режиму, а в multiclass задается внутри конкретного `DatasetClassSettings`. `classes` не должен быть пустым в multiclass режиме. `slug` и `name` должны быть уникальны. Class id назначается порядком в config: `background=0`, первый класс `1`. `priority` используется только при пересечении multiclass positive-разметки: больший приоритет перекрывает меньший, при равном приоритете используется порядок `class_id`.
 
-Валидация `SystemSettings`: `dataset.classes` требует `train.task=multiclass`, `train.loss=cross_entropy` или `train.loss=cross_entropy_dice` и `train.output_channels=len(dataset.classes)+1`. Binary dataset требует `train.task=binary`; multiclass loss в binary режиме запрещен.
+Валидация `SystemSettings`: `dataset.classes` требует `train.task=multiclass`, `train.quality_metric=pixel`, `train.loss=cross_entropy` или `train.loss=cross_entropy_dice` и `train.output_channels=len(dataset.classes)+1`. Binary dataset требует `train.task=binary`; multiclass loss в binary режиме запрещен.

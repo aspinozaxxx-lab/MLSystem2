@@ -31,6 +31,76 @@ def _json_type():
     return JSON().with_variant(JSONB, "postgresql")
 
 
+class DatasetClassRow(Base):
+    __tablename__ = "dataset_classes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(240), unique=True)
+    quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
+    primary_subclass_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("dataset_subclasses.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    primary_subclass_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class DatasetSubclassRow(Base):
+    __tablename__ = "dataset_subclasses"
+    __table_args__ = (
+        UniqueConstraint("class_id", "name", name="uq_dataset_subclasses_class_name"),
+        Index("ix_dataset_subclasses_class_id", "class_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    class_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("dataset_classes.id", ondelete="RESTRICT"),
+    )
+    name: Mapped[str] = mapped_column(String(240))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class DatasetRow(Base):
+    __tablename__ = "datasets"
+    __table_args__ = (
+        UniqueConstraint("source_type", "source_path", name="uq_datasets_source"),
+        Index("ix_datasets_subclass_id", "subclass_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    subclass_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("dataset_subclasses.id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), default="mlmarkup")
+    source_path: Mapped[str] = mapped_column(String(1024))
+    image_type: Mapped[str] = mapped_column(String(240), default="all")
+    config_revision: Mapped[int] = mapped_column(Integer, default=1)
+    legacy_version: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
     __table_args__ = (
@@ -241,6 +311,7 @@ class TrainingResultRow(Base):
     class_display_name: Mapped[str] = mapped_column(String(240))
     architecture: Mapped[str] = mapped_column(String(96))
     model_name: Mapped[str] = mapped_column(String(160))
+    quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     f1_score: Mapped[float | None] = mapped_column(nullable=True)
     epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -325,6 +396,7 @@ class TestSampleRow(Base):
     class_name: Mapped[str] = mapped_column(String(240))
     variant_key: Mapped[str] = mapped_column(String(180))
     variant_name: Mapped[str] = mapped_column(String(240))
+    quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     tile_width: Mapped[int] = mapped_column(Integer)
     tile_height: Mapped[int] = mapped_column(Integer)
     image_count: Mapped[int] = mapped_column(Integer)
@@ -507,6 +579,12 @@ class TrainingResultTestMetricRow(Base):
     true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_precision: Mapped[float | None] = mapped_column(nullable=True)
+    object_recall: Mapped[float | None] = mapped_column(nullable=True)
+    object_f1: Mapped[float | None] = mapped_column(nullable=True)
+    object_true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    object_false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     inference_template_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("inference_templates.id", ondelete="SET NULL"),

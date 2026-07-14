@@ -8,15 +8,15 @@
 
 - `list_experiments(tracking_uri: str) -> list[MLflowExperiment]` - возвращает доступные experiments из указанного MLflow tracking URI.
 - `create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment` - создает experiment или возвращает существующий с тем же именем.
-- `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает history метрики `val/best_threshold_pixel_f1` и возвращает эпоху, значение F1, threshold и ссылку на `checkpoints/best.pt`.
+- `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает `val/quality_f1` для запуска с tag `quality_metric`, использует pixel fallback для старого запуска и возвращает эпоху, значение F1, threshold и ссылку на `checkpoints/best.pt`.
 - `download_run_artifact(tracking_uri: str, run_id: str, artifact_path: str, dst_dir: str | Path) -> MLflowDownloadedArtifact` - скачивает артефакт запуска в локальную рабочую папку вызывающего модуля.
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
 - `log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> None` - пишет исходные txt/geojson файлы датасета в папку `dataset` артефактов MLflow.
 - `log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None` - пишет отчет подготовки тайлов.
 - `log_run_config(run: MLflowRunRef, config_path: str | Path) -> None` - пишет YAML-конфиг запуска.
-- `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет метрики одной эпохи сразу после ее завершения: `train/loss`, `val/loss`, `val/best_threshold`, `val/best_threshold_pixel_f1`, `val/best_threshold_precision`, `val/best_threshold_recall`, `train/epoch_time_sec`.
-- `log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None` - пишет итоговые метрики обучения: `train/epochs_total`, `train/training_time_sec`, `train/best_threshold_pixel_f1`.
+- `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет перечисленные ниже loss, quality, pixel, optional object и threshold метрики одной эпохи и tag `quality_metric`.
+- `log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None` - пишет итоговые `train/epochs_total`, `train/training_time_sec`, `train/best_quality_f1`, `train/best_threshold_pixel_f1`.
 - `log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None` - пишет историю обучения и checkpoint-файлы.
 - `log_timing_report(run: MLflowRunRef, report: TimingReport) -> None` - пишет отчет времени выполнения.
 - `log_pipeline_report(run: MLflowRunRef, report: PipelineReport) -> None` - пишет итоговый отчет конвейера.
@@ -50,15 +50,29 @@
 - `train/loss`
 - `val/loss`
 - `val/best_threshold`
+- `val/best_pixel_threshold`
+- `val/quality_f1`
+- `val/quality_precision`
+- `val/quality_recall`
 - `val/best_threshold_pixel_f1`
+- `val/pixel_f1`
+- `val/pixel_precision`
+- `val/pixel_recall`
 - `val/best_threshold_precision`
 - `val/best_threshold_recall`
+- `val/best_threshold_object_f1` — только при наличии object validation
+- `val/best_threshold_object_precision` — только при наличии object validation
+- `val/best_threshold_object_recall` — только при наличии object validation
+- `val/object_f1` — только при наличии object validation
+- `val/object_precision` — только при наличии object validation
+- `val/object_recall` — только при наличии object validation
 - `train/epoch_time_sec`
 
 `log_training_metrics` пишет только итоговые run-level метрики без `step`:
 
 - `train/epochs_total`
 - `train/training_time_sec`
+- `train/best_quality_f1`
 - `train/best_threshold_pixel_f1`
 
 ## Алгоритм работы и его особенности
@@ -69,8 +83,8 @@
 
 `log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует только метрики, перечисленные в разделе "Публикуемые MLflow-метрики". Это обеспечивает появление HPO-сигналов в MLflow во время долгого обучения без диагностического шума.
 
-`log_training_metrics` не дублирует per-epoch метрики. Он пишет только итоговые значения `train/epochs_total`, `train/training_time_sec`, `train/best_threshold_pixel_f1`. Метрика `train/best_threshold_pixel_f1` равна максимуму `val/best_threshold_pixel_f1` по истории эпох и предназначена для сортировки HPO trials через `mlflow.search_runs` без чтения history каждого run. `log_training_artifacts` пишет полную историю обучения в JSON и сохраняет существующие best/final checkpoint-файлы.
+`log_training_metrics` не дублирует per-epoch метрики. `train/best_quality_f1` равна максимуму выбранной метрики, а совместимая `train/best_threshold_pixel_f1` — максимуму pixel F1. `log_training_artifacts` пишет полную историю обучения в JSON и сохраняет существующие best/final checkpoint-файлы.
 
-`get_best_training_checkpoint` читает историю `val/best_threshold_pixel_f1`, потому что `best.pt` сохраняется train-модулем по этой же метрике. При равном F1 выбирается более ранняя эпоха, что соответствует сохранению checkpoint только при строгом улучшении. Если в MLflow есть `val/best_threshold` на той же эпохе, значение возвращается вместе с checkpoint summary.
+`get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` читает `val/quality_f1`, потому что `best.pt` сохраняется train-модулем по этой же метрике. Запуск без tag считается старым и читается по `val/best_threshold_pixel_f1`; если новый metric history отсутствует, также применяется pixel fallback. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается вместе с checkpoint summary.
 
 `download_run_artifact` оборачивает публичный MLflow client и нужен вызывающим модулям, которым требуется локальный файл артефакта без прямого импорта MLflow.

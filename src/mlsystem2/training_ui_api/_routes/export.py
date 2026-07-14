@@ -30,9 +30,10 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
     @app.post("/api/v1/markup-export", response_model=MarkupExportInfo)
     def post_markup_export(
         request: MarkupExportRequest,
+        db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> MarkupExportInfo:
-        return build_markup_export(request, ctx.config)
+        return build_markup_export(request, ctx.config, db)
 
     @app.get(
         "/api/v1/markup-export/{export_id}/tiles/{tile_index}/preview",

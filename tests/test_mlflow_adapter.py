@@ -430,7 +430,14 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
         ("train/loss", 1.0, 3),
         ("val/loss", 1.0, 3),
         ("val/best_threshold", 0.75, 3),
+        ("val/best_pixel_threshold", 0.75, 3),
+        ("val/quality_f1", 0.6, 3),
+        ("val/quality_precision", 0.7, 3),
+        ("val/quality_recall", 0.52, 3),
         ("val/best_threshold_pixel_f1", 0.6, 3),
+        ("val/pixel_f1", 0.6, 3),
+        ("val/pixel_precision", 0.7, 3),
+        ("val/pixel_recall", 0.52, 3),
         ("val/best_threshold_precision", 0.7, 3),
         ("val/best_threshold_recall", 0.52, 3),
         ("train/epoch_time_sec", 1.0, 3),
@@ -475,5 +482,6 @@ def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
     assert logged == [
         ("train/epochs_total", 2, None),
         ("train/training_time_sec", 2.2, None),
+        ("train/best_quality_f1", 0.6, None),
         ("train/best_threshold_pixel_f1", 0.6, None),
     ]

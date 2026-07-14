@@ -974,7 +974,7 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         assert job.config["operation"] == "test_sample_f1"
         assert job.config["test_sample_tile_indices"] == [1, 2]
         assert job.config["postprocess_profile"] == "strong"
-        assert job.config["test_f1_evaluator_version"] == 2
+        assert job.config["test_f1_evaluator_version"] == 3
 
         current_hash = metric.inference_config_hash
         metric.status = "current"

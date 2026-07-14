@@ -44,7 +44,7 @@ class TestSampleOptimizeRequest(BaseModel):
     min_tile_count: int = Field(gt=0)
     max_tile_count: int = Field(gt=0)
     min_object_count: int = Field(gt=0)
-    metric: Literal["pixel", "objects"]
+    metric: Literal["pixel", "objects"] = "pixel"
 
 
 class TestSampleMetric(BaseModel):
@@ -84,6 +84,7 @@ class TestSampleSummary(BaseModel):
     class_name: str
     variant_key: str
     variant_name: str
+    quality_metric: Literal["pixel", "objects"] = "pixel"
     image_count: int = Field(gt=0)
     enabled_image_count: int = Field(ge=0)
     actual_object_count: int = Field(gt=0)

@@ -28,7 +28,8 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
-from ._datasets import CUSTOM_KEY, count_scenes_file_images, list_datasets
+from ._dataset_catalog import find_managed_dataset, list_managed_datasets
+from ._datasets import CUSTOM_KEY, count_scenes_file_images
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -405,6 +406,7 @@ def _build_training_config(
             "background_factor": tile_factors["tile_preparation.background_factor"],
         },
         "train": {
+            "quality_metric": str(_flat_value(flat, "train.quality_metric", "pixel")),
             "model_name": row.architecture,
             "initial_checkpoint_uri": _blank_to_none(
                 _flat_value(flat, "train.initial_checkpoint_uri", None)
@@ -466,7 +468,7 @@ def _build_pseudo_markup_config(
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
         "scenes_file": result.scenes_file.path,
-        "images_root": str(config.images_root),
+        "images_root": str(row.config.get("images_root") or config.images_root),
         "class_key": result.class_key,
         "class_name": training_result.class_display_name if training_result is not None else result.class_key,
         "source_model": training_result.model_name if training_result is not None else row.model_name,
@@ -532,13 +534,17 @@ def _build_test_sample_f1_config(
         base_name = f"tile_{tile.tile_index:03d}"
         tif_path = sample_root / f"{base_name}.tif"
         mask_path = sample_root / f"{base_name}_mask.png"
-        if not tif_path.is_file() or not mask_path.is_file():
-            raise RuntimeError(f"Не найдены TIFF или маска тестового тайла {base_name}.")
+        geojson_path = sample_root / f"{base_name}.geojson"
+        if not tif_path.is_file() or not mask_path.is_file() or not geojson_path.is_file():
+            raise RuntimeError(
+                f"Не найдены TIFF, GeoJSON или маска тестового тайла {base_name}."
+            )
         tiles.append(
             {
                 "index": tile.tile_index,
                 "image_path": str(tif_path),
                 "mask_path": str(mask_path),
+                "geojson_path": str(geojson_path),
             }
         )
     return {
@@ -585,12 +591,26 @@ def _dataset_config(
             "annotation_file": custom.annotation_file.path,
         }
 
-    dataset = next((item for item in list_datasets(config.mlmarkup_root) if item.key == dataset_key), None)
+    dataset = find_managed_dataset(session, config, dataset_key)
     if dataset is None:
-        dataset = next((item for item in list_datasets(config.mlmarkup_root) if item.name == row.dataset_name), None)
-    if dataset is None or not dataset.scenes_file or not dataset.annotation_file:
+        dataset = next(
+            (
+                item
+                for item in list_managed_datasets(session, config, include_custom=False)
+                if item.name == row.dataset_name
+            ),
+            None,
+        )
+    if (
+        dataset is None
+        or not dataset.source_available
+        or dataset.images_dir is None
+        or not dataset.scenes_file
+        or not dataset.annotation_file
+    ):
         raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
     return {
+        "images_dir": dataset.images_dir or str(config.images_root),
         "scenes_file": dataset.scenes_file,
         "annotation_file": dataset.annotation_file,
         **(
@@ -851,6 +871,32 @@ def _finish_test_sample_f1_job(
             metric.true_positive = true_positive
             metric.false_positive = false_positive
             metric.false_negative = false_negative
+            object_true_positive = int(report.get("object_true_positive") or 0)
+            object_false_positive = int(report.get("object_false_positive") or 0)
+            object_false_negative = int(report.get("object_false_negative") or 0)
+            object_precision_denominator = object_true_positive + object_false_positive
+            object_recall_denominator = object_true_positive + object_false_negative
+            object_precision = (
+                object_true_positive / object_precision_denominator
+                if object_precision_denominator
+                else 0.0
+            )
+            object_recall = (
+                object_true_positive / object_recall_denominator
+                if object_recall_denominator
+                else 0.0
+            )
+            object_denominator = object_precision + object_recall
+            metric.object_precision = object_precision
+            metric.object_recall = object_recall
+            metric.object_f1 = (
+                2.0 * object_precision * object_recall / object_denominator
+                if object_denominator
+                else 0.0
+            )
+            metric.object_true_positive = object_true_positive
+            metric.object_false_positive = object_false_positive
+            metric.object_false_negative = object_false_negative
             metric.threshold = float(report.get("threshold"))
             metric.status = "current"
             metric.evaluated_at = row.finished_at

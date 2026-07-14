@@ -631,6 +631,64 @@
   color: var(--muted);
 }
 
+.class-editor-card {
+  display: grid;
+  gap: 16px;
+}
+
+.class-editor-header {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(180px, 240px) minmax(180px, 240px);
+  align-items: end;
+  gap: 14px;
+}
+
+.class-editor-header > label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-weight: 650;
+}
+
+.class-editor-subclasses {
+  display: grid;
+  gap: 10px;
+}
+
+.subclass-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.subclass-card-header,
+.dataset-binding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subclass-card-header .inline-form {
+  flex: 1 1 420px;
+}
+
+.dataset-binding {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.empty-binding {
+  min-height: 46px;
+}
+
+.add-subclass-form {
+  padding-top: 4px;
+}
+
 @media (max-width: 700px) {
   .tool-card,
   .class-card,
@@ -653,6 +711,16 @@
 
   .test-sample-batch-row {
     grid-template-columns: minmax(130px, 1fr) 92px 110px;
+  }
+
+  .class-editor-header {
+    grid-template-columns: 1fr;
+  }
+
+  .subclass-card-header,
+  .dataset-binding {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

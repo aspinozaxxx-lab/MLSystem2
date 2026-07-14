@@ -31,7 +31,9 @@ import type {
   ConfigField,
   ConfigSchema,
   CustomDatasetInfo,
+  DatasetCatalogInfo,
   DatasetInfo,
+  DatasetSubclassInfo,
   ImageFolderInfo,
   InferenceTemplate,
   JobDetail,
@@ -69,6 +71,7 @@ import {
   formatRuntimeMinutes,
   formatTrainingResultDate,
   integerOrNull,
+  isPrimaryDatasetVariant,
   isValidExportModelName,
   runningProgressLabel,
   shortVersion,
@@ -90,7 +93,6 @@ type TestSampleBatchFormRow = {
   dataset: DatasetInfo;
   selected: boolean;
   minObjectCount: number;
-  metric: "pixel" | "objects";
 };
 
 export function App() {
@@ -228,6 +230,7 @@ function RoutedPage(props: {
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;
   if (head === "automation") return <AutomationPage {...props} />;
+  if (head === "classes") return <ClassEditorPage {...props} />;
   if (head === "model-export") return <ModelExportPage {...props} />;
   if (head === "markup-export" && second) {
     return <TestSampleEditorPage {...props} sampleId={second} />;
@@ -257,6 +260,7 @@ function Shell({
     { href: "#/queue", key: "queue", label: "Очередь", icon: ListChecks },
     { href: "#/templates", key: "templates", label: "Шаблоны", icon: Settings },
     { href: "#/automation", key: "automation", label: "Автоматизация", icon: Activity },
+    { href: "#/classes", key: "classes", label: "Редактор классов", icon: Database },
   ];
   return (
     <div className="app-shell">
@@ -658,7 +662,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
         return {
           dataset,
           result,
-          selected: Boolean(result && isMainDatasetVariant(dataset)),
+          selected: Boolean(result && isPrimaryDatasetVariant(dataset)),
           modelName: result ? defaultTrainingZipModelName(result, bootstrap.datasets) : "",
           sampleSize: result?.sample_size_hint ? String(result.sample_size_hint) : "",
         };
@@ -858,7 +862,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
   const [minImageCount, setMinImageCount] = useState(5);
   const [maxImageCount, setMaxImageCount] = useState(10);
   const [rows, setRows] = useState<TestSampleBatchFormRow[]>(() =>
-    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150, metric: "pixel" as const })),
+    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150 })),
   );
   const [busy, setBusy] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -878,7 +882,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
     setRows((current) =>
       datasets.map((dataset) => {
         const existing = current.find((item) => item.dataset.key === dataset.key);
-        return existing || { dataset, selected: false, minObjectCount: 150, metric: "pixel" as const };
+        return existing || { dataset, selected: false, minObjectCount: 150 };
       }),
     );
   }, [datasets]);
@@ -896,7 +900,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
           current.map((row) => {
             const previous = (latest.items || []).find((item) => item.dataset_key === row.dataset.key);
             return previous
-              ? { ...row, selected: false, minObjectCount: previous.min_object_count, metric: previous.metric }
+              ? { ...row, selected: false, minObjectCount: previous.min_object_count }
               : row;
           }),
         );
@@ -945,7 +949,7 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
           .map((row) => ({
             dataset_key: row.dataset.key,
             min_object_count: row.minObjectCount,
-            metric: row.metric,
+            metric: row.dataset.quality_metric || "pixel",
           })),
       };
       const payload = await run(() =>
@@ -1047,10 +1051,8 @@ function MarkupExportPage({ bootstrap, run, showModal, closeModal }: RoutedPageP
                       <input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive} aria-label={`Минимум объектов ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { minObjectCount: Number(event.target.value) })} />
                     </label>
                     <label className="test-sample-batch-field">
-                      <span>F1</span>
-                      <select value={row.metric} disabled={busy || batchActive} aria-label={`Метрика ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { metric: event.target.value as "pixel" | "objects" })}>
-                        <option value="pixel">Пиксельный</option><option value="objects">Объектовый</option>
-                      </select>
+                      <span>Основная метрика</span>
+                      <input value={qualityMetricLabel(row.dataset.quality_metric)} readOnly disabled />
                     </label>
                   </div>
                 ))}
@@ -1213,7 +1215,6 @@ function TestSampleEditorPage({
   const [minTileCount, setMinTileCount] = useState(1);
   const [maxTileCount, setMaxTileCount] = useState(1);
   const [minObjectCount, setMinObjectCount] = useState(1);
-  const [optimizationMetric, setOptimizationMetric] = useState<TestSampleOptimizeRequest["metric"]>("objects");
 
   const loadSample = useCallback(async () => {
     setLoaded(false);
@@ -1229,7 +1230,6 @@ function TestSampleEditorPage({
         setMaxTileCount(payload.image_count);
         setMinObjectCount(1);
       }
-      setOptimizationMetric("objects");
     }
     setLoaded(true);
   }, [run, sampleId]);
@@ -1256,7 +1256,7 @@ function TestSampleEditorPage({
         min_tile_count: minTileCount,
         max_tile_count: maxTileCount,
         min_object_count: minObjectCount,
-        metric: optimizationMetric,
+        metric: sample?.quality_metric || "pixel",
       };
       const payload = await run(() =>
         apiJson<TestSampleDetail>(`/test-samples/${sampleId}/optimize`, {
@@ -1501,15 +1501,8 @@ function TestSampleEditorPage({
               />
             </label>
             <label className="field">
-              <span>Оптимизировать F1</span>
-              <select
-                value={optimizationMetric}
-                disabled={optimizing}
-                onChange={(event) => setOptimizationMetric(event.target.value as TestSampleOptimizeRequest["metric"])}
-              >
-                <option value="objects">Объектовый</option>
-                <option value="pixel">Пиксельный</option>
-              </select>
+              <span>Основная метрика класса</span>
+              <input value={qualityMetricLabel(sample.quality_metric)} readOnly disabled />
             </label>
           </div>
           <div className="button-row">
@@ -1673,8 +1666,12 @@ function trainingResultExportTime(result: TrainingResultInfo): number {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function isMainDatasetVariant(dataset: DatasetInfo): boolean {
-  return dataset.variant_key === "main" || /[\\/]main$/.test(dataset.key);
+function qualityMetricLabel(metric: "pixel" | "objects" | null | undefined): string {
+  return metric === "objects" ? "F1 объектовый" : "F1 пиксельный";
+}
+
+function qualityMetricShort(metric: "pixel" | "objects" | null | undefined): string {
+  return metric === "objects" ? "F1 obj" : "F1 pix";
 }
 
 function parseExportSampleSize(value: string): number | null | undefined {
@@ -1683,6 +1680,264 @@ function parseExportSampleSize(value: string): number | null | undefined {
   const sampleSize = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(sampleSize) || sampleSize <= 0 || sampleSize % 32 !== 0) return undefined;
   return sampleSize;
+}
+
+function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
+  const [catalog, setCatalog] = useState<DatasetCatalogInfo | null>(null);
+
+  const loadCatalog = useCallback(async () => {
+    const payload = await run(() => apiJson<DatasetCatalogInfo>("/dataset-catalog"));
+    if (payload) setCatalog(payload);
+  }, [run]);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  const applyCatalog = async (payload: DatasetCatalogInfo | undefined) => {
+    if (!payload) return;
+    setCatalog(payload);
+    await reloadBootstrap();
+  };
+
+  const createClass = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const name = String(new FormData(form).get("name") || "").trim();
+    if (!name) return;
+    const payload = await run(() =>
+      apiJson<DatasetCatalogInfo>("/dataset-classes", { method: "POST", body: { name } }),
+    );
+    if (payload) form.reset();
+    await applyCatalog(payload);
+  };
+
+  const renameClass = async (event: FormEvent<HTMLFormElement>, classKey: string) => {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get("name") || "").trim();
+    await applyCatalog(await run(() =>
+      apiJson<DatasetCatalogInfo>(`/dataset-classes/${encodeURIComponent(classKey)}`, {
+        method: "PATCH",
+        body: { name },
+      }),
+    ));
+  };
+
+  const changeMetric = async (classKey: string, qualityMetric: "pixel" | "objects") => {
+    await applyCatalog(await run(() =>
+      apiJson<DatasetCatalogInfo>(`/dataset-classes/${encodeURIComponent(classKey)}`, {
+        method: "PATCH",
+        body: { quality_metric: qualityMetric },
+      }),
+    ));
+  };
+
+  const createSubclass = async (event: FormEvent<HTMLFormElement>, classKey: string) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const name = String(new FormData(form).get("name") || "").trim();
+    const payload = await run(() =>
+      apiJson<DatasetCatalogInfo>("/dataset-subclasses", {
+        method: "POST",
+        body: { class_key: classKey, name },
+      }),
+    );
+    if (payload) form.reset();
+    await applyCatalog(payload);
+  };
+
+  const renameSubclass = async (event: FormEvent<HTMLFormElement>, subclassKey: string) => {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get("name") || "").trim();
+    await applyCatalog(await run(() =>
+      apiJson<DatasetCatalogInfo>(`/dataset-subclasses/${encodeURIComponent(subclassKey)}`, {
+        method: "PATCH",
+        body: { name },
+      }),
+    ));
+  };
+
+  const changePrimary = async (classKey: string, subclassKey: string) => {
+    if (!subclassKey) return;
+    await applyCatalog(await run(() =>
+      apiJson<DatasetCatalogInfo>(
+        `/dataset-classes/${encodeURIComponent(classKey)}/primary-subclass`,
+        { method: "PUT", body: { subclass_key: subclassKey } },
+      ),
+    ));
+  };
+
+  const openDatasetEditor = (subclass: DatasetSubclassInfo) => {
+    if (!catalog) return;
+    const dataset = subclass.dataset;
+    const sources = catalog.sources || [];
+    const formId = `dataset-editor-${subclass.key}`;
+    showModal({
+      title: dataset ? `Датасет «${dataset.name}»` : `Назначить датасет «${subclass.name}»`,
+      body: (
+        <form
+          id={formId}
+          className="form-stack"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const body = {
+              source_path: String(data.get("source_path") || ""),
+              image_type: String(data.get("image_type") || "all"),
+              ...(!dataset ? { subclass_key: subclass.key } : {}),
+            };
+            const payload = await run(() =>
+              apiJson<DatasetCatalogInfo>(
+                dataset ? `/managed-datasets/${encodeURIComponent(dataset.key)}` : "/managed-datasets",
+                { method: dataset ? "PATCH" : "POST", body },
+              ),
+            );
+            if (!payload) return;
+            closeModal();
+            await applyCatalog(payload);
+          }}
+        >
+          <label>
+            Источник MLMarkup
+            <select name="source_path" defaultValue={dataset?.source_path || sources[0]?.key || ""} required>
+              {sources.map((source) => (
+                <option key={source.key} value={source.key}>
+                  {source.name}
+                  {source.assigned_dataset_key && source.assigned_dataset_key !== dataset?.key
+                    ? dataset ? " — обменять источники" : " — переназначить"
+                    : ""}
+                  {(source.diagnostics || []).length ? " — требует внимания" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {!sources.length ? <p className="error-text">Нет свободных папок MLMarkup.</p> : null}
+          <label>
+            Тип снимков
+            <select name="image_type" defaultValue={dataset?.image_type || "all"} required>
+              {(catalog.image_types || []).map((imageType) => (
+                <option key={imageType.key} value={imageType.key}>
+                  {imageType.name} · {imageType.image_count} TIFF
+                </option>
+              ))}
+            </select>
+          </label>
+          {(dataset?.diagnostics || []).length ? (
+            <div className="notice warning">
+              {(dataset?.diagnostics || []).map((diagnostic) => <div key={diagnostic}>{diagnostic}</div>)}
+            </div>
+          ) : null}
+        </form>
+      ),
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button className="primary" type="submit" form={formId} disabled={!sources.length}>Сохранить</button>
+        </>
+      ),
+    });
+  };
+
+  const synchronize = async () => {
+    await applyCatalog(await run(() =>
+      apiJson<DatasetCatalogInfo>("/dataset-catalog/sync", { method: "POST" }),
+    ));
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Редактор классов"
+        subtitle="Устойчивые классы, подклассы и источники датасетов"
+        actions={(
+          <button className="secondary" type="button" onClick={synchronize}>
+            <RefreshCw size={15} /> Синхронизировать MLMarkup
+          </button>
+        )}
+      />
+      <section className="panel">
+        <PanelHeader title="Новый класс" subtitle="После создания добавьте подкласс и назначьте источник" />
+        <form className="inline-form" onSubmit={createClass}>
+          <input name="name" placeholder="Название класса" maxLength={240} required />
+          <button className="primary" type="submit"><Plus size={15} /> Добавить класс</button>
+        </form>
+      </section>
+      {!catalog ? <div className="empty-state">Загрузка каталога...</div> : null}
+      {(catalog?.classes || []).map((classInfo) => {
+        const subclasses = classInfo.subclasses || [];
+        const assigned = subclasses.filter((subclass) => subclass.dataset);
+        return (
+          <section className="panel class-editor-card" key={classInfo.key}>
+            <div className="class-editor-header">
+              <form className="inline-form" onSubmit={(event) => renameClass(event, classInfo.key)}>
+                <input name="name" defaultValue={classInfo.name} maxLength={240} required />
+                <button className="secondary" type="submit">Переименовать</button>
+              </form>
+              <label>
+                Основная метрика
+                <select
+                  value={classInfo.quality_metric || "pixel"}
+                  onChange={(event) => void changeMetric(classInfo.key, event.target.value as "pixel" | "objects")}
+                >
+                  <option value="pixel">F1 пиксельный</option>
+                  <option value="objects">F1 объектовый</option>
+                </select>
+              </label>
+              <label>
+                Основной подкласс
+                <select
+                  value={classInfo.primary_subclass_key || ""}
+                  disabled={!assigned.length}
+                  onChange={(event) => void changePrimary(classInfo.key, event.target.value)}
+                >
+                  <option value="">Не назначен</option>
+                  {assigned.map((subclass) => <option key={subclass.key} value={subclass.key}>{subclass.name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="class-editor-subclasses">
+              {subclasses.map((subclass) => (
+                <article className="subclass-card" key={subclass.key}>
+                  <div className="subclass-card-header">
+                    <form className="inline-form" onSubmit={(event) => renameSubclass(event, subclass.key)}>
+                      <input name="name" defaultValue={subclass.name} maxLength={240} required />
+                      <button className="secondary" type="submit">Переименовать</button>
+                    </form>
+                    {subclass.is_primary ? <span className="badge ok">основной</span> : null}
+                  </div>
+                  {subclass.dataset ? (
+                    <div className="dataset-binding">
+                      <div>
+                        <strong>{subclass.dataset.name}</strong>
+                        <div className="muted">MLMarkup: {subclass.dataset.source_path}</div>
+                        <div className="muted">Снимки: {subclass.dataset.image_type === "all" ? "все" : subclass.dataset.image_type}</div>
+                      </div>
+                      <div className="inline-row">
+                        <span className={`badge ${(subclass.dataset.diagnostics || []).length ? "warning" : "ok"}`}>
+                          {(subclass.dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
+                        </span>
+                        <button className="secondary" type="button" onClick={() => openDatasetEditor(subclass)}>Параметры</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="dataset-binding empty-binding">
+                      <span className="muted">Датасет не назначен</span>
+                      <button className="primary" type="button" onClick={() => openDatasetEditor(subclass)}>Назначить датасет</button>
+                    </div>
+                  )}
+                </article>
+              ))}
+              {!subclasses.length ? <div className="empty-state">Подклассов пока нет</div> : null}
+            </div>
+            <form className="inline-form add-subclass-form" onSubmit={(event) => createSubclass(event, classInfo.key)}>
+              <input name="name" placeholder="Название нового подкласса" maxLength={240} required />
+              <button className="secondary" type="submit"><Plus size={15} /> Добавить подкласс</button>
+            </form>
+          </section>
+        );
+      })}
+    </>
+  );
 }
 
 function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
@@ -2191,7 +2446,7 @@ function ClassResultsPage({
       {payload.primary_test_sample ? (
         <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
           <div>
-            <strong>{payload.test_f1_status === "current" ? "F1 score актуален" : payload.test_f1_status === "running" ? "Идёт пересчёт F1 score" : "F1 score не актуален"}</strong>
+            <strong>{payload.test_f1_status === "current" ? `${qualityMetricShort(payload.quality_metric)} (test) актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${qualityMetricShort(payload.quality_metric)} (test)` : `${qualityMetricShort(payload.quality_metric)} (test) не актуален`}</strong>
             <span>Основная выборка: {payload.primary_test_sample.name} · {payload.primary_test_sample.enabled_image_count} тайлов</span>
           </div>
           {payload.test_f1_status !== "current" ? (
@@ -2578,7 +2833,7 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
             <a className="variant-link" href={`#/results/${encodeURIComponent(variant.key)}`} key={variant.key}>
               <span>{variant.variant_name || variant.name}</span>
               {variant.test_f1 !== null && variant.test_f1 !== undefined ? (
-                <strong className={`result-card-f1 ${variant.test_f1_status === "current" ? "current" : "stale"}`}>F1 {formatTestF1Percent(variant.test_f1)}</strong>
+                <strong className={`result-card-f1 ${variant.test_f1_status === "current" ? "current" : "stale"}`}>{qualityMetricShort(variant.quality_metric)} (test) {formatTestF1Percent(variant.test_f1)}</strong>
               ) : null}
               <small>{integerOrNull(variant.image_count) ?? "—"} снимков</small>
             </a>
@@ -2672,8 +2927,8 @@ function ResultsTable({
                 <tr>
                   <th>МОДЕЛЬ</th>
                   <th>Статус</th>
-                  <th>F1</th>
-                  <th>Тестовый F1</th>
+                  <th>F1 (val)</th>
+                  <th>F1 (test)</th>
                   <th>Epoch</th>
                   <th>Создано</th>
                   <th aria-label="Действия"></th>
@@ -2693,11 +2948,16 @@ function ResultsTable({
                       {sourceBadge(result.source)}
                     </span>
                   </td>
-                  <td title="F1">{formatF1Score(result.f1_score)}</td>
-                  <td title="Тестовый F1">
+                  <td title={`${qualityMetricShort(result.quality_metric)} (val)`}>
+                    <span className="source-lines"><small>{qualityMetricShort(result.quality_metric)} (val)</small><strong>{formatF1Score(result.f1_score)}</strong></span>
+                  </td>
+                  <td title={`${qualityMetricShort(result.quality_metric)} (test)`}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
-                      <span className={`badge ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
-                        {formatTestF1Percent(result.test_f1.f1)}
+                      <span className="source-lines">
+                        <small>{qualityMetricShort(result.quality_metric)} (test)</small>
+                        <span className={`badge ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
+                          {formatTestF1Percent(result.test_f1.f1)}
+                        </span>
                       </span>
                     ) : result.test_f1?.status === "queued" || result.test_f1?.status === "running" ? (
                       <span className="badge neutral">расчёт</span>

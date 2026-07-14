@@ -28,10 +28,13 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
+from sqlalchemy.orm import Session
 
 from ._config import TrainingUIAPIConfig
+from ._dataset_catalog import find_managed_dataset
 from ._datasets import find_dataset, resolve_scenes_file_images
 from .contracts import (
+    DatasetInfo,
     MarkupExportInfo,
     MarkupExportRequest,
     MarkupExportTileInfo,
@@ -139,6 +142,7 @@ class _Candidate:
 def build_markup_export(
     request: MarkupExportRequest,
     config: TrainingUIAPIConfig,
+    session: Session | None = None,
 ) -> MarkupExportInfo:
     cleanup_expired_markup_exports(config)
     export_id = uuid.uuid4()
@@ -148,7 +152,12 @@ def build_markup_export(
     final_root = export_root / str(export_id)
     building_root.mkdir(parents=False, exist_ok=False)
     try:
-        generated = generate_markup_files(request, config, building_root)
+        dataset = (
+            find_managed_dataset(session, config, request.dataset_key)
+            if session is not None
+            else find_dataset(config.mlmarkup_root, request.dataset_key, config.images_root)
+        )
+        generated = generate_markup_files(request, config, building_root, dataset=dataset)
         tile_infos = [
             MarkupExportTileInfo(
                 index=tile.index,
@@ -207,8 +216,14 @@ def generate_markup_files(
     request: MarkupExportRequest,
     config: TrainingUIAPIConfig,
     output_root: Path,
+    *,
+    dataset: DatasetInfo | None = None,
 ) -> GeneratedMarkupFiles:
-    dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
+    dataset = dataset or find_dataset(
+        config.mlmarkup_root,
+        request.dataset_key,
+        config.images_root,
+    )
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError("Для экспорта разметки нужен существующий датасет MLMarkup.")
     if dataset.diagnostics:
@@ -216,7 +231,8 @@ def generate_markup_files(
     if not dataset.scenes_file or not dataset.annotation_file:
         raise TrainingUIAPIError("У датасета должны быть TXT со сценами и один positive GeoJSON.")
 
-    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), config.images_root)
+    images_root = Path(dataset.images_dir or config.images_root)
+    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
     if not source_paths:
         raise TrainingUIAPIError(
             "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
@@ -224,7 +240,7 @@ def generate_markup_files(
     annotations = _load_annotations(Path(dataset.annotation_file))
     candidates = _build_candidates(
         source_paths=source_paths,
-        images_root=config.images_root,
+        images_root=images_root,
         annotations=annotations,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
@@ -305,10 +321,11 @@ def generate_markup_pool_files(
     min_object_count: int,
     config: TrainingUIAPIConfig,
     output_root: Path,
+    dataset: DatasetInfo | None = None,
 ) -> GeneratedMarkupFiles:
     """Создать максимально широкий пул, содержащий допустимую итоговую выборку."""
 
-    dataset = find_dataset(config.mlmarkup_root, dataset_key)
+    dataset = dataset or find_dataset(config.mlmarkup_root, dataset_key, config.images_root)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(
             "Для группового создания нужен существующий вариант датасета MLMarkup."
@@ -320,7 +337,8 @@ def generate_markup_pool_files(
             "У датасета должны быть TXT со сценами и один positive GeoJSON."
         )
 
-    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), config.images_root)
+    images_root = Path(dataset.images_dir or config.images_root)
+    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
     if not source_paths:
         raise TrainingUIAPIError(
             "Для датасета не найдены TIFF в MLSYSTEM2_IMAGES_ROOT."
@@ -334,7 +352,7 @@ def generate_markup_pool_files(
     requested_pool_objects = min_object_count * 3
     candidates = _build_candidates(
         source_paths=source_paths,
-        images_root=config.images_root,
+        images_root=images_root,
         annotations=annotations,
         tile_width=tile_size,
         tile_height=tile_size,

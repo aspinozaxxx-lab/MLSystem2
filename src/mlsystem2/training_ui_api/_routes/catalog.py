@@ -10,21 +10,38 @@ from mlsystem2.training_ui_api._service import (
     bootstrap,
     classes,
     create_custom_dataset,
+    create_dataset_class,
+    create_dataset_subclass,
+    create_managed_dataset,
     create_mlflow_experiment,
+    dataset_catalog,
     datasets,
     image_folders,
     mlflow_experiments,
     models,
+    set_primary_subclass,
+    sync_dataset_catalog,
+    update_dataset_class,
+    update_dataset_subclass,
+    update_managed_dataset,
 )
 from mlsystem2.training_ui_api.contracts import (
     AppLinksResponse,
     BootstrapInfo,
     ClassListResponse,
     CustomDatasetInfo,
+    DatasetCatalogInfo,
+    DatasetClassCreate,
+    DatasetClassUpdate,
     DatasetListResponse,
+    DatasetPrimarySubclassUpdate,
+    DatasetSubclassCreate,
+    DatasetSubclassUpdate,
     ImageFolderListResponse,
     MLflowExperimentCreate,
     MLflowExperimentInfo,
+    ManagedDatasetCreate,
+    ManagedDatasetUpdate,
     ModelListResponse,
 )
 
@@ -55,16 +72,99 @@ def register_catalog_routes(app: FastAPI, ctx: RouteContext) -> None:
         return create_mlflow_experiment(request, ctx.config)
 
     @app.get("/api/v1/datasets", response_model=DatasetListResponse)
-    def get_datasets(_: str = Depends(ctx.authenticated)) -> DatasetListResponse:
-        return datasets(ctx.config)
+    def get_datasets(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetListResponse:
+        return datasets(db, ctx.config)
 
     @app.get("/api/v1/image-folders", response_model=ImageFolderListResponse)
     def get_image_folders(_: str = Depends(ctx.authenticated)) -> ImageFolderListResponse:
         return image_folders(ctx.config)
 
     @app.get("/api/v1/classes", response_model=ClassListResponse)
-    def get_classes(_: str = Depends(ctx.authenticated)) -> ClassListResponse:
-        return classes(ctx.config)
+    def get_classes(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> ClassListResponse:
+        return classes(db, ctx.config)
+
+    @app.get("/api/v1/dataset-catalog", response_model=DatasetCatalogInfo)
+    def get_dataset_catalog(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return dataset_catalog(db, ctx.config)
+
+    @app.post("/api/v1/dataset-catalog/sync", response_model=DatasetCatalogInfo)
+    def post_dataset_catalog_sync(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return sync_dataset_catalog(db, ctx.config)
+
+    @app.post("/api/v1/dataset-classes", response_model=DatasetCatalogInfo)
+    def post_dataset_class(
+        request: DatasetClassCreate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return create_dataset_class(db, request, ctx.config)
+
+    @app.patch("/api/v1/dataset-classes/{class_key}", response_model=DatasetCatalogInfo)
+    def patch_dataset_class(
+        class_key: str,
+        request: DatasetClassUpdate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return update_dataset_class(db, class_key, request, ctx.config)
+
+    @app.put(
+        "/api/v1/dataset-classes/{class_key}/primary-subclass",
+        response_model=DatasetCatalogInfo,
+    )
+    def put_primary_subclass(
+        class_key: str,
+        request: DatasetPrimarySubclassUpdate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return set_primary_subclass(db, class_key, request, ctx.config)
+
+    @app.post("/api/v1/dataset-subclasses", response_model=DatasetCatalogInfo)
+    def post_dataset_subclass(
+        request: DatasetSubclassCreate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return create_dataset_subclass(db, request, ctx.config)
+
+    @app.patch("/api/v1/dataset-subclasses/{subclass_key}", response_model=DatasetCatalogInfo)
+    def patch_dataset_subclass(
+        subclass_key: str,
+        request: DatasetSubclassUpdate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return update_dataset_subclass(db, subclass_key, request, ctx.config)
+
+    @app.post("/api/v1/managed-datasets", response_model=DatasetCatalogInfo)
+    def post_managed_dataset(
+        request: ManagedDatasetCreate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return create_managed_dataset(db, request, ctx.config)
+
+    @app.patch("/api/v1/managed-datasets/{dataset_key}", response_model=DatasetCatalogInfo)
+    def patch_managed_dataset(
+        dataset_key: str,
+        request: ManagedDatasetUpdate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return update_managed_dataset(db, dataset_key, request, ctx.config)
 
     @app.get("/api/v1/models", response_model=ModelListResponse)
     def get_models(_: str = Depends(ctx.authenticated)) -> ModelListResponse:

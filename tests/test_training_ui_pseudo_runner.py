@@ -569,6 +569,9 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert report["true_positive"] == 2
     assert report["false_positive"] == 1
     assert report["false_negative"] == 1
+    assert report["object_true_positive"] == 2
+    assert report["object_false_positive"] == 0
+    assert report["object_false_negative"] == 0
     assert report["postprocess_profile"] == "strong"
     assert report["test_f1_evaluator_version"] == 2
     assert report["preserve_boundary_components"] is True

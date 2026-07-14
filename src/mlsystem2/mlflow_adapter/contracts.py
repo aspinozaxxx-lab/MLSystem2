@@ -65,6 +65,7 @@ class MLflowBestCheckpoint(BaseModel):
     tracking_uri: str
     run_id: str
     metric_name: str
+    quality_metric: str = "pixel"
     f1_score: float
     epoch: int
     threshold: float | None = None

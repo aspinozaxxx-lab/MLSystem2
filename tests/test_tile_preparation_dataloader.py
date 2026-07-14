@@ -155,6 +155,47 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     loader.dataset.close()
 
 
+def test_binary_val_loader_returns_individual_object_masks(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "image.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+            include_object_instances=True,
+        )
+    )
+
+    _images, masks, batch_meta = next(iter(loader))
+    instances = batch_meta["object_instances"]
+    assert instances.shape == (2, 4, 4)
+    assert instances.dtype == torch.int64
+    assert torch.equal(instances > 0, masks[:, 0] > 0)
+    assert int(instances[0].max().item()) == 1
+    assert int(instances[1].max().item()) == 0
+    loader.dataset.close()
+
+
+def test_object_instance_masks_are_only_allowed_for_binary_validation() -> None:
+    with pytest.raises(ValueError, match="binary val loader"):
+        TileDataloaderRequest(
+            vrt_xml="vrt",
+            annotation_file="annotations.geojson",
+            batch_size=1,
+            mode="train",
+            include_object_instances=True,
+        )
+
+
 def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "uint16.tif"

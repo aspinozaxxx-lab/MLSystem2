@@ -35,7 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
-from ._datasets import find_dataset
+from ._dataset_catalog import find_managed_dataset
 from ._markup_export import (
     _run_milp,
     _single_constraint,
@@ -87,7 +87,7 @@ from .contracts import (
 TEST_SAMPLE_ROOT_NAME = "test-samples"
 TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
-TEST_SAMPLE_F1_EVALUATOR_VERSION = 2
+TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 OBJECT_IOU_THRESHOLD = 0.5
 _TILE_SUFFIXES = (".tif", ".geojson", "_mask.png", "_preview.png")
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
@@ -163,6 +163,9 @@ def create_test_sample(
     final_root = root / str(sample_id)
     building_root.mkdir(parents=False, exist_ok=False)
     try:
+        dataset = find_managed_dataset(session, config, request.dataset_key)
+        if dataset is None or dataset.is_custom:
+            raise TrainingUIAPIError(f"Подкласс не найден: {request.dataset_key}")
         generated = generate_markup_files(
             MarkupExportRequest(
                 dataset_key=request.dataset_key,
@@ -173,9 +176,15 @@ def create_test_sample(
             ),
             config,
             building_root,
+            dataset=dataset,
         )
         building_root.replace(final_root)
-        row = _new_test_sample_row(sample_id, request.name, generated)
+        row = _new_test_sample_row(
+            sample_id,
+            request.name,
+            generated,
+            quality_metric=dataset.quality_metric,
+        )
         session.add(row)
         session.flush()
         evaluate_test_sample(session, row, config)
@@ -187,7 +196,13 @@ def create_test_sample(
         raise
 
 
-def _new_test_sample_row(sample_id, requested_name: str, generated) -> TestSampleRow:
+def _new_test_sample_row(
+    sample_id,
+    requested_name: str,
+    generated,
+    *,
+    quality_metric: str = "pixel",
+) -> TestSampleRow:
     row = TestSampleRow(
         id=sample_id,
         name=_sample_name(requested_name, generated.dataset_name),
@@ -198,6 +213,7 @@ def _new_test_sample_row(sample_id, requested_name: str, generated) -> TestSampl
         class_name=generated.class_name,
         variant_key=generated.variant_key,
         variant_name=generated.variant_name,
+        quality_metric=quality_metric,
         tile_width=generated.tile_width,
         tile_height=generated.tile_height,
         image_count=len(generated.tiles),
@@ -248,7 +264,7 @@ def create_test_sample_batch(
     )
     rows: list[TestSampleBatchItemRow] = []
     for position, item in enumerate(request.items, start=1):
-        dataset = find_dataset(config.mlmarkup_root, item.dataset_key)
+        dataset = find_managed_dataset(session, config, item.dataset_key)
         if dataset is None or dataset.is_custom:
             raise TrainingUIAPIError(f"Подкласс не найден: {item.dataset_key}")
         if dataset.diagnostics:
@@ -270,7 +286,7 @@ def create_test_sample_batch(
                 variant_key=dataset.variant_key or variant_name,
                 variant_name=variant_name,
                 min_object_count=item.min_object_count,
-                metric=item.metric,
+                metric=dataset.quality_metric,
                 status="queued",
             )
         )
@@ -442,6 +458,9 @@ def _create_grouped_test_sample(
     final_root = root / str(sample_id)
     building_root.mkdir(parents=False, exist_ok=False)
     try:
+        dataset = find_managed_dataset(session, config, item.dataset_key)
+        if dataset is None or dataset.is_custom:
+            raise TrainingUIAPIError(f"Подкласс не найден: {item.dataset_key}")
         generated = generate_markup_pool_files(
             dataset_key=item.dataset_key,
             tile_size=batch.tile_size,
@@ -450,9 +469,15 @@ def _create_grouped_test_sample(
             min_object_count=item.min_object_count,
             config=config,
             output_root=building_root,
+            dataset=dataset,
         )
         building_root.replace(final_root)
-        row = _new_test_sample_row(sample_id, "", generated)
+        row = _new_test_sample_row(
+            sample_id,
+            "",
+            generated,
+            quality_metric=dataset.quality_metric,
+        )
         session.add(row)
         session.flush()
         _optimize_test_sample_row(
@@ -739,6 +764,7 @@ def _optimize_test_sample_row(
     source_path: Path | None = None,
 ) -> None:
     _validate_optimization_request(row, request)
+    request = request.model_copy(update={"metric": row.quality_metric})
     prediction_path = source_path or (
         Path(source.geojson_file.path) if source.geojson_file is not None else None
     )
@@ -1769,6 +1795,7 @@ def training_result_test_f1_info(
     if metric is None:
         return TrainingResultTestF1Info(
             status="unavailable",
+            quality_metric=result.quality_metric,
             sample_id=sample.id,
             sample_name=sample.name,
             sample_revision=sample.content_revision,
@@ -1789,14 +1816,28 @@ def training_result_test_f1_info(
     if status not in {"current", "stale", "queued", "running", "error", "unavailable"}:
         status = "stale" if metric.f1 is not None else "unavailable"
     job = session.get(JobRow, metric.job_id) if metric.job_id is not None else None
+    use_objects = result.quality_metric == "objects"
     return TrainingResultTestF1Info(
         status=status,
-        precision=metric.precision,
-        recall=metric.recall,
-        f1=metric.f1,
-        true_positive=metric.true_positive,
-        false_positive=metric.false_positive,
-        false_negative=metric.false_negative,
+        precision=metric.object_precision if use_objects else metric.precision,
+        recall=metric.object_recall if use_objects else metric.recall,
+        f1=metric.object_f1 if use_objects else metric.f1,
+        true_positive=metric.object_true_positive if use_objects else metric.true_positive,
+        false_positive=metric.object_false_positive if use_objects else metric.false_positive,
+        false_negative=metric.object_false_negative if use_objects else metric.false_negative,
+        quality_metric=result.quality_metric,
+        pixel_precision=metric.precision,
+        pixel_recall=metric.recall,
+        pixel_f1=metric.f1,
+        pixel_true_positive=metric.true_positive,
+        pixel_false_positive=metric.false_positive,
+        pixel_false_negative=metric.false_negative,
+        object_precision=metric.object_precision,
+        object_recall=metric.object_recall,
+        object_f1=metric.object_f1,
+        object_true_positive=metric.object_true_positive,
+        object_false_positive=metric.object_false_positive,
+        object_false_negative=metric.object_false_negative,
         sample_id=metric.sample_id or sample.id,
         sample_name=metric.sample.name if metric.sample is not None else sample.name,
         sample_revision=metric.sample_revision,
@@ -1877,11 +1918,7 @@ def _test_f1_postprocess_profile_name(
         source = _latest_pseudo_markup(session, sample.dataset_key)
     image_count = source.image_count if source is not None else None
     if image_count is None:
-        dataset = find_dataset(
-            config.mlmarkup_root,
-            sample.dataset_key,
-            config.images_root,
-        )
+        dataset = find_managed_dataset(session, config, sample.dataset_key)
         image_count = dataset.image_count if dataset is not None else None
     if image_count is None:
         image_count = len({tile.source_name for tile in sample.tiles})
@@ -1973,6 +2010,7 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         class_name=row.class_name,
         variant_key=row.variant_key,
         variant_name=row.variant_name,
+        quality_metric=row.quality_metric,
         image_count=row.image_count,
         enabled_image_count=len(enabled),
         actual_object_count=row.actual_object_count,

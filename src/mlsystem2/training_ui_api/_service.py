@@ -39,14 +39,25 @@ from ._automation import (
 )
 from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
+from ._dataset_catalog import (
+    create_dataset_class as _create_dataset_class,
+    create_dataset_subclass as _create_dataset_subclass,
+    create_managed_dataset as _create_managed_dataset,
+    find_managed_dataset,
+    list_managed_classes,
+    list_managed_datasets,
+    managed_dataset_catalog,
+    set_primary_subclass as _set_primary_subclass,
+    synchronize_dataset_catalog,
+    update_dataset_class as _update_dataset_class,
+    update_dataset_subclass as _update_dataset_subclass,
+    update_managed_dataset as _update_managed_dataset,
+)
 from ._datasets import (
     CUSTOM_KEY,
     CUSTOM_NAME,
     count_scenes_file_images,
-    find_dataset,
     find_image_folder,
-    list_classes,
-    list_datasets,
     list_image_folders,
 )
 from ._model_export import ModelExportArchive, build_triton_model_export_zip
@@ -88,8 +99,14 @@ from .contracts import (
     ClassResultsResponse,
     ConfigSchema,
     CustomDatasetInfo,
+    DatasetCatalogInfo,
+    DatasetClassCreate,
+    DatasetClassUpdate,
     DatasetInfo,
     DatasetListResponse,
+    DatasetPrimarySubclassUpdate,
+    DatasetSubclassCreate,
+    DatasetSubclassUpdate,
     ImageFolderListResponse,
     InferenceTemplate,
     InferenceTemplateApplyField,
@@ -105,6 +122,8 @@ from .contracts import (
     MLflowExperimentCreate,
     MLflowExperimentInfo,
     ModelListResponse,
+    ManagedDatasetCreate,
+    ManagedDatasetUpdate,
     PseudoMarkupResultInfo,
     PrimaryTestSampleInfo,
     QueueEnabledUpdate,
@@ -164,19 +183,88 @@ def create_mlflow_experiment(
     return MLflowExperimentInfo(experiment_id=experiment.experiment_id, name=experiment.name)
 
 
-def datasets(config: TrainingUIAPIConfig) -> DatasetListResponse:
-    return DatasetListResponse(datasets=list_datasets(config.mlmarkup_root, config.images_root))
+def datasets(session: Session, config: TrainingUIAPIConfig) -> DatasetListResponse:
+    return DatasetListResponse(datasets=list_managed_datasets(session, config))
 
 
-def classes(config: TrainingUIAPIConfig) -> ClassListResponse:
-    return ClassListResponse(classes=list_classes(config.mlmarkup_root, config.images_root))
+def classes(session: Session, config: TrainingUIAPIConfig) -> ClassListResponse:
+    return ClassListResponse(classes=list_managed_classes(session, config))
+
+
+def dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> DatasetCatalogInfo:
+    return managed_dataset_catalog(session, config)
+
+
+def sync_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> DatasetCatalogInfo:
+    synchronize_dataset_catalog(session, config)
+    return managed_dataset_catalog(session, config)
+
+
+def create_dataset_class(
+    session: Session,
+    request: DatasetClassCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _create_dataset_class(session, request, config)
+
+
+def update_dataset_class(
+    session: Session,
+    class_key: str,
+    request: DatasetClassUpdate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _update_dataset_class(session, class_key, request, config)
+
+
+def set_primary_subclass(
+    session: Session,
+    class_key: str,
+    request: DatasetPrimarySubclassUpdate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _set_primary_subclass(session, class_key, request, config)
+
+
+def create_dataset_subclass(
+    session: Session,
+    request: DatasetSubclassCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _create_dataset_subclass(session, request, config)
+
+
+def update_dataset_subclass(
+    session: Session,
+    subclass_key: str,
+    request: DatasetSubclassUpdate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _update_dataset_subclass(session, subclass_key, request, config)
+
+
+def create_managed_dataset(
+    session: Session,
+    request: ManagedDatasetCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _create_managed_dataset(session, request, config)
+
+
+def update_managed_dataset(
+    session: Session,
+    dataset_key: str,
+    request: ManagedDatasetUpdate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    return _update_managed_dataset(session, dataset_key, request, config)
 
 
 def result_classes(
     session: Session,
     config: TrainingUIAPIConfig,
 ) -> ResultClassListResponse:
-    catalog = list_classes(config.mlmarkup_root, config.images_root)
+    catalog = list_managed_classes(session, config)
     output: list[ResultClassInfo] = []
     for class_info in catalog:
         variants: list[ResultVariantInfo] = []
@@ -217,6 +305,8 @@ def result_classes(
                     class_name=variant.class_name,
                     variant_key=variant.variant_key,
                     variant_name=variant.variant_name,
+                    quality_metric=variant.quality_metric,
+                    is_primary=variant.is_primary,
                     image_count=variant.image_count,
                     test_f1=test_f1,
                     test_f1_status=test_f1_status,
@@ -230,6 +320,7 @@ def result_classes(
                 updated_at=class_info.updated_at,
                 variants=variants,
                 is_custom=class_info.is_custom,
+                quality_metric=class_info.quality_metric,
             )
         )
     return ResultClassListResponse(classes=output)
@@ -246,9 +337,9 @@ def models() -> ModelListResponse:
 def bootstrap(session: Session, config: TrainingUIAPIConfig) -> BootstrapInfo:
     return BootstrapInfo(
         links=app_links(config).links,
-        datasets=datasets(config).datasets,
+        datasets=datasets(session, config).datasets,
         image_folders=image_folders(config).folders,
-        classes=classes(config).classes,
+        classes=classes(session, config).classes,
         models=models().models,
         training_templates=training_templates(session).templates,
         inference_templates=inference_templates(session).templates,
@@ -425,7 +516,7 @@ def create_training_template(
     parent = _base_template_row(session, request.architecture)
     if parent is None:
         raise TrainingUIAPIError(f"Шаблон сети не найден: {request.architecture}")
-    dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
+    dataset = find_managed_dataset(session, config, request.dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
     existing = _dataset_template_row(session, request.architecture, dataset.key)
@@ -564,7 +655,7 @@ def create_inference_template(
     parent = _base_inference_template_row(session, request.architecture)
     if parent is None:
         raise TrainingUIAPIError(f"Шаблон инференса сети не найден: {request.architecture}")
-    dataset = find_dataset(config.mlmarkup_root, request.dataset_key)
+    dataset = find_managed_dataset(session, config, request.dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
     existing = _dataset_inference_template_row(session, request.architecture, dataset.key)
@@ -720,6 +811,7 @@ def create_training_job(
         fallback=template_row.default_config if template_row is not None else None,
         normalize_factors=False,
     )
+    job_config["train.quality_metric"] = dataset.quality_metric
     _validate_tile_factor_config(job_config)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
@@ -751,6 +843,7 @@ def create_training_job(
             class_display_name=dataset.name,
             architecture=request.architecture,
             model_name=model_name,
+            quality_metric=dataset.quality_metric,
             status=ResultStatus.RUNNING.value,
             job_id=row.id,
         )
@@ -882,7 +975,7 @@ def class_results(
     class_key: str,
     config: TrainingUIAPIConfig,
 ) -> ClassResultsResponse:
-    dataset_info = find_dataset(config.mlmarkup_root, class_key)
+    dataset_info = find_managed_dataset(session, config, class_key)
     if dataset_info is None:
         dataset_info = DatasetInfo(key=class_key, name=class_key)
     _delete_cancelled_manual_jobs(session)
@@ -936,6 +1029,7 @@ def class_results(
     return ClassResultsResponse(
         class_key=dataset_info.key,
         class_name=dataset_info.name,
+        quality_metric=dataset_info.quality_metric,
         dataset_updated_at=dataset_info.updated_at,
         primary_test_sample=(
             PrimaryTestSampleInfo(
@@ -1096,7 +1190,7 @@ def create_pseudo_markup_job(
         if source_count == 0:
             raise TrainingUIAPIError("Выберите датасет, папку снимков или загрузите txt со снимками")
         raise TrainingUIAPIError("Выберите только один источник снимков")
-    class_dataset = find_dataset(config.mlmarkup_root, class_key)
+    class_dataset = find_managed_dataset(session, config, class_key)
     class_name = class_dataset.name if class_dataset else class_key
     training_result = _resolve_training_result(session, training_result_id)
     inference_template = (
@@ -1112,6 +1206,7 @@ def create_pseudo_markup_job(
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
     inference_dataset_version: str | None = None
+    inference_images_root = str(config.images_root)
     if has_uploaded_scenes:
         _validate_upload_name(scenes_name, ".txt")
         scenes_row = _store_file(
@@ -1128,6 +1223,7 @@ def create_pseudo_markup_job(
         dataset = _resolve_dataset_name(session, dataset_key, None, config)
         dataset_name = dataset.name
         inference_dataset_version = dataset.version
+        inference_images_root = dataset.images_dir or str(config.images_root)
         if dataset.scenes_file:
             scenes_row = _store_existing_file(
                 session,
@@ -1167,6 +1263,7 @@ def create_pseudo_markup_job(
             "class_key": class_key,
             "dataset_key": dataset_key or CUSTOM_KEY,
             "image_folder_key": image_folder_key,
+            "images_root": inference_images_root,
             "training_result_id": str(training_result_id) if training_result_id else None,
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
@@ -1175,7 +1272,11 @@ def create_pseudo_markup_job(
     )
     session.add(row)
     session.flush()
-    image_count = _stored_scenes_image_count(scenes_row if scenes_file_id is not None else None, config)
+    image_count = (
+        count_scenes_file_images(Path(scenes_row.path), Path(inference_images_root))
+        if scenes_file_id is not None
+        else None
+    )
     session.add(
         PseudoMarkupResultRow(
             source=JobSource.MANUAL.value,
@@ -1472,9 +1573,13 @@ def _resolve_dataset_name(
         if custom is None:
             raise TrainingUIAPIError(f"Custom dataset не найден: {custom_dataset_id}")
         return DatasetInfo(key=CUSTOM_KEY, name=custom.name, is_custom=True)
-    for dataset in list_datasets(config.mlmarkup_root):
-        if dataset.key == dataset_key:
-            return dataset
+    dataset = find_managed_dataset(session, config, dataset_key)
+    if dataset is not None:
+        if not dataset.source_available or dataset.images_dir is None:
+            raise TrainingUIAPIError(
+                "Датасет недоступен: " + "; ".join(dataset.diagnostics)
+            )
+        return dataset
     raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
 
 
@@ -2103,6 +2208,7 @@ def _training_result_info(
         dataset_version=row.dataset_version,
         model_name=row.model_name,
         architecture=row.architecture,
+        quality_metric=row.quality_metric,
         f1_score=row.f1_score,
         epoch=row.epoch,
         trained_at=row.trained_at,

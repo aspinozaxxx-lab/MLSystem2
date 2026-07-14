@@ -8,6 +8,7 @@ import {
   formatObjectCount,
   formatRuntimeMinutes,
   formatTrainingResultDate,
+  isPrimaryDatasetVariant,
   isValidExportModelName,
   runningProgressLabel,
 } from "./format";
@@ -17,6 +18,12 @@ describe("format helpers", () => {
     expect(exportModelNamePart("Rivers Kanopus 0806")).toBe("rivers_kanopus_0806");
     expect(isValidExportModelName("rivers_kanopus_0806")).toBe(true);
     expect(isValidExportModelName("Реки")).toBe(false);
+  });
+
+  it("учитывает явный основной подкласс до совместимого fallback по main", () => {
+    expect(isPrimaryDatasetVariant({ key: "Класс\\main", variant_key: "main", is_primary: false })).toBe(false);
+    expect(isPrimaryDatasetVariant({ key: "Класс\\другой", variant_key: "другой", is_primary: true })).toBe(true);
+    expect(isPrimaryDatasetVariant({ key: "Класс\\main", variant_key: "main" })).toBe(true);
   });
 
   it("formats file sizes and running progress", () => {

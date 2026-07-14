@@ -167,6 +167,7 @@ def run_train_pipeline(
                         "train",
                         _tile_split_request(settings),
                         max_batches_per_epoch=settings.train.max_train_batches_per_epoch,
+                        include_object_instances=False,
                     )
                 ),
                 deps.create_tile_dataloader(
@@ -176,6 +177,7 @@ def run_train_pipeline(
                         settings.train.batch_size,
                         "val",
                         _tile_split_request(settings),
+                        include_object_instances=settings.train.task == "binary",
                     )
                 ),
             ),
@@ -380,6 +382,7 @@ def _tile_request(
     mode: str,
     tile_split: TileSplitRequest | None = None,
     max_batches_per_epoch: int | None = None,
+    include_object_instances: bool = False,
 ) -> TileDataloaderRequest:
     if dataset.class_annotations:
         return TileDataloaderRequest(
@@ -399,6 +402,7 @@ def _tile_request(
             mode=mode,
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
+            include_object_instances=include_object_instances,
         )
     if dataset.annotation_file is None:
         raise TrainPipelineError("PreparedDataset не содержит annotation_file для binary режима")
@@ -410,6 +414,7 @@ def _tile_request(
         mode=mode,
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
+        include_object_instances=include_object_instances,
     )
 
 
@@ -711,6 +716,7 @@ def _train_request(
         config=TrainConfig(
             epochs=settings.train.epochs,
             task=settings.train.task,
+            quality_metric=settings.train.quality_metric,
             batch_size=settings.train.batch_size,
             device=settings.train.device,
             learning_rate=settings.train.learning_rate,

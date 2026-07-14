@@ -44,6 +44,7 @@ class TileDataloaderRequest(BaseModel):
     mode: Literal["train", "val"]
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
+    include_object_instances: bool = False
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
@@ -57,6 +58,10 @@ class TileDataloaderRequest(BaseModel):
         if has_multiclass and self.hard_negative_annotation_file is not None:
             raise ValueError(
                 "hard_negative_annotation_file задается в TileDataloaderRequest только для binary режима"
+            )
+        if self.include_object_instances and (self.mode != "val" or has_multiclass):
+            raise ValueError(
+                "include_object_instances поддерживается только для binary val loader"
             )
         return self
 

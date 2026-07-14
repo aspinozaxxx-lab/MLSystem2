@@ -116,6 +116,7 @@ class TrainSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task: Literal["binary", "multiclass"] = "binary"
+    quality_metric: Literal["pixel", "objects"] = "pixel"
     model_name: str
     input_channels: int = Field(default=4, gt=0)
     output_channels: int = Field(default=1, gt=0)
@@ -145,6 +146,8 @@ class TrainSettings(BaseModel):
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
+        if self.task != "binary" and self.quality_metric == "objects":
+            raise ValueError("Объектовая метрика качества поддерживается только для binary train")
         return self
 
 

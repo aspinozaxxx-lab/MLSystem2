@@ -324,6 +324,80 @@ def test_validation_pixel_f1_is_zero_without_gt_positives() -> None:
     assert result["best_threshold_pixel_f1"] == 0.0
 
 
+def test_validation_object_f1_selects_object_threshold() -> None:
+    torch = pytest.importorskip("torch")
+
+    class IdentityModel(torch.nn.Module):
+        def forward(self, images):
+            return images
+
+    from mlsystem2.train import _trainer
+
+    probabilities = torch.tensor([[[[0.8, 0.8, 0.6, 0.6, 0.6]]]], dtype=torch.float32)
+    logits = torch.logit(probabilities)
+    instances = torch.tensor([[[1, 1, 0, 0, 0]]], dtype=torch.long)
+    masks = (instances > 0).to(dtype=torch.float32).unsqueeze(1)
+    config = TrainConfig(
+        quality_metric="objects",
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    result = _trainer._validate_epoch(
+        torch,
+        IdentityModel(),
+        [(logits, masks, {"object_instances": instances})],
+        torch.device("cpu"),
+        config,
+        1,
+    )
+
+    assert result["best_threshold"] == 0.7
+    assert result["quality_f1"] == 1.0
+    assert result["best_threshold_object_f1"] == 1.0
+    assert result["best_threshold_pixel_f1"] == 1.0
+
+
+def test_object_quality_requires_instance_masks() -> None:
+    torch = pytest.importorskip("torch")
+
+    class IdentityModel(torch.nn.Module):
+        def forward(self, images):
+            return images
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    masks = torch.zeros((1, 1, 2, 2), dtype=torch.float32)
+    config = TrainConfig(
+        quality_metric="objects",
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss="bce_dice",
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+
+    with pytest.raises(TrainError, match="маски экземпляров"):
+        _trainer._validate_epoch(
+            torch,
+            IdentityModel(),
+            [(logits, masks)],
+            torch.device("cpu"),
+            config,
+            1,
+        )
+
+
 def test_checkpoint_score_uses_best_threshold_pixel_f1() -> None:
     from mlsystem2.train import _trainer
 
@@ -339,6 +413,141 @@ def test_checkpoint_score_uses_best_threshold_pixel_f1() -> None:
     )
 
     assert _trainer._checkpoint_score(metrics) == 0.7
+
+
+def test_object_quality_drives_checkpoint_and_early_stopping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train import _trainer
+
+    class TinyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(1))
+
+        def forward(self, images):
+            return images * self.weight
+
+    quality_scores = [0.9, 0.8, 0.7]
+    pixel_scores = [0.1, 0.95, 0.99]
+
+    monkeypatch.setattr(_trainer, "_train_epoch", lambda *args, **kwargs: {"loss": 1.0})
+
+    def fake_validate(*args, **kwargs):
+        epoch = int(args[-1])
+        return {
+            "loss": 1.0,
+            "best_threshold": 0.7,
+            "best_pixel_threshold": 0.5,
+            "best_threshold_pixel_f1": pixel_scores[epoch - 1],
+            "best_threshold_pixel_precision": pixel_scores[epoch - 1],
+            "best_threshold_pixel_recall": pixel_scores[epoch - 1],
+            "best_threshold_precision": quality_scores[epoch - 1],
+            "best_threshold_recall": quality_scores[epoch - 1],
+            "best_threshold_object_f1": quality_scores[epoch - 1],
+            "best_threshold_object_precision": quality_scores[epoch - 1],
+            "best_threshold_object_recall": quality_scores[epoch - 1],
+            "quality_f1": quality_scores[epoch - 1],
+            "quality_precision": quality_scores[epoch - 1],
+            "quality_recall": quality_scores[epoch - 1],
+        }
+
+    saved: list[tuple[str, float]] = []
+    monkeypatch.setattr(_trainer, "_validate_epoch", fake_validate)
+    monkeypatch.setattr(
+        _trainer,
+        "_save_training_checkpoint",
+        lambda request, path, metrics, label: saved.append((label, metrics.val_quality_f1)),
+    )
+    request = TrainRequest(
+        model=ModelHandle(
+            spec=ModelSpec(name="segformer_b0", input_channels=1, output_channels=1),
+            model=TinyModel(),
+        ),
+        train_loader=[],
+        val_loader=[],
+        config=TrainConfig(
+            quality_metric="objects",
+            epochs=3,
+            batch_size=1,
+            device="cpu",
+            learning_rate=0.001,
+            weight_decay=0.0,
+            loss="bce_dice",
+            threshold=0.5,
+            early_stopping_patience=1,
+        ),
+        checkpoint_dir=str(tmp_path / "checkpoints"),
+    )
+
+    result = train_model(request)
+
+    assert result.epochs_total == 2
+    assert saved == [("best", 0.9), ("final", 0.8)]
+
+
+def test_object_training_checkpoint_contains_both_metric_families(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    instances = torch.zeros((2, 16, 16), dtype=torch.long)
+    instances[:, 4:8, 4:8] = 1
+    images, masks = _fake_loader(torch)[0]
+    result = train_model(
+        TrainRequest(
+            model=ModelHandle(
+                spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+                model=TinySegmentationModel(),
+            ),
+            train_loader=_fake_loader(torch),
+            val_loader=[(images, masks, {"object_instances": instances})],
+            config=TrainConfig(
+                quality_metric="objects",
+                epochs=1,
+                batch_size=2,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=1,
+            ),
+            checkpoint_dir=str(tmp_path / "object-checkpoints"),
+        )
+    )
+
+    checkpoint = torch.load(result.best_checkpoint_path, map_location="cpu")
+    metadata = checkpoint["metadata"]
+    assert metadata["quality_metric"] == "objects"
+    assert metadata["val_quality_f1"] == metadata["val_best_threshold_object_f1"]
+    assert metadata["val_best_threshold_pixel_f1"] is not None
+    assert metadata["val_best_threshold_pixel_precision"] is not None
+
+
+def test_multiclass_rejects_object_quality_metric() -> None:
+    with pytest.raises(ValueError, match="только для binary"):
+        TrainConfig(
+            task="multiclass",
+            quality_metric="objects",
+            epochs=1,
+            batch_size=1,
+            device="cpu",
+            learning_rate=0.001,
+            weight_decay=0.0,
+            loss="cross_entropy",
+            threshold=0.5,
+            early_stopping_patience=1,
+            class_slugs=["class_a"],
+        )
 
 
 def test_focal_tversky_loss_is_focal_plus_tversky() -> None:
