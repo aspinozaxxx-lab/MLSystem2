@@ -603,6 +603,23 @@ export interface paths {
         patch: operations["patch_test_sample_tile_api_v1_test_samples__sample_id__tiles__tile_index__patch"];
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/evaluate-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Evaluation Preview */
+        post: operations["post_test_sample_evaluation_preview_api_v1_test_samples__sample_id__evaluate_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/evaluate": {
         parameters: {
             query?: never;
@@ -631,6 +648,23 @@ export interface paths {
         put?: never;
         /** Post Test Sample Optimization */
         post: operations["post_test_sample_optimization_api_v1_test_samples__sample_id__optimize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/{sample_id}/optimize-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Optimization Preview */
+        post: operations["post_test_sample_optimization_preview_api_v1_test_samples__sample_id__optimize_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2295,6 +2329,16 @@ export interface components {
             /** Tiles */
             tiles?: components["schemas"]["TestSampleTileInfo"][];
         };
+        /** TestSampleDraftPreview */
+        TestSampleDraftPreview: {
+            /** Enabled Tile Indices */
+            enabled_tile_indices?: number[];
+            /** Enabled Image Count */
+            enabled_image_count: number;
+            /** Enabled Object Count */
+            enabled_object_count: number;
+            evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+        };
         /** TestSampleEvaluationInfo */
         TestSampleEvaluationInfo: {
             /**
@@ -2319,6 +2363,11 @@ export interface components {
             evaluated_at?: string | null;
             /** Error */
             error?: string | null;
+        };
+        /** TestSampleEvaluationPreviewRequest */
+        TestSampleEvaluationPreviewRequest: {
+            /** Enabled Tile Indices */
+            enabled_tile_indices?: number[];
         };
         /** TestSampleMetric */
         TestSampleMetric: {
@@ -2432,7 +2481,11 @@ export interface components {
         /** TestSampleUpdate */
         TestSampleUpdate: {
             /** Name */
-            name: string;
+            name?: string | null;
+            /** Is Primary */
+            is_primary?: boolean | null;
+            /** Enabled Tile Indices */
+            enabled_tile_indices?: number[] | null;
         };
         /** TestSampleVariantGroup */
         TestSampleVariantGroup: {
@@ -3614,7 +3667,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description ZIP всех основных тестовых выборок. */
+            /** @description ZIP всех основных тестовых разметок. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3791,6 +3844,41 @@ export interface operations {
             };
         };
     };
+    post_test_sample_evaluation_preview_api_v1_test_samples__sample_id__evaluate_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleEvaluationPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDraftPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_test_sample_evaluation_api_v1_test_samples__sample_id__evaluate_post: {
         parameters: {
             query?: never;
@@ -3857,6 +3945,41 @@ export interface operations {
             };
         };
     };
+    post_test_sample_optimization_preview_api_v1_test_samples__sample_id__optimize_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleOptimizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDraftPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_test_sample_preview_api_v1_test_samples__sample_id__tiles__tile_index__preview_get: {
         parameters: {
             query?: never;
@@ -3900,7 +4023,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description ZIP включённых тайлов постоянной тестовой выборки. */
+            /** @description ZIP включённых тайлов постоянной тестовой разметки. */
             200: {
                 headers: {
                     [name: string]: unknown;

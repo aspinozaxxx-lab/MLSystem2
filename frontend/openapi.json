@@ -1076,7 +1076,7 @@
         "operationId": "download_primary_test_samples_api_v1_test_samples_primary_download_get",
         "responses": {
           "200": {
-            "description": "ZIP всех основных тестовых выборок.",
+            "description": "ZIP всех основных тестовых разметок.",
             "content": {
               "application/zip": {
                 "schema": {
@@ -1317,6 +1317,56 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/evaluate-preview": {
+      "post": {
+        "summary": "Post Test Sample Evaluation Preview",
+        "operationId": "post_test_sample_evaluation_preview_api_v1_test_samples__sample_id__evaluate_preview_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleEvaluationPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDraftPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples/{sample_id}/evaluate": {
       "post": {
         "summary": "Post Test Sample Evaluation",
@@ -1407,6 +1457,56 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/optimize-preview": {
+      "post": {
+        "summary": "Post Test Sample Optimization Preview",
+        "operationId": "post_test_sample_optimization_preview_api_v1_test_samples__sample_id__optimize_preview_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleOptimizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleDraftPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview": {
       "get": {
         "summary": "Get Test Sample Preview",
@@ -1475,7 +1575,7 @@
         ],
         "responses": {
           "200": {
-            "description": "ZIP включённых тайлов постоянной тестовой выборки.",
+            "description": "ZIP включённых тайлов постоянной тестовой разметки.",
             "content": {
               "application/zip": {
                 "schema": {
@@ -6054,6 +6154,38 @@
         ],
         "title": "TestSampleDetail"
       },
+      "TestSampleDraftPreview": {
+        "properties": {
+          "enabled_tile_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Enabled Tile Indices"
+          },
+          "enabled_image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Image Count"
+          },
+          "enabled_object_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Object Count"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/TestSampleEvaluationInfo"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled_image_count",
+          "enabled_object_count",
+          "evaluation"
+        ],
+        "title": "TestSampleDraftPreview"
+      },
       "TestSampleEvaluationInfo": {
         "properties": {
           "status": {
@@ -6158,6 +6290,20 @@
           "status"
         ],
         "title": "TestSampleEvaluationInfo"
+      },
+      "TestSampleEvaluationPreviewRequest": {
+        "properties": {
+          "enabled_tile_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Enabled Tile Indices"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TestSampleEvaluationPreviewRequest"
       },
       "TestSampleMetric": {
         "properties": {
@@ -6430,17 +6576,46 @@
       "TestSampleUpdate": {
         "properties": {
           "name": {
-            "type": "string",
-            "maxLength": 180,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 180,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Name"
+          },
+          "is_primary": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Primary"
+          },
+          "enabled_tile_indices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled Tile Indices"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
         "title": "TestSampleUpdate"
       },
       "TestSampleVariantGroup": {

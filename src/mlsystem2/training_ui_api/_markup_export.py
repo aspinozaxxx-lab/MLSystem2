@@ -323,7 +323,7 @@ def generate_markup_pool_files(
     output_root: Path,
     dataset: DatasetInfo | None = None,
 ) -> GeneratedMarkupFiles:
-    """Создать максимально широкий пул, содержащий допустимую итоговую выборку."""
+    """Создать максимально широкий пул, содержащий допустимую итоговую разметку."""
 
     dataset = dataset or find_dataset(config.mlmarkup_root, dataset_key, config.images_root)
     if dataset is None or dataset.is_custom:
@@ -361,7 +361,7 @@ def generate_markup_pool_files(
     if len(candidates) < min_final_image_count:
         raise TrainingUIAPIError(
             "Недостаточно полностью валидных тайлов с объектами: "
-            f"найдено {len(candidates)}, для итоговой выборки требуется минимум "
+            f"найдено {len(candidates)}, для итоговой разметки требуется минимум "
             f"{min_final_image_count}."
         )
 
@@ -400,7 +400,7 @@ def generate_markup_pool_files(
             ]
         )
         raise TrainingUIAPIError(
-            "Невозможно сформировать итоговую выборку без перекрытий: "
+            "Невозможно сформировать итоговую разметку без перекрытий: "
             f"требуется от {min_final_image_count} до {max_final_image_count} тайлов "
             f"и минимум {min_object_count} объектов; "
             f"валидных кандидатов {len(candidates)}, верхняя оценка объектов в "

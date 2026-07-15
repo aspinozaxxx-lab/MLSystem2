@@ -1,4 +1,4 @@
-"""Постоянное хранение и оценка тестовых выборок."""
+"""Постоянное хранение и оценка тестовых разметок."""
 
 from __future__ import annotations
 
@@ -70,6 +70,8 @@ from .contracts import (
     TestSampleClassGroup,
     TestSampleCreate,
     TestSampleDetail,
+    TestSampleDraftPreview,
+    TestSampleEvaluationPreviewRequest,
     TestSampleEvaluationInfo,
     TestSampleMetric,
     TestSampleOptimizeRequest,
@@ -96,11 +98,11 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TestSampleUnavailable(FileNotFoundError):
-    """Тестовая выборка или её постоянный файл не найдены."""
+    """Тестовая разметка или её постоянный файл не найдены."""
 
 
 class TestSampleBatchUnavailable(FileNotFoundError):
-    """Групповой запуск тестовых выборок не найден."""
+    """Групповой запуск тестовых разметок не найден."""
 
 
 @dataclass(frozen=True)
@@ -249,7 +251,7 @@ def create_test_sample_batch(
     )
     if active is not None:
         raise TrainingUIAPIError(
-            "Групповое создание тестовых выборок уже выполняется. Дождитесь его завершения."
+            "Групповое создание тестовых разметок уже выполняется. Дождитесь его завершения."
         )
     keys = [item.dataset_key for item in request.items]
     if len(keys) != len(set(keys)):
@@ -355,7 +357,7 @@ async def run_test_sample_batch_worker(
     config: TrainingUIAPIConfig,
 ) -> None:
     interval = max(1, config.worker_interval_seconds)
-    LOGGER.info("Исполнитель групповых тестовых выборок запущен")
+    LOGGER.info("Исполнитель групповых тестовых разметок запущен")
     while True:
         try:
             await asyncio.to_thread(
@@ -366,7 +368,7 @@ async def run_test_sample_batch_worker(
         except asyncio.CancelledError:
             raise
         except Exception:
-            LOGGER.exception("Ошибка шага группового создания тестовых выборок")
+            LOGGER.exception("Ошибка шага группового создания тестовых разметок")
         await asyncio.sleep(interval)
 
 
@@ -423,7 +425,7 @@ def process_test_sample_batch_once(
             _finish_batch_if_complete(session, batch.id)
             session.commit()
     except Exception as exc:  # noqa: BLE001
-        LOGGER.exception("Не удалось создать тестовую выборку для строки %s", item_id)
+        LOGGER.exception("Не удалось создать тестовую разметку для строки %s", item_id)
         with session_factory() as session:
             item = session.get(TestSampleBatchItemRow, item_id)
             if item is None:
@@ -612,13 +614,55 @@ def update_test_sample(
     session: Session,
     sample_id: uuid.UUID,
     request: TestSampleUpdate,
+    config: TrainingUIAPIConfig,
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
-    name = request.name.strip()
-    if not name:
-        raise TrainingUIAPIError("Название тестовой выборки не может быть пустым.")
-    row.name = name
-    row.updated_at = _utc_now()
+    was_primary = row.is_primary
+    content_changed = False
+    primary_changed = False
+
+    if request.name is not None:
+        name = request.name.strip()
+        if not name:
+            raise TrainingUIAPIError("Название тестовой разметки не может быть пустым.")
+        if row.name != name:
+            row.name = name
+            row.updated_at = _utc_now()
+
+    if request.enabled_tile_indices is not None:
+        enabled_indices = _validated_tile_indices(row, request.enabled_tile_indices)
+        now = _utc_now()
+        for tile in row.tiles:
+            enabled = tile.tile_index in enabled_indices
+            if tile.enabled != enabled:
+                tile.enabled = enabled
+                tile.updated_at = now
+                content_changed = True
+        if content_changed:
+            row.content_revision += 1
+            row.updated_at = now
+        evaluate_test_sample(session, row, config)
+
+    if request.is_primary is not None:
+        primary_changed = _set_test_sample_primary(session, row, request.is_primary)
+
+    if primary_changed or (content_changed and (was_primary or row.is_primary)):
+        _refresh_training_metrics_after_primary_change(
+            session,
+            row.dataset_key,
+            config,
+            reason=(
+                "Основная тестовая разметка изменена; требуется пересчёт."
+                if primary_changed
+                else "Состав основной тестовой разметки изменён; требуется пересчёт."
+            ),
+        )
+    elif request.enabled_tile_indices is not None and row.is_primary:
+        reconcile_training_result_test_f1(
+            session,
+            config,
+            dataset_keys={row.dataset_key},
+        )
     session.flush()
     return _detail(row)
 
@@ -627,11 +671,29 @@ def update_test_sample_primary(
     session: Session,
     sample_id: uuid.UUID,
     request: TestSamplePrimaryUpdate,
+    config: TrainingUIAPIConfig | None = None,
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
-    if row.is_primary == request.is_primary:
+    if not _set_test_sample_primary(session, row, request.is_primary):
         return _detail(row)
-    if request.is_primary:
+    _refresh_training_metrics_after_primary_change(
+        session,
+        row.dataset_key,
+        config,
+        reason="Основная тестовая разметка изменена; требуется пересчёт.",
+    )
+    session.flush()
+    return _detail(row)
+
+
+def _set_test_sample_primary(
+    session: Session,
+    row: TestSampleRow,
+    is_primary: bool,
+) -> bool:
+    if row.is_primary == is_primary:
+        return False
+    if is_primary:
         current_rows = session.scalars(
             select(TestSampleRow).where(
                 TestSampleRow.dataset_key == row.dataset_key,
@@ -648,13 +710,19 @@ def update_test_sample_primary(
     else:
         row.is_primary = False
     row.updated_at = _utc_now()
-    _mark_training_test_metrics_stale(
-        session,
-        row.dataset_key,
-        "Основная тестовая выборка изменена; требуется пересчёт.",
-    )
-    session.flush()
-    return _detail(row)
+    return True
+
+
+def _validated_tile_indices(row: TestSampleRow, values: list[int]) -> set[int]:
+    selected = set(values)
+    if len(selected) != len(values):
+        raise TrainingUIAPIError("Индексы тайлов тестовой разметки не должны повторяться.")
+    available = {tile.tile_index for tile in row.tiles}
+    unknown = sorted(selected - available)
+    if unknown:
+        rendered = ", ".join(str(index) for index in unknown)
+        raise TrainingUIAPIError(f"Тайлы тестовой разметки не найдены: {rendered}.")
+    return selected
 
 
 def update_test_sample_tile(
@@ -662,6 +730,7 @@ def update_test_sample_tile(
     sample_id: uuid.UUID,
     tile_index: int,
     request: TestSampleTileUpdate,
+    config: TrainingUIAPIConfig | None = None,
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     tile = next((item for item in row.tiles if item.tile_index == tile_index), None)
@@ -675,10 +744,11 @@ def update_test_sample_tile(
         row.evaluation_error = None
         row.updated_at = _utc_now()
         if row.is_primary:
-            _mark_training_test_metrics_stale(
+            _refresh_training_metrics_after_primary_change(
                 session,
                 row.dataset_key,
-                "Состав основной тестовой выборки изменён; требуется пересчёт.",
+                config,
+                reason="Состав основной тестовой разметки изменён; требуется пересчёт.",
             )
         session.flush()
     return _detail(row)
@@ -701,7 +771,7 @@ def delete_test_sample(
             _mark_training_test_metrics_stale(
                 session,
                 row.dataset_key,
-                "Основная тестовая выборка удалена.",
+                "Основная тестовая разметка удалена.",
                 unavailable=True,
             )
         session.delete(row)
@@ -720,8 +790,128 @@ def evaluate_test_sample_by_id(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     evaluate_test_sample(session, row, config)
+    if row.is_primary:
+        reconcile_training_result_test_f1(
+            session,
+            config,
+            dataset_keys={row.dataset_key},
+        )
     session.flush()
     return _detail(row)
+
+
+def evaluate_test_sample_preview(
+    session: Session,
+    sample_id: uuid.UUID,
+    request: TestSampleEvaluationPreviewRequest,
+    config: TrainingUIAPIConfig,
+) -> TestSampleDraftPreview:
+    row = _sample_row(session, sample_id)
+    selected = _validated_tile_indices(row, request.enabled_tile_indices)
+    evaluation = _preview_evaluation(session, row, selected, config)
+    return _draft_preview(row, selected, evaluation)
+
+
+def optimize_test_sample_preview(
+    session: Session,
+    sample_id: uuid.UUID,
+    request: TestSampleOptimizeRequest,
+    config: TrainingUIAPIConfig,
+) -> TestSampleDraftPreview:
+    row = _sample_row(session, sample_id)
+    _validate_optimization_request(row, request)
+    source = _latest_pseudo_markup(session, row.dataset_key)
+    if source is None or source.geojson_file is None:
+        raise TrainingUIAPIError(
+            "Нет успешной разметки для этого подкласса и варианта датасета; "
+            "оптимизация состава недоступна."
+        )
+    source_path = Path(source.geojson_file.path)
+    if not source_path.is_file():
+        raise TrainingUIAPIError(
+            "Файл последней разметки не найден на сервере; состав не изменён."
+        )
+    selected, pixel_counts, object_counts = _optimized_selection_and_metrics(
+        row,
+        request,
+        config,
+        source_path,
+    )
+    evaluation = _preview_evaluation_info(source, pixel_counts, object_counts)
+    return _draft_preview(row, selected, evaluation)
+
+
+def _draft_preview(
+    row: TestSampleRow,
+    selected: set[int],
+    evaluation: TestSampleEvaluationInfo,
+) -> TestSampleDraftPreview:
+    enabled_tiles = [tile for tile in row.tiles if tile.tile_index in selected]
+    return TestSampleDraftPreview(
+        enabled_tile_indices=sorted(selected),
+        enabled_image_count=len(enabled_tiles),
+        enabled_object_count=sum(tile.object_count for tile in enabled_tiles),
+        evaluation=evaluation,
+    )
+
+
+def _preview_evaluation(
+    session: Session,
+    row: TestSampleRow,
+    selected: set[int],
+    config: TrainingUIAPIConfig,
+) -> TestSampleEvaluationInfo:
+    if not selected:
+        return TestSampleEvaluationInfo(
+            status="unavailable",
+            error="В тестовой разметке нет включённых тайлов.",
+        )
+    source = _latest_pseudo_markup(session, row.dataset_key)
+    if source is None or source.geojson_file is None:
+        return TestSampleEvaluationInfo(
+            status="unavailable",
+            error="Нет успешной разметки для этого подкласса и варианта датасета.",
+        )
+    source_path = Path(source.geojson_file.path)
+    if not source_path.is_file():
+        return TestSampleEvaluationInfo(
+            status="error",
+            error="Файл последней разметки не найден на сервере.",
+        )
+    try:
+        pixel_counts, object_counts = _calculate_metrics(
+            row,
+            source_path,
+            config,
+            tile_indices=selected,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return TestSampleEvaluationInfo(
+            status="error",
+            error=f"Не удалось рассчитать F1: {exc}",
+        )
+    return _preview_evaluation_info(source, pixel_counts, object_counts)
+
+
+def _preview_evaluation_info(
+    source: PseudoMarkupResultRow,
+    pixel_counts: _MetricCounts,
+    object_counts: _MetricCounts,
+) -> TestSampleEvaluationInfo:
+    return TestSampleEvaluationInfo(
+        status="current",
+        pixel=pixel_counts.info(),
+        objects=object_counts.info(),
+        object_iou_threshold=OBJECT_IOU_THRESHOLD,
+        pseudo_markup_result_id=source.id,
+        model_name=(
+            source.training_result.model_name
+            if source.training_result is not None
+            else "псевдоразметка"
+        ),
+        markup_created_at=source.updated_at or source.created_at,
+        evaluated_at=_utc_now(),
+    )
 
 
 def optimize_test_sample(
@@ -741,16 +931,17 @@ def optimize_test_sample(
     source_path = Path(source.geojson_file.path)
     if not source_path.is_file():
         raise TrainingUIAPIError(
-            "Файл последней разметки не найден на сервере; состав выборки не изменён."
+            "Файл последней разметки не найден на сервере; состав тестовой разметки не изменён."
         )
 
     previous_revision = row.content_revision
     _optimize_test_sample_row(row, request, config, source, source_path)
     if row.is_primary and row.content_revision != previous_revision:
-        _mark_training_test_metrics_stale(
+        _refresh_training_metrics_after_primary_change(
             session,
             row.dataset_key,
-            "Состав основной тестовой выборки оптимизирован; требуется пересчёт.",
+            config,
+            reason="Состав основной тестовой разметки оптимизирован; требуется пересчёт.",
         )
     session.flush()
     return _detail(row)
@@ -763,8 +954,6 @@ def _optimize_test_sample_row(
     source: PseudoMarkupResultRow,
     source_path: Path | None = None,
 ) -> None:
-    _validate_optimization_request(row, request)
-    request = request.model_copy(update={"metric": row.quality_metric})
     prediction_path = source_path or (
         Path(source.geojson_file.path) if source.geojson_file is not None else None
     )
@@ -772,11 +961,12 @@ def _optimize_test_sample_row(
         raise TrainingUIAPIError(
             "Файл разметки для оптимизации не найден на сервере."
         )
-    tile_metrics = _calculate_tile_metrics(row, prediction_path, config)
-    selected_indices = _select_optimized_tile_indices(row.tiles, tile_metrics, request)
-    selected = set(selected_indices)
-    pixel_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=0)
-    object_counts = _sum_tile_metrics(tile_metrics, selected, metric_index=1)
+    selected, pixel_counts, object_counts = _optimized_selection_and_metrics(
+        row,
+        request,
+        config,
+        prediction_path,
+    )
 
     now = _utc_now()
     changed = False
@@ -792,6 +982,25 @@ def _optimize_test_sample_row(
     _apply_evaluation(row, source, pixel_counts, object_counts)
 
 
+def _optimized_selection_and_metrics(
+    row: TestSampleRow,
+    request: TestSampleOptimizeRequest,
+    config: TrainingUIAPIConfig,
+    prediction_path: Path,
+) -> tuple[set[int], _MetricCounts, _MetricCounts]:
+    _validate_optimization_request(row, request)
+    effective_request = request.model_copy(update={"metric": row.quality_metric})
+    tile_metrics = _calculate_tile_metrics(row, prediction_path, config)
+    selected = set(
+        _select_optimized_tile_indices(row.tiles, tile_metrics, effective_request)
+    )
+    return (
+        selected,
+        _sum_tile_metrics(tile_metrics, selected, metric_index=0),
+        _sum_tile_metrics(tile_metrics, selected, metric_index=1),
+    )
+
+
 def evaluate_test_sample(
     session: Session,
     row: TestSampleRow,
@@ -800,7 +1009,7 @@ def evaluate_test_sample(
     pseudo_result: PseudoMarkupResultRow | None = None,
 ) -> None:
     if not any(tile.enabled for tile in row.tiles):
-        _evaluation_unavailable(row, "В тестовой выборке нет включённых тайлов.")
+        _evaluation_unavailable(row, "В тестовой разметке нет включённых тайлов.")
         return
     source = pseudo_result or _latest_pseudo_markup(session, row.dataset_key)
     if source is None or source.geojson_file is None:
@@ -865,7 +1074,7 @@ def _validate_optimization_request(
         )
     if request.max_tile_count > len(row.tiles):
         raise TrainingUIAPIError(
-            "Максимальное число тайлов превышает число тайлов в выборке."
+            "Максимальное число тайлов превышает число тайлов в тестовой разметке."
         )
     maximum_objects = sum(
         sorted((tile.object_count for tile in row.tiles), reverse=True)[
@@ -999,7 +1208,7 @@ def _select_optimized_tile_indices(
     )
     if numerator_result is None:
         raise TrainingUIAPIError(
-            "Невозможно подобрать состав выборки с заданными ограничениями."
+            "Невозможно подобрать состав тестовой разметки с заданными ограничениями."
         )
 
     optimal_result = numerator_result
@@ -1239,7 +1448,7 @@ def build_test_sample_download(
     row = _sample_row(session, sample_id)
     enabled = [tile for tile in row.tiles if tile.enabled]
     if not enabled:
-        raise TrainingUIAPIError("В тестовой выборке нет включённых тайлов.")
+        raise TrainingUIAPIError("В тестовой разметке нет включённых тайлов.")
     source_root = _sample_root(config, row.id)
     download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
     download_root.mkdir(parents=True, exist_ok=True)
@@ -1283,11 +1492,11 @@ def build_primary_test_samples_download(
         )
     ).all()
     if not rows:
-        raise TrainingUIAPIError("Основные тестовые выборки не назначены.")
+        raise TrainingUIAPIError("Основные тестовые разметки не назначены.")
     empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
     if empty:
         raise TrainingUIAPIError(
-            "В основных тестовых выборках нет включённых тайлов: " + ", ".join(empty)
+            "В основных тестовых разметках нет включённых тайлов: " + ", ".join(empty)
         )
 
     download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
@@ -1317,7 +1526,7 @@ def build_primary_test_samples_download(
                         path = source_root / f"{base_name}{suffix}"
                         if not path.is_file():
                             raise TrainingUIAPIError(
-                                f"Файл основной тестовой выборки не найден: {path.name}"
+                                f"Файл основной тестовой разметки не найден: {path.name}"
                             )
                         archive.write(path, f"{folder}/{path.name}")
     except Exception:
@@ -1325,7 +1534,7 @@ def build_primary_test_samples_download(
         raise
     return TestSampleDownloadArtifact(
         path=archive_path,
-        filename="основные_тестовые_выборки.zip",
+        filename="основные_тестовые_разметки.zip",
     )
 
 
@@ -1353,8 +1562,14 @@ def _calculate_metrics(
     row: TestSampleRow,
     prediction_path: Path,
     config: TrainingUIAPIConfig,
+    *,
+    tile_indices: set[int] | None = None,
 ) -> tuple[_MetricCounts, _MetricCounts]:
-    enabled = {tile.tile_index for tile in row.tiles if tile.enabled}
+    enabled = (
+        tile_indices
+        if tile_indices is not None
+        else {tile.tile_index for tile in row.tiles if tile.enabled}
+    )
     tile_metrics = _calculate_tile_metrics(
         row,
         prediction_path,
@@ -1621,6 +1836,26 @@ def _sample_row(session: Session, sample_id: uuid.UUID) -> TestSampleRow:
     return row
 
 
+def _refresh_training_metrics_after_primary_change(
+    session: Session,
+    dataset_key: str,
+    config: TrainingUIAPIConfig | None,
+    *,
+    reason: str,
+) -> None:
+    session.flush()
+    primary = _primary_sample(session, dataset_key)
+    usable = primary is not None and any(tile.enabled for tile in primary.tiles)
+    _mark_training_test_metrics_stale(
+        session,
+        dataset_key,
+        reason,
+        unavailable=not usable,
+    )
+    if config is not None and usable:
+        queue_class_test_f1(session, dataset_key, config)
+
+
 def _mark_training_test_metrics_stale(
     session: Session,
     dataset_key: str,
@@ -1638,7 +1873,7 @@ def _mark_training_test_metrics_stale(
     ).all()
     for row in rows:
         _cancel_test_metric_job(session, row)
-        if unavailable and row.f1 is None:
+        if unavailable:
             row.status = "unavailable"
         else:
             row.status = "stale" if row.f1 is not None else "unavailable"
@@ -1656,9 +1891,9 @@ def queue_class_test_f1(
 
     sample = _primary_sample(session, dataset_key)
     if sample is None:
-        raise TrainingUIAPIError("Для подкласса не назначена основная тестовая выборка.")
+        raise TrainingUIAPIError("Для подкласса не назначена основная тестовая разметка.")
     if not any(tile.enabled for tile in sample.tiles):
-        raise TrainingUIAPIError("В основной тестовой выборке нет включённых тайлов.")
+        raise TrainingUIAPIError("В основной тестовой разметке нет включённых тайлов.")
     results = session.scalars(
         select(TrainingResultRow)
         .where(
@@ -1678,6 +1913,74 @@ def queue_class_test_f1(
             created += 1
     session.flush()
     return created
+
+
+def reconcile_training_result_test_f1(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    *,
+    dataset_keys: set[str] | None = None,
+) -> int:
+    """Восстанавливает отсутствующие и устаревшие оценки без повтора текущих ошибок."""
+
+    conditions = [TrainingResultRow.status == "ok"]
+    if dataset_keys is not None:
+        if not dataset_keys:
+            return 0
+        conditions.append(TrainingResultRow.class_key.in_(dataset_keys))
+    results = session.scalars(
+        select(TrainingResultRow)
+        .where(*conditions)
+        .order_by(TrainingResultRow.created_at.desc(), TrainingResultRow.id.desc())
+    ).all()
+    created = 0
+    for result in results:
+        sample = _primary_sample(session, result.class_key)
+        if sample is None or not any(tile.enabled for tile in sample.tiles):
+            continue
+        metric = session.get(TrainingResultTestMetricRow, result.id)
+        if not _test_metric_needs_reconciliation(
+            session,
+            result,
+            sample,
+            metric,
+            config,
+        ):
+            continue
+        if queue_training_result_test_f1(
+            session,
+            result,
+            config,
+            source=JobSource(result.source),
+        ):
+            created += 1
+    session.flush()
+    return created
+
+
+def _test_metric_needs_reconciliation(
+    session: Session,
+    result: TrainingResultRow,
+    sample: TestSampleRow,
+    metric: TrainingResultTestMetricRow | None,
+    config: TrainingUIAPIConfig,
+) -> bool:
+    if metric is None:
+        return True
+    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
+    template, _, config_hash = _effective_inference_template(
+        session,
+        result.architecture,
+        result.class_key,
+        postprocess_profile,
+    )
+    if not _metric_matches(metric, sample, template, config_hash):
+        return True
+    if metric.status == "current" or _metric_job_is_active(session, metric):
+        return False
+    if metric.status in {"queued", "running"}:
+        return True
+    return metric.job_id is None and metric.status in {"stale", "unavailable"}
 
 
 def queue_training_result_test_f1(
@@ -1799,7 +2102,7 @@ def training_result_test_f1_info(
             sample_id=sample.id,
             sample_name=sample.name,
             sample_revision=sample.content_revision,
-            error="Для сети ещё не рассчитан F1 на основной тестовой выборке.",
+            error="Для сети ещё не рассчитан F1 на основной тестовой разметке.",
         )
     postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
     template, _, config_hash = _effective_inference_template(
@@ -2162,14 +2465,17 @@ __all__ = [
     "create_test_sample_batch",
     "delete_test_sample",
     "evaluate_test_sample_by_id",
+    "evaluate_test_sample_preview",
     "evaluate_test_samples_for_pseudo_markup",
     "latest_test_sample_batch",
     "mark_test_samples_stale_for_pseudo_markup",
     "optimize_test_sample",
+    "optimize_test_sample_preview",
     "primary_test_sample",
     "process_test_sample_batch_once",
     "queue_class_test_f1",
     "queue_training_result_test_f1",
+    "reconcile_training_result_test_f1",
     "recover_test_sample_batches",
     "run_test_sample_batch_worker",
     "test_sample_batch_detail",

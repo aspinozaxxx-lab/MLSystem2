@@ -47,6 +47,7 @@ from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     evaluate_test_samples_for_pseudo_markup,
     queue_training_result_test_f1,
+    reconcile_training_result_test_f1,
 )
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
@@ -339,7 +340,7 @@ def _start_inference_job(
         _write_worker_error(
             run_dir,
             (
-                "Не удалось запустить расчёт F1 на тестовой выборке.\n\n"
+                "Не удалось запустить расчёт F1 на тестовой разметке.\n\n"
                 if is_test_f1
                 else "Не удалось запустить псевдоразметку.\n\n"
             )
@@ -497,16 +498,16 @@ def _build_test_sample_f1_config(
         training_result_id = uuid.UUID(str(row.config.get("training_result_id")))
         sample_id = uuid.UUID(str(row.config.get("test_sample_id")))
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("В задании F1 повреждены идентификаторы сети или выборки.") from exc
+        raise RuntimeError("В задании F1 повреждены идентификаторы сети или разметки.") from exc
     training_result = session.get(TrainingResultRow, training_result_id)
     sample = session.get(TestSampleRow, sample_id)
     if training_result is None or training_result.status != ResultStatus.OK.value:
         raise RuntimeError("Успешный результат обучения для расчёта F1 не найден.")
     if sample is None or not sample.is_primary or sample.dataset_key != training_result.class_key:
-        raise RuntimeError("Основная тестовая выборка была заменена или удалена.")
+        raise RuntimeError("Основная тестовая разметка была заменена или удалена.")
     expected_revision = int(row.config.get("test_sample_revision") or 0)
     if sample.content_revision != expected_revision:
-        raise RuntimeError("Состав основной тестовой выборки изменён.")
+        raise RuntimeError("Состав основной тестовой разметки изменён.")
     expected_indices = {
         int(value) for value in (row.config.get("test_sample_tile_indices") or [])
     }
@@ -813,15 +814,29 @@ def _finish_inference_job(
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
     session.flush()
+    evaluated_dataset_keys: set[str] = set()
     for result in pseudo_results:
         if result.status != ResultStatus.OK.value:
             continue
         try:
             evaluate_test_samples_for_pseudo_markup(session, result, config)
+            if result.class_key:
+                evaluated_dataset_keys.add(result.class_key)
         except Exception:  # noqa: BLE001
             LOGGER.exception(
-                "Не удалось автоматически пересчитать тестовые выборки для разметки %s",
+                "Не удалось автоматически пересчитать тестовые разметки для результата %s",
                 result.id,
+            )
+    if evaluated_dataset_keys:
+        try:
+            reconcile_training_result_test_f1(
+                session,
+                config,
+                dataset_keys=evaluated_dataset_keys,
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.exception(
+                "Не удалось восстановить тестовый F1 после новой псевдоразметки"
             )
     _cleanup_inference_scratch(row)
     LOGGER.info(
@@ -903,7 +918,7 @@ def _finish_test_sample_f1_job(
             metric.error = None
         elif not still_current:
             metric.status = "stale" if metric.f1 is not None else "unavailable"
-            metric.error = "Основная тестовая выборка изменилась во время расчёта."
+            metric.error = "Основная тестовая разметка изменилась во время расчёта."
             metric.job_id = None
         else:
             metric.status = "stale" if metric.f1 is not None else "error"
@@ -955,7 +970,7 @@ def _test_sample_f1_error(report: dict[str, Any] | None, row: JobRow) -> str:
             text = ""
         if text:
             return text[:4000]
-    return "Не удалось рассчитать F1 на основной тестовой выборке."
+    return "Не удалось рассчитать F1 на основной тестовой разметке."
 
 
 def _pseudo_output_path(row: JobRow) -> Path | None:

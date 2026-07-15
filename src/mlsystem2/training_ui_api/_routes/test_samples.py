@@ -1,4 +1,4 @@
-"""HTTP-маршруты постоянных тестовых выборок."""
+"""HTTP-маршруты постоянных тестовых разметок."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from mlsystem2.training_ui_api._test_samples import (
     create_test_sample,
     delete_test_sample,
     evaluate_test_sample_by_id,
+    evaluate_test_sample_preview,
     latest_test_sample_batch,
     optimize_test_sample,
+    optimize_test_sample_preview,
     test_sample_batch_detail,
     test_sample_catalog,
     test_sample_detail,
@@ -34,6 +36,8 @@ from mlsystem2.training_ui_api.contracts import (
     TestSampleCatalogResponse,
     TestSampleCreate,
     TestSampleDetail,
+    TestSampleDraftPreview,
+    TestSampleEvaluationPreviewRequest,
     TestSampleOptimizeRequest,
     TestSamplePrimaryUpdate,
     TestSampleTileUpdate,
@@ -91,7 +95,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         response_class=FileResponse,
         responses={
             200: {
-                "description": "ZIP всех основных тестовых выборок.",
+                "description": "ZIP всех основных тестовых разметок.",
                 "content": {
                     "application/zip": {
                         "schema": {"type": "string", "format": "binary"}
@@ -127,7 +131,9 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        detail = _sample_or_404(lambda: update_test_sample(db, sample_id, request))
+        detail = _sample_or_404(
+            lambda: update_test_sample(db, sample_id, request, ctx.config)
+        )
         db.commit()
         return detail
 
@@ -142,7 +148,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
         detail = _sample_or_404(
-            lambda: update_test_sample_primary(db, sample_id, request)
+            lambda: update_test_sample_primary(db, sample_id, request, ctx.config)
         )
         db.commit()
         return detail
@@ -169,10 +175,30 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
         detail = _sample_or_404(
-            lambda: update_test_sample_tile(db, sample_id, tile_index, request)
+            lambda: update_test_sample_tile(
+                db,
+                sample_id,
+                tile_index,
+                request,
+                ctx.config,
+            )
         )
         db.commit()
         return detail
+
+    @app.post(
+        "/api/v1/test-samples/{sample_id}/evaluate-preview",
+        response_model=TestSampleDraftPreview,
+    )
+    def post_test_sample_evaluation_preview(
+        sample_id: uuid.UUID,
+        request: TestSampleEvaluationPreviewRequest,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleDraftPreview:
+        return _sample_or_404(
+            lambda: evaluate_test_sample_preview(db, sample_id, request, ctx.config)
+        )
 
     @app.post(
         "/api/v1/test-samples/{sample_id}/evaluate",
@@ -205,6 +231,20 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db.commit()
         return detail
 
+    @app.post(
+        "/api/v1/test-samples/{sample_id}/optimize-preview",
+        response_model=TestSampleDraftPreview,
+    )
+    def post_test_sample_optimization_preview(
+        sample_id: uuid.UUID,
+        request: TestSampleOptimizeRequest,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleDraftPreview:
+        return _sample_or_404(
+            lambda: optimize_test_sample_preview(db, sample_id, request, ctx.config)
+        )
+
     @app.get(
         "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview",
         response_class=FileResponse,
@@ -233,7 +273,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         response_class=FileResponse,
         responses={
             200: {
-                "description": "ZIP включённых тайлов постоянной тестовой выборки.",
+                "description": "ZIP включённых тайлов постоянной тестовой разметки.",
                 "content": {
                     "application/zip": {
                         "schema": {"type": "string", "format": "binary"}
@@ -264,7 +304,7 @@ def _sample_or_404(operation):
     except TestSampleUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Тестовая выборка или её файл не найдены.",
+            detail="Тестовая разметка или её файл не найдены.",
         ) from exc
 
 
@@ -274,7 +314,7 @@ def _batch_or_404(operation):
     except TestSampleBatchUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Групповой запуск тестовых выборок не найден.",
+            detail="Групповой запуск тестовых разметок не найден.",
         ) from exc
 
 

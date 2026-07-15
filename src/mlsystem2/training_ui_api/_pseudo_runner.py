@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
-    """Считает пиксельный и объектовый F1 на независимых TIFF-тайлах выборки."""
+    """Считает пиксельный и объектовый F1 на независимых TIFF-тайлах разметки."""
 
     started = time.time()
     run_root = Path(config["run_root"])

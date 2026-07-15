@@ -1275,13 +1275,17 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert not Path("frontend/src/app.js").exists()
     assert not Path("frontend/src/assets/app.css").exists()
     assert 'head === "model-export"' in app_tsx
-    assert 'head === "markup-export" && second' in app_tsx
+    assert 'head === "test-markups" && second === "create"' in app_tsx
+    assert 'head === "markup-export"' not in app_tsx
     assert "/bootstrap" in app_tsx
     assert "Экспорт моделей" in app_tsx
-    assert "Каталог тестовых выборок" in app_tsx
+    assert "Каталог тестовых разметок" in app_tsx
+    assert "Создание тестовых разметок" in app_tsx
     assert "Пересчитать F1" in app_tsx
     assert "Оптимизация состава" in app_tsx
-    assert "/optimize" in app_tsx
+    assert "/optimize-preview" in app_tsx
+    assert "/evaluate-preview" in app_tsx
+    assert "Не сохранено" in app_tsx
     assert "[512, 768, 1024, 1536, 2048]" in app_tsx
     assert "useState(1536)" in app_tsx
     assert '"/test-sample-batches/latest"' in app_tsx

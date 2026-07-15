@@ -1,4 +1,4 @@
-"""Контракты постоянных тестовых выборок."""
+"""Контракты постоянных тестовых разметок."""
 
 from __future__ import annotations
 
@@ -23,7 +23,19 @@ class TestSampleCreate(BaseModel):
 class TestSampleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=180)
+    name: str | None = Field(default=None, min_length=1, max_length=180)
+    is_primary: bool | None = None
+    enabled_tile_indices: list[int] | None = None
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> Self:
+        if (
+            self.name is None
+            and self.is_primary is None
+            and self.enabled_tile_indices is None
+        ):
+            raise ValueError("Нужно передать хотя бы одно изменение тестовой разметки.")
+        return self
 
 
 class TestSampleTileUpdate(BaseModel):
@@ -45,6 +57,12 @@ class TestSampleOptimizeRequest(BaseModel):
     max_tile_count: int = Field(gt=0)
     min_object_count: int = Field(gt=0)
     metric: Literal["pixel", "objects"] = "pixel"
+
+
+class TestSampleEvaluationPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled_tile_indices: list[int] = Field(default_factory=list)
 
 
 class TestSampleMetric(BaseModel):
@@ -140,6 +158,15 @@ class TestSampleDetail(TestSampleSummary):
     tiles: list[TestSampleTileInfo] = Field(default_factory=list)
 
 
+class TestSampleDraftPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled_tile_indices: list[int] = Field(default_factory=list)
+    enabled_image_count: int = Field(ge=0)
+    enabled_object_count: int = Field(ge=0)
+    evaluation: TestSampleEvaluationInfo
+
+
 class TestSampleBatchItemCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -227,6 +254,8 @@ __all__ = [
     "TestSampleClassGroup",
     "TestSampleCreate",
     "TestSampleDetail",
+    "TestSampleDraftPreview",
+    "TestSampleEvaluationPreviewRequest",
     "TestSampleEvaluationInfo",
     "TestSampleMetric",
     "TestSampleOptimizeRequest",

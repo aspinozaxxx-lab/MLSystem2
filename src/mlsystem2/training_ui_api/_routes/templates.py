@@ -123,7 +123,7 @@ def register_template_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> InferenceTemplate:
-        return update_inference_template_by_id(db, template_id, request)
+        return update_inference_template_by_id(db, template_id, request, ctx.config)
 
     @app.delete("/api/v1/inference-templates/by-id/{template_id}", response_model=InferenceTemplate)
     def delete_inference_template_by_id(
@@ -131,7 +131,7 @@ def register_template_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> InferenceTemplate:
-        return delete_inference_template(db, template_id)
+        return delete_inference_template(db, template_id, ctx.config)
 
     @app.put(
         "/api/v1/inference-templates/by-id/{template_id}/apply-field-to-all",
@@ -143,7 +143,12 @@ def register_template_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> InferenceTemplateListResponse:
-        return apply_inference_template_field_to_all(db, template_id, request)
+        return apply_inference_template_field_to_all(
+            db,
+            template_id,
+            request,
+            ctx.config,
+        )
 
     @app.get("/api/v1/inference-templates/{architecture}", response_model=InferenceTemplate)
     def get_inference_template(
@@ -160,7 +165,7 @@ def register_template_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> InferenceTemplate:
-        return update_inference_template(db, architecture, request)
+        return update_inference_template(db, architecture, request, ctx.config)
 
 
 __all__ = ["register_template_routes"]

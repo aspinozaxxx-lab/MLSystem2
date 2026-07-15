@@ -85,6 +85,7 @@ from ._test_samples import (
     mark_test_samples_stale_for_pseudo_markup,
     primary_test_sample,
     queue_class_test_f1,
+    reconcile_training_result_test_f1,
     training_result_test_f1_info,
 )
 from .contracts import (
@@ -638,12 +639,13 @@ def update_inference_template(
     session: Session,
     architecture: str,
     request: InferenceTemplateUpdate,
+    config: TrainingUIAPIConfig,
 ) -> InferenceTemplate:
     ensure_seed_templates(session)
     row = _base_inference_template_row(session, architecture)
     if row is None:
         raise TrainingUIAPIError(f"Шаблон инференса не найден: {architecture}")
-    return update_inference_template_by_id(session, row.id, request)
+    return update_inference_template_by_id(session, row.id, request, config)
 
 
 def create_inference_template(
@@ -682,6 +684,7 @@ def create_inference_template(
     )
     session.add(row)
     session.flush()
+    reconcile_training_result_test_f1(session, config)
     return _inference_template_info(row)
 
 
@@ -689,6 +692,7 @@ def update_inference_template_by_id(
     session: Session,
     template_id: uuid.UUID,
     request: InferenceTemplateUpdate,
+    config: TrainingUIAPIConfig,
 ) -> InferenceTemplate:
     ensure_seed_templates(session)
     row = session.get(InferenceTemplateRow, template_id)
@@ -712,12 +716,14 @@ def update_inference_template_by_id(
             row.is_active = request.is_active
     row.updated_at = _now()
     session.flush()
+    reconcile_training_result_test_f1(session, config)
     return _inference_template_info(row)
 
 
 def delete_inference_template(
     session: Session,
     template_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
 ) -> InferenceTemplate:
     ensure_seed_templates(session)
     row = session.get(InferenceTemplateRow, template_id)
@@ -728,6 +734,7 @@ def delete_inference_template(
     info = _inference_template_info(row)
     session.delete(row)
     session.flush()
+    reconcile_training_result_test_f1(session, config)
     return info
 
 
@@ -735,6 +742,7 @@ def apply_inference_template_field_to_all(
     session: Session,
     template_id: uuid.UUID,
     request: InferenceTemplateApplyField,
+    config: TrainingUIAPIConfig,
 ) -> InferenceTemplateListResponse:
     ensure_seed_templates(session)
     row = session.get(InferenceTemplateRow, template_id)
@@ -754,6 +762,7 @@ def apply_inference_template_field_to_all(
         template.version += 1
         template.updated_at = _now()
     session.flush()
+    reconcile_training_result_test_f1(session, config)
     return inference_templates(session)
 
 

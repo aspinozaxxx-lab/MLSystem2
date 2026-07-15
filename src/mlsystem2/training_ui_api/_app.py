@@ -30,6 +30,7 @@ from ._routes.test_samples import register_test_sample_routes
 from ._service import ensure_seed_templates
 from ._test_samples import (
     cleanup_test_sample_storage,
+    reconcile_training_result_test_f1,
     recover_test_sample_batches,
     run_test_sample_batch_worker,
 )
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
             cleanup_test_sample_storage(session, config)
             recover_test_sample_batches(session)
             ensure_seed_templates(session)
+            reconcile_training_result_test_f1(session, config)
             session.commit()
         worker_tasks: list[asyncio.Task[None]] = []
         if config.worker_enabled:

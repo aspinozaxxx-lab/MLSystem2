@@ -29,11 +29,11 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
 - `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
-- `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultClassInfo`, `ResultVariantInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, отдельный тестовый F1 сети, основная выборка и карточки классов; активные DTO содержат `job_id` и прогресс связанного задания.
+- `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultClassInfo`, `ResultVariantInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, отдельный тестовый F1 сети, основная разметка и карточки классов; активные DTO содержат `job_id` и прогресс связанного задания.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
-- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate` - создание постоянной выборки, переименование, изменение состояния тайла, ограничения оптимизации и назначение основной выборки.
-- `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail` - метрики, иерархический каталог и редакторское описание постоянных тестовых выборок.
+- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации и запрос оценки черновика.
+- `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail`, `TestSampleDraftPreview` - метрики, каталог, редакторское описание и незаписываемый результат чернового расчёта тестовых разметок.
 - `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; последний запуск хранит применённые настройки формы.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `GET /api/v1/dataset-catalog` и `POST /api/v1/dataset-catalog/sync` - иерархия редактора и явная идемпотентная синхронизация с MLMarkup.
@@ -49,15 +49,16 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/markup-export` - синхронно формирует временный набор тестовой разметки для варианта MLMarkup.
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview` - возвращает PNG-превью тайла с контуром маски.
 - `GET /api/v1/markup-export/{export_id}/download` - возвращает плоский ZIP сформированного набора.
-- `GET /api/v1/test-samples` и `POST /api/v1/test-samples` - иерархический каталог и создание постоянной тестовой выборки.
-- `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, переименование и полное удаление выборки.
+- `GET /api/v1/test-samples` и `POST /api/v1/test-samples` - иерархический каталог и создание постоянной тестовой разметки.
+- `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, атомарное сохранение имени, основного статуса и полного состава либо удаление разметки.
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов по основной метрике класса; request-поле старого клиента принимается, но не меняет выбор метрики.
+- `POST /api/v1/test-samples/{sample_id}/evaluate-preview` и `POST /api/v1/test-samples/{sample_id}/optimize-preview` - рассчитывают F1 или оптимальный состав черновика без записи в БД.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP включенных тайлов.
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
-- `PUT /api/v1/test-samples/{sample_id}/primary` - атомарно назначает, заменяет или снимает основную выборку точного варианта.
-- `GET /api/v1/test-samples/primary/download` - ZIP основных выборок с отдельной папкой `Класс_вариант`.
+- `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает основную разметку точного варианта.
+- `GET /api/v1/test-samples/primary/download` - ZIP основных разметок с отдельной папкой `Класс_вариант`.
 - `POST /api/v1/results/classes/{class_key}/test-f1` - ставит в inference-очередь отсутствующие, ошибочные и устаревшие оценки успешных сетей варианта.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -137,32 +138,35 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 ресэмплинга, бинарная маска и превью, а геометрии обрезанного GeoJSON с исходными свойствами и CRS нормализуются
 до `MultiPolygon` для открытия в QGIS одним слоем. Архив именуется по русскому имени класса, например
 `вырубки_test_markup.zip`. Совместимый временный экспорт хранится один час в `scratch_root/markup-exports`.
-Постоянные выборки хранят метаданные в `test_samples` и `test_sample_tiles`, а файлы без TTL — в
+Постоянные тестовые разметки хранят метаданные в `test_samples` и `test_sample_tiles`, а файлы без TTL — в
 `stored_files_root/test-samples/{uuid}`. Выключение тайла сохраняет файлы, исключает его из ZIP и помечает прежние
 метрики устаревшими. Пиксельный F1 считается по TP/FP/FN растрированных масок, объектный — по максимальному
 взаимно-однозначному сопоставлению с `IoU ≥ 0,5`. Источник — последняя успешная псевдоразметка, у которой
-`class_key` и входной `dataset_key` точно равны ключу варианта выборки; новый подходящий результат запускает
-автоматический пересчет. Ручной оптимизатор рассматривает все тайлы независимо от текущего состояния, максимизирует
+`class_key` и входной `dataset_key` точно равны ключу варианта разметки; новый подходящий результат запускает
+автоматический пересчёт. Редактор рассчитывает оптимизацию и F1 без записи, а одним `PATCH` сохраняет имя,
+основной статус и состав. Оптимизатор рассматривает все тайлы независимо от текущего состояния, максимизирует
 агрегированный F1 и при равенстве предпочитает территории, число объектов, исходные снимки и меньший состав.
 Групповой запуск хранится в `test_sample_batches` и `test_sample_batch_items` и обрабатывается отдельным
 последовательным исполнителем нарезки, а не очередью обучения или инференса. Для итоговых `N` тайлов и минимума
 `M` объектов и диапазона `Nmin..Nmax` он ищет максимально достижимый непересекающийся пул от `3 × Nmax` до
 `Nmin`, целится в `3M` появлений объектов и после оптимизации сохраняет от `Nmin` до `Nmax` тайлов включёнными.
-Неуспешная строка не оставляет выборку или файлы, а после перезапуска текущая строка запускается повторно.
+Неуспешная строка не оставляет разметку или файлы, а после перезапуска текущая строка запускается повторно.
 Последний запуск возвращает размер, минимум и максимум тайлов, минимумы объектов и метрики как следующие
 значения формы по умолчанию. Если старый клиент не передал `min_image_count`, минимум принимается равным
 `image_count`, сохраняя прежний режим точного числа тайлов.
 
-Флаг `test_samples.is_primary` уникален по точному `dataset_key`. Общий ZIP включает только основные выборки и
+Флаг `test_samples.is_primary` уникален по точному `dataset_key`. Общий ZIP включает только основные разметки и
 только включённые тайлы. Таблица `training_result_test_metrics` хранит пиксельные и объектовые TP/FP/FN каждой успешной сети.
 Задание `test_sample_f1` использует общую inference-очередь и тот же `_pseudo_runner`, но запускает checkpoint
-непосредственно на TIFF основной выборки: каждый тайл обрабатывается независимо, применяется threshold checkpoint
+непосредственно на TIFF основной разметки: каждый тайл обрабатывается независимо, применяется threshold checkpoint
 и актуальный inference-шаблон, после чего маска сравнивается с `tile_NNN_mask.png`. Базовый профиль
-`none/detail_v2/strong` берётся из псевдоразметки, которой оценена выборка, либо из числа снимков точного датасета.
+`none/detail_v2/strong` берётся из псевдоразметки, которой оценена разметка, либо из числа снимков точного датасета.
 Малые или компактные компоненты внутри тайла фильтруются штатно, а касающиеся границы TIFF фрагменты сохраняются,
 поскольку их полная геометрия находится за пределами тайла. Результат применяется только при совпадении основной
-выборки и ревизии состава; смена выборки, состава, профиля, эффективного шаблона или версии оценщика делает его
-устаревшим. Новая успешная сеть ставится на оценку автоматически. Этот расчёт не пишет данные в MLflow и не
+разметки и ревизии состава; смена разметки, состава, профиля, эффективного шаблона или версии оценщика делает его
+устаревшим. Новая успешная сеть и изменение основной разметки ставят оценки в очередь автоматически; при старте,
+смене профиля или inference-шаблона отсутствующие и устаревшие оценки восстанавливаются идемпотентно, а ошибка той
+же ревизии не повторяется циклически. Этот расчёт не пишет данные в MLflow и не
 изменяет `train_pipeline`.
 На странице результатов успешная строка обучения имеет кнопку `zip`: frontend предлагает имя
 `{имя geojson-разметки без расширения}_kanopus`, отправляет его в

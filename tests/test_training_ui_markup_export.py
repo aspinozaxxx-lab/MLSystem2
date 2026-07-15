@@ -19,6 +19,7 @@ from rasterio.shutil import copy as raster_copy
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
 from shapely.ops import transform as transform_geometry
+from sqlalchemy import select
 
 from mlsystem2.training_ui_api import _markup_export
 from mlsystem2.training_ui_api._config import get_config
@@ -39,24 +40,30 @@ from mlsystem2.training_ui_api._test_samples import (
     cleanup_test_sample_storage,
     create_test_sample,
     evaluate_test_sample_by_id,
+    evaluate_test_sample_preview,
     evaluate_test_samples_for_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
     optimize_test_sample,
+    optimize_test_sample_preview,
     queue_training_result_test_f1,
+    reconcile_training_result_test_f1,
     test_sample_detail as _test_sample_detail,
     training_result_test_f1_info,
     update_test_sample_primary,
     update_test_sample_tile,
+    update_test_sample,
 )
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import (
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
+    TestSampleEvaluationPreviewRequest as _TestSampleEvaluationPreviewRequest,
     TestSampleBatchCreate as _TestSampleBatchCreate,
     TestSampleOptimizeRequest as _TestSampleOptimizeRequest,
     TestSamplePrimaryUpdate as _TestSamplePrimaryUpdate,
     TestSampleTileUpdate as _TestSampleTileUpdate,
+    TestSampleUpdate as _TestSampleUpdate,
     TrainingUIAPIError,
 )
 
@@ -595,8 +602,11 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         _login(client)
         openapi = client.get("/openapi.json").json()
         assert "TestSampleDetail" in openapi["components"]["schemas"]
+        assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
+        assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
+        assert "/api/v1/test-samples/{sample_id}/optimize-preview" in openapi["paths"]
         assert (
             openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
                 "tile_width"
@@ -620,6 +630,16 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert sample["evaluation"]["status"] == "unavailable"
         assert sample["enabled_image_count"] == 2
         assert [tile["enabled"] for tile in sample["tiles"]] == [True, True]
+        draft_preview = client.post(
+            f"/api/v1/test-samples/{sample_id}/evaluate-preview",
+            json={"enabled_tile_indices": [2]},
+        )
+        assert draft_preview.status_code == 200
+        assert draft_preview.json()["enabled_tile_indices"] == [2]
+        assert draft_preview.json()["enabled_image_count"] == 1
+        assert client.get(f"/api/v1/test-samples/{sample_id}").json()[
+            "enabled_image_count"
+        ] == 2
         unavailable_optimization = client.post(
             f"/api/v1/test-samples/{sample_id}/optimize",
             json={
@@ -848,6 +868,38 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert detail.evaluation.objects.false_negative == 0
         assert detail.evaluation.pseudo_markup_result_id == pseudo.id
 
+        sample_row = session.get(_TestSampleRow, sample_id)
+        assert sample_row is not None
+        saved_revision = sample_row.content_revision
+        saved_evaluated_revision = sample_row.evaluated_revision
+        saved_enabled = [tile.tile_index for tile in sample_row.tiles if tile.enabled]
+        evaluation_preview = evaluate_test_sample_preview(
+            session,
+            sample_id,
+            _TestSampleEvaluationPreviewRequest(enabled_tile_indices=[2]),
+            config,
+        )
+        assert evaluation_preview.enabled_tile_indices == [2]
+        assert evaluation_preview.enabled_image_count == 1
+        assert evaluation_preview.evaluation.pixel is not None
+        assert evaluation_preview.evaluation.pixel.f1 == pytest.approx(1.0)
+        optimization_preview = optimize_test_sample_preview(
+            session,
+            sample_id,
+            _TestSampleOptimizeRequest(
+                min_tile_count=1,
+                max_tile_count=1,
+                min_object_count=1,
+                metric="pixel",
+            ),
+            config,
+        )
+        assert len(optimization_preview.enabled_tile_indices) == 1
+        session.flush()
+        assert sample_row.content_revision == saved_revision
+        assert sample_row.evaluated_revision == saved_evaluated_revision
+        assert [tile.tile_index for tile in sample_row.tiles if tile.enabled] == saved_enabled
+
         update_test_sample_tile(
             session,
             sample_id,
@@ -1053,6 +1105,188 @@ def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
             assert all(name.startswith("Вырубки_main/tile_002") for name in names)
         finally:
             artifact.cleanup()
+
+
+def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        first = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Первая",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        second = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Вторая",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        update_test_sample_primary(
+            session,
+            first.id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        results = [
+            TrainingResultRow(
+                source="manual",
+                dataset_key="Вырубки\\main",
+                class_key="Вырубки\\main",
+                class_display_name="Вырубки\\main",
+                architecture=architecture,
+                model_name=architecture,
+                mlflow_run_id=f"run-{index}",
+                status="ok",
+            )
+            for index, architecture in enumerate(("segformer_b2", "segformer_b3"), start=1)
+        ]
+        session.add_all(results)
+        session.flush()
+
+        updated = update_test_sample(
+            session,
+            first.id,
+            _TestSampleUpdate(
+                name="Первая сохранённая",
+                is_primary=True,
+                enabled_tile_indices=[2],
+            ),
+            config,
+        )
+        assert updated.name == "Первая сохранённая"
+        assert updated.is_primary is True
+        assert [tile.index for tile in updated.tiles if tile.enabled] == [2]
+        first_row = session.get(_TestSampleRow, first.id)
+        assert first_row is not None
+        assert first_row.content_revision == 2
+        metrics = [session.get(TrainingResultTestMetricRow, result.id) for result in results]
+        assert all(metric is not None and metric.status == "queued" for metric in metrics)
+        queued_jobs = session.scalars(
+            select(JobRow).where(JobRow.status == "queued")
+        ).all()
+        assert len(queued_jobs) == 2
+        assert all(job.config["test_sample_tile_indices"] == [2] for job in queued_jobs)
+
+        update_test_sample(
+            session,
+            first.id,
+            _TestSampleUpdate(
+                name="Первая сохранённая",
+                is_primary=True,
+                enabled_tile_indices=[2],
+            ),
+            config,
+        )
+        assert len(session.scalars(select(JobRow).where(JobRow.status == "queued")).all()) == 2
+        assert reconcile_training_result_test_f1(session, config) == 0
+
+        for metric in metrics:
+            assert metric is not None and metric.job_id is not None
+            job = session.get(JobRow, metric.job_id)
+            assert job is not None
+            job.status = "failed"
+            metric.status = "error"
+            metric.error = "Диагностическая ошибка"
+        session.flush()
+        assert reconcile_training_result_test_f1(session, config) == 0
+
+        switched = update_test_sample(
+            session,
+            second.id,
+            _TestSampleUpdate(
+                name="Вторая",
+                is_primary=True,
+                enabled_tile_indices=[1, 2],
+            ),
+            config,
+        )
+        assert switched.is_primary is True
+        assert _test_sample_detail(session, first.id).is_primary is False
+        for result in results:
+            metric = session.get(TrainingResultTestMetricRow, result.id)
+            assert metric is not None
+            assert metric.sample_id == second.id
+            assert metric.status == "queued"
+        assert reconcile_training_result_test_f1(session, config) == 0
+
+        with pytest.raises(TrainingUIAPIError, match="не должны повторяться"):
+            update_test_sample(
+                session,
+                second.id,
+                _TestSampleUpdate(enabled_tile_indices=[1, 1]),
+                config,
+            )
+
+
+def test_app_startup_recovers_missing_test_markup_f1(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                object_count=1,
+            ),
+            config,
+        )
+        update_test_sample_primary(
+            session,
+            sample.id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        result = TrainingResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="segformer b2",
+            mlflow_run_id="startup-run",
+            status="ok",
+        )
+        session.add(result)
+        session.commit()
+        result_id = result.id
+
+    with TestClient(create_app()):
+        pass
+
+    with session_factory() as session:
+        metric = session.get(TrainingResultTestMetricRow, result_id)
+        assert metric is not None
+        assert metric.status == "queued"
+        assert metric.job_id is not None
 
 
 def test_test_sample_optimizer_uses_all_tiles_and_resolves_equal_f1_by_territory() -> None:
