@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import rasterio
 from fastapi.testclient import TestClient
+from PIL import Image
 from pyproj import CRS, Transformer
 from rasterio.enums import ColorInterp
 from rasterio.features import rasterize
@@ -21,7 +22,7 @@ from shapely.geometry import box, mapping, shape
 from shapely.ops import transform as transform_geometry
 from sqlalchemy import select
 
-from mlsystem2.training_ui_api import _markup_export
+from mlsystem2.training_ui_api import _markup_export, _test_samples
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._models import (
@@ -71,6 +72,23 @@ from mlsystem2.training_ui_api.contracts import (
 pytestmark = pytest.mark.filterwarnings(
     "ignore:Dataset has no geotransform, gcps, or rpcs.*:rasterio.errors.NotGeoreferencedWarning"
 )
+
+_DOWNLOADED_TILE_SUFFIXES = {
+    ".tif",
+    ".geojson",
+    "_mask.png",
+    "_rgb.jpg",
+    "_rgb_markup.jpg",
+    "_nrg.jpg",
+    "_nrg_markup.jpg",
+    "_ngr.jpg",
+    "_ngr_markup.jpg",
+}
+
+
+def _downloaded_tile_names(base_name: str, *, folder: str | None = None) -> set[str]:
+    prefix = f"{folder}/" if folder else ""
+    return {f"{prefix}{base_name}{suffix}" for suffix in _DOWNLOADED_TILE_SUFFIXES}
 
 
 def test_markup_export_builds_black_free_georeferenced_archive(
@@ -186,6 +204,98 @@ def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
     assert yellow[2, 2]
     assert not yellow[3, 3]
     assert not bool(np.any(np.all(preview == np.asarray([255, 0, 0]), axis=2)))
+
+
+def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None:
+    size = 128
+    rows, columns = np.mgrid[:size, :size]
+    image = np.stack(
+        [
+            columns * 2 + 1,
+            rows * 2 + 1,
+            np.clip(columns + rows + 1, 1, 255),
+            np.clip(255 - columns + rows // 2, 1, 255),
+        ],
+        axis=0,
+    ).astype(np.uint8)
+    mask = np.zeros((size, size), dtype=np.uint8)
+    mask[24:104, 24:104] = 255
+
+    previews = _test_samples._test_sample_jpeg_previews(
+        image,
+        mask,
+        tile_name="tile001",
+    )
+
+    assert set(previews) == {
+        "rgb",
+        "rgb_markup",
+        "nrg",
+        "nrg_markup",
+        "ngr",
+        "ngr_markup",
+    }
+    stretched = [_markup_export._stretch_channel(channel) for channel in image]
+    expected_channels = {
+        "rgb": (0, 1, 2),
+        "nrg": (3, 0, 1),
+        "ngr": (3, 1, 0),
+    }
+    decoded: dict[str, np.ndarray] = {}
+    for name, payload in previews.items():
+        assert len(payload) <= 300 * 1024
+        with Image.open(BytesIO(payload)) as preview:
+            assert preview.format == "JPEG"
+            assert preview.size == (size, size)
+            assert preview.info.get("progressive") == 1
+            decoded[name] = np.asarray(preview.convert("RGB"))
+
+    for name, indices in expected_channels.items():
+        expected = np.stack([stretched[index] for index in indices], axis=2)
+        mean_error = np.abs(decoded[name].astype(int) - expected.astype(int)).mean()
+        assert mean_error < 8.0
+
+    edge = _markup_export._mask_edge(mask)
+    yellow = np.asarray([255, 255, 0])
+    edge_error = np.abs(decoded["rgb_markup"][edge].astype(int) - yellow).mean()
+    assert edge_error < 55.0
+    unchanged_error = np.abs(
+        decoded["rgb_markup"][:12, :12].astype(int)
+        - decoded["rgb"][:12, :12].astype(int)
+    ).mean()
+    assert unchanged_error < 4.0
+
+
+def test_test_sample_jpeg_encoder_enforces_hard_size_limit(monkeypatch) -> None:
+    random_image = np.random.default_rng(7).integers(
+        0,
+        256,
+        size=(1024, 1024, 3),
+        dtype=np.uint8,
+    )
+    payload = _test_samples._encode_test_sample_jpeg(
+        random_image,
+        tile_name="tile001",
+        preview_name="rgb",
+    )
+    assert len(payload) <= 300 * 1024
+
+    monkeypatch.setattr(_test_samples, "_JPEG_PREVIEW_MAX_BYTES", 1)
+    with pytest.raises(TrainingUIAPIError, match="не помещается в 300 КБ"):
+        _test_samples._encode_test_sample_jpeg(
+            random_image[:16, :16],
+            tile_name="tile001",
+            preview_name="rgb",
+        )
+
+
+def test_test_sample_jpeg_previews_require_nir_channel() -> None:
+    with pytest.raises(TrainingUIAPIError, match="RED, GRN, BLU и NIR"):
+        _test_samples._test_sample_jpeg_previews(
+            np.zeros((3, 16, 16), dtype=np.uint8),
+            np.zeros((16, 16), dtype=np.uint8),
+            tile_name="tile001",
+        )
 
 
 def test_markup_export_reports_nearest_object_count(tmp_path: Path, monkeypatch) -> None:
@@ -682,12 +792,11 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         archive_response = client.get(toggled["download_url"])
         assert archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
-            assert set(archive.namelist()) == {
-                "tile_002.tif",
-                "tile_002.geojson",
-                "tile_002_mask.png",
-                "tile_002_preview.png",
-            }
+            names = set(archive.namelist())
+            assert names == _downloaded_tile_names("tile001")
+            for name in names:
+                if name.endswith(".jpg"):
+                    assert archive.getinfo(name).file_size <= 300 * 1024
         disabled = client.patch(
             f"/api/v1/test-samples/{sample_id}/tiles/2",
             json={"enabled": False},
@@ -941,8 +1050,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         artifact = build_test_sample_download(session, sample_id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                assert all(name.startswith("tile_002") for name in archive.namelist())
-                assert len(archive.namelist()) == 4
+                assert set(archive.namelist()) == _downloaded_tile_names("tile001")
         finally:
             artifact.cleanup()
 
@@ -1097,14 +1205,63 @@ def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
 
         assert _test_sample_detail(session, samples[0].id).is_primary is False
         assert _test_sample_detail(session, samples[1].id).is_primary is True
+
+        first_row = session.get(_TestSampleRow, samples[0].id)
+        assert first_row is not None
+        first_row.dataset_key = "Пожары\\main"
+        first_row.dataset_name = "Пожары\\main"
+        first_row.class_key = "Пожары"
+        first_row.class_name = "Пожары"
+        first_row.variant_key = "main"
+        first_row.variant_name = "main"
+        session.flush()
+        update_test_sample_primary(
+            session,
+            samples[0].id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+
         artifact = build_primary_test_samples_download(session, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                names = archive.namelist()
-            assert len(names) == 4
-            assert all(name.startswith("Вырубки_main/tile_002") for name in names)
+                names = set(archive.namelist())
+            assert names == (
+                _downloaded_tile_names("tile001", folder="Вырубки_main")
+                | _downloaded_tile_names("tile001", folder="Пожары_main")
+                | _downloaded_tile_names("tile002", folder="Пожары_main")
+            )
         finally:
             artifact.cleanup()
+
+
+def test_test_sample_download_removes_partial_archive_when_jpeg_cannot_fit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                object_count=1,
+            ),
+            config,
+        )
+        monkeypatch.setattr(_test_samples, "_JPEG_PREVIEW_MAX_BYTES", 1)
+        with pytest.raises(TrainingUIAPIError, match="не помещается в 300 КБ"):
+            build_test_sample_download(session, sample.id, config)
+
+    download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    assert not list(download_root.glob("*.zip"))
 
 
 def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_idempotent(

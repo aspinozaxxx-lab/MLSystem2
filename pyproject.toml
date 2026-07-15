@@ -14,6 +14,7 @@ dependencies = [
   "mlflow",
   "onnx>=1.16",
   "numpy",
+  "Pillow",
   "scipy",
   "boto3",
   "rasterio",

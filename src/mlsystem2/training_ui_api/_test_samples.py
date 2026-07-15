@@ -14,12 +14,14 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from math import gcd
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import rasterio
+from PIL import Image
 from pyproj import CRS as PyprojCRS
 from pyproj import Transformer
 from rasterio.errors import NotGeoreferencedWarning
@@ -37,8 +39,10 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
 from ._markup_export import (
+    _mask_edge,
     _run_milp,
     _single_constraint,
+    _stretch_channel,
     generate_markup_files,
     generate_markup_pool_files,
 )
@@ -91,7 +95,15 @@ TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 OBJECT_IOU_THRESHOLD = 0.5
-_TILE_SUFFIXES = (".tif", ".geojson", "_mask.png", "_preview.png")
+_DOWNLOAD_TILE_SUFFIXES = (".tif", ".geojson", "_mask.png")
+_JPEG_PREVIEW_CHANNELS = {
+    "rgb": (0, 1, 2),
+    "nrg": (3, 0, 1),
+    "ngr": (3, 1, 0),
+}
+_JPEG_PREVIEW_MAX_BYTES = 300 * 1024
+_JPEG_QUALITY_MIN = 1
+_JPEG_QUALITY_MAX = 95
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
 _BATCH_FINISHED_ITEM_STATUSES = ("ok", "error")
 LOGGER = logging.getLogger(__name__)
@@ -1446,7 +1458,10 @@ def build_test_sample_download(
     config: TrainingUIAPIConfig,
 ) -> TestSampleDownloadArtifact:
     row = _sample_row(session, sample_id)
-    enabled = [tile for tile in row.tiles if tile.enabled]
+    enabled = sorted(
+        (tile for tile in row.tiles if tile.enabled),
+        key=lambda tile: tile.tile_index,
+    )
     if not enabled:
         raise TrainingUIAPIError("В тестовой разметке нет включённых тайлов.")
     source_root = _sample_root(config, row.id)
@@ -1459,15 +1474,13 @@ def build_test_sample_download(
             mode="w",
             compression=zipfile.ZIP_DEFLATED,
         ) as archive:
-            for tile in enabled:
-                base_name = f"tile_{tile.tile_index:03d}"
-                for suffix in _TILE_SUFFIXES:
-                    path = source_root / f"{base_name}{suffix}"
-                    if not path.is_file():
-                        raise TrainingUIAPIError(
-                            f"Файл тестового тайла не найден: {path.name}"
-                        )
-                    archive.write(path, path.name)
+            for download_index, tile in enumerate(enabled, start=1):
+                _write_test_sample_tile_to_archive(
+                    archive,
+                    source_root,
+                    tile.tile_index,
+                    download_index,
+                )
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
@@ -1518,17 +1531,18 @@ def build_primary_test_samples_download(
                     folder = f"{folder}_{str(row.id)[:8]}"
                 used_folders.add(folder)
                 source_root = _sample_root(config, row.id)
-                for tile in row.tiles:
-                    if not tile.enabled:
-                        continue
-                    base_name = f"tile_{tile.tile_index:03d}"
-                    for suffix in _TILE_SUFFIXES:
-                        path = source_root / f"{base_name}{suffix}"
-                        if not path.is_file():
-                            raise TrainingUIAPIError(
-                                f"Файл основной тестовой разметки не найден: {path.name}"
-                            )
-                        archive.write(path, f"{folder}/{path.name}")
+                enabled = sorted(
+                    (tile for tile in row.tiles if tile.enabled),
+                    key=lambda tile: tile.tile_index,
+                )
+                for download_index, tile in enumerate(enabled, start=1):
+                    _write_test_sample_tile_to_archive(
+                        archive,
+                        source_root,
+                        tile.tile_index,
+                        download_index,
+                        folder=folder,
+                    )
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
@@ -1536,6 +1550,117 @@ def build_primary_test_samples_download(
         path=archive_path,
         filename="основные_тестовые_разметки.zip",
     )
+
+
+def _write_test_sample_tile_to_archive(
+    archive: zipfile.ZipFile,
+    source_root: Path,
+    tile_index: int,
+    download_index: int,
+    *,
+    folder: str | None = None,
+) -> None:
+    stored_base_name = f"tile_{tile_index:03d}"
+    archive_base_name = f"tile{download_index:03d}"
+    archive_prefix = f"{folder}/" if folder else ""
+    paths = {
+        suffix: source_root / f"{stored_base_name}{suffix}"
+        for suffix in _DOWNLOAD_TILE_SUFFIXES
+    }
+    for suffix, path in paths.items():
+        if not path.is_file():
+            raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
+        archive.write(path, f"{archive_prefix}{archive_base_name}{suffix}")
+
+    tif_path = paths[".tif"]
+    mask_path = paths["_mask.png"]
+    with rasterio.open(tif_path) as dataset:
+        image = dataset.read()
+    with rasterio.open(mask_path) as dataset:
+        mask = dataset.read(1)
+    previews = _test_sample_jpeg_previews(
+        image,
+        mask,
+        tile_name=archive_base_name,
+    )
+    for suffix, preview in previews.items():
+        archive.writestr(f"{archive_prefix}{archive_base_name}_{suffix}.jpg", preview)
+
+
+def _test_sample_jpeg_previews(
+    image: np.ndarray,
+    mask: np.ndarray,
+    *,
+    tile_name: str,
+) -> dict[str, bytes]:
+    if image.ndim != 3 or image.shape[0] < 4:
+        channel_count = image.shape[0] if image.ndim == 3 else 0
+        raise TrainingUIAPIError(
+            f"Для превью {tile_name} нужны каналы RED, GRN, BLU и NIR; "
+            f"в TIFF найдено каналов: {channel_count}."
+        )
+    if mask.ndim != 2 or image.shape[1:] != mask.shape:
+        raise TrainingUIAPIError(
+            f"Размер маски {tile_name} не совпадает с размером TIFF."
+        )
+
+    stretched = tuple(_stretch_channel(image[index]) for index in range(4))
+    edge = _mask_edge(mask)
+    result: dict[str, bytes] = {}
+    for name, channel_indices in _JPEG_PREVIEW_CHANNELS.items():
+        preview = np.stack(
+            [stretched[index] for index in channel_indices],
+            axis=2,
+        )
+        result[name] = _encode_test_sample_jpeg(
+            preview,
+            tile_name=tile_name,
+            preview_name=name,
+        )
+        marked = preview.copy()
+        marked[edge] = np.asarray([255, 255, 0], dtype=np.uint8)
+        marked_name = f"{name}_markup"
+        result[marked_name] = _encode_test_sample_jpeg(
+            marked,
+            tile_name=tile_name,
+            preview_name=marked_name,
+        )
+    return result
+
+
+def _encode_test_sample_jpeg(
+    image: np.ndarray,
+    *,
+    tile_name: str,
+    preview_name: str,
+) -> bytes:
+    source = Image.fromarray(np.ascontiguousarray(image))
+    minimum = _JPEG_QUALITY_MIN
+    maximum = _JPEG_QUALITY_MAX
+    best: bytes | None = None
+    while minimum <= maximum:
+        quality = (minimum + maximum) // 2
+        stream = BytesIO()
+        source.save(
+            stream,
+            format="JPEG",
+            quality=quality,
+            optimize=True,
+            progressive=True,
+            subsampling=2,
+        )
+        payload = stream.getvalue()
+        if len(payload) <= _JPEG_PREVIEW_MAX_BYTES:
+            best = payload
+            minimum = quality + 1
+        else:
+            maximum = quality - 1
+    if best is None:
+        raise TrainingUIAPIError(
+            f"Превью {tile_name}_{preview_name}.jpg не помещается в 300 КБ "
+            "даже при минимальном качестве JPEG."
+        )
+    return best
 
 
 def cleanup_test_sample_storage(
