@@ -38,6 +38,7 @@ export type TestSampleBatchCreate = components["schemas"]["TestSampleBatchCreate
 export type TestSampleBatchInfo = components["schemas"]["TestSampleBatchInfo"];
 export type TestSampleCreate = components["schemas"]["TestSampleCreate"];
 export type TestSampleDetail = components["schemas"]["TestSampleDetail"];
+export type TestSampleDownloadRequest = components["schemas"]["TestSampleDownloadRequest"];
 export type TestSampleDraftPreview = components["schemas"]["TestSampleDraftPreview"];
 export type TestSampleEvaluationPreviewRequest = components["schemas"]["TestSampleEvaluationPreviewRequest"];
 export type TestSampleEvaluationInfo = components["schemas"]["TestSampleEvaluationInfo"];

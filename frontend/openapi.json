@@ -1596,6 +1596,55 @@
             }
           }
         }
+      },
+      "post": {
+        "summary": "Download Test Sample Draft",
+        "operationId": "download_test_sample_draft_api_v1_test_samples__sample_id__download_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleDownloadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ZIP выбранных тайлов незаписанного черновика тестовой разметки.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/automation": {
@@ -3038,7 +3087,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -3050,7 +3099,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -3084,7 +3133,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -3135,7 +3184,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -6154,6 +6203,23 @@
         ],
         "title": "TestSampleDetail"
       },
+      "TestSampleDownloadRequest": {
+        "properties": {
+          "enabled_tile_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Enabled Tile Indices"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled_tile_indices"
+        ],
+        "title": "TestSampleDownloadRequest"
+      },
       "TestSampleDraftPreview": {
         "properties": {
           "enabled_tile_indices": {
@@ -7492,6 +7558,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

@@ -88,6 +88,7 @@
 - `GET /api/v1/test-samples/primary/download`
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview`
 - `GET /api/v1/test-samples/{sample_id}/download`
+- `POST /api/v1/test-samples/{sample_id}/download`
 - `DELETE /api/v1/results/pseudo-markup/{result_id}`
 - `GET /api/v1/files/{file_id}/download`
 
@@ -128,6 +129,8 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 устаревшие до пересчёта, а новый подходящий результат псевдоразметки запускает автоматический пересчёт.
 Редактор использует `evaluate-preview` и `optimize-preview` без записи; имя, основной статус и полный состав
 применяются одним `PATCH /api/v1/test-samples/{sample_id}`.
+Скачивание из редактора передаёт текущий состав в `POST /api/v1/test-samples/{sample_id}/download`, формирует
+временный ZIP выбранных тайлов и не сохраняет черновик. Совместимый `GET` скачивает сохранённый состав.
 Одиночный и общий ZIP основных разметок последовательно нумеруют включённые тайлы как `tile001..tileNNN` и
 добавляют для каждого полноразмерные JPEG `rgb/nrg/ngr` с жёлтым контуром и без него. Превью формируются на лету
 из четырёх каналов TIFF, не сохраняются постоянно и кодируются с максимальным качеством, укладывающимся в

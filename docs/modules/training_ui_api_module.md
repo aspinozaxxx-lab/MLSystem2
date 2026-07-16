@@ -32,7 +32,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `ClassResultsResponse`, `ResultClassInfo`, `ResultVariantInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, отдельный тестовый F1 сети, основная разметка и карточки классов; активные DTO содержат `job_id` и прогресс связанного задания.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
-- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации и запрос оценки черновика.
+- `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest`, `TestSampleDownloadRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации, запросы оценки и скачивания черновика.
 - `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleVariantGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail`, `TestSampleDraftPreview` - метрики, каталог, редакторское описание и незаписываемый результат чернового расчёта тестовых разметок.
 - `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; последний запуск хранит применённые настройки формы.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
@@ -55,7 +55,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов по основной метрике класса; request-поле старого клиента принимается, но не меняет выбор метрики.
 - `POST /api/v1/test-samples/{sample_id}/evaluate-preview` и `POST /api/v1/test-samples/{sample_id}/optimize-preview` - рассчитывают F1 или оптимальный состав черновика без записи в БД.
-- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP включенных тайлов.
+- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP сохранённых включённых тайлов.
+- `POST /api/v1/test-samples/{sample_id}/download` - ZIP явно выбранных тайлов текущего черновика без изменения разметки в БД.
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
 - `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает основную разметку точного варианта.
 - `GET /api/v1/test-samples/primary/download` - ZIP основных разметок с отдельной папкой `Класс_вариант`.
@@ -145,6 +146,8 @@ Backend загружает checkpoint через `models.api.load_checkpoint`, �
 `rgb/nrg/ngr` JPEG с жёлтым двухпиксельным контуром и без него. JPEG строятся из каналов
 `RED, GRN, BLU, NIR` только при скачивании, а двоичный подбор максимального качества `1..95` обеспечивает
 жёсткий предел `300 KiB` на файл. Постоянные файлы и технический `/markup-export` сохраняют прежний формат.
+Редактор передаёт текущие индексы тайлов в `POST` скачивания; сборка использует их только для временного ZIP и
+не меняет сохранённые флаги, ревизию состава или метрики.
 Пиксельный F1 считается по TP/FP/FN растрированных масок, объектный — по максимальному
 взаимно-однозначному сопоставлению с `IoU ≥ 0,5`. Источник — последняя успешная псевдоразметка, у которой
 `class_key` и входной `dataset_key` точно равны ключу варианта разметки; новый подходящий результат запускает

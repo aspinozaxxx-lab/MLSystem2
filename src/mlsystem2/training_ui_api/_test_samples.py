@@ -1456,10 +1456,17 @@ def build_test_sample_download(
     session: Session,
     sample_id: uuid.UUID,
     config: TrainingUIAPIConfig,
+    *,
+    enabled_tile_indices: list[int] | None = None,
 ) -> TestSampleDownloadArtifact:
     row = _sample_row(session, sample_id)
+    selected = (
+        _validated_tile_indices(row, enabled_tile_indices)
+        if enabled_tile_indices is not None
+        else {tile.tile_index for tile in row.tiles if tile.enabled}
+    )
     enabled = sorted(
-        (tile for tile in row.tiles if tile.enabled),
+        (tile for tile in row.tiles if tile.tile_index in selected),
         key=lambda tile: tile.tile_index,
     )
     if not enabled:

@@ -57,6 +57,7 @@ import type {
   TestSampleBatchCreate,
   TestSampleBatchInfo,
   TestSampleDetail,
+  TestSampleDownloadRequest,
   TestSampleDraftPreview,
   TestSampleEvaluationInfo,
   TestSampleMetric,
@@ -1377,10 +1378,13 @@ function TestSampleEditorPage({
   };
 
   const download = async () => {
-    if (!sample || dirty) return;
+    if (!sample || !draft) return;
+    const request: TestSampleDownloadRequest = {
+      enabled_tile_indices: draft.enabledTileIndices,
+    };
     setDownloading(true);
     try {
-      const payload = await run(() => apiDownloadGet(sample.download_url));
+      const payload = await run(() => apiDownloadJson(sample.download_url, request));
       if (payload) downloadBlob(payload.blob, payload.filename || "test_markup.zip");
     } finally {
       setDownloading(false);
@@ -1563,7 +1567,7 @@ function TestSampleEditorPage({
                 <RefreshCw size={16} />
                 {evaluating ? "Расчёт..." : "Пересчитать F1"}
               </button>
-              <button className="primary" type="button" disabled={downloading || !hasEnabledTiles || dirty} title={dirty ? "Сначала сохраните изменения" : undefined} onClick={() => void download()}>
+              <button className="primary" type="button" disabled={downloading || !hasEnabledTiles} onClick={() => void download()}>
                 <Download size={16} />
                 {downloading ? "Скачивание..." : "Скачать ZIP"}
               </button>

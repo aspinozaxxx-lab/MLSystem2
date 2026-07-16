@@ -698,7 +698,8 @@ export interface paths {
         /** Download Test Sample */
         get: operations["download_test_sample_api_v1_test_samples__sample_id__download_get"];
         put?: never;
-        post?: never;
+        /** Download Test Sample Draft */
+        post: operations["download_test_sample_draft_api_v1_test_samples__sample_id__download_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2329,6 +2330,11 @@ export interface components {
             /** Tiles */
             tiles?: components["schemas"]["TestSampleTileInfo"][];
         };
+        /** TestSampleDownloadRequest */
+        TestSampleDownloadRequest: {
+            /** Enabled Tile Indices */
+            enabled_tile_indices: number[];
+        };
         /** TestSampleDraftPreview */
         TestSampleDraftPreview: {
             /** Enabled Tile Indices */
@@ -2728,6 +2734,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -4024,6 +4034,41 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description ZIP включённых тайлов постоянной тестовой разметки. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_test_sample_draft_api_v1_test_samples__sample_id__download_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleDownloadRequest"];
+            };
+        };
+        responses: {
+            /** @description ZIP выбранных тайлов незаписанного черновика тестовой разметки. */
             200: {
                 headers: {
                     [name: string]: unknown;

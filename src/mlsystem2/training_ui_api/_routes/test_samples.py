@@ -36,6 +36,7 @@ from mlsystem2.training_ui_api.contracts import (
     TestSampleCatalogResponse,
     TestSampleCreate,
     TestSampleDetail,
+    TestSampleDownloadRequest,
     TestSampleDraftPreview,
     TestSampleEvaluationPreviewRequest,
     TestSampleOptimizeRequest,
@@ -289,6 +290,41 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
     ) -> FileResponse:
         artifact = _sample_or_404(
             lambda: build_test_sample_download(db, sample_id, ctx.config)
+        )
+        return FileResponse(
+            artifact.path,
+            filename=artifact.filename,
+            media_type="application/zip",
+            background=BackgroundTask(artifact.cleanup),
+        )
+
+    @app.post(
+        "/api/v1/test-samples/{sample_id}/download",
+        response_class=FileResponse,
+        responses={
+            200: {
+                "description": "ZIP выбранных тайлов незаписанного черновика тестовой разметки.",
+                "content": {
+                    "application/zip": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                },
+            }
+        },
+    )
+    def download_test_sample_draft(
+        sample_id: uuid.UUID,
+        request: TestSampleDownloadRequest,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> FileResponse:
+        artifact = _sample_or_404(
+            lambda: build_test_sample_download(
+                db,
+                sample_id,
+                ctx.config,
+                enabled_tile_indices=request.enabled_tile_indices,
+            )
         )
         return FileResponse(
             artifact.path,

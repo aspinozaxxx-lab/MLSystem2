@@ -65,6 +65,12 @@ class TestSampleEvaluationPreviewRequest(BaseModel):
     enabled_tile_indices: list[int] = Field(default_factory=list)
 
 
+class TestSampleDownloadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled_tile_indices: list[int]
+
+
 class TestSampleMetric(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -254,6 +260,7 @@ __all__ = [
     "TestSampleClassGroup",
     "TestSampleCreate",
     "TestSampleDetail",
+    "TestSampleDownloadRequest",
     "TestSampleDraftPreview",
     "TestSampleEvaluationPreviewRequest",
     "TestSampleEvaluationInfo",

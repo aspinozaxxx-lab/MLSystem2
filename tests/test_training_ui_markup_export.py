@@ -717,6 +717,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize-preview" in openapi["paths"]
+        assert "post" in openapi["paths"][
+            "/api/v1/test-samples/{sample_id}/download"
+        ]
         assert (
             openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
                 "tile_width"
@@ -797,6 +800,28 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             for name in names:
                 if name.endswith(".jpg"):
                     assert archive.getinfo(name).file_size <= 300 * 1024
+        draft_archive_response = client.post(
+            toggled["download_url"],
+            json={"enabled_tile_indices": [1, 2]},
+        )
+        assert draft_archive_response.status_code == 200
+        with zipfile.ZipFile(BytesIO(draft_archive_response.content)) as archive:
+            assert set(archive.namelist()) == (
+                _downloaded_tile_names("tile001")
+                | _downloaded_tile_names("tile002")
+            )
+        persisted_after_download = client.get(
+            f"/api/v1/test-samples/{sample_id}"
+        ).json()
+        assert persisted_after_download["enabled_image_count"] == 1
+        assert [tile["enabled"] for tile in persisted_after_download["tiles"]] == [
+            False,
+            True,
+        ]
+        assert client.post(
+            toggled["download_url"],
+            json={"enabled_tile_indices": [1, 1]},
+        ).status_code == 400
         disabled = client.patch(
             f"/api/v1/test-samples/{sample_id}/tiles/2",
             json={"enabled": False},
