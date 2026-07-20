@@ -92,6 +92,7 @@ class TrainingResultInfo(BaseModel):
     dataset_version: str | None = None
     model_name: str
     architecture: str
+    input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     f1_score: float | None = None
     epoch: int | None = None
@@ -120,11 +121,13 @@ class TrainingResultBatchExportRequest(BaseModel):
     items: list[TrainingResultExportItem] = Field(default_factory=list)
 
 
-class ClassResultsResponse(BaseModel):
+class DatasetResultsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    class_key: str
-    class_name: str
+    dataset_key: str
+    dataset_name: str
+    class_key: str | None = None
+    class_name: str | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"
     dataset_updated_at: datetime | None = None
     primary_test_sample: PrimaryTestSampleInfo | None = None
@@ -132,15 +135,14 @@ class ClassResultsResponse(BaseModel):
     results: list[TrainingResultInfo]
 
 
-class ResultVariantInfo(BaseModel):
+class ResultDatasetInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
     name: str
+    dataset_name: str | None = None
     class_key: str | None = None
     class_name: str | None = None
-    variant_key: str | None = None
-    variant_name: str | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"
     is_primary: bool = False
     image_count: int | None = None
@@ -155,7 +157,7 @@ class ResultClassInfo(BaseModel):
     key: str
     name: str
     updated_at: datetime | None = None
-    variants: list[ResultVariantInfo] = Field(default_factory=list)
+    datasets: list[ResultDatasetInfo] = Field(default_factory=list)
     is_custom: bool = False
     quality_metric: Literal["pixel", "objects"] = "pixel"
 
@@ -173,7 +175,9 @@ class ResultChangeInfo(BaseModel):
     item_type: Literal["job", "training_result", "pseudo_markup_result"] = "training_result"
     job_id: UUID | None = None
     type: JobType | None = None
+    dataset_key: str
     class_key: str
+    class_name: str | None = None
     dataset_name: str
     model_name: str
     action: str
@@ -232,7 +236,7 @@ __all__ = [
     "AutomationRuleInfo",
     "AutomationRuleUpdate",
     "AutomationSnapshot",
-    "ClassResultsResponse",
+    "DatasetResultsResponse",
     "CustomDatasetInfo",
     "PrimaryTestSampleInfo",
     "PseudoMarkupResultInfo",
@@ -240,7 +244,7 @@ __all__ = [
     "ResultClassListResponse",
     "ResultChangeInfo",
     "ResultChangesResponse",
-    "ResultVariantInfo",
+    "ResultDatasetInfo",
     "TrainingResultBatchExportRequest",
     "TrainingResultExportItem",
     "TrainingResultInfo",

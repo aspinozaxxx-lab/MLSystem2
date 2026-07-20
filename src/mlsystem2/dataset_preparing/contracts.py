@@ -31,6 +31,8 @@ class DatasetPreparationRequest(BaseModel):
     hard_negative_annotation_file: str | None = None
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
+    expected_band_count: int | None = Field(default=None, gt=0)
+    expected_dtype: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
@@ -97,6 +99,8 @@ class DatasetPreparationReport(BaseModel):
     positive_objects: int = Field(ge=0)
     hard_negative_objects: int = Field(ge=0)
     objects_total: int = Field(ge=0)
+    band_count: int | None = Field(default=None, gt=0)
+    dtypes: list[str] = Field(default_factory=list)
     scenes: list[DatasetSceneReport]
     missing_files: list[str]
     errors: list[str]

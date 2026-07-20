@@ -28,69 +28,69 @@ def test_create_model_rejects_other_architectures() -> None:
         create_model(ModelSpec(name="unet", input_channels=4, output_channels=1))
 
 
-def test_create_segformer_b2_forward() -> None:
+def test_create_segformer_b2_three_channel_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
     handle = create_model(
         ModelSpec(
             name="segformer_b2",
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
     )
 
-    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert hasattr(outputs, "logits")
     assert outputs.logits.shape[0] == 1
     assert outputs.logits.shape[1] == 1
 
 
-def test_create_segformer_b0_forward() -> None:
+def test_create_segformer_b0_three_channel_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
     handle = create_model(
         ModelSpec(
             name="segformer_b0",
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
     )
 
-    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert hasattr(outputs, "logits")
     assert outputs.logits.shape[0] == 1
     assert outputs.logits.shape[1] == 1
 
 
-def test_create_smp_segformer_b0_forward() -> None:
+def test_create_smp_segformer_b0_three_channel_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
 
     handle = create_model(
         ModelSpec(
             name="smp_segformer_b0",
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
     )
 
-    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 1, 128, 128)
 
 
-def test_create_smp_deeplabv3plus_resnet50_forward() -> None:
+def test_create_smp_deeplabv3plus_resnet50_three_channel_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
 
     handle = create_model(
         ModelSpec(
             name="smp_deeplabv3plus_resnet50",
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
@@ -98,42 +98,42 @@ def test_create_smp_deeplabv3plus_resnet50_forward() -> None:
 
     handle.model.eval()
     with torch.no_grad():
-        outputs = handle.model(torch.zeros((1, 4, 256, 256), dtype=torch.float32))
+        outputs = handle.model(torch.zeros((1, 3, 256, 256), dtype=torch.float32))
 
     assert outputs.shape == (1, 1, 256, 256)
 
 
-def test_create_smp_segformer_b2_multiclass_forward() -> None:
+def test_create_smp_segformer_b2_three_channel_multiclass_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
 
     handle = create_model(
         ModelSpec(
             name="smp_segformer_b2",
-            input_channels=4,
+            input_channels=3,
             output_channels=14,
             pretrained=False,
         )
     )
 
-    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 14, 128, 128)
 
 
-def test_create_smp_segformer_b3_forward() -> None:
+def test_create_smp_segformer_b3_three_channel_forward() -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
 
     handle = create_model(
         ModelSpec(
             name="smp_segformer_b3",
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
     )
 
-    outputs = handle.model(torch.zeros((1, 4, 128, 128), dtype=torch.float32))
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 1, 128, 128)
 
 
@@ -146,14 +146,14 @@ def test_create_smp_segformer_b3_forward() -> None:
         ("smp_unet_resnet152", 64),
     ],
 )
-def test_create_smp_unet_forward(model_name: str, spatial_size: int) -> None:
+def test_create_smp_unet_three_channel_forward(model_name: str, spatial_size: int) -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
 
     handle = create_model(
         ModelSpec(
             name=model_name,
-            input_channels=4,
+            input_channels=3,
             output_channels=1,
             pretrained=False,
         )
@@ -161,7 +161,7 @@ def test_create_smp_unet_forward(model_name: str, spatial_size: int) -> None:
 
     handle.model.eval()
     with torch.no_grad():
-        outputs = handle.model(torch.zeros((1, 4, spatial_size, spatial_size), dtype=torch.float32))
+        outputs = handle.model(torch.zeros((1, 3, spatial_size, spatial_size), dtype=torch.float32))
 
     assert outputs.shape == (1, 1, spatial_size, spatial_size)
 

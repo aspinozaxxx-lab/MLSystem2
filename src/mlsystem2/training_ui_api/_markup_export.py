@@ -85,11 +85,10 @@ class GeneratedMarkupTile:
 class GeneratedMarkupFiles:
     dataset_key: str
     dataset_name: str
+    dataset_short_name: str
     dataset_version: str | None
     class_key: str
     class_name: str
-    variant_key: str
-    variant_name: str
     tile_width: int
     tile_height: int
     requested_object_count: int
@@ -293,15 +292,14 @@ def generate_markup_files(
         tile_height=request.tile_height,
     )
     class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
-    variant_name = dataset.variant_name or dataset.variant_key or "main"
+    dataset_short_name = dataset.dataset_name or "main"
     return GeneratedMarkupFiles(
         dataset_key=dataset.key,
         dataset_name=dataset.name,
+        dataset_short_name=dataset_short_name,
         dataset_version=dataset.version,
         class_key=dataset.class_key or class_name,
         class_name=class_name,
-        variant_key=dataset.variant_key or variant_name,
-        variant_name=variant_name,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
         requested_object_count=request.object_count,
@@ -328,7 +326,7 @@ def generate_markup_pool_files(
     dataset = dataset or find_dataset(config.mlmarkup_root, dataset_key, config.images_root)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(
-            "Для группового создания нужен существующий вариант датасета MLMarkup."
+            "Для группового создания нужен существующий датасет MLMarkup."
         )
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
@@ -441,15 +439,14 @@ def generate_markup_pool_files(
         tile_height=tile_size,
     )
     class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
-    variant_name = dataset.variant_name or dataset.variant_key or "main"
+    dataset_short_name = dataset.dataset_name or "main"
     return GeneratedMarkupFiles(
         dataset_key=dataset.key,
         dataset_name=dataset.name,
+        dataset_short_name=dataset_short_name,
         dataset_version=dataset.version,
         class_key=dataset.class_key or class_name,
         class_name=class_name,
-        variant_key=dataset.variant_key or variant_name,
-        variant_name=variant_name,
         tile_width=tile_size,
         tile_height=tile_size,
         requested_object_count=min_object_count,

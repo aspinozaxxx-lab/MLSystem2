@@ -11,26 +11,19 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import (
     create_dataset_class,
-    create_dataset_subclass,
     create_managed_dataset,
     list_managed_classes,
     list_managed_datasets,
-    set_primary_subclass,
+    set_primary_dataset,
     synchronize_dataset_catalog,
     update_dataset_class,
     update_managed_dataset,
 )
-from mlsystem2.training_ui_api._models import (
-    DatasetClassRow,
-    DatasetRow,
-    DatasetSubclassRow,
-    TrainingResultRow,
-)
+from mlsystem2.training_ui_api._models import DatasetClassRow, DatasetRow, TrainingResultRow
 from mlsystem2.training_ui_api.contracts import (
     DatasetClassCreate,
     DatasetClassUpdate,
-    DatasetPrimarySubclassUpdate,
-    DatasetSubclassCreate,
+    DatasetPrimaryDatasetUpdate,
     ManagedDatasetCreate,
     ManagedDatasetUpdate,
     TrainingUIAPIError,
@@ -60,19 +53,27 @@ def test_initial_import_preserves_legacy_keys_and_missing_history(
         session.flush()
         synchronize_dataset_catalog(session, config)
 
-        datasets = {item.key: item for item in list_managed_datasets(session, config, include_custom=False)}
+        datasets = {
+            item.key: item
+            for item in list_managed_datasets(session, config, include_custom=False)
+        }
         assert set(datasets) == {"Вырубки\\main", "Реки\\main"}
-        assert datasets["Вырубки\\main"].image_type == "kanopus"
+        assert datasets["Вырубки\\main"].dataset_name == "main"
+        assert datasets["Вырубки\\main"].imagery_type == "kanopus"
+        assert datasets["Вырубки\\main"].input_channels == 4
         assert datasets["Вырубки\\main"].is_primary is True
         assert datasets["Вырубки\\main"].version is not None
         assert datasets["Вырубки\\main"].version.startswith(("fs:", "git:"))
         assert datasets["Реки\\main"].source_available is False
-        assert datasets["Реки\\main"].diagnostics
-        rivers = next(item for item in list_managed_classes(session, config, include_custom=False) if item.name == "Реки")
-        assert rivers.primary_subclass_key == rivers.subclasses[0].key
+        rivers = next(
+            item
+            for item in list_managed_classes(session, config, include_custom=False)
+            if item.name == "Реки"
+        )
+        assert rivers.primary_dataset_key == rivers.datasets[0].key
 
 
-def test_sync_adds_new_sources_idempotently_and_keeps_missing_source(
+def test_sync_adds_sources_idempotently_and_keeps_missing_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -87,16 +88,13 @@ def test_sync_adds_new_sources_idempotently_and_keeps_missing_source(
 
         new_class = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Пожары"))
         assert new_class is not None
-        assert new_class.key != "Пожары"
         uuid.UUID(new_class.key)
         new_dataset = session.scalar(
-            select(DatasetRow)
-            .join(DatasetSubclassRow, DatasetSubclassRow.id == DatasetRow.subclass_id)
-            .where(DatasetSubclassRow.class_id == new_class.id)
+            select(DatasetRow).where(DatasetRow.class_id == new_class.id)
         )
         assert new_dataset is not None
-        assert new_dataset.key != "Пожары\\summer"
         uuid.UUID(new_dataset.key)
+        assert new_dataset.name == "summer"
         assert session.scalar(select(func.count()).select_from(DatasetRow)) == 2
 
         old_source = config.mlmarkup_root / "Пожары" / "summer"
@@ -114,7 +112,7 @@ def test_sync_adds_new_sources_idempotently_and_keeps_missing_source(
         assert session.scalar(select(func.count()).select_from(DatasetRow)) == 3
 
 
-def test_manual_settings_survive_sync_and_metric_bumps_dataset_versions(
+def test_manual_settings_and_ortho_type_survive_sync(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,77 +120,72 @@ def test_manual_settings_survive_sync_and_metric_bumps_dataset_versions(
     _write_source(config.mlmarkup_root / "Лес" / "main", "scene-a")
     _write_source(config.mlmarkup_root / "Лес" / "rare", "scene-b")
     _write_image(config.images_root / "kanopus" / "scene-a.tif")
-    _write_image(config.images_root / "sentinel" / "scene-b.tif")
+    _write_image(config.images_root / "kanopus" / "scene-b.tif")
+    (config.images_root / "orto").mkdir(parents=True)
 
     with session_factory() as session:
         synchronize_dataset_catalog(session, config)
         class_row = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес"))
         assert class_row is not None
-        subclasses = session.scalars(
-            select(DatasetSubclassRow).where(DatasetSubclassRow.class_id == class_row.id)
-        ).all()
-        main = next(item for item in subclasses if item.name == "main")
-        rare = next(item for item in subclasses if item.name == "rare")
-        main_dataset = session.scalar(select(DatasetRow).where(DatasetRow.subclass_id == main.id))
-        rare_dataset = session.scalar(select(DatasetRow).where(DatasetRow.subclass_id == rare.id))
-        assert main_dataset is not None
-        assert rare_dataset is not None
-        version_before = next(
-            item.version
-            for item in list_managed_datasets(session, config, include_custom=False)
-            if item.key == main_dataset.key
-        )
+        rows = session.scalars(select(DatasetRow).where(DatasetRow.class_id == class_row.id)).all()
+        main = next(item for item in rows if item.name == "main")
+        rare = next(item for item in rows if item.name == "rare")
+        revisions_before = {item.id: item.config_revision for item in rows}
 
         update_dataset_class(
             session,
             class_row.key,
-            DatasetClassUpdate(name="Лесной покров", quality_metric="objects"),
+            DatasetClassUpdate(
+                name="Лесной покров",
+                quality_metric="objects",
+                imagery_type="ortho",
+            ),
             config,
         )
-        set_primary_subclass(
+        set_primary_dataset(
             session,
             class_row.key,
-            DatasetPrimarySubclassUpdate(subclass_key=rare.key),
+            DatasetPrimaryDatasetUpdate(dataset_key=rare.key),
             config,
         )
         update_managed_dataset(
             session,
-            main_dataset.key,
-            ManagedDatasetUpdate(source_path="Лес/rare", image_type="all"),
+            main.key,
+            ManagedDatasetUpdate(name="основной", source_path="Лес/rare"),
             config,
         )
         _write_source(config.mlmarkup_root / "Лес" / "new", "scene-c")
         synchronize_dataset_catalog(session, config)
 
         session.refresh(class_row)
-        session.refresh(main_dataset)
-        session.refresh(rare_dataset)
+        session.refresh(main)
+        session.refresh(rare)
         assert class_row.name == "Лесной покров"
         assert class_row.quality_metric == "objects"
-        assert class_row.primary_subclass_id == rare.id
-        assert main_dataset.source_path == "Лес/rare"
-        assert rare_dataset.source_path == "Лес/main"
-        assert main_dataset.image_type == "all"
-        assert main_dataset.legacy_version is False
-        assert rare_dataset.legacy_version is False
+        assert class_row.imagery_type == "ortho"
+        assert class_row.primary_dataset_id == rare.id
+        assert main.source_path == "Лес/rare"
+        assert rare.source_path == "Лес/main"
+        assert main.config_revision == revisions_before[main.id] + 2
+        assert rare.config_revision == revisions_before[rare.id] + 2
         managed = next(
             item
             for item in list_managed_datasets(session, config, include_custom=False)
-            if item.key == main_dataset.key
+            if item.key == main.key
         )
-        assert managed.version != version_before
-        assert managed.version.startswith("managed:")
+        assert managed.images_dir == str(config.images_root / "orto")
+        assert managed.input_channels == 3
+        assert managed.imagery_type == "ortho"
         assert session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес")) is None
-        new_subclass = session.scalar(
-            select(DatasetSubclassRow).where(
-                DatasetSubclassRow.class_id == class_row.id,
-                DatasetSubclassRow.name == "new",
+        assert session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.class_id == class_row.id,
+                DatasetRow.name == "new",
             )
-        )
-        assert new_subclass is not None
+        ) is not None
 
 
-def test_editor_creation_rejects_unsafe_source_paths(
+def test_editor_creates_dataset_directly_and_preserves_source_owner_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,47 +193,79 @@ def test_editor_creation_rejects_unsafe_source_paths(
     _write_source(config.mlmarkup_root / "Свободный" / "main", "scene-a")
 
     with session_factory() as session:
-        catalog = create_dataset_class(session, DatasetClassCreate(name="Ручной класс"), config)
-        class_info = next(item for item in catalog.classes if item.name == "Ручной класс")
-        catalog = create_dataset_subclass(
+        synchronize_dataset_catalog(session, config)
+        original = session.scalar(select(DatasetRow))
+        assert original is not None
+        original_key = original.key
+        catalog = create_dataset_class(
             session,
-            DatasetSubclassCreate(class_key=class_info.key, name="вариант"),
+            DatasetClassCreate(name="Ручной класс", imagery_type="ortho"),
             config,
         )
-        subclass = next(
-            item
-            for item in next(item for item in catalog.classes if item.key == class_info.key).subclasses
-            if item.name == "вариант"
-        )
+        class_info = next(item for item in catalog.classes if item.name == "Ручной класс")
         with pytest.raises(TrainingUIAPIError, match="внутри MLMarkup"):
             create_managed_dataset(
                 session,
                 ManagedDatasetCreate(
-                    subclass_key=subclass.key,
+                    class_key=class_info.key,
+                    name="набор",
                     source_path="../outside",
-                    image_type="all",
                 ),
                 config,
             )
         catalog = create_managed_dataset(
             session,
             ManagedDatasetCreate(
-                subclass_key=subclass.key,
+                class_key=class_info.key,
+                name="набор",
                 source_path="Свободный/main",
-                image_type="all",
             ),
             config,
         )
-        assigned = next(
-            item
-            for item in next(item for item in catalog.classes if item.key == class_info.key).subclasses
-            if item.key == subclass.key
-        )
-        assert assigned.dataset is not None
-        assert assigned.dataset.key == "Свободный\\main"
-        original_class = next(item for item in catalog.classes if item.name == "Свободный")
-        assert original_class.subclasses[0].dataset is None
+        target = next(item for item in catalog.classes if item.key == class_info.key)
+        assert len(target.datasets) == 1
+        assert target.datasets[0].key == original_key
+        assert target.datasets[0].imagery_type == "ortho"
         assert session.scalar(select(func.count()).select_from(DatasetRow)) == 1
+
+
+def test_primary_dataset_must_belong_to_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / "Первый" / "main", "scene-a")
+    _write_source(config.mlmarkup_root / "Второй" / "main", "scene-b")
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        classes = list_managed_classes(session, config, include_custom=False)
+        first, second = classes
+        with pytest.raises(TrainingUIAPIError, match="не принадлежит"):
+            set_primary_dataset(
+                session,
+                first.key,
+                DatasetPrimaryDatasetUpdate(dataset_key=second.datasets[0].key),
+                config,
+            )
+
+
+def test_new_ortho_source_is_detected_from_scene_folder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / "Крыши" / "main", "ryazan")
+    _write_image(config.images_root / "orto" / "ryazan" / "ortho.tif")
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        class_info = next(
+            item
+            for item in list_managed_classes(session, config, include_custom=False)
+            if item.name == "Крыши"
+        )
+        assert class_info.imagery_type == "ortho"
+        assert class_info.datasets[0].input_channels == 3
+        assert class_info.datasets[0].image_count == 1
 
 
 def test_sync_does_not_read_source_symlink_outside_mlmarkup(

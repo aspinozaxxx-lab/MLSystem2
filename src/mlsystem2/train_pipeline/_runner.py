@@ -332,6 +332,8 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
                 for item in settings.dataset.classes
             ],
             val_fraction=settings.dataset.val_fraction,
+            expected_band_count=settings.train.input_channels,
+            expected_dtype="uint8",
         )
     return DatasetPreparationRequest(
         images_dir=settings.dataset.images_dir,
@@ -339,6 +341,8 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         annotation_file=settings.dataset.annotation_file,
         hard_negative_annotation_file=settings.dataset.hard_negative_annotation_file,
         val_fraction=settings.dataset.val_fraction,
+        expected_band_count=settings.train.input_channels,
+        expected_dtype="uint8",
     )
 
 
@@ -632,6 +636,8 @@ def _tile_preparation_report(
         "tile_size": settings.tile_preparation.tile_size,
         "stride": settings.tile_preparation.stride,
         "batch_size": settings.train.batch_size,
+        "input_channels": settings.train.input_channels,
+        "input_dtype": "uint8",
         "num_workers": settings.tile_preparation.num_workers,
         "prefetch_epochs": settings.tile_preparation.prefetch_epochs,
         "augmentation_level": settings.tile_preparation.augmentation_level,
@@ -800,9 +806,9 @@ def _binary_dataset_class_slug(settings: SystemSettings) -> str:
             and annotation_path.parent.parent.parent.name.lower() == "mlmarkup"
         ):
             class_slug = _slug_part(annotation_path.parent.parent.name)
-            variant_slug = _slug_part(annotation_path.parent.name)
-            if class_slug and variant_slug:
-                return f"{class_slug}_{variant_slug}"
+            dataset_slug = _slug_part(annotation_path.parent.name)
+            if class_slug and dataset_slug:
+                return f"{class_slug}_{dataset_slug}"
     return _slug_part(annotation_path.stem) or "unknown"
 
 

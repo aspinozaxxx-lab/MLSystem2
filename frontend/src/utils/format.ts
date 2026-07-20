@@ -104,13 +104,18 @@ export function isValidExportModelName(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(value);
 }
 
-export function isPrimaryDatasetVariant(dataset: {
-  key: string;
-  variant_key?: string | null;
+export function isPrimaryDataset(dataset: {
   is_primary?: boolean;
 }): boolean {
-  if (typeof dataset.is_primary === "boolean") return dataset.is_primary;
-  return dataset.variant_key === "main" || /[\\/]main$/.test(dataset.key);
+  return dataset.is_primary === true;
+}
+
+export function imageryTypeForInputChannels(
+  inputChannels: number | null | undefined,
+): "kanopus" | "ortho" | null {
+  if (inputChannels === 4) return "kanopus";
+  if (inputChannels === 3) return "ortho";
+  return null;
 }
 
 export function runningProgressLabel(type: string | null | undefined, progress: RuntimeProgress | null | undefined): string {

@@ -395,10 +395,10 @@
         }
       }
     },
-    "/api/v1/dataset-classes/{class_key}/primary-subclass": {
+    "/api/v1/dataset-classes/{class_key}/primary-dataset": {
       "put": {
-        "summary": "Put Primary Subclass",
-        "operationId": "put_primary_subclass_api_v1_dataset_classes__class_key__primary_subclass_put",
+        "summary": "Put Primary Dataset",
+        "operationId": "put_primary_dataset_api_v1_dataset_classes__class_key__primary_dataset_put",
         "parameters": [
           {
             "name": "class_key",
@@ -415,94 +415,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DatasetPrimarySubclassUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatasetCatalogInfo"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dataset-subclasses": {
-      "post": {
-        "summary": "Post Dataset Subclass",
-        "operationId": "post_dataset_subclass_api_v1_dataset_subclasses_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DatasetSubclassCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatasetCatalogInfo"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dataset-subclasses/{subclass_key}": {
-      "patch": {
-        "summary": "Patch Dataset Subclass",
-        "operationId": "patch_dataset_subclass_api_v1_dataset_subclasses__subclass_key__patch",
-        "parameters": [
-          {
-            "name": "subclass_key",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Subclass Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DatasetSubclassUpdate"
+                "$ref": "#/components/schemas/DatasetPrimaryDatasetUpdate"
               }
             }
           }
@@ -2663,18 +2576,18 @@
         }
       }
     },
-    "/api/v1/results/classes/{class_key}": {
+    "/api/v1/results/datasets/{dataset_key}": {
       "get": {
-        "summary": "Get Class Results",
-        "operationId": "get_class_results_api_v1_results_classes__class_key__get",
+        "summary": "Get Dataset Results",
+        "operationId": "get_dataset_results_api_v1_results_datasets__dataset_key__get",
         "parameters": [
           {
-            "name": "class_key",
+            "name": "dataset_key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Class Key"
+              "title": "Dataset Key"
             }
           }
         ],
@@ -2684,7 +2597,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ClassResultsResponse"
+                  "$ref": "#/components/schemas/DatasetResultsResponse"
                 }
               }
             }
@@ -2702,18 +2615,18 @@
         }
       }
     },
-    "/api/v1/results/classes/{class_key}/pseudo-markup": {
+    "/api/v1/results/datasets/{dataset_key}/pseudo-markup": {
       "post": {
         "summary": "Post Pseudo Markup",
-        "operationId": "post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post",
+        "operationId": "post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post",
         "parameters": [
           {
-            "name": "class_key",
+            "name": "dataset_key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Class Key"
+              "title": "Dataset Key"
             }
           }
         ],
@@ -2721,7 +2634,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post"
+                "$ref": "#/components/schemas/Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post"
               }
             }
           }
@@ -2750,18 +2663,18 @@
         }
       }
     },
-    "/api/v1/results/classes/{class_key}/test-f1": {
+    "/api/v1/results/datasets/{dataset_key}/test-f1": {
       "post": {
         "summary": "Post Test F1",
-        "operationId": "post_test_f1_api_v1_results_classes__class_key__test_f1_post",
+        "operationId": "post_test_f1_api_v1_results_datasets__dataset_key__test_f1_post",
         "parameters": [
           {
-            "name": "class_key",
+            "name": "dataset_key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Class Key"
+              "title": "Dataset Key"
             }
           }
         ],
@@ -2771,7 +2684,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ClassResultsResponse"
+                  "$ref": "#/components/schemas/DatasetResultsResponse"
                 }
               }
             }
@@ -3145,7 +3058,7 @@
         "type": "object",
         "title": "Body_post_model_export_triton_zip_api_v1_model_export_triton_zip_post"
       },
-      "Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post": {
+      "Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post": {
         "properties": {
           "dataset_key": {
             "anyOf": [
@@ -3194,7 +3107,7 @@
           }
         },
         "type": "object",
-        "title": "Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post"
+        "title": "Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post"
       },
       "Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post": {
         "properties": {
@@ -3305,19 +3218,12 @@
             ],
             "title": "Updated At"
           },
-          "variants": {
+          "datasets": {
             "items": {
               "$ref": "#/components/schemas/DatasetInfo"
             },
             "type": "array",
-            "title": "Variants"
-          },
-          "subclasses": {
-            "items": {
-              "$ref": "#/components/schemas/DatasetSubclassInfo"
-            },
-            "type": "array",
-            "title": "Subclasses"
+            "title": "Datasets"
           },
           "is_custom": {
             "type": "boolean",
@@ -3333,7 +3239,17 @@
             "title": "Quality Metric",
             "default": "pixel"
           },
-          "primary_subclass_key": {
+          "imagery_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageryType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "primary_dataset_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -3342,7 +3258,7 @@
                 "type": "null"
               }
             ],
-            "title": "Primary Subclass Key"
+            "title": "Primary Dataset Key"
           }
         },
         "additionalProperties": false,
@@ -3369,75 +3285,6 @@
           "classes"
         ],
         "title": "ClassListResponse"
-      },
-      "ClassResultsResponse": {
-        "properties": {
-          "class_key": {
-            "type": "string",
-            "title": "Class Key"
-          },
-          "class_name": {
-            "type": "string",
-            "title": "Class Name"
-          },
-          "quality_metric": {
-            "type": "string",
-            "enum": [
-              "pixel",
-              "objects"
-            ],
-            "title": "Quality Metric",
-            "default": "pixel"
-          },
-          "dataset_updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dataset Updated At"
-          },
-          "primary_test_sample": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PrimaryTestSampleInfo"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "test_f1_status": {
-            "type": "string",
-            "enum": [
-              "current",
-              "stale",
-              "running",
-              "unavailable"
-            ],
-            "title": "Test F1 Status",
-            "default": "unavailable"
-          },
-          "results": {
-            "items": {
-              "$ref": "#/components/schemas/TrainingResultInfo"
-            },
-            "type": "array",
-            "title": "Results"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "class_key",
-          "class_name",
-          "results"
-        ],
-        "title": "ClassResultsResponse"
       },
       "ConfigField": {
         "properties": {
@@ -3587,12 +3434,12 @@
             "type": "array",
             "title": "Sources"
           },
-          "image_types": {
+          "imagery_types": {
             "items": {
-              "$ref": "#/components/schemas/ImageTypeInfo"
+              "$ref": "#/components/schemas/ImageryTypeInfo"
             },
             "type": "array",
-            "title": "Image Types"
+            "title": "Imagery Types"
           }
         },
         "additionalProperties": false,
@@ -3606,12 +3453,16 @@
             "maxLength": 240,
             "minLength": 1,
             "title": "Name"
+          },
+          "imagery_type": {
+            "$ref": "#/components/schemas/ImageryType"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "name"
+          "name",
+          "imagery_type"
         ],
         "title": "DatasetClassCreate"
       },
@@ -3639,6 +3490,16 @@
                 "type": "null"
               }
             ]
+          },
+          "imagery_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageryType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -3654,6 +3515,17 @@
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "dataset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Name"
           },
           "class_key": {
             "anyOf": [
@@ -3676,39 +3548,6 @@
               }
             ],
             "title": "Class Name"
-          },
-          "subclass_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Subclass Key"
-          },
-          "variant_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Variant Key"
-          },
-          "variant_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Variant Name"
           },
           "path": {
             "anyOf": [
@@ -3802,10 +3641,27 @@
             "title": "Quality Metric",
             "default": "pixel"
           },
-          "image_type": {
-            "type": "string",
-            "title": "Image Type",
-            "default": "all"
+          "imagery_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageryType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_channels": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Channels"
           },
           "images_dir": {
             "anyOf": [
@@ -3883,21 +3739,112 @@
         ],
         "title": "DatasetListResponse"
       },
-      "DatasetPrimarySubclassUpdate": {
+      "DatasetPrimaryDatasetUpdate": {
         "properties": {
-          "subclass_key": {
+          "dataset_key": {
             "type": "string",
             "maxLength": 180,
             "minLength": 1,
-            "title": "Subclass Key"
+            "title": "Dataset Key"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "subclass_key"
+          "dataset_key"
         ],
-        "title": "DatasetPrimarySubclassUpdate"
+        "title": "DatasetPrimaryDatasetUpdate"
+      },
+      "DatasetResultsResponse": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "class_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Key"
+          },
+          "class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Name"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "dataset_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Updated At"
+          },
+          "primary_test_sample": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrimaryTestSampleInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "test_f1_status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "running",
+              "unavailable"
+            ],
+            "title": "Test F1 Status",
+            "default": "unavailable"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/TrainingResultInfo"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key",
+          "dataset_name",
+          "results"
+        ],
+        "title": "DatasetResultsResponse"
       },
       "DatasetSourceInfo": {
         "properties": {
@@ -3941,79 +3888,6 @@
         ],
         "title": "DatasetSourceInfo"
       },
-      "DatasetSubclassCreate": {
-        "properties": {
-          "class_key": {
-            "type": "string",
-            "maxLength": 180,
-            "minLength": 1,
-            "title": "Class Key"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 240,
-            "minLength": 1,
-            "title": "Name"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "class_key",
-          "name"
-        ],
-        "title": "DatasetSubclassCreate"
-      },
-      "DatasetSubclassInfo": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "is_primary": {
-            "type": "boolean",
-            "title": "Is Primary",
-            "default": false
-          },
-          "dataset": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DatasetInfo"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "key",
-          "name"
-        ],
-        "title": "DatasetSubclassInfo"
-      },
-      "DatasetSubclassUpdate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 240,
-            "minLength": 1,
-            "title": "Name"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "DatasetSubclassUpdate"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4044,6 +3918,9 @@
           "image_count": {
             "type": "integer",
             "title": "Image Count"
+          },
+          "imagery_type": {
+            "$ref": "#/components/schemas/ImageryType"
           }
         },
         "additionalProperties": false,
@@ -4052,7 +3929,8 @@
           "key",
           "name",
           "path",
-          "image_count"
+          "image_count",
+          "imagery_type"
         ],
         "title": "ImageFolderInfo"
       },
@@ -4073,19 +3951,35 @@
         ],
         "title": "ImageFolderListResponse"
       },
-      "ImageTypeInfo": {
+      "ImageryType": {
+        "type": "string",
+        "enum": [
+          "kanopus",
+          "ortho"
+        ],
+        "title": "ImageryType"
+      },
+      "ImageryTypeInfo": {
         "properties": {
           "key": {
-            "type": "string",
-            "title": "Key"
+            "$ref": "#/components/schemas/ImageryType"
           },
           "name": {
             "type": "string",
             "title": "Name"
           },
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
           "path": {
             "type": "string",
             "title": "Path"
+          },
+          "input_channels": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Input Channels"
           },
           "image_count": {
             "type": "integer",
@@ -4098,10 +3992,12 @@
         "required": [
           "key",
           "name",
+          "folder",
           "path",
+          "input_channels",
           "image_count"
         ],
-        "title": "ImageTypeInfo"
+        "title": "ImageryTypeInfo"
       },
       "InferenceTemplate": {
         "properties": {
@@ -4675,55 +4571,65 @@
       },
       "ManagedDatasetCreate": {
         "properties": {
-          "subclass_key": {
+          "class_key": {
             "type": "string",
             "maxLength": 180,
             "minLength": 1,
-            "title": "Subclass Key"
+            "title": "Class Key"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
           },
           "source_path": {
             "type": "string",
             "maxLength": 1024,
             "minLength": 1,
             "title": "Source Path"
-          },
-          "image_type": {
-            "type": "string",
-            "maxLength": 240,
-            "minLength": 1,
-            "title": "Image Type",
-            "default": "all"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "subclass_key",
+          "class_key",
+          "name",
           "source_path"
         ],
         "title": "ManagedDatasetCreate"
       },
       "ManagedDatasetUpdate": {
         "properties": {
-          "source_path": {
-            "type": "string",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Source Path"
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
-          "image_type": {
-            "type": "string",
-            "maxLength": 240,
-            "minLength": 1,
-            "title": "Image Type",
-            "default": "all"
+          "source_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "source_path"
-        ],
         "title": "ManagedDatasetUpdate"
       },
       "MarkupExportInfo": {
@@ -5219,9 +5125,24 @@
               }
             ]
           },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
           "class_key": {
             "type": "string",
             "title": "Class Key"
+          },
+          "class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Name"
           },
           "dataset_name": {
             "type": "string",
@@ -5271,6 +5192,7 @@
         "type": "object",
         "required": [
           "id",
+          "dataset_key",
           "class_key",
           "dataset_name",
           "model_name",
@@ -5319,12 +5241,12 @@
             ],
             "title": "Updated At"
           },
-          "variants": {
+          "datasets": {
             "items": {
-              "$ref": "#/components/schemas/ResultVariantInfo"
+              "$ref": "#/components/schemas/ResultDatasetInfo"
             },
             "type": "array",
-            "title": "Variants"
+            "title": "Datasets"
           },
           "is_custom": {
             "type": "boolean",
@@ -5363,17 +5285,7 @@
         "type": "object",
         "title": "ResultClassListResponse"
       },
-      "ResultStatus": {
-        "type": "string",
-        "enum": [
-          "running",
-          "ok",
-          "error",
-          "cancelled"
-        ],
-        "title": "ResultStatus"
-      },
-      "ResultVariantInfo": {
+      "ResultDatasetInfo": {
         "properties": {
           "key": {
             "type": "string",
@@ -5382,6 +5294,17 @@
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "dataset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Name"
           },
           "class_key": {
             "anyOf": [
@@ -5404,28 +5327,6 @@
               }
             ],
             "title": "Class Name"
-          },
-          "variant_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Variant Key"
-          },
-          "variant_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Variant Name"
           },
           "quality_metric": {
             "type": "string",
@@ -5499,7 +5400,17 @@
           "key",
           "name"
         ],
-        "title": "ResultVariantInfo"
+        "title": "ResultDatasetInfo"
+      },
+      "ResultStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "ok",
+          "error",
+          "cancelled"
+        ],
+        "title": "ResultStatus"
       },
       "RuntimeProgress": {
         "properties": {
@@ -5829,14 +5740,6 @@
             "type": "string",
             "title": "Class Name"
           },
-          "variant_key": {
-            "type": "string",
-            "title": "Variant Key"
-          },
-          "variant_name": {
-            "type": "string",
-            "title": "Variant Name"
-          },
           "min_object_count": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
@@ -5952,8 +5855,6 @@
           "dataset_name",
           "class_key",
           "class_name",
-          "variant_key",
-          "variant_name",
           "min_object_count",
           "metric",
           "status"
@@ -5984,12 +5885,12 @@
             "type": "string",
             "title": "Name"
           },
-          "variants": {
+          "datasets": {
             "items": {
-              "$ref": "#/components/schemas/TestSampleVariantGroup"
+              "$ref": "#/components/schemas/TestSampleDatasetGroup"
             },
             "type": "array",
-            "title": "Variants"
+            "title": "Datasets"
           }
         },
         "additionalProperties": false,
@@ -6045,6 +5946,32 @@
         ],
         "title": "TestSampleCreate"
       },
+      "TestSampleDatasetGroup": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleSummary"
+            },
+            "type": "array",
+            "title": "Samples"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "TestSampleDatasetGroup"
+      },
       "TestSampleDetail": {
         "properties": {
           "id": {
@@ -6082,14 +6009,6 @@
           "class_name": {
             "type": "string",
             "title": "Class Name"
-          },
-          "variant_key": {
-            "type": "string",
-            "title": "Variant Key"
-          },
-          "variant_name": {
-            "type": "string",
-            "title": "Variant Name"
           },
           "quality_metric": {
             "type": "string",
@@ -6186,8 +6105,6 @@
           "dataset_name",
           "class_key",
           "class_name",
-          "variant_key",
-          "variant_name",
           "image_count",
           "enabled_image_count",
           "actual_object_count",
@@ -6507,14 +6424,6 @@
             "type": "string",
             "title": "Class Name"
           },
-          "variant_key": {
-            "type": "string",
-            "title": "Variant Key"
-          },
-          "variant_name": {
-            "type": "string",
-            "title": "Variant Name"
-          },
           "quality_metric": {
             "type": "string",
             "enum": [
@@ -6572,8 +6481,6 @@
           "dataset_name",
           "class_key",
           "class_name",
-          "variant_key",
-          "variant_name",
           "image_count",
           "enabled_image_count",
           "actual_object_count",
@@ -6683,32 +6590,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "TestSampleUpdate"
-      },
-      "TestSampleVariantGroup": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "samples": {
-            "items": {
-              "$ref": "#/components/schemas/TestSampleSummary"
-            },
-            "type": "array",
-            "title": "Samples"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "key",
-          "name"
-        ],
-        "title": "TestSampleVariantGroup"
       },
       "TrainingJobCreate": {
         "properties": {
@@ -6871,6 +6752,12 @@
           "architecture": {
             "type": "string",
             "title": "Architecture"
+          },
+          "input_channels": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Input Channels",
+            "default": 4
           },
           "quality_metric": {
             "type": "string",

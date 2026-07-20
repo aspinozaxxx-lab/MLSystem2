@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class ImageryType(StrEnum):
+    KANOPUS = "kanopus"
+    ORTHO = "ortho"
 
 
 class AppLink(BaseModel):
@@ -41,11 +46,9 @@ class DatasetInfo(BaseModel):
 
     key: str
     name: str
+    dataset_name: str | None = None
     class_key: str | None = None
     class_name: str | None = None
-    subclass_key: str | None = None
-    variant_key: str | None = None
-    variant_name: str | None = None
     path: str | None = None
     is_custom: bool = False
     scenes_file: str | None = None
@@ -55,7 +58,8 @@ class DatasetInfo(BaseModel):
     version: str | None = None
     updated_at: datetime | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    image_type: str = "all"
+    imagery_type: ImageryType | None = None
+    input_channels: int | None = Field(default=None, gt=0)
     images_dir: str | None = None
     source_type: str | None = None
     source_path: str | None = None
@@ -77,6 +81,7 @@ class ImageFolderInfo(BaseModel):
     name: str
     path: str
     image_count: int
+    imagery_type: ImageryType
 
 
 class ImageFolderListResponse(BaseModel):
@@ -85,26 +90,17 @@ class ImageFolderListResponse(BaseModel):
     folders: list[ImageFolderInfo]
 
 
-class DatasetSubclassInfo(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    name: str
-    is_primary: bool = False
-    dataset: DatasetInfo | None = None
-
-
 class ClassInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
     name: str
     updated_at: datetime | None = None
-    variants: list[DatasetInfo] = Field(default_factory=list)
-    subclasses: list[DatasetSubclassInfo] = Field(default_factory=list)
+    datasets: list[DatasetInfo] = Field(default_factory=list)
     is_custom: bool = False
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    primary_subclass_key: str | None = None
+    imagery_type: ImageryType | None = None
+    primary_dataset_key: str | None = None
 
 
 class QualityMetric(StrEnum):
@@ -122,12 +118,14 @@ class DatasetSourceInfo(BaseModel):
     diagnostics: list[str] = Field(default_factory=list)
 
 
-class ImageTypeInfo(BaseModel):
+class ImageryTypeInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    key: str
+    key: ImageryType
     name: str
+    folder: str
     path: str
+    input_channels: int = Field(gt=0)
     image_count: int = Field(ge=0)
 
 
@@ -136,13 +134,14 @@ class DatasetCatalogInfo(BaseModel):
 
     classes: list[ClassInfo] = Field(default_factory=list)
     sources: list[DatasetSourceInfo] = Field(default_factory=list)
-    image_types: list[ImageTypeInfo] = Field(default_factory=list)
+    imagery_types: list[ImageryTypeInfo] = Field(default_factory=list)
 
 
 class DatasetClassCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=240)
+    imagery_type: ImageryType
 
 
 class DatasetClassUpdate(BaseModel):
@@ -150,40 +149,34 @@ class DatasetClassUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=240)
     quality_metric: QualityMetric | None = None
+    imagery_type: ImageryType | None = None
 
 
-class DatasetPrimarySubclassUpdate(BaseModel):
+class DatasetPrimaryDatasetUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subclass_key: str = Field(min_length=1, max_length=180)
-
-
-class DatasetSubclassCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    class_key: str = Field(min_length=1, max_length=180)
-    name: str = Field(min_length=1, max_length=240)
-
-
-class DatasetSubclassUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=240)
+    dataset_key: str = Field(min_length=1, max_length=180)
 
 
 class ManagedDatasetCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subclass_key: str = Field(min_length=1, max_length=180)
+    class_key: str = Field(min_length=1, max_length=180)
+    name: str = Field(min_length=1, max_length=240)
     source_path: str = Field(min_length=1, max_length=1024)
-    image_type: str = Field(default="all", min_length=1, max_length=240)
 
 
 class ManagedDatasetUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_path: str = Field(min_length=1, max_length=1024)
-    image_type: str = Field(default="all", min_length=1, max_length=240)
+    name: str | None = Field(default=None, min_length=1, max_length=240)
+    source_path: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> Self:
+        if self.name is None and self.source_path is None:
+            raise ValueError("Нужно передать хотя бы одно изменение датасета.")
+        return self
 
 
 class ClassListResponse(BaseModel):
@@ -218,14 +211,12 @@ __all__ = [
     "DatasetClassUpdate",
     "DatasetInfo",
     "DatasetListResponse",
-    "DatasetPrimarySubclassUpdate",
+    "DatasetPrimaryDatasetUpdate",
     "DatasetSourceInfo",
-    "DatasetSubclassCreate",
-    "DatasetSubclassInfo",
-    "DatasetSubclassUpdate",
+    "ImageryType",
+    "ImageryTypeInfo",
     "ImageFolderInfo",
     "ImageFolderListResponse",
-    "ImageTypeInfo",
     "ManagedDatasetCreate",
     "ManagedDatasetUpdate",
     "MLflowExperimentCreate",

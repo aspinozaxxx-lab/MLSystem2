@@ -20,7 +20,7 @@ function catalog(): TestSampleCatalogResponse {
       {
         key: "class",
         name: "Класс",
-        variants: [
+        datasets: [
           {
             key: "ready",
             name: "Готовый",
@@ -41,9 +41,9 @@ describe("тестовые разметки", () => {
     expect(testMarkupStats(catalog(), "missing")).toEqual({ count: 0, hasPrimary: false });
   });
 
-  it("показывает подклассы без основной разметки первыми", () => {
-    const ready = { key: "ready", class_name: "Класс", variant_name: "Готовый" } as DatasetInfo;
-    const missing = { key: "missing", class_name: "Класс", variant_name: "Новый" } as DatasetInfo;
+  it("показывает датасеты без основной разметки первыми", () => {
+    const ready = { key: "ready", class_name: "Класс", dataset_name: "Готовый" } as DatasetInfo;
+    const missing = { key: "missing", class_name: "Класс", dataset_name: "Новый" } as DatasetInfo;
     expect(sortTestMarkupDatasets([ready, missing], catalog()).map((item) => item.key)).toEqual([
       "missing",
       "ready",

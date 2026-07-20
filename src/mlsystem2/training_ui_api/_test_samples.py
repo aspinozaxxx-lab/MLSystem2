@@ -84,7 +84,7 @@ from .contracts import (
     TestSampleTileInfo,
     TestSampleTileUpdate,
     TestSampleUpdate,
-    TestSampleVariantGroup,
+    TestSampleDatasetGroup,
     TrainingResultTestF1Info,
     TrainingUIAPIError,
 )
@@ -179,7 +179,7 @@ def create_test_sample(
     try:
         dataset = find_managed_dataset(session, config, request.dataset_key)
         if dataset is None or dataset.is_custom:
-            raise TrainingUIAPIError(f"Подкласс не найден: {request.dataset_key}")
+            raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
         generated = generate_markup_files(
             MarkupExportRequest(
                 dataset_key=request.dataset_key,
@@ -225,8 +225,7 @@ def _new_test_sample_row(
         dataset_version=generated.dataset_version,
         class_key=generated.class_key,
         class_name=generated.class_name,
-        variant_key=generated.variant_key,
-        variant_name=generated.variant_name,
+        dataset_short_name=generated.dataset_short_name,
         quality_metric=quality_metric,
         tile_width=generated.tile_width,
         tile_height=generated.tile_height,
@@ -267,7 +266,7 @@ def create_test_sample_batch(
         )
     keys = [item.dataset_key for item in request.items]
     if len(keys) != len(set(keys)):
-        raise TrainingUIAPIError("Один подкласс нельзя добавить в групповой запуск дважды.")
+        raise TrainingUIAPIError("Один датасет нельзя добавить в групповой запуск дважды.")
 
     batch = TestSampleBatchRow(
         status="queued",
@@ -280,7 +279,7 @@ def create_test_sample_batch(
     for position, item in enumerate(request.items, start=1):
         dataset = find_managed_dataset(session, config, item.dataset_key)
         if dataset is None or dataset.is_custom:
-            raise TrainingUIAPIError(f"Подкласс не найден: {item.dataset_key}")
+            raise TrainingUIAPIError(f"Датасет не найден: {item.dataset_key}")
         if dataset.diagnostics:
             raise TrainingUIAPIError(f"{dataset.name}: {'; '.join(dataset.diagnostics)}")
         if not dataset.scenes_file or not dataset.annotation_file:
@@ -288,7 +287,7 @@ def create_test_sample_batch(
                 f"{dataset.name}: нужны TXT со сценами и один positive GeoJSON."
             )
         class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
-        variant_name = dataset.variant_name or dataset.variant_key or "main"
+        dataset_name = dataset.dataset_name or dataset.name
         rows.append(
             TestSampleBatchItemRow(
                 position=position,
@@ -297,8 +296,7 @@ def create_test_sample_batch(
                 dataset_version=dataset.version,
                 class_key=dataset.class_key or class_name,
                 class_name=class_name,
-                variant_key=dataset.variant_key or variant_name,
-                variant_name=variant_name,
+                dataset_short_name=dataset_name,
                 min_object_count=item.min_object_count,
                 metric=dataset.quality_metric,
                 status="queued",
@@ -459,7 +457,7 @@ def _create_grouped_test_sample(
     source = _latest_pseudo_markup(session, item.dataset_key)
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
-            "Нет успешной псевдоразметки точного подкласса для оптимизации состава."
+            "Нет успешной псевдоразметки выбранного датасета для оптимизации состава."
         )
     source_path = Path(source.geojson_file.path)
     if not source_path.is_file():
@@ -474,7 +472,7 @@ def _create_grouped_test_sample(
     try:
         dataset = find_managed_dataset(session, config, item.dataset_key)
         if dataset is None or dataset.is_custom:
-            raise TrainingUIAPIError(f"Подкласс не найден: {item.dataset_key}")
+            raise TrainingUIAPIError(f"Датасет не найден: {item.dataset_key}")
         generated = generate_markup_pool_files(
             dataset_key=item.dataset_key,
             tile_size=batch.tile_size,
@@ -565,8 +563,6 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
                 dataset_version=item.dataset_version,
                 class_key=item.class_key,
                 class_name=item.class_name,
-                variant_key=item.variant_key,
-                variant_name=item.variant_name,
                 min_object_count=item.min_object_count,
                 metric=item.metric,
                 status=item.status,
@@ -598,20 +594,20 @@ def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
     )
     for row in rows:
         grouped[(row.class_key, row.class_name)][
-            (row.variant_key, row.variant_name)
+            (row.dataset_key, row.dataset_short_name)
         ].append(_summary(row))
     classes = [
         TestSampleClassGroup(
             key=class_key,
             name=class_name,
-            variants=[
-                TestSampleVariantGroup(key=variant_key, name=variant_name, samples=samples)
-                for (variant_key, variant_name), samples in sorted(
-                    variants.items(), key=lambda item: item[0][1].casefold()
+            datasets=[
+                TestSampleDatasetGroup(key=dataset_key, name=dataset_name, samples=samples)
+                for (dataset_key, dataset_name), samples in sorted(
+                    dataset_groups.items(), key=lambda item: item[0][1].casefold()
                 )
             ],
         )
-        for (class_key, class_name), variants in sorted(
+        for (class_key, class_name), dataset_groups in sorted(
             grouped.items(), key=lambda item: item[0][1].casefold()
         )
     ]
@@ -835,7 +831,7 @@ def optimize_test_sample_preview(
     source = _latest_pseudo_markup(session, row.dataset_key)
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
-            "Нет успешной разметки для этого подкласса и варианта датасета; "
+            "Нет успешной разметки для этого датасета; "
             "оптимизация состава недоступна."
         )
     source_path = Path(source.geojson_file.path)
@@ -882,7 +878,7 @@ def _preview_evaluation(
     if source is None or source.geojson_file is None:
         return TestSampleEvaluationInfo(
             status="unavailable",
-            error="Нет успешной разметки для этого подкласса и варианта датасета.",
+            error="Нет успешной разметки для этого датасета.",
         )
     source_path = Path(source.geojson_file.path)
     if not source_path.is_file():
@@ -937,7 +933,7 @@ def optimize_test_sample(
     source = _latest_pseudo_markup(session, row.dataset_key)
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
-            "Нет успешной разметки для этого подкласса и варианта датасета; "
+            "Нет успешной разметки для этого датасета; "
             "оптимизация состава недоступна."
         )
     source_path = Path(source.geojson_file.path)
@@ -1027,7 +1023,7 @@ def evaluate_test_sample(
     if source is None or source.geojson_file is None:
         _evaluation_unavailable(
             row,
-            "Нет успешной разметки для этого подкласса и варианта датасета.",
+            "Нет успешной разметки для этого датасета.",
         )
         return
     source_path = Path(source.geojson_file.path)
@@ -1507,7 +1503,7 @@ def build_primary_test_samples_download(
         .options(selectinload(TestSampleRow.tiles))
         .order_by(
             TestSampleRow.class_name,
-            TestSampleRow.variant_name,
+            TestSampleRow.dataset_short_name,
             TestSampleRow.id,
         )
     ).all()
@@ -1531,7 +1527,7 @@ def build_primary_test_samples_download(
         ) as archive:
             for row in rows:
                 folder = _safe_name(
-                    f"{row.class_name}_{row.variant_name}",
+                    f"{row.class_name}_{row.dataset_short_name}",
                     "test_sample",
                 )
                 if folder in used_folders:
@@ -1600,21 +1596,25 @@ def _test_sample_jpeg_previews(
     *,
     tile_name: str,
 ) -> dict[str, bytes]:
-    if image.ndim != 3 or image.shape[0] < 4:
-        channel_count = image.shape[0] if image.ndim == 3 else 0
+    channel_count = image.shape[0] if image.ndim == 3 else 0
+    if channel_count == 3:
+        preview_channels = {"rgb": (0, 1, 2)}
+    elif channel_count == 4:
+        preview_channels = _JPEG_PREVIEW_CHANNELS
+    else:
         raise TrainingUIAPIError(
-            f"Для превью {tile_name} нужны каналы RED, GRN, BLU и NIR; "
-            f"в TIFF найдено каналов: {channel_count}."
+            f"Для превью {tile_name} нужен RGB TIFF с 3 каналами либо "
+            f"RGB+NIR TIFF с 4 каналами; найдено каналов: {channel_count}."
         )
     if mask.ndim != 2 or image.shape[1:] != mask.shape:
         raise TrainingUIAPIError(
             f"Размер маски {tile_name} не совпадает с размером TIFF."
         )
 
-    stretched = tuple(_stretch_channel(image[index]) for index in range(4))
+    stretched = tuple(_stretch_channel(image[index]) for index in range(channel_count))
     edge = _mask_edge(mask)
     result: dict[str, bytes] = {}
-    for name, channel_indices in _JPEG_PREVIEW_CHANNELS.items():
+    for name, channel_indices in preview_channels.items():
         preview = np.stack(
             [stretched[index] for index in channel_indices],
             axis=2,
@@ -2023,7 +2023,7 @@ def queue_class_test_f1(
 
     sample = _primary_sample(session, dataset_key)
     if sample is None:
-        raise TrainingUIAPIError("Для подкласса не назначена основная тестовая разметка.")
+        raise TrainingUIAPIError("Для датасета не назначена основная тестовая разметка.")
     if not any(tile.enabled for tile in sample.tiles):
         raise TrainingUIAPIError("В основной тестовой разметке нет включённых тайлов.")
     results = session.scalars(
@@ -2443,8 +2443,6 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         dataset_version=row.dataset_version,
         class_key=row.class_key,
         class_name=row.class_name,
-        variant_key=row.variant_key,
-        variant_name=row.variant_name,
         quality_metric=row.quality_metric,
         image_count=row.image_count,
         enabled_image_count=len(enabled),

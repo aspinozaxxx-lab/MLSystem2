@@ -8,7 +8,8 @@ import {
   formatObjectCount,
   formatRuntimeMinutes,
   formatTrainingResultDate,
-  isPrimaryDatasetVariant,
+  imageryTypeForInputChannels,
+  isPrimaryDataset,
   isValidExportModelName,
   runningProgressLabel,
 } from "./format";
@@ -20,10 +21,16 @@ describe("format helpers", () => {
     expect(isValidExportModelName("Реки")).toBe(false);
   });
 
-  it("учитывает явный основной подкласс до совместимого fallback по main", () => {
-    expect(isPrimaryDatasetVariant({ key: "Класс\\main", variant_key: "main", is_primary: false })).toBe(false);
-    expect(isPrimaryDatasetVariant({ key: "Класс\\другой", variant_key: "другой", is_primary: true })).toBe(true);
-    expect(isPrimaryDatasetVariant({ key: "Класс\\main", variant_key: "main" })).toBe(true);
+  it("учитывает явный признак основного датасета", () => {
+    expect(isPrimaryDataset({ is_primary: false })).toBe(false);
+    expect(isPrimaryDataset({ is_primary: true })).toBe(true);
+    expect(isPrimaryDataset({})).toBe(false);
+  });
+
+  it("определяет тип снимков по числу входных каналов", () => {
+    expect(imageryTypeForInputChannels(4)).toBe("kanopus");
+    expect(imageryTypeForInputChannels(3)).toBe("ortho");
+    expect(imageryTypeForInputChannels(2)).toBeNull();
   });
 
   it("formats file sizes and running progress", () => {

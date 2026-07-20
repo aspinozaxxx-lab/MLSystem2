@@ -79,7 +79,7 @@ def build_triton_model_export_zip(
         _write_text(model_dir / "config.pbtxt", _triton_config(parsed_model_name, input_channels))
         _write_text(
             pipeline_dir / f"{parsed_model_name}_triton.yaml",
-            _pipeline_yaml(parsed_model_name, parsed_sample_size),
+            _pipeline_yaml(parsed_model_name, parsed_sample_size, input_channels),
         )
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
         _zip_directory(service_root, service_zip_path)
@@ -317,7 +317,16 @@ instance_group [
 """
 
 
-def _pipeline_yaml(model_name: str, sample_size: int) -> str:
+def _pipeline_yaml(model_name: str, sample_size: int, input_channels: int) -> str:
+    if input_channels == 3:
+        bands = ("RED", "GRN", "BLU")
+    elif input_channels == 4:
+        bands = ("RED", "GRN", "BLU", "NIR")
+    else:
+        raise TrainingUIAPIError(
+            f"Экспорт поддерживает только 3- и 4-канальные модели, получено {input_channels}."
+        )
+    bands_yaml = "\n".join(f"        - {band}" for band in bands)
     return f"""version: 0.1.4
 config:
   _class: Compose
@@ -330,20 +339,14 @@ config:
       input: input
       input_ext: tif
       output:
-        - RED
-        - GRN
-        - BLU
-        - NIR
+{bands_yaml}
     - _class: Segmentation
       bounds: 0
       sample_size:
         - {sample_size}
         - {sample_size}
       input_rasters:
-        - RED
-        - GRN
-        - BLU
-        - NIR
+{bands_yaml}
       output_labels:
         - mask
       nodata: 0

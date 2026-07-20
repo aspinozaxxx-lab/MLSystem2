@@ -59,6 +59,27 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     assert features[0]["properties"]["postprocess_level"] == 1
 
 
+def test_pseudo_runner_requires_exact_checkpoint_channel_count(tmp_path: Path) -> None:
+    image_path = tmp_path / "ortho.tif"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(np.zeros((3, 8, 8), dtype=np.uint8))
+
+    with rasterio.open(image_path) as dataset:
+        _pseudo_runner._validate_raster_input_channels(dataset, image_path, 3)
+        with pytest.raises(RuntimeError, match="должен содержать 4 каналов"):
+            _pseudo_runner._validate_raster_input_channels(dataset, image_path, 4)
+
+
 def test_select_postprocess_profile_uses_unique_image_count_boundaries() -> None:
     assert _select_postprocess_profile(0).name == "none"
     assert _select_postprocess_profile(5).name == "none"
@@ -101,6 +122,22 @@ def test_find_images_accepts_txt_scene_forms_and_dataset_folders(tmp_path) -> No
     assert _find_images("./KV3_100.L2.PMS.SCN01_cog.tif", index) == [first]
     assert _find_images("KV3_100.L2.PMS.SCN01.tif", index) == [first]
     assert _find_images("irkutsk", index) == [first, second]
+
+
+def test_find_images_prefers_exact_relative_path_for_duplicate_filename(
+    tmp_path: Path,
+) -> None:
+    images_root = tmp_path / "images"
+    first = images_root / "first" / "shared.tif"
+    second = images_root / "second" / "shared.tif"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.touch()
+    second.touch()
+
+    index = _image_index(images_root)
+
+    assert _find_images("first/shared.tif", index) == [first]
 
 
 def test_collect_scene_inputs_deduplicates_found_rasters(tmp_path) -> None:

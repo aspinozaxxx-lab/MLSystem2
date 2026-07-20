@@ -439,7 +439,7 @@ def test_prepare_dataset_reports_error_when_crs_is_missing(tmp_path: Path) -> No
     assert any("CRS" in error for error in result.report.errors)
 
 
-def test_prepare_dataset_reports_error_when_nodata_is_missing(tmp_path: Path) -> None:
+def test_prepare_dataset_accepts_all_valid_mask_without_nodata(tmp_path: Path) -> None:
     images = tmp_path / "images"
     images.mkdir()
     _write_raster(images / "scene_a.tif", 1, 0)
@@ -455,12 +455,42 @@ def test_prepare_dataset_reports_error_when_nodata_is_missing(tmp_path: Path) ->
             scenes_file=str(scenes_file),
             annotation_file=str(annotation_file),
             val_fraction=0.5,
+            expected_band_count=1,
+            expected_dtype="uint8",
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert result.report.band_count == 1
+    assert result.report.dtypes == ["uint8"]
+
+
+def test_prepare_dataset_enforces_expected_band_count_and_dtype(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    _write_raster(images / "scene_a.tif", 1, 0, count=3)
+    _write_raster(images / "scene_b.tif", 2, 4, count=3)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\nscene_b\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif", "scene_b.tif"])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.5,
+            expected_band_count=4,
+            expected_dtype="uint16",
         )
     )
 
     assert result.report.status == "error"
     assert result.dataset is None
-    assert any("nodata" in error for error in result.report.errors)
+    assert any("должен содержать 4 каналов" in error for error in result.report.errors)
+    assert any("должны иметь dtype uint16" in error for error in result.report.errors)
 
 
 def _write_raster(
@@ -472,8 +502,10 @@ def _write_raster(
     pixel_size: float = 1.0,
     top: float = 4.0,
     nodata: int | None = 0,
+    count: int = 1,
+    dtype: str = "uint8",
 ) -> None:
-    data = np.full((1, 4, 4), value, dtype=np.uint8)
+    data = np.full((count, 4, 4), value, dtype=np.dtype(dtype))
     transform = from_origin(left, top, pixel_size, pixel_size)
     with rasterio.open(
         path,
@@ -481,8 +513,8 @@ def _write_raster(
         driver="GTiff",
         width=4,
         height=4,
-        count=1,
-        dtype="uint8",
+        count=count,
+        dtype=dtype,
         crs=crs,
         transform=transform,
         nodata=nodata,

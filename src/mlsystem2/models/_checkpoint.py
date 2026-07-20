@@ -31,16 +31,27 @@ def load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint:
         raise ModelsError(f"Некорректный checkpoint: {checkpoint_path}")
 
     spec = request.model_spec
-    if spec is None:
-        raw_spec = payload.get("model_spec")
-        if not isinstance(raw_spec, dict):
-            raise ModelsError("Checkpoint не содержит model_spec, а request.model_spec не задан.")
+    raw_spec = payload.get("model_spec")
+    checkpoint_spec = None
+    if isinstance(raw_spec, dict):
         try:
             from .contracts import ModelSpec
 
-            spec = ModelSpec.model_validate(raw_spec)
+            checkpoint_spec = ModelSpec.model_validate(raw_spec)
         except Exception as exc:
             raise ModelsError("Не удалось восстановить model_spec из checkpoint.") from exc
+    if spec is None:
+        if not isinstance(raw_spec, dict):
+            raise ModelsError("Checkpoint не содержит model_spec, а request.model_spec не задан.")
+        spec = checkpoint_spec
+    elif checkpoint_spec is not None and checkpoint_spec != spec:
+        raise ModelsError(
+            "Параметры checkpoint не совпадают с запросом: "
+            f"checkpoint={checkpoint_spec.model_dump(mode='json')}, "
+            f"request={spec.model_dump(mode='json')}"
+        )
+    if spec is None:
+        raise ModelsError("Не удалось определить model_spec checkpoint.")
 
     model = create_model(spec)
     try:

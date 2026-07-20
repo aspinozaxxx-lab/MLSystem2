@@ -8,15 +8,15 @@ from fastapi import Depends, FastAPI, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
-    class_results,
     create_pseudo_markup_job,
+    dataset_results,
     delete_pseudo_markup_result,
-    recalculate_class_test_f1,
+    recalculate_dataset_test_f1,
     result_changes,
     result_classes,
 )
 from mlsystem2.training_ui_api.contracts import (
-    ClassResultsResponse,
+    DatasetResultsResponse,
     JobDetail,
     PseudoMarkupResultInfo,
     ResultClassListResponse,
@@ -39,22 +39,22 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> ResultChangesResponse:
-        return result_changes(db)
+        return result_changes(db, ctx.config)
 
-    @app.get("/api/v1/results/classes/{class_key}", response_model=ClassResultsResponse)
-    def get_class_results(
-        class_key: str,
+    @app.get("/api/v1/results/datasets/{dataset_key}", response_model=DatasetResultsResponse)
+    def get_dataset_results(
+        dataset_key: str,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
-    ) -> ClassResultsResponse:
-        return class_results(db, class_key, ctx.config)
+    ) -> DatasetResultsResponse:
+        return dataset_results(db, dataset_key, ctx.config)
 
-    @app.post("/api/v1/results/classes/{class_key}/pseudo-markup", response_model=JobDetail)
+    @app.post("/api/v1/results/datasets/{dataset_key}/pseudo-markup", response_model=JobDetail)
     async def post_pseudo_markup(
-        class_key: str,
+        dataset_key: str,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
-        dataset_key: str | None = Form(default=None),
+        source_dataset_key: str | None = Form(default=None, alias="dataset_key"),
         image_folder_key: str | None = Form(default=None),
         training_result_id: str | None = Form(default=None),
         scenes_txt: UploadFile | None = File(default=None),
@@ -64,8 +64,8 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         scenes_bytes = await scenes_txt.read() if scenes_name is not None else None
         return create_pseudo_markup_job(
             db,
-            class_key=class_key,
-            dataset_key=dataset_key,
+            class_key=dataset_key,
+            dataset_key=source_dataset_key,
             image_folder_key=image_folder_key,
             training_result_id=parsed_training_result_id,
             scenes_name=scenes_name,
@@ -75,15 +75,15 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         )
 
     @app.post(
-        "/api/v1/results/classes/{class_key}/test-f1",
-        response_model=ClassResultsResponse,
+        "/api/v1/results/datasets/{dataset_key}/test-f1",
+        response_model=DatasetResultsResponse,
     )
     def post_test_f1(
-        class_key: str,
+        dataset_key: str,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
-    ) -> ClassResultsResponse:
-        return recalculate_class_test_f1(db, class_key, ctx.config)
+    ) -> DatasetResultsResponse:
+        return recalculate_dataset_test_f1(db, dataset_key, ctx.config)
 
     @app.delete("/api/v1/results/pseudo-markup/{result_id}", response_model=PseudoMarkupResultInfo)
     def delete_pseudo_markup(

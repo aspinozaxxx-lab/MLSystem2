@@ -9,7 +9,6 @@ from mlsystem2.training_ui_api._auth import (
     current_user,
     login_response,
     logout_response,
-    require_user,
     verify_credentials,
 )
 

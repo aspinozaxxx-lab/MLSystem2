@@ -106,8 +106,6 @@ class TestSampleSummary(BaseModel):
     dataset_version: str | None = None
     class_key: str
     class_name: str
-    variant_key: str
-    variant_name: str
     quality_metric: Literal["pixel", "objects"] = "pixel"
     image_count: int = Field(gt=0)
     enabled_image_count: int = Field(ge=0)
@@ -119,7 +117,7 @@ class TestSampleSummary(BaseModel):
     updated_at: datetime
 
 
-class TestSampleVariantGroup(BaseModel):
+class TestSampleDatasetGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
@@ -132,7 +130,7 @@ class TestSampleClassGroup(BaseModel):
 
     key: str
     name: str
-    variants: list[TestSampleVariantGroup] = Field(default_factory=list)
+    datasets: list[TestSampleDatasetGroup] = Field(default_factory=list)
 
 
 class TestSampleCatalogResponse(BaseModel):
@@ -220,8 +218,6 @@ class TestSampleBatchItemInfo(BaseModel):
     dataset_version: str | None = None
     class_key: str
     class_name: str
-    variant_key: str
-    variant_name: str
     min_object_count: int = Field(gt=0)
     metric: Literal["pixel", "objects"]
     status: Literal["queued", "running", "ok", "error"]
@@ -258,6 +254,7 @@ __all__ = [
     "TestSampleBatchItemInfo",
     "TestSampleCatalogResponse",
     "TestSampleClassGroup",
+    "TestSampleDatasetGroup",
     "TestSampleCreate",
     "TestSampleDetail",
     "TestSampleDownloadRequest",
@@ -271,5 +268,4 @@ __all__ = [
     "TestSampleTileInfo",
     "TestSampleTileUpdate",
     "TestSampleUpdate",
-    "TestSampleVariantGroup",
 ]

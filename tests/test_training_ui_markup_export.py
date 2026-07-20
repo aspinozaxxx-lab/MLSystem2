@@ -289,10 +289,20 @@ def test_test_sample_jpeg_encoder_enforces_hard_size_limit(monkeypatch) -> None:
         )
 
 
-def test_test_sample_jpeg_previews_require_nir_channel() -> None:
-    with pytest.raises(TrainingUIAPIError, match="RED, GRN, BLU и NIR"):
+def test_test_sample_jpeg_previews_for_rgb_have_no_nir_compositions() -> None:
+    previews = _test_samples._test_sample_jpeg_previews(
+        np.zeros((3, 16, 16), dtype=np.uint8),
+        np.zeros((16, 16), dtype=np.uint8),
+        tile_name="tile001",
+    )
+
+    assert set(previews) == {"rgb", "rgb_markup"}
+
+
+def test_test_sample_jpeg_previews_reject_unsupported_channel_count() -> None:
+    with pytest.raises(TrainingUIAPIError, match="найдено каналов: 2"):
         _test_samples._test_sample_jpeg_previews(
-            np.zeros((3, 16, 16), dtype=np.uint8),
+            np.zeros((2, 16, 16), dtype=np.uint8),
             np.zeros((16, 16), dtype=np.uint8),
             tile_name="tile001",
         )
@@ -768,8 +778,8 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
 
         catalog = client.get("/api/v1/test-samples").json()
         assert catalog["classes"][0]["name"] == "Вырубки"
-        assert catalog["classes"][0]["variants"][0]["name"] == "main"
-        assert catalog["classes"][0]["variants"][0]["samples"][0]["name"] == (
+        assert catalog["classes"][0]["datasets"][0]["name"] == "main"
+        assert catalog["classes"][0]["datasets"][0]["samples"][0]["name"] == (
             "Контрольная выборка"
         )
 
@@ -1237,8 +1247,7 @@ def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
         first_row.dataset_name = "Пожары\\main"
         first_row.class_key = "Пожары"
         first_row.class_name = "Пожары"
-        first_row.variant_key = "main"
-        first_row.variant_name = "main"
+        first_row.dataset_short_name = "main"
         session.flush()
         update_test_sample_primary(
             session,

@@ -57,7 +57,7 @@ def test_train_pipeline_sets_mlflow_dataset_from_binary_annotation_stem() -> Non
     assert request.tags["class"] == "annotations"
 
 
-def test_train_pipeline_sets_mlflow_class_tag_from_mlmarkup_class_and_variant() -> None:
+def test_train_pipeline_sets_mlflow_class_tag_from_mlmarkup_class_and_dataset() -> None:
     settings = _settings(initial_checkpoint_uri=None)
     settings.dataset.scenes_file = "/data/MLMarkup/Абразия/main/scenes.txt"
     settings.dataset.annotation_file = "/data/MLMarkup/Абразия/main/annotation.geojson"

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -33,39 +34,24 @@ def _json_type():
 
 class DatasetClassRow(Base):
     __tablename__ = "dataset_classes"
+    __table_args__ = (
+        CheckConstraint(
+            "imagery_type IN ('kanopus', 'ortho')",
+            name="ck_dataset_classes_imagery_type",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(240), unique=True)
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
-    primary_subclass_id: Mapped[uuid.UUID | None] = mapped_column(
+    imagery_type: Mapped[str] = mapped_column(String(32), default="kanopus")
+    primary_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("dataset_subclasses.id", ondelete="SET NULL"),
+        ForeignKey("datasets.id", ondelete="SET NULL"),
         nullable=True,
     )
-    primary_subclass_locked: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class DatasetSubclassRow(Base):
-    __tablename__ = "dataset_subclasses"
-    __table_args__ = (
-        UniqueConstraint("class_id", "name", name="uq_dataset_subclasses_class_name"),
-        Index("ix_dataset_subclasses_class_id", "class_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
-    class_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("dataset_classes.id", ondelete="RESTRICT"),
-    )
-    name: Mapped[str] = mapped_column(String(240))
+    primary_dataset_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -78,19 +64,19 @@ class DatasetRow(Base):
     __tablename__ = "datasets"
     __table_args__ = (
         UniqueConstraint("source_type", "source_path", name="uq_datasets_source"),
-        Index("ix_datasets_subclass_id", "subclass_id"),
+        UniqueConstraint("class_id", "name", name="uq_datasets_class_name"),
+        Index("ix_datasets_class_id", "class_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
-    subclass_id: Mapped[uuid.UUID] = mapped_column(
+    class_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("dataset_subclasses.id", ondelete="RESTRICT"),
-        unique=True,
+        ForeignKey("dataset_classes.id", ondelete="RESTRICT"),
     )
+    name: Mapped[str] = mapped_column(String(240))
     source_type: Mapped[str] = mapped_column(String(32), default="mlmarkup")
     source_path: Mapped[str] = mapped_column(String(1024))
-    image_type: Mapped[str] = mapped_column(String(240), default="all")
     config_revision: Mapped[int] = mapped_column(Integer, default=1)
     legacy_version: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -376,7 +362,7 @@ class TestSampleRow(Base):
     __tablename__ = "test_samples"
     __table_args__ = (
         Index("ix_test_samples_dataset_key", "dataset_key"),
-        Index("ix_test_samples_class_variant", "class_key", "variant_key"),
+        Index("ix_test_samples_class_dataset", "class_key", "dataset_key"),
         Index("ix_test_samples_created_at", "created_at"),
         Index(
             "uq_test_samples_primary_dataset_key",
@@ -394,8 +380,7 @@ class TestSampleRow(Base):
     dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
     class_key: Mapped[str] = mapped_column(String(180))
     class_name: Mapped[str] = mapped_column(String(240))
-    variant_key: Mapped[str] = mapped_column(String(180))
-    variant_name: Mapped[str] = mapped_column(String(240))
+    dataset_short_name: Mapped[str] = mapped_column(String(240))
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     tile_width: Mapped[int] = mapped_column(Integer)
     tile_height: Mapped[int] = mapped_column(Integer)
@@ -523,8 +508,7 @@ class TestSampleBatchItemRow(Base):
     dataset_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
     class_key: Mapped[str] = mapped_column(String(180))
     class_name: Mapped[str] = mapped_column(String(240))
-    variant_key: Mapped[str] = mapped_column(String(180))
-    variant_name: Mapped[str] = mapped_column(String(240))
+    dataset_short_name: Mapped[str] = mapped_column(String(240))
     min_object_count: Mapped[int] = mapped_column(Integer)
     metric: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)

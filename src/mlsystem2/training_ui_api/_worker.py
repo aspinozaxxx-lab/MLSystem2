@@ -29,7 +29,7 @@ from mlsystem2.settings.api import load_settings
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset, list_managed_datasets
-from ._datasets import CUSTOM_KEY, count_scenes_file_images
+from ._datasets import CUSTOM_KEY, count_scenes_file_images, imagery_images_dir
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -409,6 +409,7 @@ def _build_training_config(
         "train": {
             "quality_metric": str(_flat_value(flat, "train.quality_metric", "pixel")),
             "model_name": row.architecture,
+            "input_channels": _int_value(flat, "train.input_channels", 4),
             "initial_checkpoint_uri": _blank_to_none(
                 _flat_value(flat, "train.initial_checkpoint_uri", None)
             ),
@@ -479,6 +480,8 @@ def _build_pseudo_markup_config(
         "checkpoint_artifact_path": row.config.get("checkpoint_artifact_path") or "checkpoints/best.pt",
         "checkpoint_f1_score": row.config.get("checkpoint_f1_score"),
         "checkpoint_epoch": row.config.get("checkpoint_epoch"),
+        "imagery_type": row.config.get("imagery_type"),
+        "input_channels": _int_value(row.config, "input_channels", 4),
         "postprocess_config": row.config.get("inference_template_config") or {},
         "threshold": threshold,
         "tile_size": tile_size,
@@ -565,6 +568,7 @@ def _build_test_sample_f1_config(
         "checkpoint_artifact_path": checkpoint.artifact_path,
         "checkpoint_f1_score": checkpoint.f1_score,
         "checkpoint_epoch": checkpoint.epoch,
+        "input_channels": _int_value(flat, "train.input_channels", 4),
         "postprocess_config": row.config.get("inference_template_config") or {},
         "postprocess_profile": row.config.get("postprocess_profile"),
         "test_f1_evaluator_version": row.config.get("test_f1_evaluator_version"),
@@ -588,6 +592,10 @@ def _dataset_config(
         if custom is None:
             raise RuntimeError(f"Custom dataset не найден: {row.custom_dataset_id}")
         return {
+            "images_dir": str(
+                row.config.get("dataset.images_dir")
+                or imagery_images_dir(config.images_root, "kanopus")
+            ),
             "scenes_file": custom.scenes_file.path,
             "annotation_file": custom.annotation_file.path,
         }
@@ -611,7 +619,11 @@ def _dataset_config(
     ):
         raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
     return {
-        "images_dir": dataset.images_dir or str(config.images_root),
+        "images_dir": str(
+            row.config.get("dataset.images_dir")
+            or dataset.images_dir
+            or config.images_root
+        ),
         "scenes_file": dataset.scenes_file,
         "annotation_file": dataset.annotation_file,
         **(
@@ -815,7 +827,11 @@ def _finish_inference_job(
         if file_row is not None:
             result.geojson_file = file_row
         if result.image_count is None:
-            result.image_count = _stored_scenes_image_count(result.scenes_file, config)
+            images_root = Path(str(row.config.get("images_root") or config.images_root))
+            result.image_count = _stored_scenes_image_count(
+                result.scenes_file,
+                images_root,
+            )
         result.updated_at = _now()
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
@@ -1074,10 +1090,13 @@ def _geojson_feature_count(path: Path) -> int | None:
     return len(features) if isinstance(features, list) else None
 
 
-def _stored_scenes_image_count(row: StoredFileRow | None, config: TrainingUIAPIConfig) -> int | None:
+def _stored_scenes_image_count(
+    row: StoredFileRow | None,
+    images_root: Path,
+) -> int | None:
     if row is None:
         return None
-    return count_scenes_file_images(Path(row.path), config.images_root)
+    return count_scenes_file_images(Path(row.path), images_root)
 
 
 def _cleanup_inference_scratch(row: JobRow) -> None:

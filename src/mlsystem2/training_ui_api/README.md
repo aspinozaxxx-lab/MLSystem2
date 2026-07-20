@@ -37,6 +37,13 @@
 - `GET /api/v1/datasets`
 - `GET /api/v1/image-folders`
 - `GET /api/v1/classes`
+- `GET /api/v1/dataset-catalog`
+- `POST /api/v1/dataset-catalog/sync`
+- `POST /api/v1/dataset-classes`
+- `PATCH /api/v1/dataset-classes/{class_key}`
+- `PUT /api/v1/dataset-classes/{class_key}/primary-dataset`
+- `POST /api/v1/managed-datasets`
+- `PATCH /api/v1/managed-datasets/{dataset_key}`
 - `POST /api/v1/custom-datasets`
 - `GET /api/v1/models`
 - `GET /api/v1/automation`
@@ -66,9 +73,9 @@
 - `POST /api/v1/jobs/{job_id}/move-down`
 - `GET /api/v1/results/classes`
 - `GET /api/v1/results/changes`
-- `GET /api/v1/results/classes/{class_key}`
-- `POST /api/v1/results/classes/{class_key}/pseudo-markup`
-- `POST /api/v1/results/classes/{class_key}/test-f1`
+- `GET /api/v1/results/datasets/{dataset_key}`
+- `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup`
+- `POST /api/v1/results/datasets/{dataset_key}/test-f1`
 - `POST /api/v1/results/training/{result_id}/triton-zip`
 - `POST /api/v1/markup-export`
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
@@ -94,21 +101,21 @@
 
 OpenAPI доступен стандартно по `/openapi.json`.
 
-`GET /api/v1/datasets` возвращает плоский список вариантов датасетов MLMarkup с ключами и именами вида
-`Класс\вариант`, например `Вырубки\main`. `GET /api/v1/classes` и `GET /api/v1/results/classes`
-возвращают классы с вложенным списком `variants`; frontend не выбирает класс целиком, а открывает конкретный
-вариант. В папке варианта ожидается один TXT со списком сцен, один ordinary positive GeoJSON и optional
+`GET /api/v1/datasets` возвращает плоский список датасетов MLMarkup, а `GET /api/v1/classes` и
+`GET /api/v1/results/classes` — классы с вложенным списком `datasets`. Класс задаёт единый тип снимков:
+`kanopus` использует четыре канала из `prepared_images/kanopus`, `ortho` — три RGB-канала из
+`prepared_images/orto`. В папке датасета ожидается один TXT со списком сцен, один ordinary positive GeoJSON и optional
 `hard_negative.geojson`. `hard_negative.geojson` возвращается как `hard_negative_annotation_file` и не выбирается
 как positive `annotation_file`; несколько обычных GeoJSON дают diagnostics вместо случайного выбора.
-`updated_at` у варианта заполняется по последнему git-коммиту, затронувшему папку варианта в
+`updated_at` датасета заполняется по последнему git-коммиту, затронувшему его папку в
 `MLSYSTEM2_MLMARKUP_ROOT`. Если `MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem
-mtime как fallback. `version` у варианта равен `git:{commit_sha}` или `fs:{mtime_ns}` и используется автоматизацией
-для дедупликации jobs по конкретной версии датасета. `image_count` у варианта считается по txt-списку сцен через
-индекс подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT`: строки-папки разворачиваются в фактические TIFF, повторы
+mtime как fallback. `version` равен `git:{commit_sha}` или `fs:{mtime_ns}` и используется автоматизацией
+для дедупликации jobs по конкретной версии датасета. `image_count` считается по txt-списку сцен через
+индекс снимков внутри корня типа класса: строки-папки разворачиваются в фактические TIFF, повторы
 удаляются.
 
 `POST /api/v1/markup-export` формирует самостоятельный набор тестовой разметки и не создает job или запись в БД.
-Доступны только однозначные варианты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и
+Доступны только однозначные датасеты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и
 `hard_negative.geojson` не участвуют. TIFF читаются только из `MLSYSTEM2_IMAGES_ROOT`, в рабочей конфигурации это
 `/data/mlsystem2/prepared_images`. Окна обязаны целиком находиться внутри растра, иметь полностью валидную
 `dataset_mask` и не содержать пикселей без данных или полностью чёрных пикселей. Выбор через `scipy.optimize.milp` сначала
@@ -122,7 +129,7 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 
 `POST /api/v1/test-samples` использует ту же нарезку, но сохраняет готовые файлы без TTL в
 `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT/test-samples/{uuid}`, а описание и состояния тайлов — в Postgres.
-Каталог группирует тестовые разметки как `класс → вариант`. Выключенные тайлы остаются доступными для возврата, но не входят
+Каталог группирует тестовые разметки как `класс → датасет`. Выключенные тайлы остаются доступными для возврата, но не входят
 в скачиваемый ZIP и расчёт F1; полное удаление разметки удаляет запись и весь каталог файлов. Сервис считает
 пиксельную и объектную F1 по последней успешной псевдоразметке с точным совпадением `class_key` и входного
 `dataset_key`; порог объектного сопоставления равен `IoU ≥ 0,5`. После переключения прежние значения видны как
@@ -132,9 +139,9 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 Скачивание из редактора передаёт текущий состав в `POST /api/v1/test-samples/{sample_id}/download`, формирует
 временный ZIP выбранных тайлов и не сохраняет черновик. Совместимый `GET` скачивает сохранённый состав.
 Одиночный и общий ZIP основных разметок последовательно нумеруют включённые тайлы как `tile001..tileNNN` и
-добавляют для каждого полноразмерные JPEG `rgb/nrg/ngb` с жёлтым контуром и без него. Композиции соответствуют
-`RED-GRN-BLU`, `NIR-RED-GRN` и `NIR-GRN-BLU`. Превью формируются на лету
-из четырёх каналов TIFF, не сохраняются постоянно и кодируются с максимальным качеством, укладывающимся в
+добавляют полноразмерные JPEG с жёлтым контуром и без него. Для RGB TIFF создаётся только `rgb`, для
+четырёхканального TIFF — `rgb/nrg/ngb` с композициями `RED-GRN-BLU`, `NIR-RED-GRN` и `NIR-GRN-BLU`.
+Превью формируются на лету, не сохраняются постоянно и кодируются с максимальным качеством, укладывающимся в
 `300 KiB`. Временный `/markup-export` и PNG-превью редактора остаются совместимыми с прежним форматом.
 `POST /api/v1/test-samples/{sample_id}/optimize` рассматривает включённые и выключенные тайлы, соблюдает минимум и
 максимум тайлов и минимум объектов, затем атомарно применяет состав с максимальным агрегированным пиксельным либо
@@ -146,7 +153,7 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 `min_image_count..image_count` с максимальным выбранным F1. Без `min_image_count` запрос сохраняет прежний
 режим точного числа тайлов. Статусы группы и строк сохраняются в Postgres и восстанавливаются после перезапуска.
 `GET /api/v1/test-sample-batches/latest` одновременно является источником последних значений формы: размера,
-минимума и максимума тайлов, минимального числа объектов и метрики каждого участвовавшего варианта.
+минимума и максимума тайлов, минимального числа объектов и метрики каждого участвовавшего датасета.
 
 У каждого точного `dataset_key` может быть одна основная тестовая разметка. Совместимое назначение выполняется через
 `PUT /api/v1/test-samples/{sample_id}/primary`, а общий ZIP основных разметок возвращает
@@ -158,11 +165,11 @@ mtime как fallback. `version` у варианта равен `git:{commit_sha
 внутренние компоненты проходят полную постобработку. Метрика устаревает при смене разметки, ревизии состава,
 профиля, эффективного шаблона или версии алгоритма оценки; успешная новая сеть и изменение основной разметки
 ставят оценки в очередь автоматически, старт сервиса восстанавливает отсутствующие и устаревшие расчёты,
-а ручной повтор выполняет `POST /api/v1/results/classes/{class_key}/test-f1`. В MLflow эти метрики не
+а ручной повтор выполняет `POST /api/v1/results/datasets/{dataset_key}/test-f1`. В MLflow эти метрики не
 записываются.
 
-`GET /api/v1/image-folders` возвращает папки внутри `MLSYSTEM2_IMAGES_ROOT`, в которых TIFF лежат напрямую. Ключ и
-имя папки - относительный путь, например `kanopus/Olskij`; `image_count` - количество `.tif/.tiff` в этой папке.
+`GET /api/v1/image-folders` возвращает папки внутри `kanopus` и `orto`, в которых TIFF лежат напрямую. Ключ и
+имя папки — относительный путь, например `orto/ryazan`; `imagery_type` сообщает тип, `image_count` — количество TIFF.
 
 На странице запуска обучения frontend по умолчанию выбирает существующий MLflow experiment с максимальным числовым
 `experiment_id`. Поле `Новое имя experiment` показывается только при выборе пункта `Новый experiment`. Ручное поле
@@ -210,7 +217,7 @@ wall-clock лимита. Схема каждого параметра храни
 `settings` и не сохраняются в UI-шаблонах.
 
 `training_templates.dataset_key` nullable. Строка с `dataset_key=null` является базовым шаблоном сети.
-Строка с заполненным `dataset_key` является переопределением для конкретного варианта MLMarkup, например
+Строка с заполненным `dataset_key` является переопределением для конкретного датасета MLMarkup, например
 `Вырубки\test`, и создается через `POST /api/v1/training-templates` копированием текущих defaults базового
 шаблона сети. При ручном запуске и автоматизации сервис сначала ищет активный шаблон `(architecture,
 dataset_key)`, а если его нет, использует базовый шаблон `(architecture, null)`. Базовый шаблон удалить нельзя;
@@ -224,7 +231,7 @@ dataset_key)`, а если его нет, использует базовый ш
 `postprocess.simplify_m` и параметры `postprocess.filter_compact_objects.*`. При ручном и автоматическом
 создании псевдоразметки сервис ищет активный шаблон инференса `(architecture, dataset_key)`, а если его нет,
 использует базовый `(architecture, null)`. Для `Реки\main` и `smp_segformer_b2` начальный шаблон включает
-вариант 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и фильтр компактных объектов
+профиль 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и фильтр компактных объектов
 `min_isoperimetric_quotient=0.25`, `max_bbox_ratio=3.5`.
 
 `jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
@@ -262,11 +269,11 @@ jobs. Failed auto attempt не ретраится до новой версии �
 
 `GET /api/v1/results/changes` возвращает сначала active jobs со статусами `queued`/`running`, затем последние
 20 успешных изменений из `training_results` и `pseudo_markup_results`, отсортированные по времени изменения.
-Каждая строка содержит `item_type`, optional `job_id`, `type`, `class_key`, имя модели, имя датасета, status,
+Каждая строка содержит `item_type`, optional `job_id`, `type`, `dataset_key`, `class_key`, `class_name`, имя модели, имя датасета, status,
 optional `mlflow_run_url` и действие: `запланировано обучение`, `идёт обучение`, `запланирована псевдоразметка`,
 `идёт псевдоразметка`, `обучена сеть` или `создана разметка`.
-`GET /api/v1/results/classes/{class_key}` возвращает активные строки обучения и псевдоразметки прямо в основной
-структуре класса: `TrainingResultInfo` и `PseudoMarkupResultInfo` содержат необязательный `job_id`, а статус
+`GET /api/v1/results/datasets/{dataset_key}` возвращает активные строки обучения и псевдоразметки прямо в основной
+структуре датасета: `TrainingResultInfo` и `PseudoMarkupResultInfo` содержат необязательный `job_id`, а статус
 `queued`/`running` берется из связанного задания, пока результат еще не завершен. `TrainingResultInfo.created_at`
 содержит время создания строки результата, а `started_at` - время запуска связанного job, если job успел стартовать.
 

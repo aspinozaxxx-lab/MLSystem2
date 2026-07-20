@@ -41,23 +41,24 @@ from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
 from ._dataset_catalog import (
     create_dataset_class as _create_dataset_class,
-    create_dataset_subclass as _create_dataset_subclass,
     create_managed_dataset as _create_managed_dataset,
     find_managed_dataset,
     list_managed_classes,
     list_managed_datasets,
     managed_dataset_catalog,
-    set_primary_subclass as _set_primary_subclass,
+    set_primary_dataset as _set_primary_dataset,
     synchronize_dataset_catalog,
     update_dataset_class as _update_dataset_class,
-    update_dataset_subclass as _update_dataset_subclass,
     update_managed_dataset as _update_managed_dataset,
 )
 from ._datasets import (
     CUSTOM_KEY,
     CUSTOM_NAME,
+    IMAGERY_CHANNELS,
+    RASTER_SUFFIXES,
     count_scenes_file_images,
     find_image_folder,
+    imagery_images_dir,
     list_image_folders,
 )
 from ._model_export import ModelExportArchive, build_triton_model_export_zip
@@ -97,7 +98,7 @@ from .contracts import (
     AutomationSnapshot,
     BootstrapInfo,
     ClassListResponse,
-    ClassResultsResponse,
+    DatasetResultsResponse,
     ConfigSchema,
     CustomDatasetInfo,
     DatasetCatalogInfo,
@@ -105,9 +106,7 @@ from .contracts import (
     DatasetClassUpdate,
     DatasetInfo,
     DatasetListResponse,
-    DatasetPrimarySubclassUpdate,
-    DatasetSubclassCreate,
-    DatasetSubclassUpdate,
+    DatasetPrimaryDatasetUpdate,
     ImageFolderListResponse,
     InferenceTemplate,
     InferenceTemplateApplyField,
@@ -131,7 +130,7 @@ from .contracts import (
     QueueSnapshot,
     ResultClassInfo,
     ResultClassListResponse,
-    ResultVariantInfo,
+    ResultDatasetInfo,
     ResultStatus,
     ResultChangeInfo,
     ResultChangesResponse,
@@ -218,30 +217,13 @@ def update_dataset_class(
     return _update_dataset_class(session, class_key, request, config)
 
 
-def set_primary_subclass(
+def set_primary_dataset(
     session: Session,
     class_key: str,
-    request: DatasetPrimarySubclassUpdate,
+    request: DatasetPrimaryDatasetUpdate,
     config: TrainingUIAPIConfig,
 ) -> DatasetCatalogInfo:
-    return _set_primary_subclass(session, class_key, request, config)
-
-
-def create_dataset_subclass(
-    session: Session,
-    request: DatasetSubclassCreate,
-    config: TrainingUIAPIConfig,
-) -> DatasetCatalogInfo:
-    return _create_dataset_subclass(session, request, config)
-
-
-def update_dataset_subclass(
-    session: Session,
-    subclass_key: str,
-    request: DatasetSubclassUpdate,
-    config: TrainingUIAPIConfig,
-) -> DatasetCatalogInfo:
-    return _update_dataset_subclass(session, subclass_key, request, config)
+    return _set_primary_dataset(session, class_key, request, config)
 
 
 def create_managed_dataset(
@@ -268,12 +250,12 @@ def result_classes(
     catalog = list_managed_classes(session, config)
     output: list[ResultClassInfo] = []
     for class_info in catalog:
-        variants: list[ResultVariantInfo] = []
-        for variant in class_info.variants:
+        result_datasets: list[ResultDatasetInfo] = []
+        for dataset in class_info.datasets:
             test_f1 = None
             test_f1_status = None
             test_f1_training_result_id = None
-            if primary_test_sample(session, variant.key) is not None:
+            if primary_test_sample(session, dataset.key) is not None:
                 result = session.scalar(
                     select(TrainingResultRow)
                     .join(
@@ -282,7 +264,7 @@ def result_classes(
                         == TrainingResultRow.id,
                     )
                     .where(
-                        TrainingResultRow.class_key == variant.key,
+                        TrainingResultRow.class_key == dataset.key,
                         TrainingResultRow.status == ResultStatus.OK.value,
                         TrainingResultTestMetricRow.f1.is_not(None),
                     )
@@ -298,17 +280,16 @@ def result_classes(
                         test_f1 = info.f1
                         test_f1_status = "current" if info.status == "current" else "stale"
                         test_f1_training_result_id = result.id
-            variants.append(
-                ResultVariantInfo(
-                    key=variant.key,
-                    name=variant.name,
-                    class_key=variant.class_key,
-                    class_name=variant.class_name,
-                    variant_key=variant.variant_key,
-                    variant_name=variant.variant_name,
-                    quality_metric=variant.quality_metric,
-                    is_primary=variant.is_primary,
-                    image_count=variant.image_count,
+            result_datasets.append(
+                ResultDatasetInfo(
+                    key=dataset.key,
+                    name=dataset.name,
+                    dataset_name=dataset.dataset_name,
+                    class_key=dataset.class_key,
+                    class_name=dataset.class_name,
+                    quality_metric=dataset.quality_metric,
+                    is_primary=dataset.is_primary,
+                    image_count=dataset.image_count,
                     test_f1=test_f1,
                     test_f1_status=test_f1_status,
                     test_f1_training_result_id=test_f1_training_result_id,
@@ -319,7 +300,7 @@ def result_classes(
                 key=class_info.key,
                 name=class_info.name,
                 updated_at=class_info.updated_at,
-                variants=variants,
+                datasets=result_datasets,
                 is_custom=class_info.is_custom,
                 quality_metric=class_info.quality_metric,
             )
@@ -821,6 +802,12 @@ def create_training_job(
         normalize_factors=False,
     )
     job_config["train.quality_metric"] = dataset.quality_metric
+    job_config["train.input_channels"] = dataset.input_channels or 4
+    job_config["dataset.imagery_type"] = (
+        dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
+    )
+    if dataset.images_dir is not None:
+        job_config["dataset.images_dir"] = dataset.images_dir
     _validate_tile_factor_config(job_config)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
@@ -979,20 +966,20 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
     return _job_detail(session, row)
 
 
-def class_results(
+def dataset_results(
     session: Session,
-    class_key: str,
+    dataset_key: str,
     config: TrainingUIAPIConfig,
-) -> ClassResultsResponse:
-    dataset_info = find_managed_dataset(session, config, class_key)
+) -> DatasetResultsResponse:
+    dataset_info = find_managed_dataset(session, config, dataset_key)
     if dataset_info is None:
-        dataset_info = DatasetInfo(key=class_key, name=class_key)
+        dataset_info = DatasetInfo(key=dataset_key, name=dataset_key, dataset_name=dataset_key)
     _delete_cancelled_manual_jobs(session)
-    _delete_cancelled_results_for_class(session, class_key)
+    _delete_cancelled_results_for_class(session, dataset_key)
     rows = session.scalars(
         select(TrainingResultRow)
         .where(
-            TrainingResultRow.class_key == class_key,
+            TrainingResultRow.class_key == dataset_key,
             TrainingResultRow.status != ResultStatus.CANCELLED.value,
         )
         .order_by(TrainingResultRow.created_at.desc())
@@ -1007,7 +994,7 @@ def class_results(
             if job_id is not None
         ],
     )
-    primary = primary_test_sample(session, class_key)
+    primary = primary_test_sample(session, dataset_key)
     result_infos = [
         _training_result_info(
             session,
@@ -1035,9 +1022,11 @@ def class_results(
         test_f1_status = "running"
     else:
         test_f1_status = "stale"
-    return ClassResultsResponse(
-        class_key=dataset_info.key,
-        class_name=dataset_info.name,
+    return DatasetResultsResponse(
+        dataset_key=dataset_info.key,
+        dataset_name=dataset_info.name,
+        class_key=dataset_info.class_key,
+        class_name=dataset_info.class_name,
         quality_metric=dataset_info.quality_metric,
         dataset_updated_at=dataset_info.updated_at,
         primary_test_sample=(
@@ -1058,19 +1047,28 @@ def class_results(
     )
 
 
-def recalculate_class_test_f1(
+def recalculate_dataset_test_f1(
     session: Session,
-    class_key: str,
+    dataset_key: str,
     config: TrainingUIAPIConfig,
-) -> ClassResultsResponse:
-    queue_class_test_f1(session, class_key, config)
+) -> DatasetResultsResponse:
+    queue_class_test_f1(session, dataset_key, config)
     session.flush()
-    return class_results(session, class_key, config)
+    return dataset_results(session, dataset_key, config)
 
 
-def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
+def result_changes(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    limit: int = 20,
+) -> ResultChangesResponse:
     ensure_queue_positions(session)
-    active_changes = [_job_change_info(session, row) for row in _queue_rows(session)]
+    datasets_by_key = {
+        item.key: item for item in list_managed_datasets(session, config)
+    }
+    active_changes = [
+        _job_change_info(session, row, datasets_by_key) for row in _queue_rows(session)
+    ]
     training_rows = session.scalars(
         select(TrainingResultRow)
         .where(
@@ -1089,13 +1087,20 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
     ).all()
     changes: list[ResultChangeInfo] = []
     for row in training_rows:
+        dataset = datasets_by_key.get(row.class_key)
         changes.append(
             ResultChangeInfo(
                 id=row.id,
                 item_type="training_result",
                 job_id=row.job_id,
                 type=JobType.TRAINING,
-                class_key=row.class_key,
+                dataset_key=row.class_key,
+                class_key=(dataset.class_key or row.class_key) if dataset is not None else row.class_key,
+                class_name=(
+                    dataset.class_name
+                    if dataset is not None
+                    else row.class_display_name.split("\\", maxsplit=1)[0]
+                ),
                 dataset_name=row.class_display_name,
                 model_name=row.model_name,
                 action="обучена сеть",
@@ -1106,6 +1111,7 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
             )
         )
     for row in pseudo_rows:
+        dataset = datasets_by_key.get(row.class_key)
         model_name = row.training_result.model_name if row.training_result is not None else "псевдоразметка"
         changes.append(
             ResultChangeInfo(
@@ -1113,7 +1119,13 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
                 item_type="pseudo_markup_result",
                 job_id=row.job_id,
                 type=JobType.INFERENCE,
-                class_key=row.class_key,
+                dataset_key=row.class_key,
+                class_key=(dataset.class_key or row.class_key) if dataset is not None else row.class_key,
+                class_name=(
+                    dataset.class_name
+                    if dataset is not None
+                    else row.source_dataset_name.split("\\", maxsplit=1)[0]
+                ),
                 dataset_name=row.source_dataset_name,
                 model_name=model_name,
                 action="создана разметка",
@@ -1126,15 +1138,26 @@ def result_changes(session: Session, limit: int = 20) -> ResultChangesResponse:
     return ResultChangesResponse(changes=[*active_changes, *changes[:limit]])
 
 
-def _job_change_info(session: Session, row: JobRow) -> ResultChangeInfo:
+def _job_change_info(
+    session: Session,
+    row: JobRow,
+    datasets_by_key: dict[str, DatasetInfo],
+) -> ResultChangeInfo:
     job_type = JobType(row.type)
-    class_key = _job_class_key(row)
+    dataset_key = _job_dataset_key(row)
+    dataset = datasets_by_key.get(dataset_key)
     return ResultChangeInfo(
         id=row.id,
         item_type="job",
         job_id=row.id,
         type=job_type,
-        class_key=class_key,
+        dataset_key=dataset_key,
+        class_key=(dataset.class_key or dataset_key) if dataset is not None else dataset_key,
+        class_name=(
+            dataset.class_name
+            if dataset is not None
+            else (row.training_dataset_name or row.dataset_name).split("\\", maxsplit=1)[0]
+        ),
         dataset_name=row.training_dataset_name or row.dataset_name,
         model_name=row.model_name,
         action=_job_change_action(row),
@@ -1145,7 +1168,7 @@ def _job_change_info(session: Session, row: JobRow) -> ResultChangeInfo:
     )
 
 
-def _job_class_key(row: JobRow) -> str:
+def _job_dataset_key(row: JobRow) -> str:
     if row.type == JobType.INFERENCE.value:
         value = (row.config or {}).get("class_key")
         if isinstance(value, str) and value:
@@ -1202,6 +1225,24 @@ def create_pseudo_markup_job(
     class_dataset = find_managed_dataset(session, config, class_key)
     class_name = class_dataset.name if class_dataset else class_key
     training_result = _resolve_training_result(session, training_result_id)
+    if training_result is not None and training_result.class_key != class_key:
+        raise TrainingUIAPIError("Выбранная модель обучена для другого датасета")
+    training_job = (
+        session.get(JobRow, training_result.job_id)
+        if training_result is not None and training_result.job_id is not None
+        else None
+    )
+    input_channels = (
+        _job_input_channels(training_job)
+        if training_result is not None
+        else (class_dataset.input_channels if class_dataset is not None else 4)
+    )
+    imagery_by_channels = {channels: imagery for imagery, channels in IMAGERY_CHANNELS.items()}
+    imagery_type = imagery_by_channels.get(input_channels)
+    if imagery_type is None:
+        raise TrainingUIAPIError(
+            f"Для модели с {input_channels} входными каналами тип снимков не поддерживается"
+        )
     inference_template = (
         inference_template_row_for_dataset(session, training_result.architecture, dataset_key)
         if training_result is not None
@@ -1215,7 +1256,7 @@ def create_pseudo_markup_job(
     scenes_file_id: uuid.UUID | None = None
     dataset_name = CUSTOM_NAME
     inference_dataset_version: str | None = None
-    inference_images_root = str(config.images_root)
+    inference_images_root = str(imagery_images_dir(config.images_root, imagery_type))
     if has_uploaded_scenes:
         _validate_upload_name(scenes_name, ".txt")
         scenes_row = _store_file(
@@ -1230,6 +1271,10 @@ def create_pseudo_markup_job(
         dataset_name = CUSTOM_NAME
     elif dataset_key:
         dataset = _resolve_dataset_name(session, dataset_key, None, config)
+        if dataset.input_channels != input_channels:
+            raise TrainingUIAPIError(
+                "Выбранный датасет несовместим с числом входных каналов модели"
+            )
         dataset_name = dataset.name
         inference_dataset_version = dataset.version
         inference_images_root = dataset.images_dir or str(config.images_root)
@@ -1241,15 +1286,24 @@ def create_pseudo_markup_job(
             )
             scenes_file_id = scenes_row.id
     elif image_folder_key:
-        folder = find_image_folder(config.images_root, image_folder_key)
+        folder = find_image_folder(config.images_root, image_folder_key, imagery_type)
         if folder is None:
+            existing_folder = find_image_folder(config.images_root, image_folder_key)
+            if existing_folder is not None:
+                raise TrainingUIAPIError("Папка снимков несовместима с выбранной моделью")
             raise TrainingUIAPIError(f"Папка снимков не найдена: {image_folder_key}")
+        imagery_root = imagery_images_dir(config.images_root, imagery_type)
+        scene_entries = [
+            image.relative_to(imagery_root).as_posix()
+            for image in sorted(Path(folder.path).iterdir())
+            if image.is_file() and image.suffix.casefold() in RASTER_SUFFIXES
+        ]
         scenes_row = _store_file(
             session,
             kind=StoredFileKind.SCENES_TXT,
             original_name=f"{Path(image_folder_key).name or 'images'}.txt",
             content_type="text/plain",
-            content=f"{image_folder_key}\n".encode("utf-8"),
+            content=("\n".join(scene_entries) + "\n").encode("utf-8"),
             config=config,
         )
         scenes_file_id = scenes_row.id
@@ -1273,6 +1327,8 @@ def create_pseudo_markup_job(
             "dataset_key": dataset_key or CUSTOM_KEY,
             "image_folder_key": image_folder_key,
             "images_root": inference_images_root,
+            "imagery_type": imagery_type,
+            "input_channels": input_channels,
             "training_result_id": str(training_result_id) if training_result_id else None,
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
@@ -1286,6 +1342,10 @@ def create_pseudo_markup_job(
         if scenes_file_id is not None
         else None
     )
+    if scenes_file_id is not None and image_count == 0:
+        raise TrainingUIAPIError(
+            f"В выбранном источнике не найдены снимки типа «{imagery_type}»"
+        )
     session.add(
         PseudoMarkupResultRow(
             source=JobSource.MANUAL.value,
@@ -1990,6 +2050,17 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
     )
 
 
+def _job_input_channels(job: JobRow | None) -> int:
+    if job is None:
+        return 4
+    value = (job.config or {}).get("train.input_channels")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 4
+    return parsed if parsed > 0 else 4
+
+
 def _job_detail(session: Session, row: JobRow) -> JobDetail:
     return JobDetail(
         id=row.id,
@@ -2217,6 +2288,7 @@ def _training_result_info(
         dataset_version=row.dataset_version,
         model_name=row.model_name,
         architecture=row.architecture,
+        input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         f1_score=row.f1_score,
         epoch=row.epoch,
@@ -2266,12 +2338,6 @@ def _public_result_status(
     if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
         return job.status
     return result_status
-
-
-def _stored_scenes_image_count(row: StoredFileRow | None, config: TrainingUIAPIConfig) -> int | None:
-    if row is None:
-        return None
-    return count_scenes_file_images(Path(row.path), config.images_root)
 
 
 def _job_progress(session: Session, row: JobRow) -> RuntimeProgress | None:

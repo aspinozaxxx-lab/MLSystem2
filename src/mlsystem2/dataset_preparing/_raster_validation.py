@@ -10,7 +10,6 @@ import rasterio
 from affine import Affine
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
-from rasterio.enums import MaskFlags
 
 from ._constants import TARGET_CRS
 
@@ -36,7 +35,12 @@ class RasterValidationResult:
     errors: list[str]
 
 
-def validate_rasters(scene_to_image: dict[str, Path]) -> RasterValidationResult:
+def validate_rasters(
+    scene_to_image: dict[str, Path],
+    *,
+    expected_band_count: int | None = None,
+    expected_dtype: str | None = None,
+) -> RasterValidationResult:
     errors: list[str] = []
     rasters: list[RasterInfo] = []
     baseline_band_count: int | None = None
@@ -84,6 +88,18 @@ def validate_rasters(scene_to_image: dict[str, Path]) -> RasterValidationResult:
                 errors.append(f"Количество каналов снимка отличается: {path}")
             if info.dtypes != baseline_dtypes:
                 errors.append(f"dtype каналов снимка отличается: {path}")
+        if expected_band_count is not None and info.band_count != expected_band_count:
+            errors.append(
+                f"Снимок должен содержать {expected_band_count} каналов, "
+                f"получено {info.band_count}: {path}"
+            )
+        if expected_dtype is not None and any(
+            dtype != expected_dtype for dtype in info.dtypes
+        ):
+            errors.append(
+                f"Каналы снимка должны иметь dtype {expected_dtype}, "
+                f"получено {', '.join(info.dtypes)}: {path}"
+            )
         rasters.append(info)
 
     return RasterValidationResult(rasters=rasters, errors=errors)
@@ -99,7 +115,7 @@ def _is_valid_geotransform(transform: Affine) -> bool:
 
 def _has_usable_mask(dataset: rasterio.io.DatasetReader) -> bool:
     flag_sets = [set(flags) for flags in dataset.mask_flag_enums]
-    if flag_sets and all(MaskFlags.all_valid not in flags for flags in flag_sets):
+    if flag_sets and all(flags for flags in flag_sets):
         return True
 
     sample_height = min(dataset.height, 256)

@@ -137,6 +137,8 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
         )
         model = loaded.model.model
+        input_channels = _loaded_input_channels(loaded, config)
+        _validate_configured_input_channels(config, input_channels)
         model.to(torch.device(device))
         model.eval()
         for number, tile in enumerate(tiles, start=1):
@@ -144,6 +146,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             prediction = _infer_test_tile_mask(
                 torch=torch,
                 model=model,
+                input_channels=input_channels,
                 image_path=Path(str(tile["image_path"])),
                 tile_size=inference_tile_size,
                 stride=stride,
@@ -349,6 +352,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
         )
         model = loaded.model.model
+        input_channels = _loaded_input_channels(loaded, config)
+        _validate_configured_input_channels(config, input_channels)
         model.to(torch.device(device))
         model.eval()
     except Exception as exc:  # noqa: BLE001
@@ -406,6 +411,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 scene_features = _infer_scene(
                     torch=torch,
                     model=model,
+                    input_channels=input_channels,
                     image_path=scene_input.image_path,
                     scene=scene_input.scene_id,
                     config=config,
@@ -491,10 +497,56 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         _release_cuda_cache(torch, device)
 
 
+def _validate_configured_input_channels(
+    config: dict[str, Any],
+    checkpoint_input_channels: int,
+) -> None:
+    configured = config.get("input_channels")
+    if configured is None:
+        return
+    try:
+        expected = int(configured)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("input_channels в конфигурации должен быть целым числом.") from exc
+    if expected != checkpoint_input_channels:
+        raise RuntimeError(
+            "Число входных каналов конфигурации не совпадает с checkpoint: "
+            f"{expected} != {checkpoint_input_channels}."
+        )
+
+
+def _loaded_input_channels(loaded: object, config: dict[str, Any]) -> int:
+    model_handle = getattr(loaded, "model", None)
+    spec = getattr(model_handle, "spec", None)
+    value = getattr(spec, "input_channels", None)
+    if value is None:
+        value = config.get("input_channels", 4)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Не удалось определить число входных каналов checkpoint.") from exc
+    if parsed <= 0:
+        raise RuntimeError("Число входных каналов checkpoint должно быть положительным.")
+    return parsed
+
+
+def _validate_raster_input_channels(
+    dataset: rasterio.io.DatasetReader,
+    image_path: Path,
+    expected: int,
+) -> None:
+    if dataset.count != expected:
+        raise RuntimeError(
+            f"Снимок должен содержать {expected} каналов, "
+            f"получено {dataset.count}: {image_path}"
+        )
+
+
 def _infer_scene(
     *,
     torch,
     model,
+    input_channels: int = 4,
     image_path: Path,
     scene: str,
     config: dict[str, Any],
@@ -507,6 +559,7 @@ def _infer_scene(
 ) -> list[dict[str, Any]]:
     del batch_size
     with rasterio.open(image_path) as dataset:
+        _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         for window in _windows(dataset.width, dataset.height, tile_size, stride):
@@ -517,10 +570,6 @@ def _infer_scene(
                 out_shape=(dataset.count, tile_size, tile_size),
                 masked=False,
             )
-            if image.shape[0] > 4:
-                image = image[:4]
-            if image.shape[0] < 4:
-                image = np.pad(image, ((0, 4 - image.shape[0]), (0, 0), (0, 0)))
             if np.all(_nodata_pixels(image, nodata)):
                 continue
             tile_mask = _predict_tile(
@@ -554,6 +603,7 @@ def _infer_test_tile_mask(
     *,
     torch,
     model,
+    input_channels: int = 4,
     image_path: Path,
     tile_size: int,
     stride: int,
@@ -562,6 +612,7 @@ def _infer_test_tile_mask(
     postprocess_profile: _PostprocessProfile,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
+        _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         for window in _windows(dataset.width, dataset.height, tile_size, stride):
@@ -572,10 +623,6 @@ def _infer_test_tile_mask(
                 out_shape=(dataset.count, tile_size, tile_size),
                 masked=False,
             )
-            if image.shape[0] > 4:
-                image = image[:4]
-            if image.shape[0] < 4:
-                image = np.pad(image, ((0, 4 - image.shape[0]), (0, 0), (0, 0)))
             if np.all(_nodata_pixels(image, nodata)):
                 continue
             predicted = _predict_tile(
@@ -1222,6 +1269,12 @@ def _image_index(images_root: Path) -> dict[str, list[Path]]:
     files = [*images_root.rglob("*.tif"), *images_root.rglob("*.tiff")]
     index: dict[str, list[Path]] = {}
     for path in sorted(files):
+        try:
+            relative_path = path.relative_to(images_root).as_posix()
+        except ValueError:
+            relative_path = path.name
+        for key in _scene_lookup_keys(relative_path):
+            _add_index_path(index, key, path)
         for key in _scene_lookup_keys(path.name):
             _add_index_path(index, key, path)
         for key in _scene_lookup_keys(path.stem):
@@ -1247,8 +1300,20 @@ def _add_index_path(index: dict[str, list[Path]], key: str, path: Path) -> None:
 
 
 def _find_images(scene: str, index: dict[str, list[Path]]) -> list[Path]:
+    normalized = _normalized_scene(scene)
+    if "/" in normalized:
+        exact = _paths_for_keys(_exact_scene_lookup_keys(normalized), index)
+        if exact:
+            return exact
+    return _paths_for_keys(_scene_lookup_keys(normalized), index)
+
+
+def _paths_for_keys(
+    keys: set[str],
+    index: dict[str, list[Path]],
+) -> list[Path]:
     found: list[Path] = []
-    for key in _scene_lookup_keys(scene):
+    for key in keys:
         for path in index.get(key, []):
             if path not in found:
                 found.append(path)
@@ -1263,10 +1328,7 @@ def _find_image(scene: str, index: dict[str, list[Path]]) -> Path | None:
 
 
 def _scene_lookup_keys(value: str) -> set[str]:
-    raw = value.strip().replace("\\", "/")
-    while raw.startswith("./"):
-        raw = raw[2:]
-    raw = raw.strip("/")
+    raw = _normalized_scene(value)
     if not raw:
         return set()
 
@@ -1282,6 +1344,30 @@ def _scene_lookup_keys(value: str) -> set[str]:
         else:
             keys.add(f"{variant}_cog".lower())
     return keys
+
+
+def _exact_scene_lookup_keys(value: str) -> set[str]:
+    raw = _normalized_scene(value)
+    if not raw:
+        return set()
+    variants = {raw, _strip_raster_suffix(raw)}
+    keys: set[str] = set()
+    for variant in variants:
+        if not variant:
+            continue
+        keys.add(variant.lower())
+        if variant.endswith("_cog"):
+            keys.add(variant[:-4].lower())
+        else:
+            keys.add(f"{variant}_cog".lower())
+    return keys
+
+
+def _normalized_scene(value: str) -> str:
+    raw = value.strip().replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw.strip("/")
 
 
 def _strip_raster_suffix(value: str) -> str:

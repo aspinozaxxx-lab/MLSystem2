@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from mlsystem2.training_ui_api._datasets import list_classes, list_datasets, list_image_folders
+from mlsystem2.training_ui_api._datasets import (
+    find_image_folder,
+    list_classes,
+    list_datasets,
+    list_image_folders,
+    resolve_scenes_file_images,
+)
 
 
 def test_list_classes_uses_git_history_for_dataset_update_dates(tmp_path: Path) -> None:
@@ -48,10 +54,13 @@ def test_list_classes_uses_git_history_for_dataset_update_dates(tmp_path: Path) 
 
     assert classes["class_a"].updated_at == datetime(2024, 1, 2, 10, 20, 30, tzinfo=timezone.utc)
     assert classes["class_b"].updated_at == datetime(2024, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
-    assert [item.key for item in classes["class_b"].variants] == ["class_b\\main", "class_b\\test"]
+    assert [item.key for item in classes["class_b"].datasets] == [
+        "class_b\\main",
+        "class_b\\test",
+    ]
     assert datasets["class_a\\main"].name == "class_a\\main"
     assert datasets["class_a\\main"].class_name == "class_a"
-    assert datasets["class_a\\main"].variant_name == "main"
+    assert datasets["class_a\\main"].dataset_name == "main"
     assert datasets["class_b\\test"].updated_at == datetime(2024, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
     assert datasets["class_a\\main"].version == initial_datasets["class_a\\main"].version
     assert datasets["class_b\\main"].version == initial_datasets["class_b\\main"].version
@@ -70,14 +79,23 @@ def test_list_image_folders_returns_direct_raster_folder_counts(tmp_path: Path) 
     (first / "scene-2.tiff").touch()
     (first / "readme.txt").touch()
     (second / "scene-3.tif").touch()
+    ortho = images_root / "orto" / "ryazan"
+    ortho.mkdir(parents=True)
+    (ortho / "ortho-1.tif").touch()
+    ignored = images_root / "sentinel" / "region"
+    ignored.mkdir(parents=True)
+    (ignored / "ignored.tif").touch()
 
     folders = list_image_folders(images_root)
 
-    assert [(item.key, item.image_count) for item in folders] == [
-        ("kanopus/irkutsk", 1),
-        ("kanopus/Olskij", 2),
+    assert [(item.key, item.image_count, item.imagery_type) for item in folders] == [
+        ("kanopus/irkutsk", 1, "kanopus"),
+        ("kanopus/Olskij", 2, "kanopus"),
+        ("orto/ryazan", 1, "ortho"),
     ]
     assert empty_parent.exists()
+    assert find_image_folder(images_root, "orto/ryazan", "ortho") is not None
+    assert find_image_folder(images_root, "orto/ryazan", "kanopus") is None
 
 
 def test_list_datasets_counts_images_from_folder_entries_with_dedup(tmp_path: Path) -> None:
@@ -95,6 +113,22 @@ def test_list_datasets_counts_images_from_folder_entries_with_dedup(tmp_path: Pa
     datasets = {item.key: item for item in list_datasets(mlmarkup_root, images_root)}
 
     assert datasets["Вырубки\\main"].image_count == 2
+
+
+def test_scene_relative_path_selects_only_the_exact_duplicate_filename(
+    tmp_path: Path,
+) -> None:
+    images_root = tmp_path / "prepared_images" / "orto"
+    first = images_root / "first" / "shared.tif"
+    second = images_root / "second" / "shared.tif"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.touch()
+    second.touch()
+    scenes = tmp_path / "scenes.txt"
+    scenes.write_text("first/shared.tif\n", encoding="utf-8")
+
+    assert resolve_scenes_file_images(scenes, images_root) == [first.resolve()]
 
 
 def test_list_datasets_splits_positive_and_hard_negative_geojson(tmp_path: Path) -> None:

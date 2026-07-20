@@ -265,6 +265,12 @@ def _ensure_training_for_rule(
     )
     job_config = sanitize_template_config(template.default_config)
     job_config["train.quality_metric"] = dataset.quality_metric
+    job_config["train.input_channels"] = dataset.input_channels or 4
+    job_config["dataset.imagery_type"] = (
+        dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
+    )
+    if dataset.images_dir is not None:
+        job_config["dataset.images_dir"] = dataset.images_dir
     model_name = MODEL_DISPLAY_NAMES.get(rule.architecture, rule.architecture)
     row = JobRow(
         type=JobType.TRAINING.value,
@@ -364,6 +370,10 @@ def _ensure_pseudo_markup_for_rule(
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
             "images_root": str(images_root),
+            "imagery_type": (
+                dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
+            ),
+            "input_channels": dataset.input_channels or 4,
             **_checkpoint_config(training_result, config),
         },
     )

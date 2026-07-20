@@ -10,7 +10,7 @@ from ._object_counts import (
     count_objects_per_scene,
     score_images_by_annotation_geometry,
 )
-from ._raster_validation import validate_rasters
+from ._raster_validation import RasterValidationResult, validate_rasters
 from ._scene_matching import (
     expand_scene_entries,
     filter_existing_scenes,
@@ -128,7 +128,15 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         for scene in pool_scene_ids
         if scene in scene_to_image
     }
-    validation = validate_rasters(selected_scene_to_image) if selected_scene_to_image else None
+    validation = (
+        validate_rasters(
+            selected_scene_to_image,
+            expected_band_count=request.expected_band_count,
+            expected_dtype=request.expected_dtype,
+        )
+        if selected_scene_to_image
+        else None
+    )
     if validation is not None:
         errors.extend(validation.errors)
 
@@ -161,6 +169,7 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         scene_to_image=scene_to_image,
         missing_files=missing_files,
         errors=errors,
+        validation=validation,
     )
     if errors:
         dataset = None
@@ -298,7 +307,15 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         for scene in pool_scene_ids
         if scene in scene_to_image
     }
-    validation = validate_rasters(selected_scene_to_image) if selected_scene_to_image else None
+    validation = (
+        validate_rasters(
+            selected_scene_to_image,
+            expected_band_count=request.expected_band_count,
+            expected_dtype=request.expected_dtype,
+        )
+        if selected_scene_to_image
+        else None
+    )
     if validation is not None:
         errors.extend(validation.errors)
 
@@ -341,6 +358,7 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         scene_to_image=scene_to_image,
         missing_files=missing_files,
         errors=errors,
+        validation=validation,
     )
     if errors:
         dataset = None
@@ -553,6 +571,7 @@ def _build_report(
     scene_to_image: dict[str, Path],
     missing_files: list[str],
     errors: list[str],
+    validation: RasterValidationResult | None = None,
 ) -> DatasetPreparationReport:
     positive_by_scene = {row.scene_name: row.object_count for row in positive_rows}
     hard_negative_by_scene = {row.scene_name: row.object_count for row in hard_negative_rows}
@@ -569,6 +588,7 @@ def _build_report(
     ]
     positive_objects = sum(item.positive_objects for item in scene_reports)
     hard_negative_objects = sum(item.hard_negative_objects for item in scene_reports)
+    first_raster = validation.rasters[0] if validation and validation.rasters else None
     return DatasetPreparationReport(
         status="error" if errors else "ok",
         scenes_total=len(scenes),
@@ -576,6 +596,8 @@ def _build_report(
         positive_objects=positive_objects,
         hard_negative_objects=hard_negative_objects,
         objects_total=positive_objects + hard_negative_objects,
+        band_count=first_raster.band_count if first_raster is not None else None,
+        dtypes=list(first_raster.dtypes) if first_raster is not None else [],
         scenes=scene_reports,
         missing_files=missing_files,
         errors=errors,

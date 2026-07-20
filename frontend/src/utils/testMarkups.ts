@@ -19,7 +19,7 @@ export type TestMarkupStats = {
 
 export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): TestSampleSummary[] {
   return (catalog?.classes || []).flatMap((classGroup) =>
-    (classGroup.variants || []).flatMap((variant) => variant.samples || []),
+    (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []),
   );
 }
 
@@ -42,8 +42,8 @@ export function sortTestMarkupDatasets(
     const primaryDifference = Number(testMarkupStats(catalog, left.key).hasPrimary)
       - Number(testMarkupStats(catalog, right.key).hasPrimary);
     if (primaryDifference) return primaryDifference;
-    const leftLabel = `${left.class_name || left.name}\u0000${left.variant_name || left.variant_key || left.name}`;
-    const rightLabel = `${right.class_name || right.name}\u0000${right.variant_name || right.variant_key || right.name}`;
+    const leftLabel = `${left.class_name || left.name}\u0000${left.dataset_name || left.name}`;
+    const rightLabel = `${right.class_name || right.name}\u0000${right.dataset_name || right.name}`;
     return leftLabel.localeCompare(rightLabel, "ru");
   });
 }

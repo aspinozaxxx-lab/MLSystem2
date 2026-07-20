@@ -231,14 +231,14 @@
   font-size: 17px;
 }
 
-.variant-list {
+.dataset-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
 }
 
-.variant-link {
+.dataset-link {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -251,12 +251,12 @@
   text-decoration: none;
 }
 
-.variant-link span {
+.dataset-link span {
   color: var(--text);
   font-weight: 650;
 }
 
-.variant-link small {
+.dataset-link small {
   color: var(--muted);
   white-space: nowrap;
 }
@@ -681,7 +681,11 @@
 
 .class-editor-header {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(180px, 240px) minmax(180px, 240px);
+  grid-template-columns:
+    minmax(280px, 1fr)
+    minmax(150px, 190px)
+    minmax(180px, 220px)
+    minmax(180px, 220px);
   align-items: end;
   gap: 14px;
 }
@@ -693,12 +697,12 @@
   font-weight: 650;
 }
 
-.class-editor-subclasses {
+.class-editor-datasets {
   display: grid;
   gap: 10px;
 }
 
-.subclass-card {
+.dataset-card {
   display: grid;
   gap: 10px;
   padding: 13px;
@@ -707,28 +711,18 @@
   background: var(--surface-soft);
 }
 
-.subclass-card-header,
-.dataset-binding {
+.dataset-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.subclass-card-header .inline-form {
+.dataset-card-header .source-lines {
   flex: 1 1 420px;
 }
 
-.dataset-binding {
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.empty-binding {
-  min-height: 46px;
-}
-
-.add-subclass-form {
+.add-dataset-actions {
   padding-top: 4px;
 }
 
@@ -764,8 +758,7 @@
     grid-template-columns: 1fr;
   }
 
-  .subclass-card-header,
-  .dataset-binding {
+  .dataset-card-header {
     align-items: stretch;
     flex-direction: column;
   }

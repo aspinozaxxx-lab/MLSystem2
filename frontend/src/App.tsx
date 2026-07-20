@@ -29,13 +29,13 @@ import type {
   AutomationRuleInfo,
   AutomationSnapshot,
   BootstrapInfo,
-  ClassResultsResponse,
+  DatasetResultsResponse,
   ConfigField,
   ConfigSchema,
   CustomDatasetInfo,
   DatasetCatalogInfo,
   DatasetInfo,
-  DatasetSubclassInfo,
+  ImageryType,
   ImageFolderInfo,
   InferenceTemplate,
   JobDetail,
@@ -75,7 +75,8 @@ import {
   formatRuntimeMinutes,
   formatTrainingResultDate,
   integerOrNull,
-  isPrimaryDatasetVariant,
+  imageryTypeForInputChannels,
+  isPrimaryDataset,
   isValidExportModelName,
   runningProgressLabel,
   shortVersion,
@@ -268,7 +269,7 @@ function RoutedPage(props: {
     return <TestSampleEditorPage {...props} sampleId={second} />;
   }
   if (head === "test-markups") return <TestMarkupCatalogPage {...props} />;
-  if (head === "results" && second) return <ClassResultsPage {...props} classKey={decodeURIComponent(second)} />;
+  if (head === "results" && second) return <DatasetResultsPage {...props} datasetKey={decodeURIComponent(second)} />;
   if (head === "results") return <ResultsPage {...props} />;
   if (head === "jobs" && second) return <JobPage {...props} jobId={second} />;
   return <HomePage {...props} />;
@@ -694,16 +695,16 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
 
   useEffect(() => {
     let cancelled = false;
-    const variants = bootstrap.classes.flatMap((item) => item.variants || []);
+    const datasets = bootstrap.classes.flatMap((item) => item.datasets || []);
     setLoading(true);
     void Promise.all(
-      variants.map(async (dataset): Promise<ModelExportRow> => {
-        const payload = await run(() => apiJson<ClassResultsResponse>(`/results/classes/${encodeURIComponent(dataset.key)}`));
+      datasets.map(async (dataset): Promise<ModelExportRow> => {
+        const payload = await run(() => apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(dataset.key)}`));
         const result = payload ? latestSuccessfulTrainingResult(payload.results) : null;
         return {
           dataset,
           result,
-          selected: Boolean(result && isPrimaryDatasetVariant(dataset)),
+          selected: Boolean(result && isPrimaryDataset(dataset)),
           modelName: result ? defaultTrainingZipModelName(result, bootstrap.datasets) : "",
           sampleSize: result?.sample_size_hint ? String(result.sample_size_hint) : "",
         };
@@ -780,7 +781,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
 
   return (
     <>
-      <PageHeader title="Экспорт моделей" subtitle="Последние успешные модели по вариантам MLMarkup" />
+      <PageHeader title="Экспорт моделей" subtitle="Последние успешные модели по датасетам MLMarkup" />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
           <PanelHeader
@@ -870,7 +871,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
               </table>
             </div>
           ) : (
-            <div className="empty-state">Варианты датасетов не найдены</div>
+            <div className="empty-state">Датасеты не найдены</div>
           )}
         </section>
         <div className="inline-row">
@@ -1028,7 +1029,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
                 </label>
               </div>
               <p className="muted test-sample-batch-pool-hint">
-                До оптимизации будет сформирован пул до {Math.max(0, maxImageCount * 3)} тайлов на подкласс.
+                До оптимизации будет сформирован пул до {Math.max(0, maxImageCount * 3)} тайлов на датасет.
               </p>
               <div className="button-row test-sample-batch-select-actions">
                 <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: true })))}>Выбрать все</button>
@@ -1043,7 +1044,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
                       <input type="checkbox" checked={row.selected} disabled={busy || batchActive} aria-label={`Создать разметку ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })} />
                       <span className="source-lines">
                         <strong>{row.dataset.class_name || row.dataset.name}</strong>
-                        <span>{row.dataset.variant_name || row.dataset.variant_key || row.dataset.name}</span>
+                        <span>{row.dataset.dataset_name || row.dataset.name}</span>
                         <span className="test-markup-creation-status">
                           {stats.hasPrimary ? <><Star className="primary-star" size={13} fill="currentColor" />Основная есть</> : "Основной нет"}
                           <span>Разметок: {stats.count}</span>
@@ -1175,11 +1176,11 @@ function TestSampleBatchProgress({ batch }: { batch: TestSampleBatchInfo }) {
       <div className="batch-progress-track" aria-label={`Выполнено ${percent}%`}><span style={{ width: `${percent}%` }} /></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>#</th><th>Подкласс</th><th>Статус</th><th>Пул</th><th>Результат</th></tr></thead>
+          <thead><tr><th>#</th><th>Датасет</th><th>Статус</th><th>Пул</th><th>Результат</th></tr></thead>
           <tbody>
             {(batch.items || []).map((item) => (
               <tr key={item.id} title={item.error || undefined}>
-                <td>{item.position}</td><td>{item.class_name} → {item.variant_name}</td>
+                <td>{item.position}</td><td>{item.dataset_name}</td>
                 <td><span className={`badge ${item.status === "ok" ? "ok" : item.status === "error" ? "error" : "neutral"}`}>{batchItemStatusLabel(item.status)}</span></td>
                 <td>{item.pool_tile_count ?? "—"} тайлов · {item.pool_object_count ?? "—"} объектов</td>
                 <td>{item.sample_id ? <a href={`#/test-markups/${item.sample_id}`}>{item.sample_name || "Открыть разметку"}</a> : item.error ? <span className="error-text">Ошибка — наведите для подробностей</span> : "—"}</td>
@@ -1217,8 +1218,8 @@ function TestSampleCatalog({
   const samples = flattenTestMarkups(catalog).sort((left, right) => {
     const classOrder = left.class_name.localeCompare(right.class_name, "ru");
     if (classOrder) return classOrder;
-    const subclassOrder = left.variant_name.localeCompare(right.variant_name, "ru");
-    if (subclassOrder) return subclassOrder;
+    const datasetOrder = left.dataset_name.localeCompare(right.dataset_name, "ru");
+    if (datasetOrder) return datasetOrder;
     return right.created_at.localeCompare(left.created_at);
   });
   if (!samples.length) return <div className="empty-state">Тестовые разметки ещё не созданы.</div>;
@@ -1228,7 +1229,7 @@ function TestSampleCatalog({
         <article className="test-markup-card" key={sample.id}>
           <div className="test-markup-card-header">
             <a href={`#/test-markups/${sample.id}`}>
-              <strong>{sample.class_name} → {sample.variant_name}</strong>
+              <strong>{sample.dataset_name}</strong>
               <span>{sample.name}</span>
             </a>
             <div className="inline-row">
@@ -1428,8 +1429,8 @@ function TestSampleEditorPage({
       body: (
         <p>
           {makePrimary
-            ? "После общего сохранения эта разметка заменит текущую основную разметку подкласса, а оценки сетей автоматически пересчитаются."
-            : "После общего сохранения подкласс останется без основной тестовой разметки, а его тестовые метрики станут недоступными."}
+            ? "После общего сохранения эта разметка заменит текущую основную разметку датасета, а оценки сетей автоматически пересчитаются."
+            : "После общего сохранения датасет останется без основной тестовой разметки, а его тестовые метрики станут недоступными."}
         </p>
       ),
       footer: (
@@ -1483,7 +1484,7 @@ function TestSampleEditorPage({
         <p>
           Разметка «{sample.name}» и все её файлы будут удалены без возможности восстановления.
           {dirty ? " Несохранённый черновик будет отброшен." : ""}
-          {sample.is_primary ? " Это основная разметка: тестовый F1 всех сетей подкласса станет недоступным." : ""}
+          {sample.is_primary ? " Это основная разметка: тестовый F1 всех сетей датасета станет недоступным." : ""}
         </p>
       ),
       footer: (
@@ -1539,7 +1540,7 @@ function TestSampleEditorPage({
     <>
       <PageHeader
         title={draft.name}
-        subtitle={`${sample.class_name} → ${sample.variant_name} · создана ${formatDateTime(sample.created_at)}`}
+        subtitle={`${sample.dataset_name} · создана ${formatDateTime(sample.created_at)}`}
         actions={
           <>
             <a className="secondary" href="#/test-markups">Каталог</a>
@@ -1726,7 +1727,7 @@ function TestSampleEvaluationPanel({ evaluation }: { evaluation: TestSampleEvalu
     <section className="panel test-sample-evaluation">
       <PanelHeader
         title="Качество разметки"
-        subtitle="Пиксельная и объектная метрики рассчитаны по последней разметке этого класса и варианта"
+        subtitle="Пиксельная и объектная метрики рассчитаны по последней разметке этого датасета"
         aside={<TestSampleEvaluationBadge evaluation={evaluation} />}
       />
       <div className="test-sample-metric-grid">
@@ -1779,9 +1780,7 @@ function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvalu
 }
 
 function testMarkupDatasetLabel(dataset: DatasetInfo): string {
-  const className = dataset.class_name || dataset.class_key || dataset.name;
-  const variantName = dataset.variant_name || dataset.variant_key;
-  return variantName ? `${className}\\${variantName}` : className;
+  return dataset.name;
 }
 
 function formatTestF1Percent(value: number): string {
@@ -1838,10 +1837,15 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
   const createClass = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const name = String(new FormData(form).get("name") || "").trim();
+    const data = new FormData(form);
+    const name = String(data.get("name") || "").trim();
+    const imageryType = String(data.get("imagery_type") || "kanopus") as ImageryType;
     if (!name) return;
     const payload = await run(() =>
-      apiJson<DatasetCatalogInfo>("/dataset-classes", { method: "POST", body: { name } }),
+      apiJson<DatasetCatalogInfo>("/dataset-classes", {
+        method: "POST",
+        body: { name, imagery_type: imageryType },
+      }),
     );
     if (payload) form.reset();
     await applyCatalog(payload);
@@ -1858,57 +1862,36 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     ));
   };
 
-  const changeMetric = async (classKey: string, qualityMetric: "pixel" | "objects") => {
+  const updateClass = async (
+    classKey: string,
+    body: { quality_metric?: "pixel" | "objects"; imagery_type?: ImageryType },
+  ) => {
     await applyCatalog(await run(() =>
       apiJson<DatasetCatalogInfo>(`/dataset-classes/${encodeURIComponent(classKey)}`, {
         method: "PATCH",
-        body: { quality_metric: qualityMetric },
+        body,
       }),
     ));
   };
 
-  const createSubclass = async (event: FormEvent<HTMLFormElement>, classKey: string) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const name = String(new FormData(form).get("name") || "").trim();
-    const payload = await run(() =>
-      apiJson<DatasetCatalogInfo>("/dataset-subclasses", {
-        method: "POST",
-        body: { class_key: classKey, name },
-      }),
-    );
-    if (payload) form.reset();
-    await applyCatalog(payload);
-  };
-
-  const renameSubclass = async (event: FormEvent<HTMLFormElement>, subclassKey: string) => {
-    event.preventDefault();
-    const name = String(new FormData(event.currentTarget).get("name") || "").trim();
-    await applyCatalog(await run(() =>
-      apiJson<DatasetCatalogInfo>(`/dataset-subclasses/${encodeURIComponent(subclassKey)}`, {
-        method: "PATCH",
-        body: { name },
-      }),
-    ));
-  };
-
-  const changePrimary = async (classKey: string, subclassKey: string) => {
-    if (!subclassKey) return;
+  const changePrimary = async (classKey: string, datasetKey: string) => {
+    if (!datasetKey) return;
     await applyCatalog(await run(() =>
       apiJson<DatasetCatalogInfo>(
-        `/dataset-classes/${encodeURIComponent(classKey)}/primary-subclass`,
-        { method: "PUT", body: { subclass_key: subclassKey } },
+        `/dataset-classes/${encodeURIComponent(classKey)}/primary-dataset`,
+        { method: "PUT", body: { dataset_key: datasetKey } },
       ),
     ));
   };
 
-  const openDatasetEditor = (subclass: DatasetSubclassInfo) => {
+  const openDatasetEditor = (classKey: string, dataset?: DatasetInfo) => {
     if (!catalog) return;
-    const dataset = subclass.dataset;
-    const sources = catalog.sources || [];
-    const formId = `dataset-editor-${subclass.key}`;
+    const sources = (catalog.sources || []).filter(
+      (source) => !source.assigned_dataset_key || source.assigned_dataset_key === dataset?.key,
+    );
+    const formId = `dataset-editor-${dataset?.key || classKey}`;
     showModal({
-      title: dataset ? `Датасет «${dataset.name}»` : `Назначить датасет «${subclass.name}»`,
+      title: dataset ? `Датасет «${dataset.name}»` : "Новый датасет",
       body: (
         <form
           id={formId}
@@ -1916,15 +1899,17 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           onSubmit={async (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
-            const body = {
+            const request = {
+              name: String(data.get("name") || "").trim(),
               source_path: String(data.get("source_path") || ""),
-              image_type: String(data.get("image_type") || "all"),
-              ...(!dataset ? { subclass_key: subclass.key } : {}),
             };
             const payload = await run(() =>
               apiJson<DatasetCatalogInfo>(
                 dataset ? `/managed-datasets/${encodeURIComponent(dataset.key)}` : "/managed-datasets",
-                { method: dataset ? "PATCH" : "POST", body },
+                {
+                  method: dataset ? "PATCH" : "POST",
+                  body: dataset ? request : { ...request, class_key: classKey },
+                },
               ),
             );
             if (!payload) return;
@@ -1933,30 +1918,26 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           }}
         >
           <label>
+            Название датасета
+            <input
+              name="name"
+              defaultValue={dataset?.dataset_name || ""}
+              maxLength={240}
+              required
+            />
+          </label>
+          <label>
             Источник MLMarkup
             <select name="source_path" defaultValue={dataset?.source_path || sources[0]?.key || ""} required>
               {sources.map((source) => (
                 <option key={source.key} value={source.key}>
                   {source.name}
-                  {source.assigned_dataset_key && source.assigned_dataset_key !== dataset?.key
-                    ? dataset ? " — обменять источники" : " — переназначить"
-                    : ""}
                   {(source.diagnostics || []).length ? " — требует внимания" : ""}
                 </option>
               ))}
             </select>
           </label>
           {!sources.length ? <p className="error-text">Нет свободных папок MLMarkup.</p> : null}
-          <label>
-            Тип снимков
-            <select name="image_type" defaultValue={dataset?.image_type || "all"} required>
-              {(catalog.image_types || []).map((imageType) => (
-                <option key={imageType.key} value={imageType.key}>
-                  {imageType.name} · {imageType.image_count} TIFF
-                </option>
-              ))}
-            </select>
-          </label>
           {(dataset?.diagnostics || []).length ? (
             <div className="notice warning">
               {(dataset?.diagnostics || []).map((diagnostic) => <div key={diagnostic}>{diagnostic}</div>)}
@@ -1983,7 +1964,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     <>
       <PageHeader
         title="Редактор классов"
-        subtitle="Устойчивые классы, подклассы и источники датасетов"
+        subtitle="Классы, датасеты и источники снимков"
         actions={(
           <button className="secondary" type="button" onClick={synchronize}>
             <RefreshCw size={15} /> Синхронизировать MLMarkup
@@ -1991,16 +1972,20 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
         )}
       />
       <section className="panel">
-        <PanelHeader title="Новый класс" subtitle="После создания добавьте подкласс и назначьте источник" />
+        <PanelHeader title="Новый класс" subtitle="Выберите тип снимков, затем добавьте датасеты" />
         <form className="inline-form" onSubmit={createClass}>
           <input name="name" placeholder="Название класса" maxLength={240} required />
+          <select name="imagery_type" defaultValue="kanopus" aria-label="Тип снимков">
+            <option value="kanopus">Канопус</option>
+            <option value="ortho">Ортофото</option>
+          </select>
           <button className="primary" type="submit"><Plus size={15} /> Добавить класс</button>
         </form>
       </section>
       {!catalog ? <div className="empty-state">Загрузка каталога...</div> : null}
       {(catalog?.classes || []).map((classInfo) => {
-        const subclasses = classInfo.subclasses || [];
-        const assigned = subclasses.filter((subclass) => subclass.dataset);
+        const datasets = classInfo.datasets || [];
+        const hasFreeSource = (catalog?.sources || []).some((source) => !source.assigned_dataset_key);
         return (
           <section className="panel class-editor-card" key={classInfo.key}>
             <div className="class-editor-header">
@@ -2009,65 +1994,91 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                 <button className="secondary" type="submit">Переименовать</button>
               </form>
               <label>
+                Тип снимков
+                <select
+                  value={classInfo.imagery_type || "kanopus"}
+                  onChange={(event) => void updateClass(
+                    classInfo.key,
+                    { imagery_type: event.target.value as ImageryType },
+                  )}
+                >
+                  <option value="kanopus">Канопус</option>
+                  <option value="ortho">Ортофото</option>
+                </select>
+              </label>
+              <label>
                 Основная метрика
                 <select
                   value={classInfo.quality_metric || "pixel"}
-                  onChange={(event) => void changeMetric(classInfo.key, event.target.value as "pixel" | "objects")}
+                  onChange={(event) => void updateClass(
+                    classInfo.key,
+                    { quality_metric: event.target.value as "pixel" | "objects" },
+                  )}
                 >
                   <option value="pixel">F1 пиксельный</option>
                   <option value="objects">F1 объектовый</option>
                 </select>
               </label>
               <label>
-                Основной подкласс
+                Основной датасет
                 <select
-                  value={classInfo.primary_subclass_key || ""}
-                  disabled={!assigned.length}
+                  value={classInfo.primary_dataset_key || ""}
+                  disabled={!datasets.length}
                   onChange={(event) => void changePrimary(classInfo.key, event.target.value)}
                 >
                   <option value="">Не назначен</option>
-                  {assigned.map((subclass) => <option key={subclass.key} value={subclass.key}>{subclass.name}</option>)}
+                  {datasets.map((dataset) => (
+                    <option key={dataset.key} value={dataset.key}>
+                      {dataset.dataset_name || dataset.name}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
-            <div className="class-editor-subclasses">
-              {subclasses.map((subclass) => (
-                <article className="subclass-card" key={subclass.key}>
-                  <div className="subclass-card-header">
-                    <form className="inline-form" onSubmit={(event) => renameSubclass(event, subclass.key)}>
-                      <input name="name" defaultValue={subclass.name} maxLength={240} required />
-                      <button className="secondary" type="submit">Переименовать</button>
-                    </form>
-                    {subclass.is_primary ? <span className="badge ok">основной</span> : null}
+            <div className="class-editor-datasets">
+              {datasets.map((dataset) => (
+                <article className="dataset-card" key={dataset.key}>
+                  <div className="dataset-card-header">
+                    <div className="source-lines">
+                      <strong>{dataset.dataset_name || dataset.name}</strong>
+                      <span className="muted">MLMarkup: {dataset.source_path}</span>
+                      <span className="muted">Снимки: {imageryTypeLabel(classInfo.imagery_type)}</span>
+                    </div>
+                    <div className="inline-row">
+                      {dataset.is_primary ? <span className="badge ok">основной</span> : null}
+                      <span className={`badge ${(dataset.diagnostics || []).length ? "warning" : "ok"}`}>
+                        {(dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
+                      </span>
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => openDatasetEditor(classInfo.key, dataset)}
+                      >
+                        Параметры
+                      </button>
+                    </div>
                   </div>
-                  {subclass.dataset ? (
-                    <div className="dataset-binding">
-                      <div>
-                        <strong>{subclass.dataset.name}</strong>
-                        <div className="muted">MLMarkup: {subclass.dataset.source_path}</div>
-                        <div className="muted">Снимки: {subclass.dataset.image_type === "all" ? "все" : subclass.dataset.image_type}</div>
-                      </div>
-                      <div className="inline-row">
-                        <span className={`badge ${(subclass.dataset.diagnostics || []).length ? "warning" : "ok"}`}>
-                          {(subclass.dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
-                        </span>
-                        <button className="secondary" type="button" onClick={() => openDatasetEditor(subclass)}>Параметры</button>
-                      </div>
+                  {(dataset.diagnostics || []).length ? (
+                    <div className="notice warning">
+                      {(dataset.diagnostics || []).map((diagnostic) => (
+                        <div key={diagnostic}>{diagnostic}</div>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="dataset-binding empty-binding">
-                      <span className="muted">Датасет не назначен</span>
-                      <button className="primary" type="button" onClick={() => openDatasetEditor(subclass)}>Назначить датасет</button>
-                    </div>
-                  )}
+                  ) : null}
                 </article>
               ))}
-              {!subclasses.length ? <div className="empty-state">Подклассов пока нет</div> : null}
+              {!datasets.length ? <div className="empty-state">Датасетов пока нет</div> : null}
             </div>
-            <form className="inline-form add-subclass-form" onSubmit={(event) => createSubclass(event, classInfo.key)}>
-              <input name="name" placeholder="Название нового подкласса" maxLength={240} required />
-              <button className="secondary" type="submit"><Plus size={15} /> Добавить подкласс</button>
-            </form>
+            <div className="button-row add-dataset-actions">
+              <button
+                className="secondary"
+                type="button"
+                disabled={!hasFreeSource}
+                onClick={() => openDatasetEditor(classInfo.key)}
+              >
+                <Plus size={15} /> Добавить датасет
+              </button>
+            </div>
           </section>
         );
       })}
@@ -2472,7 +2483,7 @@ function ResultsPage({ run, showJobLog }: RoutedPageProps) {
 
   return (
     <>
-      <PageHeader title="Результаты" subtitle="Классы, варианты датасетов и последние изменения" />
+      <PageHeader title="Результаты" subtitle="Классы, датасеты и последние изменения" />
       <section className="content-grid">
         {(classes || []).map((item) => (
           <ResultClassCard item={item} key={item.key} />
@@ -2487,38 +2498,38 @@ function ResultsPage({ run, showJobLog }: RoutedPageProps) {
   );
 }
 
-function ClassResultsPage({
-  classKey,
+function DatasetResultsPage({
+  datasetKey,
   bootstrap,
   run,
   showModal,
   closeModal,
   showJobLog,
-}: RoutedPageProps & { classKey: string }) {
-  const [payload, setPayload] = useState<ClassResultsResponse | null>(null);
+}: RoutedPageProps & { datasetKey: string }) {
+  const [payload, setPayload] = useState<DatasetResultsResponse | null>(null);
   const load = useCallback(async () => {
-    const data = await run(() => apiJson<ClassResultsResponse>(`/results/classes/${encodeURIComponent(classKey)}`));
+    const data = await run(() => apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}`));
     if (data) setPayload(data);
-  }, [classKey, run]);
+  }, [datasetKey, run]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    if (!payload || !hasActiveClassResults(payload)) return undefined;
+    if (!payload || !hasActiveDatasetResults(payload)) return undefined;
     const timer = window.setTimeout(() => void load(), PROGRESS_REFRESH_MS);
     return () => window.clearTimeout(timer);
   }, [load, payload]);
 
-  if (!payload) return <LoadingPage text="Загрузка результатов класса" />;
+  if (!payload) return <LoadingPage text="Загрузка результатов датасета" />;
 
   const showPseudo = (result: TrainingResultInfo) => {
     showModal({
       title: "Запустить pseudo-markup",
       body: (
         <PseudoMarkupForm
-          classKey={classKey}
+          datasetKey={datasetKey}
           result={result}
           datasets={bootstrap.datasets}
           imageFolders={bootstrap.image_folders}
@@ -2564,7 +2575,7 @@ function ClassResultsPage({
 
   const recalculateTestF1 = async () => {
     const updated = await run(() =>
-      apiJson<ClassResultsResponse>(`/results/classes/${encodeURIComponent(classKey)}/test-f1`, {
+      apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}/test-f1`, {
         method: "POST",
       }),
     );
@@ -2574,7 +2585,7 @@ function ClassResultsPage({
   return (
     <>
       <PageHeader
-        title={payload.class_name}
+        title={payload.dataset_name}
         subtitle={`Обновление датасета: ${formatDate(payload.dataset_updated_at)}`}
         actions={<a className="secondary" href="#/results">Все классы</a>}
       />
@@ -2955,7 +2966,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
 }
 
 function ResultClassCard({ item }: { item: ResultClassInfo }) {
-  const variants = item.variants?.length ? item.variants : [];
+  const datasets = item.datasets || [];
   return (
     <div className="class-card">
       <div className="card-title">
@@ -2963,22 +2974,19 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
         {item.name}
       </div>
       <p className="muted">Обновлено: {formatDate(item.updated_at)}</p>
-      <div className="variant-list">
-        {variants.length ? (
-          variants.map((variant) => (
-            <a className="variant-link" href={`#/results/${encodeURIComponent(variant.key)}`} key={variant.key}>
-              <span>{variant.variant_name || variant.name}</span>
-              {variant.test_f1 !== null && variant.test_f1 !== undefined ? (
-                <strong className={`result-card-f1 ${variant.test_f1_status === "current" ? "current" : "stale"}`}>{qualityMetricShort(variant.quality_metric)} (test) {formatTestF1Percent(variant.test_f1)}</strong>
+      <div className="dataset-list">
+        {datasets.length ? (
+          datasets.map((dataset) => (
+            <a className="dataset-link" href={`#/results/${encodeURIComponent(dataset.key)}`} key={dataset.key}>
+              <span>{dataset.dataset_name || dataset.name}</span>
+              {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
+                <strong className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}>{qualityMetricShort(dataset.quality_metric)} (test) {formatTestF1Percent(dataset.test_f1)}</strong>
               ) : null}
-              <small>{integerOrNull(variant.image_count) ?? "—"} снимков</small>
+              <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
             </a>
           ))
         ) : (
-          <a className="variant-link" href={`#/results/${encodeURIComponent(item.key)}`}>
-            <span>main</span>
-            <small>открыть</small>
-          </a>
+          <div className="empty-state">Датасетов пока нет</div>
         )}
       </div>
     </div>
@@ -3005,7 +3013,7 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
             <tr
               className={`clickable-row result-change-row ${resultKindClass(changeResultKind(item))}`}
               key={item.id}
-              onClick={() => navigate(`results/${encodeURIComponent(item.class_key)}`)}
+              onClick={() => navigate(`results/${encodeURIComponent(item.dataset_key)}`)}
             >
               <td onClick={(event) => event.stopPropagation()}>
                 <span className="status-stack">
@@ -3013,7 +3021,7 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
                   {sourceBadge(item.source)}
                 </span>
               </td>
-              <td>{item.class_key}</td>
+              <td>{item.class_name || item.class_key}</td>
               <td>{item.dataset_name}</td>
               <td>{item.model_name}</td>
               <td>{actionBadge(item.action, changeResultKind(item))}</td>
@@ -3035,7 +3043,7 @@ function ResultsTable({
   onDeletePseudo,
   showJobLog,
 }: {
-  payload: ClassResultsResponse;
+  payload: DatasetResultsResponse;
   datasets: DatasetInfo[];
   imageFolders: ImageFolderInfo[];
   onPseudo: (result: TrainingResultInfo) => void;
@@ -3043,7 +3051,7 @@ function ResultsTable({
   onDeletePseudo: (item: PseudoMarkupResultInfo) => void;
   showJobLog: (jobId: string) => Promise<void>;
 }) {
-  if (!payload.results.length) return <div className="empty-state">Для класса пока нет результатов</div>;
+  if (!payload.results.length) return <div className="empty-state">Для датасета пока нет результатов</div>;
   return (
     <div className="form-stack">
       {payload.results.map((result) => (
@@ -3183,7 +3191,7 @@ function ResultsTable({
 }
 
 function PseudoMarkupForm({
-  classKey,
+  datasetKey,
   result,
   datasets,
   imageFolders,
@@ -3191,7 +3199,7 @@ function PseudoMarkupForm({
   closeModal,
   reload,
 }: {
-  classKey: string;
+  datasetKey: string;
   result: TrainingResultInfo;
   datasets: DatasetInfo[];
   imageFolders: ImageFolderInfo[];
@@ -3199,24 +3207,33 @@ function PseudoMarkupForm({
   closeModal: () => void;
   reload: () => Promise<void>;
 }) {
+  const imageryType = imageryTypeForInputChannels(result.input_channels);
+  const compatibleDatasets = imageryType
+    ? datasets.filter(
+        (dataset) => dataset.key !== "custom" && dataset.imagery_type === imageryType,
+      )
+    : [];
+  const compatibleFolders = imageryType
+    ? imageFolders.filter((folder) => folder.imagery_type === imageryType)
+    : [];
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const source = new FormData(event.currentTarget);
-    const datasetKey = String(source.get("dataset_key") || "");
+    const sourceDatasetKey = String(source.get("dataset_key") || "");
     const imageFolderKey = String(source.get("image_folder_key") || "");
     const file = source.get("scenes_txt");
     const hasFile = file instanceof File && Boolean(file.name);
-    const sourceCount = [Boolean(datasetKey), Boolean(imageFolderKey), hasFile].filter(Boolean).length;
+    const sourceCount = [Boolean(sourceDatasetKey), Boolean(imageFolderKey), hasFile].filter(Boolean).length;
     if (sourceCount !== 1) {
       window.alert("Выберите ровно один источник: датасет, папку снимков или TXT.");
       return;
     }
     const request = new FormData();
     request.set("training_result_id", result.id);
-    if (datasetKey) request.set("dataset_key", datasetKey);
+    if (sourceDatasetKey) request.set("dataset_key", sourceDatasetKey);
     if (imageFolderKey) request.set("image_folder_key", imageFolderKey);
     if (hasFile && file instanceof File) request.set("scenes_txt", file);
-    const created = await run(() => apiForm<JobDetail>(`/results/classes/${encodeURIComponent(classKey)}/pseudo-markup`, request));
+    const created = await run(() => apiForm<JobDetail>(`/results/datasets/${encodeURIComponent(datasetKey)}/pseudo-markup`, request));
     if (created) {
       closeModal();
       await reload();
@@ -3224,13 +3241,20 @@ function PseudoMarkupForm({
   };
   return (
     <form className="form-stack" onSubmit={submit}>
+      {imageryType ? (
+        <p className="muted">
+          Доступны только снимки типа «{imageryTypeLabel(imageryType)}», совместимые с {result.input_channels}-канальной моделью.
+        </p>
+      ) : (
+        <p className="error-text">
+          Для модели с {result.input_channels} входными каналами тип снимков не определён.
+        </p>
+      )}
       <label className="field">
         <span>Датасет</span>
         <select name="dataset_key" defaultValue="">
           <option value="">Не выбран</option>
-          {datasets
-            .filter((dataset) => dataset.key !== "custom")
-            .map((dataset) => (
+          {compatibleDatasets.map((dataset) => (
               <option value={dataset.key} key={dataset.key}>
                 {datasetOptionLabel(dataset)}
               </option>
@@ -3241,7 +3265,7 @@ function PseudoMarkupForm({
         <span>Папка снимков</span>
         <select name="image_folder_key" defaultValue="">
           <option value="">Не выбрана</option>
-          {imageFolders.map((folder) => (
+          {compatibleFolders.map((folder) => (
             <option value={folder.key} key={folder.key}>
               {imageFolderOptionLabel(folder)}
             </option>
@@ -3459,7 +3483,7 @@ function isActiveStatus(status: string): boolean {
   return status === "queued" || status === "running";
 }
 
-function hasActiveClassResults(payload: ClassResultsResponse): boolean {
+function hasActiveDatasetResults(payload: DatasetResultsResponse): boolean {
   return payload.results.some(
     (item) =>
       isActiveStatus(item.status) ||
@@ -3474,13 +3498,20 @@ function datasetOptionLabel(item: DatasetInfo): string {
 }
 
 function imageFolderOptionLabel(item: ImageFolderInfo): string {
-  return `${item.name} (${item.image_count} img)`;
+  return `${item.name} · ${imageryTypeLabel(item.imagery_type)} (${item.image_count} img)`;
+}
+
+function imageryTypeLabel(value: ImageryType | null | undefined): string {
+  return value === "ortho" ? "Ортофото" : "Канопус";
 }
 
 function imageSourceLabel(item: PseudoMarkupResultInfo, datasets: DatasetInfo[], folders: ImageFolderInfo[]): string {
-  const label = item.dataset_key
-    ? datasets.find((dataset) => dataset.key === item.dataset_key)?.name || item.source_dataset_name
-    : folders.find((candidate) => candidate.key === item.source_dataset_name)?.name || item.source_dataset_name;
+  const folder = folders.find((candidate) => candidate.key === item.source_dataset_name);
+  const label = folder?.name
+    || (item.dataset_key
+      ? datasets.find((dataset) => dataset.key === item.dataset_key)?.name
+      : undefined)
+    || item.source_dataset_name;
   const count = integerOrNull(item.image_count);
   return `${label}${count === null ? "" : ` (${count} снимков)`}`;
 }
@@ -3543,7 +3574,7 @@ function defaultTrainingZipModelName(result: TrainingResultInfo, datasets: Datas
   const filename = String(dataset?.annotation_file || "").split(/[\\/]/).pop() || "";
   const stem = filename.replace(/\.[^.]*$/, "");
   const datasetPart = exportModelNamePart(stem || dataset?.class_key || dataset?.name || result.dataset_key || "model");
-  const suffix = "kanopus";
+  const suffix = dataset?.imagery_type === "ortho" ? "ortho" : "kanopus";
   if (!datasetPart || datasetPart === suffix || datasetPart.endsWith(`_${suffix}`)) return datasetPart || suffix;
   return `${datasetPart}_${suffix}`;
 }

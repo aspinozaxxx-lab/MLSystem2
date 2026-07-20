@@ -243,7 +243,7 @@ export interface paths {
         patch: operations["patch_dataset_class_api_v1_dataset_classes__class_key__patch"];
         trace?: never;
     };
-    "/api/v1/dataset-classes/{class_key}/primary-subclass": {
+    "/api/v1/dataset-classes/{class_key}/primary-dataset": {
         parameters: {
             query?: never;
             header?: never;
@@ -251,47 +251,13 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Put Primary Subclass */
-        put: operations["put_primary_subclass_api_v1_dataset_classes__class_key__primary_subclass_put"];
+        /** Put Primary Dataset */
+        put: operations["put_primary_dataset_api_v1_dataset_classes__class_key__primary_dataset_put"];
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/v1/dataset-subclasses": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Post Dataset Subclass */
-        post: operations["post_dataset_subclass_api_v1_dataset_subclasses_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/dataset-subclasses/{subclass_key}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Patch Dataset Subclass */
-        patch: operations["patch_dataset_subclass_api_v1_dataset_subclasses__subclass_key__patch"];
         trace?: never;
     };
     "/api/v1/managed-datasets": {
@@ -1070,15 +1036,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/results/classes/{class_key}": {
+    "/api/v1/results/datasets/{dataset_key}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Class Results */
-        get: operations["get_class_results_api_v1_results_classes__class_key__get"];
+        /** Get Dataset Results */
+        get: operations["get_dataset_results_api_v1_results_datasets__dataset_key__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1087,7 +1053,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/results/classes/{class_key}/pseudo-markup": {
+    "/api/v1/results/datasets/{dataset_key}/pseudo-markup": {
         parameters: {
             query?: never;
             header?: never;
@@ -1097,14 +1063,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Post Pseudo Markup */
-        post: operations["post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post"];
+        post: operations["post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/results/classes/{class_key}/test-f1": {
+    "/api/v1/results/datasets/{dataset_key}/test-f1": {
         parameters: {
             query?: never;
             header?: never;
@@ -1114,7 +1080,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Post Test F1 */
-        post: operations["post_test_f1_api_v1_results_classes__class_key__test_f1_post"];
+        post: operations["post_test_f1_api_v1_results_datasets__dataset_key__test_f1_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1249,8 +1215,8 @@ export interface components {
             /** Checkpoint */
             checkpoint?: string | null;
         };
-        /** Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post */
-        Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post: {
+        /** Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post */
+        Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post: {
             /** Dataset Key */
             dataset_key?: string | null;
             /** Image Folder Key */
@@ -1295,10 +1261,8 @@ export interface components {
             name: string;
             /** Updated At */
             updated_at?: string | null;
-            /** Variants */
-            variants?: components["schemas"]["DatasetInfo"][];
-            /** Subclasses */
-            subclasses?: components["schemas"]["DatasetSubclassInfo"][];
+            /** Datasets */
+            datasets?: components["schemas"]["DatasetInfo"][];
             /**
              * Is Custom
              * @default false
@@ -1310,37 +1274,14 @@ export interface components {
              * @enum {string}
              */
             quality_metric: "pixel" | "objects";
-            /** Primary Subclass Key */
-            primary_subclass_key?: string | null;
+            imagery_type?: components["schemas"]["ImageryType"] | null;
+            /** Primary Dataset Key */
+            primary_dataset_key?: string | null;
         };
         /** ClassListResponse */
         ClassListResponse: {
             /** Classes */
             classes: components["schemas"]["ClassInfo"][];
-        };
-        /** ClassResultsResponse */
-        ClassResultsResponse: {
-            /** Class Key */
-            class_key: string;
-            /** Class Name */
-            class_name: string;
-            /**
-             * Quality Metric
-             * @default pixel
-             * @enum {string}
-             */
-            quality_metric: "pixel" | "objects";
-            /** Dataset Updated At */
-            dataset_updated_at?: string | null;
-            primary_test_sample?: components["schemas"]["PrimaryTestSampleInfo"] | null;
-            /**
-             * Test F1 Status
-             * @default unavailable
-             * @enum {string}
-             */
-            test_f1_status: "current" | "stale" | "running" | "unavailable";
-            /** Results */
-            results: components["schemas"]["TrainingResultInfo"][];
         };
         /** ConfigField */
         ConfigField: {
@@ -1394,19 +1335,21 @@ export interface components {
             classes?: components["schemas"]["ClassInfo"][];
             /** Sources */
             sources?: components["schemas"]["DatasetSourceInfo"][];
-            /** Image Types */
-            image_types?: components["schemas"]["ImageTypeInfo"][];
+            /** Imagery Types */
+            imagery_types?: components["schemas"]["ImageryTypeInfo"][];
         };
         /** DatasetClassCreate */
         DatasetClassCreate: {
             /** Name */
             name: string;
+            imagery_type: components["schemas"]["ImageryType"];
         };
         /** DatasetClassUpdate */
         DatasetClassUpdate: {
             /** Name */
             name?: string | null;
             quality_metric?: components["schemas"]["QualityMetric"] | null;
+            imagery_type?: components["schemas"]["ImageryType"] | null;
         };
         /** DatasetInfo */
         DatasetInfo: {
@@ -1414,16 +1357,12 @@ export interface components {
             key: string;
             /** Name */
             name: string;
+            /** Dataset Name */
+            dataset_name?: string | null;
             /** Class Key */
             class_key?: string | null;
             /** Class Name */
             class_name?: string | null;
-            /** Subclass Key */
-            subclass_key?: string | null;
-            /** Variant Key */
-            variant_key?: string | null;
-            /** Variant Name */
-            variant_name?: string | null;
             /** Path */
             path?: string | null;
             /**
@@ -1449,11 +1388,9 @@ export interface components {
              * @enum {string}
              */
             quality_metric: "pixel" | "objects";
-            /**
-             * Image Type
-             * @default all
-             */
-            image_type: string;
+            imagery_type?: components["schemas"]["ImageryType"] | null;
+            /** Input Channels */
+            input_channels?: number | null;
             /** Images Dir */
             images_dir?: string | null;
             /** Source Type */
@@ -1478,10 +1415,38 @@ export interface components {
             /** Datasets */
             datasets: components["schemas"]["DatasetInfo"][];
         };
-        /** DatasetPrimarySubclassUpdate */
-        DatasetPrimarySubclassUpdate: {
-            /** Subclass Key */
-            subclass_key: string;
+        /** DatasetPrimaryDatasetUpdate */
+        DatasetPrimaryDatasetUpdate: {
+            /** Dataset Key */
+            dataset_key: string;
+        };
+        /** DatasetResultsResponse */
+        DatasetResultsResponse: {
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Class Key */
+            class_key?: string | null;
+            /** Class Name */
+            class_name?: string | null;
+            /**
+             * Quality Metric
+             * @default pixel
+             * @enum {string}
+             */
+            quality_metric: "pixel" | "objects";
+            /** Dataset Updated At */
+            dataset_updated_at?: string | null;
+            primary_test_sample?: components["schemas"]["PrimaryTestSampleInfo"] | null;
+            /**
+             * Test F1 Status
+             * @default unavailable
+             * @enum {string}
+             */
+            test_f1_status: "current" | "stale" | "running" | "unavailable";
+            /** Results */
+            results: components["schemas"]["TrainingResultInfo"][];
         };
         /** DatasetSourceInfo */
         DatasetSourceInfo: {
@@ -1495,31 +1460,6 @@ export interface components {
             assigned_dataset_key?: string | null;
             /** Diagnostics */
             diagnostics?: string[];
-        };
-        /** DatasetSubclassCreate */
-        DatasetSubclassCreate: {
-            /** Class Key */
-            class_key: string;
-            /** Name */
-            name: string;
-        };
-        /** DatasetSubclassInfo */
-        DatasetSubclassInfo: {
-            /** Key */
-            key: string;
-            /** Name */
-            name: string;
-            /**
-             * Is Primary
-             * @default false
-             */
-            is_primary: boolean;
-            dataset?: components["schemas"]["DatasetInfo"] | null;
-        };
-        /** DatasetSubclassUpdate */
-        DatasetSubclassUpdate: {
-            /** Name */
-            name: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1536,20 +1476,29 @@ export interface components {
             path: string;
             /** Image Count */
             image_count: number;
+            imagery_type: components["schemas"]["ImageryType"];
         };
         /** ImageFolderListResponse */
         ImageFolderListResponse: {
             /** Folders */
             folders: components["schemas"]["ImageFolderInfo"][];
         };
-        /** ImageTypeInfo */
-        ImageTypeInfo: {
-            /** Key */
-            key: string;
+        /**
+         * ImageryType
+         * @enum {string}
+         */
+        ImageryType: "kanopus" | "ortho";
+        /** ImageryTypeInfo */
+        ImageryTypeInfo: {
+            key: components["schemas"]["ImageryType"];
             /** Name */
             name: string;
+            /** Folder */
+            folder: string;
             /** Path */
             path: string;
+            /** Input Channels */
+            input_channels: number;
             /** Image Count */
             image_count: number;
         };
@@ -1756,25 +1705,19 @@ export interface components {
         };
         /** ManagedDatasetCreate */
         ManagedDatasetCreate: {
-            /** Subclass Key */
-            subclass_key: string;
+            /** Class Key */
+            class_key: string;
+            /** Name */
+            name: string;
             /** Source Path */
             source_path: string;
-            /**
-             * Image Type
-             * @default all
-             */
-            image_type: string;
         };
         /** ManagedDatasetUpdate */
         ManagedDatasetUpdate: {
+            /** Name */
+            name?: string | null;
             /** Source Path */
-            source_path: string;
-            /**
-             * Image Type
-             * @default all
-             */
-            image_type: string;
+            source_path?: string | null;
         };
         /** MarkupExportInfo */
         MarkupExportInfo: {
@@ -1959,8 +1902,12 @@ export interface components {
             /** Job Id */
             job_id?: string | null;
             type?: components["schemas"]["JobType"] | null;
+            /** Dataset Key */
+            dataset_key: string;
             /** Class Key */
             class_key: string;
+            /** Class Name */
+            class_name?: string | null;
             /** Dataset Name */
             dataset_name: string;
             /** Model Name */
@@ -1995,8 +1942,8 @@ export interface components {
             name: string;
             /** Updated At */
             updated_at?: string | null;
-            /** Variants */
-            variants?: components["schemas"]["ResultVariantInfo"][];
+            /** Datasets */
+            datasets?: components["schemas"]["ResultDatasetInfo"][];
             /**
              * Is Custom
              * @default false
@@ -2014,25 +1961,18 @@ export interface components {
             /** Classes */
             classes?: components["schemas"]["ResultClassInfo"][];
         };
-        /**
-         * ResultStatus
-         * @enum {string}
-         */
-        ResultStatus: "running" | "ok" | "error" | "cancelled";
-        /** ResultVariantInfo */
-        ResultVariantInfo: {
+        /** ResultDatasetInfo */
+        ResultDatasetInfo: {
             /** Key */
             key: string;
             /** Name */
             name: string;
+            /** Dataset Name */
+            dataset_name?: string | null;
             /** Class Key */
             class_key?: string | null;
             /** Class Name */
             class_name?: string | null;
-            /** Variant Key */
-            variant_key?: string | null;
-            /** Variant Name */
-            variant_name?: string | null;
             /**
              * Quality Metric
              * @default pixel
@@ -2053,6 +1993,11 @@ export interface components {
             /** Test F1 Training Result Id */
             test_f1_training_result_id?: string | null;
         };
+        /**
+         * ResultStatus
+         * @enum {string}
+         */
+        ResultStatus: "running" | "ok" | "error" | "cancelled";
         /** RuntimeProgress */
         RuntimeProgress: {
             /** Current */
@@ -2187,10 +2132,6 @@ export interface components {
             class_key: string;
             /** Class Name */
             class_name: string;
-            /** Variant Key */
-            variant_key: string;
-            /** Variant Name */
-            variant_name: string;
             /** Min Object Count */
             min_object_count: number;
             /**
@@ -2229,8 +2170,8 @@ export interface components {
             key: string;
             /** Name */
             name: string;
-            /** Variants */
-            variants?: components["schemas"]["TestSampleVariantGroup"][];
+            /** Datasets */
+            datasets?: components["schemas"]["TestSampleDatasetGroup"][];
         };
         /** TestSampleCreate */
         TestSampleCreate: {
@@ -2262,6 +2203,15 @@ export interface components {
              */
             object_count: number;
         };
+        /** TestSampleDatasetGroup */
+        TestSampleDatasetGroup: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Samples */
+            samples?: components["schemas"]["TestSampleSummary"][];
+        };
         /** TestSampleDetail */
         TestSampleDetail: {
             /**
@@ -2281,10 +2231,6 @@ export interface components {
             class_key: string;
             /** Class Name */
             class_name: string;
-            /** Variant Key */
-            variant_key: string;
-            /** Variant Name */
-            variant_name: string;
             /**
              * Quality Metric
              * @default pixel
@@ -2429,10 +2375,6 @@ export interface components {
             class_key: string;
             /** Class Name */
             class_name: string;
-            /** Variant Key */
-            variant_key: string;
-            /** Variant Name */
-            variant_name: string;
             /**
              * Quality Metric
              * @default pixel
@@ -2493,15 +2435,6 @@ export interface components {
             /** Enabled Tile Indices */
             enabled_tile_indices?: number[] | null;
         };
-        /** TestSampleVariantGroup */
-        TestSampleVariantGroup: {
-            /** Key */
-            key: string;
-            /** Name */
-            name: string;
-            /** Samples */
-            samples?: components["schemas"]["TestSampleSummary"][];
-        };
         /** TrainingJobCreate */
         TrainingJobCreate: {
             /** Mlflow Experiment Id */
@@ -2557,6 +2490,11 @@ export interface components {
             model_name: string;
             /** Architecture */
             architecture: string;
+            /**
+             * Input Channels
+             * @default 4
+             */
+            input_channels: number;
             /**
              * Quality Metric
              * @default pixel
@@ -3110,7 +3048,7 @@ export interface operations {
             };
         };
     };
-    put_primary_subclass_api_v1_dataset_classes__class_key__primary_subclass_put: {
+    put_primary_dataset_api_v1_dataset_classes__class_key__primary_dataset_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -3121,75 +3059,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DatasetPrimarySubclassUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetCatalogInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_dataset_subclass_api_v1_dataset_subclasses_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetSubclassCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetCatalogInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_dataset_subclass_api_v1_dataset_subclasses__subclass_key__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                subclass_key: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetSubclassUpdate"];
+                "application/json": components["schemas"]["DatasetPrimaryDatasetUpdate"];
             };
         };
         responses: {
@@ -4928,12 +4798,12 @@ export interface operations {
             };
         };
     };
-    get_class_results_api_v1_results_classes__class_key__get: {
+    get_dataset_results_api_v1_results_datasets__dataset_key__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                class_key: string;
+                dataset_key: string;
             };
             cookie?: never;
         };
@@ -4945,7 +4815,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ClassResultsResponse"];
+                    "application/json": components["schemas"]["DatasetResultsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4959,18 +4829,18 @@ export interface operations {
             };
         };
     };
-    post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post: {
+    post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                class_key: string;
+                dataset_key: string;
             };
             cookie?: never;
         };
         requestBody?: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_post_pseudo_markup_api_v1_results_classes__class_key__pseudo_markup_post"];
+                "multipart/form-data": components["schemas"]["Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post"];
             };
         };
         responses: {
@@ -4994,12 +4864,12 @@ export interface operations {
             };
         };
     };
-    post_test_f1_api_v1_results_classes__class_key__test_f1_post: {
+    post_test_f1_api_v1_results_datasets__dataset_key__test_f1_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                class_key: string;
+                dataset_key: string;
             };
             cookie?: never;
         };
@@ -5011,7 +4881,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ClassResultsResponse"];
+                    "application/json": components["schemas"]["DatasetResultsResponse"];
                 };
             };
             /** @description Validation Error */
