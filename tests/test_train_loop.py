@@ -364,6 +364,42 @@ def test_validation_object_f1_selects_object_threshold() -> None:
     assert result["best_threshold_pixel_f1"] == 1.0
 
 
+def test_object_threshold_counts_are_batched_without_changing_results() -> None:
+    import numpy as np
+
+    from mlsystem2.train import _trainer
+
+    class RecordingExecutor:
+        task_count = 0
+
+        def map(self, function, tasks):
+            materialized_tasks = list(tasks)
+            self.task_count = len(materialized_tasks)
+            return map(function, materialized_tasks)
+
+    true_instances = np.zeros((2, 4, 4), dtype=np.int64)
+    true_instances[0, 1:3, 1:3] = 1
+    probabilities = np.zeros((2, 4, 4), dtype=np.float32)
+    probabilities[0, 1:3, 1:3] = 0.8
+    probabilities[1, 0, 0] = 0.8
+    counts = {
+        0.5: {"tp": 0, "fp": 0, "fn": 0},
+        0.9: {"tp": 0, "fp": 0, "fn": 0},
+    }
+    executor = RecordingExecutor()
+
+    _trainer._accumulate_object_threshold_counts(
+        counts,
+        true_instances,
+        probabilities,
+        executor,
+    )
+
+    assert executor.task_count == 4
+    assert counts[0.5] == {"tp": 1, "fp": 1, "fn": 0}
+    assert counts[0.9] == {"tp": 0, "fp": 0, "fn": 1}
+
+
 def test_object_quality_requires_instance_masks() -> None:
     torch = pytest.importorskip("torch")
 

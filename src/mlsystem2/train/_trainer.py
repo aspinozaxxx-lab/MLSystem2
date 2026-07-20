@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from math import isfinite
 from time import perf_counter
+from typing import Any
 
 from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
@@ -17,6 +20,7 @@ from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
 
 MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH = 1
+OBJECT_METRIC_MAX_WORKERS = 8
 THRESHOLD_CANDIDATES = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
 
 
@@ -227,7 +231,11 @@ def _validate_epoch(
         for threshold in THRESHOLD_CANDIDATES
     }
     object_instances_seen = False
-    with torch.no_grad():
+    object_metric_workers = min(OBJECT_METRIC_MAX_WORKERS, max(1, os.cpu_count() or 1))
+    with (
+        ThreadPoolExecutor(max_workers=object_metric_workers) as object_metric_executor,
+        torch.no_grad(),
+    ):
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
@@ -252,20 +260,12 @@ def _validate_epoch(
             object_instances = meta.get("object_instances") if isinstance(meta, dict) else None
             if object_instances is not None:
                 object_instances_seen = True
-                true_instances = _as_numpy_instances(object_instances)
-                probabilities = probs[:, 0, :, :].detach().cpu().numpy()
-                for threshold, counts in object_threshold_counts.items():
-                    predicted = probabilities >= threshold
-                    for tile_index in range(predicted.shape[0]):
-                        result = compute_object_f1(
-                            ObjectF1Request(
-                                y_true_instances=true_instances[tile_index],
-                                y_pred_mask=predicted[tile_index],
-                            )
-                        )
-                        counts["tp"] += result.true_positive
-                        counts["fp"] += result.false_positive
-                        counts["fn"] += result.false_negative
+                _accumulate_object_threshold_counts(
+                    object_threshold_counts,
+                    _as_numpy_instances(object_instances),
+                    probs[:, 0, :, :].detach().cpu().numpy(),
+                    object_metric_executor,
+                )
             if (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
@@ -314,6 +314,48 @@ def _validate_epoch(
         "quality_precision": quality_precision,
         "quality_recall": quality_recall,
     }
+
+
+def _accumulate_object_threshold_counts(
+    threshold_counts: dict[float, dict[str, int]],
+    true_instances: Any,
+    probabilities: Any,
+    executor: ThreadPoolExecutor,
+) -> None:
+    tasks: list[tuple[float, Any, Any]] = []
+    for threshold in threshold_counts:
+        predicted = probabilities >= threshold
+        tasks.extend(
+            (threshold, true_instances[tile_index], predicted[tile_index])
+            for tile_index in range(predicted.shape[0])
+        )
+
+    for threshold, true_positive, false_positive, false_negative in executor.map(
+        _compute_object_threshold_counts,
+        tasks,
+    ):
+        counts = threshold_counts[threshold]
+        counts["tp"] += true_positive
+        counts["fp"] += false_positive
+        counts["fn"] += false_negative
+
+
+def _compute_object_threshold_counts(
+    task: tuple[float, Any, Any],
+) -> tuple[float, int, int, int]:
+    threshold, true_instances, predicted = task
+    result = compute_object_f1(
+        ObjectF1Request(
+            y_true_instances=true_instances,
+            y_pred_mask=predicted,
+        )
+    )
+    return (
+        threshold,
+        result.true_positive,
+        result.false_positive,
+        result.false_negative,
+    )
 
 
 def _validate_multiclass_epoch(

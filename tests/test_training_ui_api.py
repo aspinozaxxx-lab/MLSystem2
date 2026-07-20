@@ -2376,14 +2376,19 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
             threshold=0.7,
         )
 
+    def fake_list_experiments(tracking_uri: str) -> list[MLflowExperiment]:
+        assert tracking_uri == config.mlflow_tracking_uri
+        return [MLflowExperiment(experiment_id="1", name="ui-test", lifecycle_stage="active")]
+
     monkeypatch.setattr(_worker, "get_best_training_checkpoint", fake_best_checkpoint)
+    monkeypatch.setattr(_worker, "list_experiments", fake_list_experiments)
 
     with session_factory() as session:
         ensure_seed_templates(session)
         job = create_training_job(
             session,
             TrainingJobCreate(
-                mlflow_experiment_id="1",
+                mlflow_experiment_id=None,
                 mlflow_experiment_name="ui-test",
                 mlflow_run_name="worker-test",
                 dataset_key="Вырубки\\main",
@@ -2422,7 +2427,11 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         running_result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == job.id))
         assert running_result is not None
         assert running_result.mlflow_run_id == "run-123"
-        assert running_result.mlflow_run_url is not None
+        assert row.mlflow_experiment_id == "1"
+        assert (
+            running_result.mlflow_run_url
+            == f"{config.mlflow_ui_url.rstrip('/')}/#/experiments/1/runs/run-123"
+        )
 
         (run_dir / "train.log").write_text("status=succeeded\nmlflow_run=run-123\n", encoding="utf-8")
         (run_dir / "exit_code").write_text("0\n", encoding="utf-8")

@@ -22,7 +22,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from mlsystem2.mlflow_adapter.api import get_best_training_checkpoint
+from mlsystem2.mlflow_adapter.api import get_best_training_checkpoint, list_experiments
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
 from mlsystem2.settings.api import load_settings
 
@@ -717,6 +717,11 @@ def _finish_training_job(
     row.finished_at = _now()
     row.process_pid = None
     mlflow_run_id = _extract_mlflow_run_id(row)
+    mlflow_experiment_id = (
+        _resolve_mlflow_experiment_id(row, config)
+        if mlflow_run_id
+        else row.mlflow_experiment_id
+    )
     best_checkpoint = (
         _best_training_checkpoint(config, mlflow_run_id)
         if succeeded and mlflow_run_id
@@ -731,7 +736,7 @@ def _finish_training_job(
             result.f1_score = best_checkpoint.f1_score
             result.epoch = best_checkpoint.epoch
         result.mlflow_run_url = (
-            _mlflow_run_url(config, row.mlflow_experiment_id, mlflow_run_id)
+            _mlflow_run_url(config, mlflow_experiment_id, mlflow_run_id)
             if mlflow_run_id
             else result.mlflow_run_url
         )
@@ -759,12 +764,13 @@ def _sync_training_run_id(session: Session, row: JobRow, config: TrainingUIAPICo
     mlflow_run_id = _extract_mlflow_run_id(row)
     if not mlflow_run_id:
         return
+    mlflow_experiment_id = _resolve_mlflow_experiment_id(row, config)
     changed = False
     for result in _training_results(session, row):
         if result.mlflow_run_id != mlflow_run_id:
             result.mlflow_run_id = mlflow_run_id
             changed = True
-        run_url = _mlflow_run_url(config, row.mlflow_experiment_id, mlflow_run_id)
+        run_url = _mlflow_run_url(config, mlflow_experiment_id, mlflow_run_id)
         if result.mlflow_run_url != run_url:
             result.mlflow_run_url = run_url
             changed = True
@@ -1169,6 +1175,38 @@ def _mlflow_run_url(
     if not experiment_id:
         return base
     return f"{base}/#/experiments/{experiment_id}/runs/{run_id}"
+
+
+def _resolve_mlflow_experiment_id(
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+) -> str | None:
+    if row.mlflow_experiment_id:
+        return row.mlflow_experiment_id
+    experiment_name = (row.mlflow_experiment_name or "").strip()
+    if not experiment_name:
+        return None
+    try:
+        experiment = next(
+            (
+                candidate
+                for candidate in list_experiments(config.mlflow_tracking_uri)
+                if candidate.name == experiment_name
+            ),
+            None,
+        )
+    except MLflowAdapterError:
+        LOGGER.warning(
+            "Не удалось определить id MLflow experiment %s для задания %s",
+            experiment_name,
+            row.id,
+            exc_info=True,
+        )
+        return None
+    if experiment is None:
+        return None
+    row.mlflow_experiment_id = experiment.experiment_id
+    return experiment.experiment_id
 
 
 def _read_exit_code(run_dir: Path | None) -> int | None:
