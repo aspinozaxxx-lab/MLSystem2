@@ -177,6 +177,7 @@ def run_train_pipeline(
                         settings.train.batch_size,
                         "val",
                         _tile_split_request(settings),
+                        max_batches_per_epoch=settings.train.max_val_batches_per_epoch,
                         include_object_instances=settings.train.task == "binary",
                     )
                 ),
@@ -519,6 +520,9 @@ class _CountingLoader:
         sampling_warnings = _dataset_attr(self.dataset, "sampling_warnings")
         if isinstance(sampling_warnings, list):
             warnings.extend(str(item) for item in sampling_warnings)
+        loader_warnings = _loader_attr(self.loader, "warnings")
+        if isinstance(loader_warnings, list):
+            warnings.extend(str(item) for item in loader_warnings)
         observed_positive_ratio = _safe_ratio(self.observed_positive_tiles, self.observed_tiles)
         observed_hard_negative_ratio = _safe_ratio(
             self.observed_hard_negative_tiles,
@@ -592,6 +596,11 @@ class _CountingLoader:
             "cache_mode": _loader_attr(self.loader, "cache_mode"),
             "cached_batches": _loader_attr(self.loader, "cached_batches"),
             "cached_tiles": _loader_attr(self.loader, "cached_tiles"),
+            "selected_batches": _loader_attr(self.loader, "selected_batches"),
+            "selected_tiles": _loader_attr(self.loader, "selected_tiles"),
+            "cache_estimated_bytes": _loader_attr(self.loader, "cache_estimated_bytes"),
+            "cache_limit_bytes": _loader_attr(self.loader, "cache_limit_bytes"),
+            "cache_fallback_reason": _loader_attr(self.loader, "cache_fallback_reason"),
             "class_balance_enabled": _dataset_attr(self.dataset, "class_balance_enabled"),
             "observed_batches": self.observed_batches,
             "observed_tiles": self.observed_tiles,
@@ -639,8 +648,11 @@ def _tile_preparation_report(
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
-    if _loader_attr(loader, "cache_mode") == "memory":
+    cache_mode = _loader_attr(loader, "cache_mode")
+    if cache_mode == "memory":
         return "cached_balanced"
+    if cache_mode == "lazy":
+        return "lazy_balanced"
     uses_weighted_sampler = _uses_weighted_sampler(loader)
     if not uses_weighted_sampler:
         return "sequential"

@@ -321,9 +321,10 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     assert val_request.tile_split == tile_split
 
 
-def test_train_pipeline_passes_train_batch_limit_to_tile_request() -> None:
+def test_train_pipeline_passes_batch_limits_to_tile_requests() -> None:
     settings = _settings(initial_checkpoint_uri=None)
     settings.train.max_train_batches_per_epoch = 128
+    settings.train.max_val_batches_per_epoch = 256
     prepared = PreparedDataset(
         train_vrt_xml="TRAIN",
         val_vrt_xml="VAL",
@@ -366,7 +367,7 @@ def test_train_pipeline_passes_train_batch_limit_to_tile_request() -> None:
     assert result.status.value == "succeeded"
     assert [request.mode for request in requests] == ["train", "val"]
     assert requests[0].max_batches_per_epoch == 128
-    assert requests[1].max_batches_per_epoch is None
+    assert requests[1].max_batches_per_epoch == 256
 
 
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
@@ -456,6 +457,11 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
         "cache_mode": None,
         "cached_batches": None,
         "cached_tiles": None,
+        "selected_batches": None,
+        "selected_tiles": None,
+        "cache_estimated_bytes": None,
+        "cache_limit_bytes": None,
+        "cache_fallback_reason": None,
         "class_balance_enabled": False,
         "observed_batches": 2,
         "observed_tiles": 3,
@@ -594,6 +600,12 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
         cache_mode = "memory"
         cached_batches = 1
         cached_tiles = 4
+        selected_batches = 1
+        selected_tiles = 4
+        cache_estimated_bytes = 1024
+        cache_limit_bytes = 2048
+        cache_fallback_reason = None
+        warnings: list[str] = []
         sampler = None
 
         def __iter__(self):
@@ -624,12 +636,77 @@ def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
     assert snapshot["cache_mode"] == "memory"
     assert snapshot["cached_batches"] == 1
     assert snapshot["cached_tiles"] == 4
+    assert snapshot["selected_batches"] == 1
+    assert snapshot["selected_tiles"] == 4
+    assert snapshot["cache_estimated_bytes"] == 1024
+    assert snapshot["cache_limit_bytes"] == 2048
+    assert snapshot["cache_fallback_reason"] is None
     assert snapshot["observed_positive_ratio"] == 0.5
     assert snapshot["observed_hard_negative_ratio"] == 0.25
     assert snapshot["observed_background_ratio"] == 0.25
     assert snapshot["positive_ratio_abs_error"] is None
     assert snapshot["hard_negative_ratio_abs_error"] is None
     assert snapshot["background_ratio_abs_error"] is None
+
+
+def test_counting_loader_reports_lazy_balanced_val_metadata() -> None:
+    warning = "Val tile cache не помещается; используется ленивое чтение."
+
+    class Dataset:
+        source_rect_count = 1
+        candidate_window_count = 4
+        candidate_window_count_before_valid_filter = 4
+        black_filtered_window_count = 0
+        valid_footprint_stride = 64
+        valid_footprint_valid_cells = 4
+        valid_footprint_total_cells = 4
+        estimated_positive_tiles = 2
+        estimated_hard_negative_tiles = 0
+        estimated_background_tiles = 2
+        class_balance_enabled = False
+        class_balance_warnings: list[str] = []
+
+        def __len__(self) -> int:
+            return 4
+
+    class Loader:
+        dataset = Dataset()
+        cache_mode = "lazy"
+        cached_batches = 0
+        cached_tiles = 0
+        selected_batches = 1
+        selected_tiles = 4
+        cache_estimated_bytes = 4096
+        cache_limit_bytes = 2048
+        cache_fallback_reason = warning
+        warnings = [warning]
+        sampler = object()
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self) -> int:
+            return 1
+
+    raw_loader = Loader()
+    loader = _runner._CountingLoader(
+        raw_loader,
+        "val",
+        sampling_mode=_runner._sampling_mode(_settings(initial_checkpoint_uri=None), raw_loader),
+    )
+
+    snapshot = loader.snapshot()
+
+    assert snapshot["sampling_mode"] == "lazy_balanced"
+    assert snapshot["cache_mode"] == "lazy"
+    assert snapshot["cached_batches"] == 0
+    assert snapshot["cached_tiles"] == 0
+    assert snapshot["selected_batches"] == 1
+    assert snapshot["selected_tiles"] == 4
+    assert snapshot["cache_estimated_bytes"] == 4096
+    assert snapshot["cache_limit_bytes"] == 2048
+    assert snapshot["cache_fallback_reason"] == warning
+    assert warning in snapshot["warnings"]
 
 
 def _settings(*, initial_checkpoint_uri: str | None) -> SystemSettings:

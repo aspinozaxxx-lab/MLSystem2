@@ -163,7 +163,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.max_val_batches_per_epoch",
             "label": "Validation batch-ей на эпоху",
             "value_type": "integer-null",
-            "tooltip": "Ограничивает размер validation epoch. Пустое значение означает весь validation split.",
+            "tooltip": "Ограничивает balanced validation subset до оценки RAM и чтения тайлов. Пустое значение означает весь subset.",
             "min_value": 1,
         },
         {
@@ -380,8 +380,8 @@ _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
         "Пусто для полного обучения; 50..200 для быстрых HPO/smoke, если нужно сравнить конфиги за ограниченное время.",
     ),
     "train.max_val_batches_per_epoch": (
-        "Ограничение validation epoch в batch-ах. Ускоряет проверку, но делает метрику менее стабильной.",
-        "Пусто или 500..2000. Уменьшать только для быстрых экспериментов; для финального сравнения лучше полный val.",
+        "Ограничение фиксированного balanced validation subset в batch-ах до оценки RAM и чтения тайлов. Меньший subset снижает расход памяти и ускоряет проверку, но делает метрику менее стабильной.",
+        "256..1000 для крупных тайлов; пусто только когда полный val гарантированно помещается в RAM или допустим ленивый режим.",
     ),
     "train.max_training_time_sec": (
         "Wall-clock лимит обучения. Проверяется после завершения эпохи, поэтому процесс сохраняет final checkpoint штатно.",

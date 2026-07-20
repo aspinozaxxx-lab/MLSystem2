@@ -21,6 +21,7 @@ from mlsystem2.tile_preparation import _dataloader as dataloader_impl
 from mlsystem2.tile_preparation import _dataset as dataset_impl
 from mlsystem2.tile_preparation._dataloader import (
     _available_memory_bytes,
+    _balanced_val_indices,
     _effective_prefetch_factor,
     _ensure_val_cache_fits_memory,
     _linux_mem_available_bytes,
@@ -1120,6 +1121,82 @@ def test_val_cached_loader_returns_same_batches_on_each_iteration(tmp_path: Path
     val_loader.dataset.close()
 
 
+def test_balanced_val_indices_respect_tile_limit_without_replacement() -> None:
+    class Dataset:
+        positive_hints = [True, True, True, False, False, False, False]
+
+    first = _balanced_val_indices(Dataset(), seed=42, max_tiles=4)
+    second = _balanced_val_indices(Dataset(), seed=42, max_tiles=4)
+
+    assert first == second
+    assert len(first) == len(set(first)) == 4
+    assert [Dataset.positive_hints[index] for index in first] == [True, False, True, False]
+
+
+def test_val_loader_applies_batch_limit_before_building_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "limited_val_cache.tif"
+    data = np.full((1, 4, 52), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0.5, 2.5], [11.5, 2.5], [11.5, 3.5], [0.5, 3.5], [0.5, 2.5]],
+    )
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
+    monkeypatch.setattr(dataloader_impl, "_available_memory_bytes", lambda: 1024**3)
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+            max_batches_per_epoch=2,
+        )
+    )
+
+    assert loader.cache_mode == "memory"
+    assert loader.selected_tiles == 4
+    assert loader.selected_batches == 2
+    assert loader.cached_tiles == 4
+    assert loader.cached_batches == 2
+    assert len(loader._indices) == len(set(loader._indices)) == 4
+    assert [loader.dataset.positive_hints[index] for index in loader._indices] == [
+        True,
+        False,
+        True,
+        False,
+    ]
+    loader.dataset.close()
+
+
+def test_val_loader_rejects_limit_smaller_than_balanced_pair(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    raster_path = tmp_path / "invalid_val_limit.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
+
+    with pytest.raises(TilePreparationError, match="хотя бы один positive"):
+        create_tile_dataloader(
+            TileDataloaderRequest(
+                vrt_xml=vrt_xml,
+                annotation_file=annotation_file,
+                batch_size=1,
+                mode="val",
+                max_batches_per_epoch=1,
+            )
+        )
+
+
 def test_val_cached_loader_reads_tiles_only_during_cache_build(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1168,6 +1245,112 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
     assert read_calls == 2
     assert mask_calls == 2
     val_loader.dataset.close()
+
+
+@pytest.mark.parametrize("available_memory", [1, None])
+def test_val_loader_falls_back_to_deterministic_lazy_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    available_memory: int | None,
+) -> None:
+    torch = pytest.importorskip("torch")
+    raster_path = tmp_path / "lazy_val_reads.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    vrt_xml = _write_vrt_xml(raster_path)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_height4(annotation_file)
+    load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
+    monkeypatch.setattr(
+        dataloader_impl,
+        "_available_memory_bytes",
+        lambda: available_memory,
+    )
+
+    read_calls = 0
+    original_read = TileDataset._read_image_raw
+
+    def counted_read(self, dataset, window):
+        nonlocal read_calls
+        read_calls += 1
+        return original_read(self, dataset, window)
+
+    monkeypatch.setattr(TileDataset, "_read_image_raw", counted_read)
+
+    loader = create_tile_dataloader(
+        TileDataloaderRequest(
+            vrt_xml=vrt_xml,
+            annotation_file=annotation_file,
+            batch_size=2,
+            mode="val",
+            include_object_instances=True,
+        )
+    )
+
+    assert loader.cache_mode == "lazy"
+    assert loader.selected_tiles == 2
+    assert loader.selected_batches == 1
+    assert loader.cached_tiles == 0
+    assert loader.cached_batches == 0
+    assert loader.cache_fallback_reason in caplog.text
+    assert read_calls == 0
+
+    first_batches = list(loader)
+    assert read_calls == 2
+    second_batches = list(loader)
+    assert read_calls == 4
+    assert torch.equal(first_batches[0][0], second_batches[0][0])
+    assert torch.equal(first_batches[0][1], second_batches[0][1])
+    assert torch.equal(
+        first_batches[0][2]["object_instances"],
+        second_batches[0][2]["object_instances"],
+    )
+    assert first_batches[0][2]["object_instances"].dtype == torch.long
+    loader.dataset.close()
+
+
+def test_lazy_val_loader_uses_configured_workers_and_fixed_prefetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+
+    class Dataset:
+        positive_hints = [True, True, False, False]
+        tile_size = 4
+        channel_count = 1
+        uses_multiclass_masks = False
+        includes_object_instances = False
+
+    captured: dict[str, object] = {}
+
+    class FakeDataLoader:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def __len__(self) -> int:
+            return 2
+
+        def __iter__(self):
+            return iter(())
+
+    monkeypatch.setattr(dataloader_impl, "_available_memory_bytes", lambda: 1)
+
+    loader = dataloader_impl._create_val_loader(
+        torch=torch,
+        data_loader_type=FakeDataLoader,
+        dataset=Dataset(),
+        batch_size=2,
+        seed=42,
+        num_workers=3,
+        max_batches_per_epoch=2,
+    )
+
+    assert loader.cache_mode == "lazy"
+    assert captured["num_workers"] == 3
+    assert captured["prefetch_factor"] == 2
+    assert captured["persistent_workers"] is True
+    assert list(captured["sampler"]) == list(loader.sampler)
 
 
 def test_val_cached_loader_uses_min_group_without_replacement(tmp_path: Path) -> None:

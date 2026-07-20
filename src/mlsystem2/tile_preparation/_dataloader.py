@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import random
@@ -21,6 +22,10 @@ from .contracts import TileDataloaderRequest, TilePreparationError
 
 VAL_CACHE_AVAILABLE_MEMORY_FRACTION = 0.5
 VAL_CACHE_ESTIMATE_OVERHEAD = 1.25
+VAL_LAZY_PREFETCH_FACTOR = 2
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_tile_dataloader(
@@ -60,11 +65,14 @@ def create_tile_dataloader(
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
     if request.mode == "val":
-        return _create_cached_val_loader(
+        return _create_val_loader(
             torch=torch,
+            data_loader_type=DataLoader,
             dataset=dataset,
             batch_size=request.batch_size,
             seed=tile_settings.seed,
+            num_workers=tile_settings.num_workers,
+            max_batches_per_epoch=request.max_batches_per_epoch,
         )
 
     generator = torch.Generator()
@@ -116,11 +124,19 @@ class _CachedValLoader:
         dataset: TileDataset,
         batch_size: int,
         indices: list[int],
+        cache_estimated_bytes: int,
+        cache_limit_bytes: int,
     ) -> None:
         self.dataset = dataset
         self.sampler = None
         self.batch_size = batch_size
         self.cache_mode = "memory"
+        self.selected_tiles = len(indices)
+        self.selected_batches = math.ceil(len(indices) / batch_size)
+        self.cache_estimated_bytes = cache_estimated_bytes
+        self.cache_limit_bytes = cache_limit_bytes
+        self.cache_fallback_reason = None
+        self.warnings: list[str] = []
         self.cached_tiles = len(indices)
         self._indices = list(indices)
         try:
@@ -152,32 +168,146 @@ class _CachedValLoader:
         return batches
 
 
-def _create_cached_val_loader(
+class _FixedIndexSampler:
+    def __init__(self, indices: list[int]) -> None:
+        self._indices = list(indices)
+
+    def __iter__(self):
+        return iter(self._indices)
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+
+class _LazyValLoader:
+    def __init__(
+        self,
+        *,
+        torch,
+        data_loader_type,
+        dataset: TileDataset,
+        batch_size: int,
+        indices: list[int],
+        seed: int,
+        num_workers: int,
+        cache_estimated_bytes: int,
+        cache_limit_bytes: int | None,
+        fallback_reason: str,
+    ) -> None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        sampler = _FixedIndexSampler(indices)
+        dataloader_kwargs = {
+            "dataset": dataset,
+            "batch_size": batch_size,
+            "sampler": sampler,
+            "num_workers": num_workers,
+            "collate_fn": _collate_tile_batch,
+            "generator": generator,
+            "worker_init_fn": _seed_tile_worker,
+        }
+        if num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = VAL_LAZY_PREFETCH_FACTOR
+            dataloader_kwargs["persistent_workers"] = True
+
+        self._loader = data_loader_type(**dataloader_kwargs)
+        self.dataset = dataset
+        self.sampler = sampler
+        self.batch_size = batch_size
+        self.cache_mode = "lazy"
+        self.selected_tiles = len(indices)
+        self.selected_batches = len(self._loader)
+        self.cache_estimated_bytes = cache_estimated_bytes
+        self.cache_limit_bytes = cache_limit_bytes
+        self.cache_fallback_reason = fallback_reason
+        self.warnings = [fallback_reason]
+        self.cached_tiles = 0
+        self.cached_batches = 0
+
+    def __iter__(self):
+        return iter(self._loader)
+
+    def __len__(self) -> int:
+        return len(self._loader)
+
+
+def _create_val_loader(
     *,
     torch,
+    data_loader_type,
     dataset: TileDataset,
     batch_size: int,
     seed: int,
-) -> _CachedValLoader:
-    indices = _balanced_val_indices(dataset, seed=seed)
-    _ensure_val_cache_fits_memory(dataset, tile_count=len(indices))
-    return _CachedValLoader(
+    num_workers: int,
+    max_batches_per_epoch: int | None,
+) -> _CachedValLoader | _LazyValLoader:
+    max_tiles = (
+        max_batches_per_epoch * batch_size
+        if max_batches_per_epoch is not None
+        else None
+    )
+    indices = _balanced_val_indices(dataset, seed=seed, max_tiles=max_tiles)
+    cache_estimated_bytes = _estimate_val_cache_bytes(dataset, tile_count=len(indices))
+    cache_limit_bytes = _val_cache_limit_bytes()
+    if cache_limit_bytes is not None and cache_estimated_bytes <= cache_limit_bytes:
+        try:
+            return _CachedValLoader(
+                torch=torch,
+                dataset=dataset,
+                batch_size=batch_size,
+                indices=indices,
+                cache_estimated_bytes=cache_estimated_bytes,
+                cache_limit_bytes=cache_limit_bytes,
+            )
+        except TilePreparationError as exc:
+            if "Val tile cache не поместился в RAM" not in str(exc):
+                raise
+            fallback_reason = (
+                "Val tile cache не удалось собрать в RAM; используется "
+                "детерминированное ленивое чтение тайлов."
+            )
+    elif cache_limit_bytes is None:
+        fallback_reason = (
+            "Доступную RAM для val tile cache определить не удалось; используется "
+            "детерминированное ленивое чтение тайлов."
+        )
+    else:
+        fallback_reason = (
+            "Val tile cache не помещается в безопасный лимит RAM: "
+            f"требуется около {_format_bytes(cache_estimated_bytes)}, "
+            f"лимит {_format_bytes(cache_limit_bytes)}; используется "
+            "детерминированное ленивое чтение тайлов."
+        )
+
+    LOGGER.warning(fallback_reason)
+    return _LazyValLoader(
         torch=torch,
+        data_loader_type=data_loader_type,
         dataset=dataset,
         batch_size=batch_size,
         indices=indices,
+        seed=seed,
+        num_workers=num_workers,
+        cache_estimated_bytes=cache_estimated_bytes,
+        cache_limit_bytes=cache_limit_bytes,
+        fallback_reason=fallback_reason,
     )
 
 
-def _balanced_val_indices(dataset: TileDataset, *, seed: int) -> list[int]:
+def _balanced_val_indices(
+    dataset: TileDataset,
+    *,
+    seed: int,
+    max_tiles: int | None = None,
+) -> list[int]:
     hints = dataset.positive_hints
     if hints is None:
-        raise TilePreparationError("Val balanced cache требует positive/negative hints.")
+        raise TilePreparationError("Val balanced subset требует positive/negative hints.")
     positive_indices = [index for index, positive in enumerate(hints) if positive]
     negative_indices = [index for index, positive in enumerate(hints) if not positive]
     if not positive_indices or not negative_indices:
         raise TilePreparationError(
-            "Val balanced cache требует и positive, и negative tiles "
+            "Val balanced subset требует и positive, и negative tiles "
             f"после tile_split: positive={len(positive_indices)}, negative={len(negative_indices)}."
         )
 
@@ -185,6 +315,14 @@ def _balanced_val_indices(dataset: TileDataset, *, seed: int) -> list[int]:
     rng.shuffle(positive_indices)
     rng.shuffle(negative_indices)
     group_size = min(len(positive_indices), len(negative_indices))
+    if max_tiles is not None:
+        max_group_size = max_tiles // 2
+        if max_group_size < 1:
+            raise TilePreparationError(
+                "max_batches_per_epoch и batch_size должны позволять выбрать "
+                "хотя бы один positive и один negative val tile."
+            )
+        group_size = min(group_size, max_group_size)
     balanced_indices: list[int] = []
     for positive_index, negative_index in zip(
         positive_indices[:group_size],
@@ -197,16 +335,22 @@ def _balanced_val_indices(dataset: TileDataset, *, seed: int) -> list[int]:
 
 def _ensure_val_cache_fits_memory(dataset: TileDataset, *, tile_count: int) -> None:
     required_bytes = _estimate_val_cache_bytes(dataset, tile_count=tile_count)
-    available_bytes = _available_memory_bytes()
-    if available_bytes is None:
+    allowed_bytes = _val_cache_limit_bytes()
+    if allowed_bytes is None:
         return
-    allowed_bytes = int(available_bytes * VAL_CACHE_AVAILABLE_MEMORY_FRACTION)
     if required_bytes > allowed_bytes:
         raise TilePreparationError(
             "Val tile cache не помещается в RAM: "
             f"требуется около {_format_bytes(required_bytes)}, "
             f"доступный безопасный лимит {_format_bytes(allowed_bytes)}."
         )
+
+
+def _val_cache_limit_bytes() -> int | None:
+    available_bytes = _available_memory_bytes()
+    if available_bytes is None:
+        return None
+    return int(available_bytes * VAL_CACHE_AVAILABLE_MEMORY_FRACTION)
 
 
 def _estimate_val_cache_bytes(dataset: TileDataset, *, tile_count: int) -> int:
