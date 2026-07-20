@@ -1960,6 +1960,14 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "MLMarkup"))
     monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT",
+        str(tmp_path / "stored-files"),
+    )
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT",
+        str(tmp_path / "scratch"),
+    )
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
 
     config = get_config()
