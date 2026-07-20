@@ -81,8 +81,8 @@ _DOWNLOADED_TILE_SUFFIXES = {
     "_rgb_markup.jpg",
     "_nrg.jpg",
     "_nrg_markup.jpg",
-    "_ngr.jpg",
-    "_ngr_markup.jpg",
+    "_ngb.jpg",
+    "_ngb_markup.jpg",
 }
 
 
@@ -232,14 +232,14 @@ def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None
         "rgb_markup",
         "nrg",
         "nrg_markup",
-        "ngr",
-        "ngr_markup",
+        "ngb",
+        "ngb_markup",
     }
     stretched = [_markup_export._stretch_channel(channel) for channel in image]
     expected_channels = {
         "rgb": (0, 1, 2),
         "nrg": (3, 0, 1),
-        "ngr": (3, 1, 0),
+        "ngb": (3, 1, 2),
     }
     decoded: dict[str, np.ndarray] = {}
     for name, payload in previews.items():

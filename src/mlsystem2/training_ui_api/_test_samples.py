@@ -99,7 +99,7 @@ _DOWNLOAD_TILE_SUFFIXES = (".tif", ".geojson", "_mask.png")
 _JPEG_PREVIEW_CHANNELS = {
     "rgb": (0, 1, 2),
     "nrg": (3, 0, 1),
-    "ngr": (3, 1, 0),
+    "ngb": (3, 1, 2),
 }
 _JPEG_PREVIEW_MAX_BYTES = 300 * 1024
 _JPEG_QUALITY_MIN = 1
