@@ -229,8 +229,9 @@ dataset_key)`, а если его нет, использует базовый ш
 постобработки: `postprocess.mask_min_object_pixels`, `postprocess.mask_min_hole_pixels`,
 `postprocess.binary_closing_radius`, `postprocess.min_area_m2`, `postprocess.min_hole_area_m2`,
 `postprocess.simplify_m` и параметры `postprocess.filter_compact_objects.*`. При ручном и автоматическом
-создании псевдоразметки сервис ищет активный шаблон инференса `(architecture, dataset_key)`, а если его нет,
-использует базовый `(architecture, null)`. Для `Реки\main` и `smp_segformer_b2` начальный шаблон включает
+создании псевдоразметки сервис ищет активный шаблон инференса по датасету обученной модели
+`(architecture, training_dataset_key)`, а если его нет, использует базовый `(architecture, null)`; выбранный
+датасет, папка или загруженный TXT со снимками на шаблон не влияют. Для `Реки\main` и `smp_segformer_b2` начальный шаблон включает
 профиль 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и фильтр компактных объектов
 `min_isoperimetric_quotient=0.25`, `max_bbox_ratio=3.5`.
 
@@ -293,7 +294,9 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
 строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
 `/api/v1/files/{file_id}/download`. Этот путь не создает Triton model archive, Geoalert pipeline YAML или запись в
-Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. При выборе
+Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. Трёхканальный
+checkpoint принимает RGB и RGBA GeoTIFF: у RGBA читаются только первые три канала. Все остальные несовпадения
+числа каналов отклоняются; обучение и основной CLI-инференс остаются строгими. При выборе
 папки сервис создает stored txt с одной строкой-относительным путем папки. `PseudoMarkupResultInfo.image_count`
 содержит сохраненное в БД количество фактически найденных снимков по txt, включая загруженные custom txt и
 строки-папки. `StoredFileInfo.size_bytes` и nullable `StoredFileInfo.object_count` берутся из БД и используются

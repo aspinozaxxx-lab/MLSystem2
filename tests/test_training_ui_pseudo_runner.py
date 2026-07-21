@@ -59,8 +59,8 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     assert features[0]["properties"]["postprocess_level"] == 1
 
 
-def test_pseudo_runner_requires_exact_checkpoint_channel_count(tmp_path: Path) -> None:
-    image_path = tmp_path / "ortho.tif"
+def test_pseudo_runner_accepts_only_rgb_or_rgba_for_three_channel_checkpoint(tmp_path: Path) -> None:
+    image_path = tmp_path / "rgb.tif"
     with rasterio.open(
         image_path,
         "w",
@@ -75,9 +75,92 @@ def test_pseudo_runner_requires_exact_checkpoint_channel_count(tmp_path: Path) -
         dataset.write(np.zeros((3, 8, 8), dtype=np.uint8))
 
     with rasterio.open(image_path) as dataset:
-        _pseudo_runner._validate_raster_input_channels(dataset, image_path, 3)
+        assert _pseudo_runner._validate_raster_input_channels(dataset, image_path, 3) == (1, 2, 3)
         with pytest.raises(RuntimeError, match="должен содержать 4 каналов"):
             _pseudo_runner._validate_raster_input_channels(dataset, image_path, 4)
+
+    rgba_path = tmp_path / "rgba.tif"
+    with rasterio.open(
+        rgba_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(np.zeros((4, 8, 8), dtype=np.uint8))
+
+    with rasterio.open(rgba_path) as dataset:
+        assert _pseudo_runner._validate_raster_input_channels(dataset, rgba_path, 3) == (1, 2, 3)
+        assert _pseudo_runner._validate_raster_input_channels(dataset, rgba_path, 4) == (1, 2, 3, 4)
+
+    five_channel_path = tmp_path / "five-channels.tif"
+    with rasterio.open(
+        five_channel_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=5,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(np.zeros((5, 8, 8), dtype=np.uint8))
+
+    with rasterio.open(five_channel_path) as dataset:
+        with pytest.raises(RuntimeError, match="получено 5"):
+            _pseudo_runner._validate_raster_input_channels(dataset, five_channel_path, 3)
+
+
+def test_pseudo_runner_reads_first_three_rgba_channels_for_rgb_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "rgba.tif"
+    image = np.stack(
+        [np.full((8, 8), value, dtype=np.uint8) for value in (11, 22, 33, 44)]
+    )
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(image)
+
+    received_images: list[np.ndarray] = []
+
+    def fake_predict_tile(_torch, _model, tile, *, threshold, device):
+        del threshold, device
+        received_images.append(tile.copy())
+        return np.zeros((8, 8), dtype=np.uint8)
+
+    monkeypatch.setattr(_pseudo_runner, "_predict_tile", fake_predict_tile)
+    result = _infer_test_tile_mask(
+        torch=object(),
+        model=object(),
+        input_channels=3,
+        image_path=image_path,
+        tile_size=8,
+        stride=8,
+        threshold=0.5,
+        device="cpu",
+        postprocess_profile=_select_postprocess_profile(0),
+    )
+
+    assert np.array_equal(result, np.zeros((8, 8), dtype=np.uint8))
+    assert len(received_images) == 1
+    assert received_images[0].shape == (3, 8, 8)
+    assert [np.unique(channel).item() for channel in received_images[0]] == [11.0, 22.0, 33.0]
 
 
 def test_select_postprocess_profile_uses_unique_image_count_boundaries() -> None:

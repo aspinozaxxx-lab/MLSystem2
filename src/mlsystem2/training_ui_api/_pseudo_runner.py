@@ -534,12 +534,15 @@ def _validate_raster_input_channels(
     dataset: rasterio.io.DatasetReader,
     image_path: Path,
     expected: int,
-) -> None:
-    if dataset.count != expected:
-        raise RuntimeError(
-            f"Снимок должен содержать {expected} каналов, "
-            f"получено {dataset.count}: {image_path}"
-        )
+) -> tuple[int, ...]:
+    if dataset.count == expected:
+        return tuple(range(1, expected + 1))
+    if expected == 3 and dataset.count == 4:
+        return (1, 2, 3)
+    raise RuntimeError(
+        f"Снимок должен содержать {expected} каналов, "
+        f"получено {dataset.count}: {image_path}"
+    )
 
 
 def _infer_scene(
@@ -559,15 +562,16 @@ def _infer_scene(
 ) -> list[dict[str, Any]]:
     del batch_size
     with rasterio.open(image_path) as dataset:
-        _validate_raster_input_channels(dataset, image_path, input_channels)
+        input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         for window in _windows(dataset.width, dataset.height, tile_size, stride):
             image = dataset.read(
+                indexes=input_indexes,
                 window=window,
                 boundless=True,
                 fill_value=nodata,
-                out_shape=(dataset.count, tile_size, tile_size),
+                out_shape=(len(input_indexes), tile_size, tile_size),
                 masked=False,
             )
             if np.all(_nodata_pixels(image, nodata)):
@@ -612,15 +616,16 @@ def _infer_test_tile_mask(
     postprocess_profile: _PostprocessProfile,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
-        _validate_raster_input_channels(dataset, image_path, input_channels)
+        input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         for window in _windows(dataset.width, dataset.height, tile_size, stride):
             image = dataset.read(
+                indexes=input_indexes,
                 window=window,
                 boundless=True,
                 fill_value=nodata,
-                out_shape=(dataset.count, tile_size, tile_size),
+                out_shape=(len(input_indexes), tile_size, tile_size),
                 masked=False,
             )
             if np.all(_nodata_pixels(image, nodata)):

@@ -1663,8 +1663,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
         ).json()
         assert pseudo["type"] == "inference"
-        assert pseudo["config"]["inference_template_id"] == updated_inference_dataset_template["id"]
-        assert pseudo["config"]["inference_template_config"]["postprocess.min_area_m2"] == 2222.0
+        assert pseudo["config"]["inference_template_id"] == inference_template["id"]
+        assert (
+            pseudo["config"]["inference_template_config"]["postprocess.min_area_m2"]
+            == inference_template["default_config"]["postprocess.min_area_m2"]
+        )
         conflict = client.post(
             "/api/v1/results/datasets/custom/pseudo-markup",
             data={
@@ -1683,6 +1686,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert folder_pseudo["config"]["image_folder_key"] == "kanopus/irkutsk"
         assert folder_pseudo["config"]["images_root"] == str(images_root / "kanopus")
         assert folder_pseudo["config"]["input_channels"] == 4
+        assert folder_pseudo["config"]["inference_template_id"] == inference_template["id"]
         second_folder_pseudo = client.post(
             "/api/v1/results/datasets/custom/pseudo-markup",
             data={"image_folder_key": "kanopus/toguchinsk", "training_result_id": training_result_id},
@@ -2019,6 +2023,26 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
         )
         assert training_result is not None
         training_result.status = ResultStatus.OK.value
+        inference_template = _service.create_inference_template(
+            session,
+            TrainingTemplateCreate(
+                architecture="smp_segformer_b2",
+                dataset_key="Крыши\\main",
+            ),
+            config,
+        )
+        inference_template = _service.update_inference_template_by_id(
+            session,
+            inference_template.id,
+            TrainingTemplateUpdate(
+                default_config={
+                    **inference_template.default_config,
+                    "postprocess.min_area_m2": 20.0,
+                    "postprocess.simplify_m": 0.5,
+                }
+            ),
+            config,
+        )
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Крыши\\main",
@@ -2053,6 +2077,9 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
     assert pseudo.config["images_root"] == str(tmp_path / "images" / "orto")
     assert pseudo.config["imagery_type"] == "ortho"
     assert pseudo.config["input_channels"] == 3
+    assert pseudo.config["inference_template_id"] == str(inference_template.id)
+    assert pseudo.config["inference_template_config"]["postprocess.min_area_m2"] == 20.0
+    assert pseudo.config["inference_template_config"]["postprocess.simplify_m"] == 0.5
     assert pseudo_scenes == "ryazan/ortho.tif\n"
     assert pseudo_payload["images_root"] == str(tmp_path / "images" / "orto")
     assert pseudo_payload["imagery_type"] == "ortho"

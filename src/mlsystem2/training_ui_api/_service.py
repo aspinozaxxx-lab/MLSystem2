@@ -1244,7 +1244,11 @@ def create_pseudo_markup_job(
             f"Для модели с {input_channels} входными каналами тип снимков не поддерживается"
         )
     inference_template = (
-        inference_template_row_for_dataset(session, training_result.architecture, dataset_key)
+        inference_template_row_for_dataset(
+            session,
+            training_result.architecture,
+            training_result.class_key,
+        )
         if training_result is not None
         else None
     )
