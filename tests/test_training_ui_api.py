@@ -65,6 +65,30 @@ def test_pseudo_geojson_download_name_normalizes_legacy_slashes() -> None:
     assert _service.stored_file_download_name(row) == "Засоления_main_segformer b2_07_38_06_06.geojson"
 
 
+def test_pseudo_geojson_download_name_uses_display_name_for_uuid_key() -> None:
+    training_result = TrainingResultRow(
+        class_display_name="Разрушки\\main",
+        model_name="segformer b2",
+    )
+    pseudo_result = PseudoMarkupResultRow(
+        class_key="9788af3a-000d-4b0a-aa2f-c9b2b3b09cb1",
+        training_result=training_result,
+    )
+    job = JobRow(
+        dataset_name="Разрушки\\main",
+        training_dataset_name="Разрушки\\main",
+        model_name="pseudo-markup",
+    )
+
+    name = _worker._pseudo_geojson_download_name(
+        job,
+        [pseudo_result],
+        datetime(2026, 7, 21, 11, 54, tzinfo=timezone.utc),
+    )
+
+    assert name == "Разрушки_main_segformer_b2_11_54_21_07.geojson"
+
+
 def test_training_ui_queue_snapshot_returns_unified_priority_order(
     tmp_path: Path,
     monkeypatch,

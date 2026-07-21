@@ -1111,7 +1111,13 @@ def _pseudo_geojson_download_name(
     created_at: datetime | None,
 ) -> str:
     result = results[0] if results else None
-    dataset_name = result.class_key if result is not None else row.dataset_name
+    dataset_name = (
+        result.training_result.class_display_name
+        if result is not None and result.training_result is not None
+        else row.training_dataset_name
+        or (result.class_key if result is not None else None)
+        or row.dataset_name
+    )
     model_name = result.training_result.model_name if result is not None and result.training_result is not None else row.model_name
     timestamp = (created_at or _now()).strftime("%H_%M_%d_%m")
     return f"{_filename_part(dataset_name)}_{_filename_part(model_name)}_{timestamp}.geojson"

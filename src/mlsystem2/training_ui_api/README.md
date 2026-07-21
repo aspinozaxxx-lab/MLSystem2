@@ -298,7 +298,9 @@ Triton model repository; после обработки или ошибки за�
 содержит сохраненное в БД количество фактически найденных снимков по txt, включая загруженные custom txt и
 строки-папки. `StoredFileInfo.size_bytes` и nullable `StoredFileInfo.object_count` берутся из БД и используются
 frontend для отображения размера и количества объектов скачиваемого GeoJSON; страница результатов не читает
-GeoJSON и не обходит корень снимков при открытии.
+GeoJSON и не обходит корень снимков при открытии. Имя скачиваемого GeoJSON начинается с отображаемых названий
+класса и датасета из результата обучения, а технический UUID датасета используется только как fallback для
+неполных legacy-записей.
 `GET /api/v1/jobs/{job_id}/log` сначала отдает `worker_error.txt`, `train.log`, `logs/train.log` или
 `logs/pseudo_markup.log` из рабочей папки задания. Если локального лога нет или он указывает смотреть journalctl,
 endpoint возвращает фрагмент `journalctl` по unit из `MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT`.
