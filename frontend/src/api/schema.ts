@@ -2046,7 +2046,7 @@ export interface components {
              * @default 1536
              * @enum {integer}
              */
-            tile_size: 512 | 768 | 1024 | 1536 | 2048;
+            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584;
             /**
              * Min Image Count
              * @description Минимальное число включённых тайлов; без поля используется image_count.

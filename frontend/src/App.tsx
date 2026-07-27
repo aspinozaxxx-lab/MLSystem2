@@ -92,7 +92,7 @@ import {
 } from "./utils/testMarkups";
 
 const PROGRESS_REFRESH_MS = 10_000;
-const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048] as const;
+const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
 
 type ModalState = {
   title: string;

@@ -1326,7 +1326,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/optimize-preview" in app_tsx
     assert "/evaluate-preview" in app_tsx
     assert "Не сохранено" in app_tsx
-    assert "[512, 768, 1024, 1536, 2048]" in app_tsx
+    assert "[512, 768, 1024, 1536, 2048, 2560, 3072, 3584]" in app_tsx
     assert "useState(1536)" in app_tsx
     assert '"/test-sample-batches/latest"' in app_tsx
     assert "setTileSize(latest.tile_size)" in app_tsx
