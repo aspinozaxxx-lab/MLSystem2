@@ -182,7 +182,7 @@ class TestSampleBatchItemCreate(BaseModel):
 class TestSampleBatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tile_size: Literal[512, 768, 1024, 1536, 2048] = 1536
+    tile_size: Literal[512, 768, 1024, 1536, 2048, 2560, 3072, 3584] = 1536
     min_image_count: int | None = Field(
         default=None,
         gt=0,

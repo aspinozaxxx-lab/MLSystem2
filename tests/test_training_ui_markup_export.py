@@ -918,6 +918,26 @@ def test_test_sample_batch_request_keeps_exact_legacy_image_count() -> None:
         )
 
 
+@pytest.mark.parametrize("tile_size", [2560, 3072, 3584])
+def test_test_sample_batch_request_accepts_large_tile_sizes(tile_size: int) -> None:
+    request = _TestSampleBatchCreate(
+        tile_size=tile_size,
+        image_count=3,
+        items=[{"dataset_key": "Вырубки\\main"}],
+    )
+
+    assert request.tile_size == tile_size
+
+
+def test_test_sample_batch_request_rejects_unlisted_tile_size() -> None:
+    with pytest.raises(ValueError):
+        _TestSampleBatchCreate(
+            tile_size=3000,
+            image_count=3,
+            items=[{"dataset_key": "Вырубки\\main"}],
+        )
+
+
 def test_persistent_test_sample_metrics_and_stale_revision(
     tmp_path: Path,
     monkeypatch,
