@@ -12,11 +12,13 @@ import uuid
 import warnings
 import zipfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from math import gcd
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -33,6 +35,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
+from shapely.validation import make_valid
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
@@ -95,7 +98,9 @@ TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 OBJECT_IOU_THRESHOLD = 0.5
-_DOWNLOAD_TILE_SUFFIXES = (".tif", ".geojson", "_mask.png")
+_DOWNLOAD_BASE_TILE_SUFFIXES = (".tif", ".geojson")
+_DOWNLOAD_PREVIEW_SOURCE_SUFFIXES = ("_mask.png",)
+_BULK_DOWNLOAD_MAX_WORKERS = 8
 _JPEG_PREVIEW_CHANNELS = {
     "rgb": (0, 1, 2),
     "nrg": (3, 0, 1),
@@ -124,6 +129,14 @@ class TestSampleDownloadArtifact:
 
     def cleanup(self) -> None:
         self.path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class _TestSampleDownloadDescriptor:
+    sample_id: uuid.UUID
+    folder: str
+    source_root: Path
+    tile_indices: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -1454,6 +1467,7 @@ def build_test_sample_download(
     config: TrainingUIAPIConfig,
     *,
     enabled_tile_indices: list[int] | None = None,
+    include_previews: bool = True,
 ) -> TestSampleDownloadArtifact:
     row = _sample_row(session, sample_id)
     selected = (
@@ -1483,6 +1497,7 @@ def build_test_sample_download(
                     source_root,
                     tile.tile_index,
                     download_index,
+                    include_previews=include_previews,
                 )
     except Exception:
         archive_path.unlink(missing_ok=True)
@@ -1493,87 +1508,181 @@ def build_test_sample_download(
     )
 
 
-def build_primary_test_samples_download(
+def build_test_samples_download(
     session: Session,
+    sample_ids: list[uuid.UUID],
     config: TrainingUIAPIConfig,
+    *,
+    include_previews: bool = True,
 ) -> TestSampleDownloadArtifact:
+    if not sample_ids:
+        raise TrainingUIAPIError("Выберите хотя бы одну тестовую разметку.")
+    if len(set(sample_ids)) != len(sample_ids):
+        raise TrainingUIAPIError(
+            "Идентификаторы тестовых разметок не должны повторяться."
+        )
     rows = session.scalars(
         select(TestSampleRow)
-        .where(TestSampleRow.is_primary.is_(True))
+        .where(TestSampleRow.id.in_(sample_ids))
         .options(selectinload(TestSampleRow.tiles))
-        .order_by(
-            TestSampleRow.class_name,
-            TestSampleRow.dataset_short_name,
-            TestSampleRow.id,
-        )
     ).all()
-    if not rows:
-        raise TrainingUIAPIError("Основные тестовые разметки не назначены.")
+    rows_by_id = {row.id: row for row in rows}
+    missing = [sample_id for sample_id in sample_ids if sample_id not in rows_by_id]
+    if missing:
+        raise TestSampleUnavailable(", ".join(str(sample_id) for sample_id in missing))
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            row.class_name.casefold(),
+            row.dataset_short_name.casefold(),
+            row.name.casefold(),
+            str(row.id),
+        ),
+    )
     empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
     if empty:
         raise TrainingUIAPIError(
-            "В основных тестовых разметках нет включённых тайлов: " + ", ".join(empty)
+            "В выбранных тестовых разметках нет включённых тайлов: " + ", ".join(empty)
         )
 
     download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
     download_root.mkdir(parents=True, exist_ok=True)
-    archive_path = download_root / f"primary-{uuid.uuid4()}.zip"
-    used_folders: set[str] = set()
+    archive_path = download_root / f"selected-{uuid.uuid4()}.zip"
+    descriptors = _test_sample_download_descriptors(
+        ordered_rows,
+        config,
+    )
     try:
-        with zipfile.ZipFile(
-            archive_path,
-            mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as archive:
-            for row in rows:
-                folder = _safe_name(
-                    f"{row.class_name}_{row.dataset_short_name}",
-                    "test_sample",
-                )
-                if folder in used_folders:
-                    folder = f"{folder}_{str(row.id)[:8]}"
-                used_folders.add(folder)
-                source_root = _sample_root(config, row.id)
-                enabled = sorted(
-                    (tile for tile in row.tiles if tile.enabled),
-                    key=lambda tile: tile.tile_index,
-                )
-                for download_index, tile in enumerate(enabled, start=1):
-                    _write_test_sample_tile_to_archive(
-                        archive,
-                        source_root,
-                        tile.tile_index,
-                        download_index,
-                        folder=folder,
+        with TemporaryDirectory(
+            dir=download_root,
+            prefix=".building-",
+        ) as temporary_directory:
+            staging_root = Path(temporary_directory)
+            worker_count = min(_BULK_DOWNLOAD_MAX_WORKERS, len(descriptors))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [
+                    executor.submit(
+                        _prepare_test_sample_download,
+                        descriptor,
+                        staging_root,
+                        include_previews=include_previews,
                     )
+                    for descriptor in descriptors
+                ]
+                try:
+                    prepared_roots = [future.result() for future in futures]
+                except Exception:
+                    for future in futures:
+                        future.cancel()
+                    raise
+            with zipfile.ZipFile(
+                archive_path,
+                mode="w",
+                compression=zipfile.ZIP_STORED,
+            ) as archive:
+                for descriptor, prepared_root in zip(
+                    descriptors,
+                    prepared_roots,
+                    strict=True,
+                ):
+                    for path in sorted(
+                        (item for item in prepared_root.rglob("*") if item.is_file()),
+                        key=lambda item: item.relative_to(prepared_root).as_posix(),
+                    ):
+                        relative = path.relative_to(prepared_root).as_posix()
+                        archive.write(
+                            path,
+                            f"{descriptor.folder}/{relative}",
+                            compress_type=zipfile.ZIP_STORED,
+                        )
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
     return TestSampleDownloadArtifact(
         path=archive_path,
-        filename="основные_тестовые_разметки.zip",
+        filename="тестовые_разметки.zip",
     )
 
 
-def _write_test_sample_tile_to_archive(
-    archive: zipfile.ZipFile,
+def _test_sample_download_descriptors(
+    rows: list[TestSampleRow],
+    config: TrainingUIAPIConfig,
+) -> list[_TestSampleDownloadDescriptor]:
+    used_folders: set[str] = set()
+    result: list[_TestSampleDownloadDescriptor] = []
+    for row in rows:
+        folder = _safe_name(
+            f"{row.class_name}_{row.dataset_short_name}_{row.name}",
+            "test_sample",
+        )
+        if folder.casefold() in used_folders:
+            folder = f"{folder}_{str(row.id)[:8]}"
+        used_folders.add(folder.casefold())
+        enabled = tuple(
+            tile.tile_index
+            for tile in sorted(row.tiles, key=lambda tile: tile.tile_index)
+            if tile.enabled
+        )
+        result.append(
+            _TestSampleDownloadDescriptor(
+                sample_id=row.id,
+                folder=folder,
+                source_root=_sample_root(config, row.id),
+                tile_indices=enabled,
+            )
+        )
+    return result
+
+
+def _prepare_test_sample_download(
+    descriptor: _TestSampleDownloadDescriptor,
+    staging_root: Path,
+    *,
+    include_previews: bool,
+) -> Path:
+    output_root = staging_root / str(descriptor.sample_id)
+    output_root.mkdir(parents=True, exist_ok=False)
+    for download_index, tile_index in enumerate(descriptor.tile_indices, start=1):
+        entries = _test_sample_tile_download_entries(
+            descriptor.source_root,
+            tile_index,
+            download_index,
+            include_previews=include_previews,
+        )
+        for archive_name, payload in entries:
+            destination = output_root / archive_name
+            if isinstance(payload, Path):
+                shutil.copy2(payload, destination)
+            else:
+                destination.write_bytes(payload)
+    return output_root
+
+
+def _test_sample_tile_download_entries(
     source_root: Path,
     tile_index: int,
     download_index: int,
     *,
+    include_previews: bool,
     folder: str | None = None,
-) -> None:
+) -> list[tuple[str, Path | bytes]]:
     stored_base_name = f"tile_{tile_index:03d}"
     archive_base_name = f"tile{download_index:03d}"
     archive_prefix = f"{folder}/" if folder else ""
+    suffixes = list(_DOWNLOAD_BASE_TILE_SUFFIXES)
+    if include_previews:
+        suffixes.extend(_DOWNLOAD_PREVIEW_SOURCE_SUFFIXES)
     paths = {
         suffix: source_root / f"{stored_base_name}{suffix}"
-        for suffix in _DOWNLOAD_TILE_SUFFIXES
+        for suffix in suffixes
     }
+    entries: list[tuple[str, Path | bytes]] = []
     for suffix, path in paths.items():
         if not path.is_file():
             raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
-        archive.write(path, f"{archive_prefix}{archive_base_name}{suffix}")
+        entries.append((f"{archive_prefix}{archive_base_name}{suffix}", path))
+    if not include_previews:
+        return entries
 
     tif_path = paths[".tif"]
     mask_path = paths["_mask.png"]
@@ -1586,8 +1695,36 @@ def _write_test_sample_tile_to_archive(
         mask,
         tile_name=archive_base_name,
     )
-    for suffix, preview in previews.items():
-        archive.writestr(f"{archive_prefix}{archive_base_name}_{suffix}.jpg", preview)
+    entries.extend(
+        (
+            f"{archive_prefix}{archive_base_name}_{suffix}.jpg",
+            preview,
+        )
+        for suffix, preview in previews.items()
+    )
+    return entries
+
+
+def _write_test_sample_tile_to_archive(
+    archive: zipfile.ZipFile,
+    source_root: Path,
+    tile_index: int,
+    download_index: int,
+    *,
+    include_previews: bool,
+    folder: str | None = None,
+) -> None:
+    for archive_name, payload in _test_sample_tile_download_entries(
+        source_root,
+        tile_index,
+        download_index,
+        include_previews=include_previews,
+        folder=folder,
+    ):
+        if isinstance(payload, Path):
+            archive.write(payload, archive_name)
+        else:
+            archive.writestr(archive_name, payload)
 
 
 def _test_sample_jpeg_previews(
@@ -1805,6 +1942,8 @@ def _geometries_for_tile(
     result: list[BaseGeometry] = []
     for geometry in geometries:
         transformed = _transform_geometry(geometry, source_crs, target_crs)
+        if transformed.is_empty:
+            continue
         clipped = _polygonal_geometry(transformed.intersection(tile_footprint))
         if clipped is not None and not clipped.is_empty and clipped.area > 0.0:
             result.append(clipped)
@@ -1906,28 +2045,34 @@ def _transform_geometry(
     source_crs: PyprojCRS,
     target_crs: PyprojCRS,
 ) -> BaseGeometry:
-    if source_crs == target_crs:
-        return geometry
-    transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
-    return transform_geometry(transformer.transform, geometry)
+    transformed = geometry
+    if source_crs != target_crs:
+        transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        transformed = transform_geometry(transformer.transform, geometry)
+    return _polygonal_geometry(transformed) or GeometryCollection()
 
 
 def _polygonal_geometry(geometry: BaseGeometry) -> Polygon | MultiPolygon | None:
     if geometry.is_empty:
         return None
-    if not geometry.is_valid:
-        geometry = geometry.buffer(0)
-    if isinstance(geometry, (Polygon, MultiPolygon)):
-        return geometry
-    if isinstance(geometry, GeometryCollection):
-        polygons = [
-            part
-            for part in geometry.geoms
-            if isinstance(part, (Polygon, MultiPolygon)) and not part.is_empty
-        ]
+    repaired = make_valid(geometry) if not geometry.is_valid else geometry
+    if isinstance(repaired, Polygon):
+        return repaired
+    if isinstance(repaired, MultiPolygon):
+        return repaired
+    if isinstance(repaired, GeometryCollection):
+        polygons: list[Polygon] = []
+        for part in repaired.geoms:
+            normalized = _polygonal_geometry(part)
+            if isinstance(normalized, Polygon):
+                polygons.append(normalized)
+            elif isinstance(normalized, MultiPolygon):
+                polygons.extend(normalized.geoms)
         if not polygons:
             return None
         merged = unary_union(polygons)
+        if not merged.is_valid:
+            merged = make_valid(merged)
         return merged if isinstance(merged, (Polygon, MultiPolygon)) else None
     return None
 
@@ -2588,8 +2733,8 @@ __all__ = [
     "TestSampleBatchUnavailable",
     "TestSampleDownloadArtifact",
     "TestSampleUnavailable",
-    "build_primary_test_samples_download",
     "build_test_sample_download",
+    "build_test_samples_download",
     "cleanup_test_sample_storage",
     "create_test_sample",
     "create_test_sample_batch",

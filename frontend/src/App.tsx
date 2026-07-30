@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ApiError, apiDownload, apiDownloadGet, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import type {
   AnyTemplate,
   AutomationRuleInfo,
@@ -56,6 +56,7 @@ import type {
   TestSampleCatalogResponse,
   TestSampleBatchCreate,
   TestSampleBatchInfo,
+  TestSampleBulkDownloadRequest,
   TestSampleDetail,
   TestSampleDownloadRequest,
   TestSampleDraftPreview,
@@ -1093,18 +1094,36 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
   }, [loadCatalog]);
 
   const samples = flattenTestMarkups(catalog);
-  const primarySamples = samples.filter((sample) => sample.is_primary);
-  const canDownloadAll = primarySamples.length > 0
-    && primarySamples.every((sample) => sample.enabled_image_count > 0);
 
-  const downloadAll = async () => {
+  const downloadSelected = async (sampleIds: string[], includePreviews: boolean): Promise<boolean> => {
+    const request: TestSampleBulkDownloadRequest = {
+      sample_ids: sampleIds,
+      include_previews: includePreviews,
+    };
     setDownloadingAll(true);
     try {
-      const payload = await run(() => apiDownloadGet("/test-samples/primary/download"));
-      if (payload) downloadBlob(payload.blob, payload.filename || "основные_тестовые_разметки.zip");
+      const payload = await run(() => apiDownloadJson("/test-samples/download", request));
+      if (!payload) return false;
+      downloadBlob(payload.blob, payload.filename || "тестовые_разметки.zip");
+      return true;
     } finally {
       setDownloadingAll(false);
     }
+  };
+
+  const openBulkDownload = () => {
+    showModal({
+      title: "Скачать тестовые разметки",
+      wide: true,
+      body: (
+        <BulkTestSampleDownloadForm
+          samples={samples}
+          onCancel={closeModal}
+          onSubmit={downloadSelected}
+        />
+      ),
+      footer: <></>,
+    });
   };
 
   const removeSample = (sample: TestSampleSummary) => {
@@ -1149,18 +1168,194 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
             <button
               className="secondary compact-action"
               type="button"
-              disabled={downloadingAll || !canDownloadAll}
-              title={canDownloadAll ? "Скачать все основные разметки" : "Назначьте основные разметки с включёнными тайлами"}
-              onClick={() => void downloadAll()}
+              disabled={downloadingAll || samples.length === 0}
+              title={samples.length ? "Выбрать тестовые разметки для скачивания" : "Тестовые разметки ещё не созданы"}
+              onClick={openBulkDownload}
             >
               <Download size={15} />
-              {downloadingAll ? "Скачивание..." : "Скачать все основные"}
+              {downloadingAll ? "Скачивание..." : "Скачать разметки"}
             </button>
           }
         />
         {catalog ? <TestSampleCatalog catalog={catalog} onDelete={removeSample} /> : <div className="empty-state">Загрузка каталога...</div>}
       </section>
     </>
+  );
+}
+
+function TestSampleDownloadOptionsForm({
+  onCancel,
+  onSubmit,
+}: {
+  onCancel: () => void;
+  onSubmit: (includePreviews: boolean) => Promise<boolean>;
+}) {
+  const [includePreviews, setIncludePreviews] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      if (await onSubmit(includePreviews)) onCancel();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="form-stack" onSubmit={submit}>
+      <DownloadModeFields
+        includePreviews={includePreviews}
+        onChange={setIncludePreviews}
+      />
+      <div className="button-row download-dialog-actions">
+        <button className="secondary" type="button" disabled={submitting} onClick={onCancel}>Отмена</button>
+        <button className="primary" type="submit" disabled={submitting}>
+          <Download size={16} />
+          {submitting ? "Формирование..." : "Скачать ZIP"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function BulkTestSampleDownloadForm({
+  samples,
+  onCancel,
+  onSubmit,
+}: {
+  samples: TestSampleSummary[];
+  onCancel: () => void;
+  onSubmit: (sampleIds: string[], includePreviews: boolean) => Promise<boolean>;
+}) {
+  const orderedSamples = useMemo(
+    () => [...samples].sort((left, right) => {
+      const classOrder = left.class_name.localeCompare(right.class_name, "ru");
+      if (classOrder) return classOrder;
+      const datasetOrder = left.dataset_name.localeCompare(right.dataset_name, "ru");
+      if (datasetOrder) return datasetOrder;
+      const nameOrder = left.name.localeCompare(right.name, "ru");
+      return nameOrder || left.id.localeCompare(right.id);
+    }),
+    [samples],
+  );
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(
+      samples
+        .filter((sample) => sample.is_primary && sample.enabled_image_count > 0)
+        .map((sample) => sample.id),
+    ),
+  );
+  const [includePreviews, setIncludePreviews] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const selectedIds = orderedSamples
+    .filter((sample) => selected.has(sample.id))
+    .map((sample) => sample.id);
+
+  const toggle = (sampleId: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(sampleId);
+      else next.delete(sampleId);
+      return next;
+    });
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedIds.length) return;
+    setSubmitting(true);
+    try {
+      if (await onSubmit(selectedIds, includePreviews)) onCancel();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="form-stack" onSubmit={submit}>
+      <div className="download-selection-header">
+        <span className="field-label">Разметки</span>
+        <button
+          className="secondary compact-action"
+          type="button"
+          disabled={!selectedIds.length || submitting}
+          onClick={() => setSelected(new Set())}
+        >
+          Снять все
+        </button>
+      </div>
+      <div className="test-sample-download-grid">
+        {orderedSamples.map((sample) => {
+          const available = sample.enabled_image_count > 0;
+          return (
+            <label
+              className={`test-sample-download-choice ${available ? "" : "disabled-row"}`}
+              key={sample.id}
+              title={available ? sample.name : "В разметке нет включённых тайлов"}
+            >
+              <input
+                type="checkbox"
+                checked={available && selected.has(sample.id)}
+                disabled={!available || submitting}
+                onChange={(event) => toggle(sample.id, event.target.checked)}
+              />
+              <span className="source-lines">
+                <strong>
+                  {sample.name}
+                  {sample.is_primary ? <Star className="primary-star" size={14} fill="currentColor" aria-label="Основная разметка" /> : null}
+                </strong>
+                <span>{sample.dataset_name} · {sample.enabled_image_count} тайлов</span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <DownloadModeFields
+        includePreviews={includePreviews}
+        onChange={setIncludePreviews}
+      />
+      <div className="button-row download-dialog-actions">
+        <button className="secondary" type="button" disabled={submitting} onClick={onCancel}>Отмена</button>
+        <button className="primary" type="submit" disabled={submitting || !selectedIds.length}>
+          <Download size={16} />
+          {submitting ? "Формирование..." : `Скачать выбранные (${selectedIds.length})`}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DownloadModeFields({
+  includePreviews,
+  onChange,
+}: {
+  includePreviews: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <fieldset className="download-mode-fieldset">
+      <legend>Состав архива</legend>
+      <label className="download-mode-choice">
+        <input
+          type="radio"
+          name="download-mode"
+          checked={includePreviews}
+          onChange={() => onChange(true)}
+        />
+        <span><strong>С превью</strong><small>TIFF, GeoJSON, PNG-маска и JPEG-превью</small></span>
+      </label>
+      <label className="download-mode-choice">
+        <input
+          type="radio"
+          name="download-mode"
+          checked={!includePreviews}
+          onChange={() => onChange(false)}
+        />
+        <span><strong>Без превью</strong><small>Только TIFF и GeoJSON</small></span>
+      </label>
+    </fieldset>
   );
 }
 
@@ -1378,18 +1573,34 @@ function TestSampleEditorPage({
     }
   };
 
-  const download = async () => {
-    if (!sample || !draft) return;
+  const download = async (includePreviews: boolean): Promise<boolean> => {
+    if (!sample || !draft) return false;
     const request: TestSampleDownloadRequest = {
       enabled_tile_indices: draft.enabledTileIndices,
+      include_previews: includePreviews,
     };
     setDownloading(true);
     try {
       const payload = await run(() => apiDownloadJson(sample.download_url, request));
-      if (payload) downloadBlob(payload.blob, payload.filename || "test_markup.zip");
+      if (!payload) return false;
+      downloadBlob(payload.blob, payload.filename || "test_markup.zip");
+      return true;
     } finally {
       setDownloading(false);
     }
+  };
+
+  const openDownload = () => {
+    showModal({
+      title: "Скачать тестовую разметку",
+      body: (
+        <TestSampleDownloadOptionsForm
+          onCancel={closeModal}
+          onSubmit={download}
+        />
+      ),
+      footer: <></>,
+    });
   };
 
   const toggleTile = (tileIndex: number, enabled: boolean) => {
@@ -1568,7 +1779,7 @@ function TestSampleEditorPage({
                 <RefreshCw size={16} />
                 {evaluating ? "Расчёт..." : "Пересчитать F1"}
               </button>
-              <button className="primary" type="button" disabled={downloading || !hasEnabledTiles} onClick={() => void download()}>
+              <button className="primary" type="button" disabled={downloading || !hasEnabledTiles} onClick={openDownload}>
                 <Download size={16} />
                 {downloading ? "Скачивание..." : "Скачать ZIP"}
               </button>

@@ -12,8 +12,8 @@ from starlette.background import BackgroundTask
 from mlsystem2.training_ui_api._test_samples import (
     TestSampleBatchUnavailable,
     TestSampleUnavailable,
-    build_primary_test_samples_download,
     build_test_sample_download,
+    build_test_samples_download,
     create_test_sample_batch,
     create_test_sample,
     delete_test_sample,
@@ -33,6 +33,7 @@ from mlsystem2.training_ui_api._test_samples import (
 from mlsystem2.training_ui_api.contracts import (
     TestSampleBatchCreate,
     TestSampleBatchInfo,
+    TestSampleBulkDownloadRequest,
     TestSampleCatalogResponse,
     TestSampleCreate,
     TestSampleDetail,
@@ -91,12 +92,12 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db.commit()
         return detail
 
-    @app.get(
-        "/api/v1/test-samples/primary/download",
+    @app.post(
+        "/api/v1/test-samples/download",
         response_class=FileResponse,
         responses={
             200: {
-                "description": "ZIP всех основных тестовых разметок.",
+                "description": "ZIP выбранных сохранённых тестовых разметок.",
                 "content": {
                     "application/zip": {
                         "schema": {"type": "string", "format": "binary"}
@@ -105,11 +106,19 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
             }
         },
     )
-    def download_primary_test_samples(
+    def download_test_samples(
+        request: TestSampleBulkDownloadRequest,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> FileResponse:
-        artifact = build_primary_test_samples_download(db, ctx.config)
+        artifact = _sample_or_404(
+            lambda: build_test_samples_download(
+                db,
+                request.sample_ids,
+                ctx.config,
+                include_previews=request.include_previews,
+            )
+        )
         return FileResponse(
             artifact.path,
             filename=artifact.filename,
@@ -324,6 +333,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
                 sample_id,
                 ctx.config,
                 enabled_tile_indices=request.enabled_tile_indices,
+                include_previews=request.include_previews,
             )
         )
         return FileResponse(

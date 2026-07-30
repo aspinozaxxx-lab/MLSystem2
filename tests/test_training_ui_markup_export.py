@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
+import uuid
 import zipfile
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -18,7 +21,7 @@ from rasterio.enums import ColorInterp
 from rasterio.features import rasterize
 from rasterio.shutil import copy as raster_copy
 from rasterio.transform import from_origin
-from shapely.geometry import box, mapping, shape
+from shapely.geometry import Polygon, box, mapping, shape
 from shapely.ops import transform as transform_geometry
 from sqlalchemy import select
 
@@ -36,8 +39,8 @@ from mlsystem2.training_ui_api._models import (
 )
 from mlsystem2.training_ui_api._test_samples import (
     _object_counts,
-    build_primary_test_samples_download,
     build_test_sample_download,
+    build_test_samples_download,
     cleanup_test_sample_storage,
     create_test_sample,
     evaluate_test_sample_by_id,
@@ -596,6 +599,185 @@ def test_candidate_pool_accepts_final_subset_in_image_count_range() -> None:
     assert impossible is None
 
 
+def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
+    monkeypatch,
+) -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate(
+            crs,
+            index=index,
+            territory=f"region-{index}",
+            source=f"region-{index}/scene.tif",
+            count=1,
+        )
+        for index in range(7)
+    ]
+    request = MarkupExportRequest(
+        dataset_key="test\\main",
+        tile_width=16,
+        tile_height=16,
+        image_count=7,
+        object_count=15,
+    )
+    original_run_milp = _markup_export._run_milp
+    calls = 0
+
+    def timeout_on_deviation(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
+        return original_run_milp(*args, **kwargs)
+
+    monkeypatch.setattr(_markup_export, "_run_milp", timeout_on_deviation)
+    selected = _markup_export._select_candidates(
+        candidates,
+        request,
+        allow_touching=False,
+        min_final_image_count=5,
+        max_final_image_count=7,
+        min_final_object_count=5,
+    )
+
+    assert selected == list(range(7))
+    calls = 0
+    with pytest.raises(_markup_export._MilpTimeLimitError):
+        _markup_export._select_candidates(
+            candidates,
+            request,
+            allow_touching=False,
+        )
+
+
+def test_achievable_object_maximum_respects_tile_conflicts() -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate_with_footprint(
+            crs,
+            index=0,
+            count=100,
+            footprint=box(0, 0, 40, 10),
+        ),
+        _selection_candidate_with_footprint(
+            crs,
+            index=1,
+            count=60,
+            footprint=box(0, 0, 10, 10),
+        ),
+        _selection_candidate_with_footprint(
+            crs,
+            index=2,
+            count=60,
+            footprint=box(30, 0, 40, 10),
+        ),
+    ]
+
+    maximum = _markup_export._maximum_achievable_object_count(
+        candidates,
+        max_image_count=2,
+        allow_touching=True,
+    )
+
+    assert maximum == 120
+    assert sum(sorted((item.object_count for item in candidates), reverse=True)[:2]) == 160
+
+
+def test_impossible_pool_error_reports_achievable_object_maximum(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+
+    with pytest.raises(
+        TrainingUIAPIError,
+        match=r"достижимый максимум объектов при не более чем 2 тайлах — 4",
+    ):
+        _markup_export.generate_markup_pool_files(
+            dataset_key="Вырубки\\main",
+            tile_size=16,
+            min_final_image_count=1,
+            max_final_image_count=2,
+            min_object_count=1000,
+            config=config,
+            output_root=tmp_path / "pool",
+        )
+
+
+def test_projection_repairs_production_polygon_before_intersection() -> None:
+    coordinates = [
+        (37.493821659955344, 47.06105450614723),
+        (37.493832865467674, 47.061050913957054),
+        (37.493829569728746, 47.061047770790445),
+        (37.49384670757115, 47.06103340202644),
+        (37.49385066245785, 47.061019931306674),
+        (37.49384077524108, 47.0610064605835),
+        (37.493826273989825, 47.06100825668012),
+        (37.493822978250904, 47.06100107229328),
+        (37.49381111359079, 47.06100152131748),
+        (37.493811772738574, 47.0609907447355),
+        (37.49380056722624, 47.06099119375978),
+        (37.493798589782884, 47.060984458395),
+        (37.4937893617139, 47.060981764248844),
+        (37.4937306975611, 47.06100601155933),
+        (37.493729379265524, 47.061005113510994),
+        (37.49373135670888, 47.06100241936588),
+        (37.49372344693547, 47.06100331741427),
+        (37.493722787787675, 47.06101005277668),
+        (37.49370301335415, 47.061019482282624),
+        (37.49370433164972, 47.061020380330724),
+        (37.49370762738864, 47.06101903325857),
+        (37.4936964218763, 47.061031156906715),
+        (37.49370564994529, 47.06103834128951),
+        (37.493700376763016, 47.06104283152825),
+        (37.49370828653642, 47.06104328055211),
+        (37.49370630909307, 47.06104866883806),
+        (37.49372344693547, 47.06105809833718),
+        (37.49371883290098, 47.06106977295282),
+        (37.49372740182217, 47.06107291611813),
+        (37.4937260835266, 47.06108234561295),
+        (37.49373794818672, 47.06107965147175),
+        (37.49373728903894, 47.06108414170701),
+        (37.49374124392564, 47.061080549518834),
+        (37.493743221368995, 47.06109357119986),
+        (37.49376826898481, 47.06109267315299),
+        (37.49377090557594, 47.06110030655086),
+        (37.49376563239367, 47.06108503975402),
+        (37.49378606597498, 47.0610792024482),
+        (37.493791339157255, 47.0610715690473),
+        (37.4937854068272, 47.06106887490555),
+        (37.49380122637402, 47.06106573174001),
+        (37.49380386296516, 47.061072467094526),
+        (37.493822978250904, 47.061063037597954),
+        (37.493821659955344, 47.06105450614723),
+    ]
+    source = Polygon(coordinates)
+    source_crs = CRS.from_epsg(4326)
+    target_crs = CRS.from_epsg(3857)
+    transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+    uncorrected = transform_geometry(transformer.transform, source)
+
+    assert source.is_valid
+    assert not uncorrected.is_valid
+    repaired = _markup_export._transform_between_crs(
+        source,
+        source_crs,
+        target_crs,
+    )
+    assert repaired.is_valid
+    assert repaired.geom_type == "MultiPolygon"
+    clipped = _test_samples._geometries_for_tile(
+        [source],
+        source_crs,
+        target_crs,
+        box(*uncorrected.bounds),
+    )
+    assert len(clipped) == 1
+    assert clipped[0].is_valid
+    assert clipped[0].area > 0.0
+
+
 def test_candidate_selection_prioritizes_territories_then_sources_deterministically() -> None:
     crs = CRS.from_epsg(3857)
     candidates = [
@@ -730,6 +912,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "post" in openapi["paths"][
             "/api/v1/test-samples/{sample_id}/download"
         ]
+        assert "post" in openapi["paths"]["/api/v1/test-samples/download"]
+        assert "/api/v1/test-samples/primary/download" not in openapi["paths"]
+        assert "TestSampleBulkDownloadRequest" in openapi["components"]["schemas"]
         assert (
             openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
                 "tile_width"
@@ -819,6 +1004,50 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             assert set(archive.namelist()) == (
                 _downloaded_tile_names("tile001")
                 | _downloaded_tile_names("tile002")
+            )
+        draft_without_previews = client.post(
+            toggled["download_url"],
+            json={
+                "enabled_tile_indices": [1, 2],
+                "include_previews": False,
+            },
+        )
+        assert draft_without_previews.status_code == 200
+        with zipfile.ZipFile(BytesIO(draft_without_previews.content)) as archive:
+            assert set(archive.namelist()) == {
+                "tile001.tif",
+                "tile001.geojson",
+                "tile002.tif",
+                "tile002.geojson",
+            }
+        assert client.post(
+            "/api/v1/test-samples/download",
+            json={"sample_ids": []},
+        ).status_code == 422
+        assert client.post(
+            "/api/v1/test-samples/download",
+            json={"sample_ids": [sample_id, sample_id]},
+        ).status_code == 422
+        assert client.post(
+            "/api/v1/test-samples/download",
+            json={"sample_ids": [str(uuid.uuid4())]},
+        ).status_code == 404
+        bulk_without_previews = client.post(
+            "/api/v1/test-samples/download",
+            json={
+                "sample_ids": [sample_id],
+                "include_previews": False,
+            },
+        )
+        assert bulk_without_previews.status_code == 200
+        with zipfile.ZipFile(BytesIO(bulk_without_previews.content)) as archive:
+            assert set(archive.namelist()) == {
+                "Вырубки_main_Переименованная_выборка/tile001.tif",
+                "Вырубки_main_Переименованная_выборка/tile001.geojson",
+            }
+            assert all(
+                info.compress_type == zipfile.ZIP_STORED
+                for info in archive.infolist()
             )
         persisted_after_download = client.get(
             f"/api/v1/test-samples/{sample_id}"
@@ -1108,6 +1337,20 @@ def test_persistent_test_sample_metrics_and_stale_revision(
                 assert set(archive.namelist()) == _downloaded_tile_names("tile001")
         finally:
             artifact.cleanup()
+        artifact = build_test_sample_download(
+            session,
+            sample_id,
+            config,
+            include_previews=False,
+        )
+        try:
+            with zipfile.ZipFile(artifact.path) as archive:
+                assert set(archive.namelist()) == {
+                    "tile001.tif",
+                    "tile001.geojson",
+                }
+        finally:
+            artifact.cleanup()
 
         mark_test_samples_stale_for_pseudo_markup(session, pseudo.id)
         detail = _test_sample_detail(session, sample_id)
@@ -1215,7 +1458,7 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         assert "изменён" in (metric.error or "")
 
 
-def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
+def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1275,17 +1518,133 @@ def test_primary_sample_is_unique_and_bulk_zip_uses_enabled_tiles(
             _TestSamplePrimaryUpdate(is_primary=True),
         )
 
-        artifact = build_primary_test_samples_download(session, config)
+        artifact = build_test_samples_download(
+            session,
+            [sample.id for sample in reversed(samples)],
+            config,
+        )
         try:
             with zipfile.ZipFile(artifact.path) as archive:
                 names = set(archive.namelist())
+                assert all(
+                    info.compress_type == zipfile.ZIP_STORED
+                    for info in archive.infolist()
+                )
             assert names == (
-                _downloaded_tile_names("tile001", folder="Вырубки_main")
-                | _downloaded_tile_names("tile001", folder="Пожары_main")
-                | _downloaded_tile_names("tile002", folder="Пожары_main")
+                _downloaded_tile_names(
+                    "tile001",
+                    folder="Вырубки_main_Выборка_2",
+                )
+                | _downloaded_tile_names(
+                    "tile001",
+                    folder="Пожары_main_Выборка_1",
+                )
+                | _downloaded_tile_names(
+                    "tile002",
+                    folder="Пожары_main_Выборка_1",
+                )
             )
         finally:
             artifact.cleanup()
+
+
+def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        samples = [
+            create_test_sample(
+                session,
+                _TestSampleCreate(
+                    name="Одинаковое имя",
+                    dataset_key="Вырубки\\main",
+                    tile_width=16,
+                    tile_height=16,
+                    image_count=1,
+                    object_count=1,
+                ),
+                config,
+            )
+            for _ in range(9)
+        ]
+        original_prepare = _test_samples._prepare_test_sample_download
+        lock = threading.Lock()
+        active = 0
+        maximum_active = 0
+        call_count = 0
+
+        def tracked_prepare(
+            descriptor,
+            staging_root,
+            *,
+            include_previews,
+        ):
+            nonlocal active, maximum_active, call_count
+            with lock:
+                active += 1
+                call_count += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                time.sleep(0.05)
+                return original_prepare(
+                    descriptor,
+                    staging_root,
+                    include_previews=include_previews,
+                )
+            finally:
+                with lock:
+                    active -= 1
+
+        monkeypatch.setattr(
+            _test_samples,
+            "_prepare_test_sample_download",
+            tracked_prepare,
+        )
+        artifact = build_test_samples_download(
+            session,
+            [sample.id for sample in samples],
+            config,
+            include_previews=False,
+        )
+        try:
+            with zipfile.ZipFile(artifact.path) as archive:
+                folders = {name.split("/", maxsplit=1)[0] for name in archive.namelist()}
+                assert len(folders) == 9
+                assert len(archive.namelist()) == 18
+                assert all(
+                    info.compress_type == zipfile.ZIP_STORED
+                    for info in archive.infolist()
+                )
+        finally:
+            artifact.cleanup()
+
+        assert call_count == 9
+        assert maximum_active == 8
+
+        broken_root = (
+            config.stored_files_root
+            / "test-samples"
+            / str(samples[0].id)
+        )
+        (broken_root / "tile_001.geojson").unlink()
+        with pytest.raises(TrainingUIAPIError, match="Файл тестового тайла не найден"):
+            build_test_samples_download(
+                session,
+                [sample.id for sample in samples],
+                config,
+                include_previews=False,
+            )
+
+    download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    assert not list(download_root.glob("*.zip"))
+    assert not list(download_root.glob(".building-*"))
 
 
 def test_test_sample_download_removes_partial_archive_when_jpeg_cannot_fit(
@@ -1853,6 +2212,27 @@ def _selection_candidate(
         source_name=source,
         territory=territory,
         column=left,
+        row=0,
+        raster_crs=crs,
+        raster_footprint=footprint,
+        annotation_footprint=footprint,
+        feature_positions=tuple(range(feature_start, feature_start + count)),
+    )
+
+
+def _selection_candidate_with_footprint(
+    crs: CRS,
+    *,
+    index: int,
+    count: int,
+    footprint,
+) -> _markup_export._Candidate:
+    feature_start = index * 100
+    return _markup_export._Candidate(
+        source_path=Path(f"scene-{index}.tif"),
+        source_name=f"region-{index}/scene-{index}.tif",
+        territory=f"region-{index}",
+        column=index,
         row=0,
         raster_crs=crs,
         raster_footprint=footprint,

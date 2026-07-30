@@ -353,6 +353,112 @@
   margin-bottom: 10px;
 }
 
+.download-selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-sample-download-grid {
+  display: grid;
+  grid-template-rows: repeat(3, minmax(58px, auto));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(250px, 1fr);
+  gap: 8px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+}
+
+.test-sample-download-choice {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.test-sample-download-choice.disabled-row {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.test-sample-download-choice input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.test-sample-download-choice .source-lines {
+  min-width: 0;
+}
+
+.test-sample-download-choice strong {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.test-sample-download-choice strong,
+.test-sample-download-choice span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-mode-fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.download-mode-fieldset legend {
+  grid-column: 1 / -1;
+  margin-bottom: 7px;
+  color: #334155;
+  font-weight: 650;
+}
+
+.download-mode-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.download-mode-choice input[type="radio"] {
+  flex: 0 0 auto;
+  width: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+}
+
+.download-mode-choice span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.download-mode-choice small {
+  color: var(--muted);
+}
+
+.download-dialog-actions {
+  justify-content: flex-end;
+}
+
 .test-sample-batch-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -747,6 +853,18 @@
   }
 
   .test-markup-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .test-sample-download-grid {
+    grid-template-rows: none;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: 1fr;
+    overflow-x: visible;
+  }
+
+  .download-mode-fieldset {
     grid-template-columns: 1fr;
   }
 

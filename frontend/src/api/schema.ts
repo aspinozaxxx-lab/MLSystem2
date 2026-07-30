@@ -499,17 +499,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/test-samples/primary/download": {
+    "/api/v1/test-samples/download": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Download Primary Test Samples */
-        get: operations["download_primary_test_samples_api_v1_test_samples_primary_download_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Download Test Samples */
+        post: operations["download_test_samples_api_v1_test_samples_download_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2159,6 +2159,16 @@ export interface components {
             /** Finished At */
             finished_at?: string | null;
         };
+        /** TestSampleBulkDownloadRequest */
+        TestSampleBulkDownloadRequest: {
+            /** Sample Ids */
+            sample_ids: string[];
+            /**
+             * Include Previews
+             * @default true
+             */
+            include_previews: boolean;
+        };
         /** TestSampleCatalogResponse */
         TestSampleCatalogResponse: {
             /** Classes */
@@ -2280,6 +2290,11 @@ export interface components {
         TestSampleDownloadRequest: {
             /** Enabled Tile Indices */
             enabled_tile_indices: number[];
+            /**
+             * Include Previews
+             * @default true
+             */
+            include_previews: boolean;
         };
         /** TestSampleDraftPreview */
         TestSampleDraftPreview: {
@@ -3538,22 +3553,35 @@ export interface operations {
             };
         };
     };
-    download_primary_test_samples_api_v1_test_samples_primary_download_get: {
+    download_test_samples_api_v1_test_samples_download_post: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleBulkDownloadRequest"];
+            };
+        };
         responses: {
-            /** @description ZIP всех основных тестовых разметок. */
+            /** @description ZIP выбранных сохранённых тестовых разметок. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

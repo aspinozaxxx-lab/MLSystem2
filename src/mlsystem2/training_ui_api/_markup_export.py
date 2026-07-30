@@ -28,6 +28,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
+from shapely.validation import make_valid
 from sqlalchemy.orm import Session
 
 from ._config import TrainingUIAPIConfig
@@ -58,10 +59,15 @@ _ORIGIN_FRACTIONS = (
     (0.75, 0.75),
 )
 _MILP_TIME_LIMIT_SECONDS = 15.0
+_MILP_MAXIMUM_TIME_LIMIT_SECONDS = 60.0
 
 
 class MarkupExportUnavailable(FileNotFoundError):
     """Временный экспорт не найден или уже просрочен."""
+
+
+class _MilpTimeLimitError(TrainingUIAPIError):
+    """Оптимизация не завершилась за допустимое время."""
 
 
 @dataclass(frozen=True)
@@ -392,17 +398,17 @@ def generate_markup_pool_files(
             break
 
     if selected_indices is None or selected_pool_count is None:
-        maximum_objects = sum(
-            sorted((item.object_count for item in candidates), reverse=True)[
-                :max_final_image_count
-            ]
+        maximum_objects = _maximum_achievable_object_count(
+            candidates,
+            max_image_count=max_final_image_count,
+            allow_touching=True,
         )
         raise TrainingUIAPIError(
             "Невозможно сформировать итоговую разметку без перекрытий: "
             f"требуется от {min_final_image_count} до {max_final_image_count} тайлов "
             f"и минимум {min_object_count} объектов; "
-            f"валидных кандидатов {len(candidates)}, верхняя оценка объектов в "
-            f"{max_final_image_count} самых плотных кандидатах — {maximum_objects}."
+            f"валидных кандидатов {len(candidates)}, достижимый максимум объектов "
+            f"при не более чем {max_final_image_count} тайлах — {maximum_objects}."
         )
 
     selected = [candidates[index] for index in selected_indices]
@@ -734,10 +740,11 @@ def _transform_between_crs(
     source_crs: PyprojCRS,
     target_crs: PyprojCRS,
 ) -> BaseGeometry:
-    if source_crs == target_crs:
-        return geometry
-    transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
-    return transform_geometry(transformer.transform, geometry)
+    transformed = geometry
+    if source_crs != target_crs:
+        transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        transformed = transform_geometry(transformer.transform, geometry)
+    return _polygonal_geometry(transformed) or GeometryCollection()
 
 
 def _clamped_origin(value: float, maximum: int) -> int:
@@ -1039,12 +1046,21 @@ def _select_candidates(
 
     source_objective = np.zeros(variable_count, dtype=float)
     source_objective[source_offset:deviation_index] = -1.0
-    source_result = _run_milp(
-        source_objective,
-        integrality=integrality,
-        bounds=bounds,
-        constraints=[*common_constraints, territory_constraint],
-    )
+    try:
+        source_result = _run_milp(
+            source_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=[*common_constraints, territory_constraint],
+        )
+    except _MilpTimeLimitError:
+        if has_final_subset:
+            return _selected_indices(
+                territory_result,
+                candidate_count,
+                request.image_count,
+            )
+        raise
     if source_result is None:
         return None
     source_optimum = int(round(float(np.sum(source_result[source_offset:deviation_index]))))
@@ -1057,12 +1073,17 @@ def _select_candidates(
 
     deviation_objective = np.zeros(variable_count, dtype=float)
     deviation_objective[deviation_index] = 1.0
-    deviation_result = _run_milp(
-        deviation_objective,
-        integrality=integrality,
-        bounds=bounds,
-        constraints=[*common_constraints, territory_constraint, source_constraint],
-    )
+    try:
+        deviation_result = _run_milp(
+            deviation_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=[*common_constraints, territory_constraint, source_constraint],
+        )
+    except _MilpTimeLimitError:
+        if has_final_subset:
+            return _selected_indices(source_result, candidate_count, request.image_count)
+        raise
     if deviation_result is None:
         return None
     deviation_optimum = int(round(float(deviation_result[deviation_index])))
@@ -1075,17 +1096,26 @@ def _select_candidates(
 
     density_objective = np.zeros(variable_count, dtype=float)
     density_objective[:candidate_count] = -object_counts
-    density_result = _run_milp(
-        density_objective,
-        integrality=integrality,
-        bounds=bounds,
-        constraints=[
-            *common_constraints,
-            territory_constraint,
-            deviation_constraint,
-            source_constraint,
-        ],
-    )
+    try:
+        density_result = _run_milp(
+            density_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=[
+                *common_constraints,
+                territory_constraint,
+                deviation_constraint,
+                source_constraint,
+            ],
+        )
+    except _MilpTimeLimitError:
+        if has_final_subset:
+            return _selected_indices(
+                deviation_result,
+                candidate_count,
+                request.image_count,
+            )
+        raise
     if density_result is None:
         return None
     object_optimum = int(
@@ -1105,22 +1135,104 @@ def _select_candidates(
     )
     stable_objective = np.zeros(variable_count, dtype=float)
     stable_objective[:candidate_count] = np.arange(1, candidate_count + 1, dtype=float)
-    stable_result = _run_milp(
-        stable_objective,
-        integrality=integrality,
-        bounds=bounds,
-        constraints=[
-            *common_constraints,
-            territory_constraint,
-            deviation_constraint,
-            source_constraint,
-            object_constraint,
-        ],
-    )
+    try:
+        stable_result = _run_milp(
+            stable_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=[
+                *common_constraints,
+                territory_constraint,
+                deviation_constraint,
+                source_constraint,
+                object_constraint,
+            ],
+        )
+    except _MilpTimeLimitError:
+        if has_final_subset:
+            return _selected_indices(
+                density_result,
+                candidate_count,
+                request.image_count,
+            )
+        raise
     if stable_result is None:
         return None
-    selected = [index for index in range(candidate_count) if stable_result[index] > 0.5]
-    return selected if len(selected) == request.image_count else None
+    return _selected_indices(stable_result, candidate_count, request.image_count)
+
+
+def _selected_indices(
+    result: np.ndarray,
+    candidate_count: int,
+    expected_count: int,
+) -> list[int] | None:
+    selected = [index for index in range(candidate_count) if result[index] > 0.5]
+    return selected if len(selected) == expected_count else None
+
+
+def _maximum_achievable_object_count(
+    candidates: list[_Candidate],
+    *,
+    max_image_count: int,
+    allow_touching: bool,
+) -> int:
+    candidate_count = len(candidates)
+    if candidate_count == 0 or max_image_count <= 0:
+        return 0
+    object_counts = np.asarray(
+        [item.object_count for item in candidates],
+        dtype=float,
+    )
+    constraints = [
+        _single_constraint(
+            candidate_count,
+            [(index, 1.0) for index in range(candidate_count)],
+            minimum=0.0,
+            maximum=float(max_image_count),
+        )
+    ]
+    conflicts = _candidate_conflicts(candidates, allow_touching=allow_touching)
+    if conflicts:
+        rows: list[int] = []
+        columns: list[int] = []
+        values: list[float] = []
+        for row_index, (left, right) in enumerate(sorted(conflicts)):
+            rows.extend((row_index, row_index))
+            columns.extend((left, right))
+            values.extend((1.0, 1.0))
+        matrix = coo_matrix(
+            (values, (rows, columns)),
+            shape=(len(conflicts), candidate_count),
+            dtype=float,
+        ).tocsr()
+        constraints.append(
+            LinearConstraint(
+                matrix,
+                np.full(len(conflicts), -np.inf),
+                np.ones(len(conflicts)),
+            )
+        )
+    result = _run_milp(
+        -object_counts,
+        integrality=np.ones(candidate_count, dtype=int),
+        bounds=Bounds(
+            np.zeros(candidate_count, dtype=float),
+            np.ones(candidate_count, dtype=float),
+        ),
+        constraints=constraints,
+        time_limit=_MILP_MAXIMUM_TIME_LIMIT_SECONDS,
+    )
+    if result is None:
+        return 0
+    return int(
+        round(
+            sum(
+                candidates[index].object_count
+                for index in range(candidate_count)
+                if result[index] > 0.5
+            )
+        )
+    )
 
 
 def _candidate_conflicts(
@@ -1149,19 +1261,24 @@ def _run_milp(
     bounds: Bounds,
     constraints: list[LinearConstraint],
     allow_infeasible: bool = False,
+    time_limit: float = _MILP_TIME_LIMIT_SECONDS,
 ) -> np.ndarray | None:
     result = milp(
         objective,
         integrality=integrality,
         bounds=bounds,
         constraints=constraints,
-        options={"presolve": True, "time_limit": _MILP_TIME_LIMIT_SECONDS},
+        options={"presolve": True, "time_limit": time_limit},
     )
     if allow_infeasible and result.status == 2:
         return None
+    if result.status == 1:
+        raise _MilpTimeLimitError(
+            "Не удалось оптимально подобрать тестовые тайлы за допустимое время."
+        )
     if not result.success or result.x is None:
         raise TrainingUIAPIError(
-            "Не удалось оптимально подобрать тестовые тайлы за допустимое время."
+            "Не удалось подобрать тестовые тайлы с заданными ограничениями."
         )
     return np.asarray(result.x)
 
@@ -1274,19 +1391,28 @@ def _clipped_features(
 
 
 def _polygonal_geometry(geometry: BaseGeometry) -> Polygon | MultiPolygon | None:
-    if isinstance(geometry, (Polygon, MultiPolygon)):
-        return geometry
-    if isinstance(geometry, GeometryCollection):
-        polygons = [
-            part
-            for part in geometry.geoms
-            if isinstance(part, (Polygon, MultiPolygon)) and not part.is_empty
-        ]
-        if not polygons:
-            return None
-        merged = unary_union(polygons)
-        return merged if isinstance(merged, (Polygon, MultiPolygon)) else None
-    return None
+    if geometry.is_empty:
+        return None
+    repaired = make_valid(geometry) if not geometry.is_valid else geometry
+    if isinstance(repaired, Polygon):
+        return repaired
+    if isinstance(repaired, MultiPolygon):
+        return repaired
+    if not isinstance(repaired, GeometryCollection):
+        return None
+    polygons: list[Polygon] = []
+    for part in repaired.geoms:
+        normalized = _polygonal_geometry(part)
+        if isinstance(normalized, Polygon):
+            polygons.append(normalized)
+        elif isinstance(normalized, MultiPolygon):
+            polygons.extend(normalized.geoms)
+    if not polygons:
+        return None
+    merged = unary_union(polygons)
+    if not merged.is_valid:
+        merged = make_valid(merged)
+    return merged if isinstance(merged, (Polygon, MultiPolygon)) else None
 
 
 def _write_geotiff(

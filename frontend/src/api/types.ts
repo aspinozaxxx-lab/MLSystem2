@@ -36,6 +36,7 @@ export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
 export type TestSampleCatalogResponse = components["schemas"]["TestSampleCatalogResponse"];
 export type TestSampleBatchCreate = components["schemas"]["TestSampleBatchCreate"];
 export type TestSampleBatchInfo = components["schemas"]["TestSampleBatchInfo"];
+export type TestSampleBulkDownloadRequest = components["schemas"]["TestSampleBulkDownloadRequest"];
 export type TestSampleCreate = components["schemas"]["TestSampleCreate"];
 export type TestSampleDetail = components["schemas"]["TestSampleDetail"];
 export type TestSampleDownloadRequest = components["schemas"]["TestSampleDownloadRequest"];
