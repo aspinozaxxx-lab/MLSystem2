@@ -77,6 +77,10 @@ class TestSampleBulkDownloadRequest(BaseModel):
 
     sample_ids: list[UUID] = Field(
         min_length=1,
+        description=(
+            "Уникальные идентификаторы сохранённых тестовых разметок; "
+            "не более одной разметки для каждого dataset_key."
+        ),
         json_schema_extra={"uniqueItems": True},
     )
     include_previews: bool = True

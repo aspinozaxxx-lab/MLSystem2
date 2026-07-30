@@ -2161,7 +2161,10 @@ export interface components {
         };
         /** TestSampleBulkDownloadRequest */
         TestSampleBulkDownloadRequest: {
-            /** Sample Ids */
+            /**
+             * Sample Ids
+             * @description Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого dataset_key.
+             */
             sample_ids: string[];
             /**
              * Include Previews

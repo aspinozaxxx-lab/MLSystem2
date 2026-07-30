@@ -5,10 +5,14 @@ import type {
   TestSampleCatalogResponse,
   TestSampleDetail,
   TestSampleDraftPreview,
+  TestSampleSummary,
 } from "../api/types";
 import {
   applyTestMarkupPreview,
+  changeTestMarkupDownloadSelection,
+  initialTestMarkupDownloadSelection,
   sortTestMarkupDatasets,
+  testMarkupDownloadOptions,
   testMarkupDraft,
   testMarkupDraftChanged,
   testMarkupStats,
@@ -27,6 +31,53 @@ function catalog(): TestSampleCatalogResponse {
             samples: [
               { id: "one", dataset_key: "ready", is_primary: true } as never,
               { id: "two", dataset_key: "ready", is_primary: false } as never,
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function downloadCatalog(): TestSampleCatalogResponse {
+  const sample = (
+    id: string,
+    datasetKey: string,
+    name: string,
+    createdAt: string,
+    isPrimary: boolean,
+    enabledImageCount: number,
+  ) => ({
+    id,
+    name,
+    dataset_key: datasetKey,
+    dataset_name: `Вырубки\\${datasetKey}`,
+    class_name: "Вырубки",
+    is_primary: isPrimary,
+    enabled_image_count: enabledImageCount,
+    created_at: createdAt,
+  }) as TestSampleSummary;
+
+  return {
+    classes: [
+      {
+        key: "deforestation",
+        name: "Вырубки",
+        datasets: [
+          {
+            key: "main",
+            name: "main",
+            samples: [
+              sample("new", "main", "Новая", "2026-07-30T10:00:00Z", false, 2),
+              sample("primary", "main", "Основная", "2026-07-29T10:00:00Z", true, 2),
+              sample("old", "main", "Старая", "2026-07-28T10:00:00Z", false, 2),
+            ],
+          },
+          {
+            key: "empty",
+            name: "empty",
+            samples: [
+              sample("empty-primary", "empty", "Пустая", "2026-07-30T10:00:00Z", true, 0),
             ],
           },
         ],
@@ -66,5 +117,35 @@ describe("тестовые разметки", () => {
     const updated = applyTestMarkupPreview(draft, preview);
     expect(updated.enabledTileIndices).toEqual([2]);
     expect(testMarkupDraftChanged(sample, updated)).toBe(true);
+  });
+
+  it("сортирует варианты и отмечает доступные основные разметки", () => {
+    const options = testMarkupDownloadOptions(downloadCatalog());
+
+    expect(options.map(({ sample }) => sample.id)).toEqual([
+      "empty-primary",
+      "primary",
+      "new",
+      "old",
+    ]);
+    expect(options[1].datasetName).toBe("main");
+    expect(initialTestMarkupDownloadSelection(options)).toEqual(new Set(["primary"]));
+  });
+
+  it("оставляет одну разметку датасета и снимает все отметки", () => {
+    const options = testMarkupDownloadOptions(downloadCatalog());
+    const initial = initialTestMarkupDownloadSelection(options);
+    const replaced = changeTestMarkupDownloadSelection(
+      options,
+      initial,
+      { type: "toggle", sampleId: "new", checked: true },
+    );
+
+    expect(replaced).toEqual(new Set(["new"]));
+    expect(changeTestMarkupDownloadSelection(
+      options,
+      replaced,
+      { type: "clear" },
+    )).toEqual(new Set());
   });
 });

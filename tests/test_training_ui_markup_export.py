@@ -915,6 +915,11 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "post" in openapi["paths"]["/api/v1/test-samples/download"]
         assert "/api/v1/test-samples/primary/download" not in openapi["paths"]
         assert "TestSampleBulkDownloadRequest" in openapi["components"]["schemas"]
+        assert "не более одной разметки" in (
+            openapi["components"]["schemas"]["TestSampleBulkDownloadRequest"][
+                "properties"
+            ]["sample_ids"]["description"]
+        )
         assert (
             openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
                 "tile_width"
@@ -1032,6 +1037,28 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             "/api/v1/test-samples/download",
             json={"sample_ids": [str(uuid.uuid4())]},
         ).status_code == 404
+        second_sample_response = client.post(
+            "/api/v1/test-samples",
+            json={
+                "name": "Вторая выборка",
+                "dataset_key": "Вырубки\\main",
+                "tile_width": 16,
+                "tile_height": 16,
+                "image_count": 1,
+                "object_count": 1,
+            },
+        )
+        assert second_sample_response.status_code == 200
+        second_sample_id = second_sample_response.json()["id"]
+        duplicate_dataset_response = client.post(
+            "/api/v1/test-samples/download",
+            json={"sample_ids": [sample_id, second_sample_id]},
+        )
+        assert duplicate_dataset_response.status_code == 400
+        assert "не более одной разметки" in duplicate_dataset_response.json()["detail"]
+        assert client.delete(
+            f"/api/v1/test-samples/{second_sample_id}"
+        ).status_code == 204
         bulk_without_previews = client.post(
             "/api/v1/test-samples/download",
             json={
@@ -1042,8 +1069,8 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert bulk_without_previews.status_code == 200
         with zipfile.ZipFile(BytesIO(bulk_without_previews.content)) as archive:
             assert set(archive.namelist()) == {
-                "Вырубки_main_Переименованная_выборка/tile001.tif",
-                "Вырубки_main_Переименованная_выборка/tile001.geojson",
+                "Вырубки_main/tile001.tif",
+                "Вырубки_main/tile001.geojson",
             }
             assert all(
                 info.compress_type == zipfile.ZIP_STORED
@@ -1533,19 +1560,74 @@ def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
             assert names == (
                 _downloaded_tile_names(
                     "tile001",
-                    folder="Вырубки_main_Выборка_2",
+                    folder="Вырубки_main",
                 )
                 | _downloaded_tile_names(
                     "tile001",
-                    folder="Пожары_main_Выборка_1",
+                    folder="Пожары_main",
                 )
                 | _downloaded_tile_names(
                     "tile002",
-                    folder="Пожары_main_Выборка_1",
+                    folder="Пожары_main",
                 )
             )
         finally:
             artifact.cleanup()
+
+
+def test_bulk_download_rejects_duplicate_datasets_and_normalized_folder_collisions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        samples = [
+            create_test_sample(
+                session,
+                _TestSampleCreate(
+                    name=f"Выборка {index}",
+                    dataset_key="Вырубки\\main",
+                    tile_width=16,
+                    tile_height=16,
+                    image_count=1,
+                    object_count=1,
+                ),
+                config,
+            )
+            for index in (1, 2)
+        ]
+        sample_ids = [sample.id for sample in samples]
+        with pytest.raises(
+            TrainingUIAPIError,
+            match="не более одной разметки каждого датасета",
+        ):
+            build_test_samples_download(session, sample_ids, config)
+
+        rows = [session.get(_TestSampleRow, sample_id) for sample_id in sample_ids]
+        assert all(row is not None for row in rows)
+        first_row, second_row = rows
+        assert first_row is not None
+        assert second_row is not None
+        first_row.dataset_name = "Вырубки\\main/test"
+        first_row.dataset_short_name = "main/test"
+        second_row.dataset_key = "Вырубки\\main test"
+        second_row.dataset_name = "Вырубки\\main test"
+        second_row.dataset_short_name = "main test"
+        session.flush()
+
+        with pytest.raises(
+            TrainingUIAPIError,
+            match="одинаковое имя папки архива «Вырубки_main_test»",
+        ):
+            build_test_samples_download(session, sample_ids, config)
+
+    download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    assert not download_root.exists()
 
 
 def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
@@ -1574,6 +1656,13 @@ def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
             )
             for _ in range(9)
         ]
+        for index, sample in enumerate(samples, start=1):
+            row = session.get(_TestSampleRow, sample.id)
+            assert row is not None
+            row.dataset_key = f"Вырубки\\set-{index:02d}"
+            row.dataset_name = f"Вырубки\\set-{index:02d}"
+            row.dataset_short_name = f"set-{index:02d}"
+        session.flush()
         original_prepare = _test_samples._prepare_test_sample_download
         lock = threading.Lock()
         active = 0

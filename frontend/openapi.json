@@ -5894,7 +5894,8 @@
             "type": "array",
             "minItems": 1,
             "uniqueItems": true,
-            "title": "Sample Ids"
+            "title": "Sample Ids",
+            "description": "Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого dataset_key."
           },
           "include_previews": {
             "type": "boolean",

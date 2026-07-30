@@ -84,11 +84,15 @@ import {
 } from "./utils/format";
 import {
   applyTestMarkupPreview,
+  changeTestMarkupDownloadSelection,
   flattenTestMarkups,
+  initialTestMarkupDownloadSelection,
   sortTestMarkupDatasets,
+  testMarkupDownloadOptions,
   testMarkupDraft,
   testMarkupDraftChanged,
   testMarkupStats,
+  type TestMarkupDownloadOption,
   type TestMarkupDraft,
 } from "./utils/testMarkups";
 
@@ -1117,7 +1121,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
       wide: true,
       body: (
         <BulkTestSampleDownloadForm
-          samples={samples}
+          catalog={catalog}
           onCancel={closeModal}
           onSubmit={downloadSelected}
         />
@@ -1221,45 +1225,30 @@ function TestSampleDownloadOptionsForm({
 }
 
 function BulkTestSampleDownloadForm({
-  samples,
+  catalog,
   onCancel,
   onSubmit,
 }: {
-  samples: TestSampleSummary[];
+  catalog: TestSampleCatalogResponse | null;
   onCancel: () => void;
   onSubmit: (sampleIds: string[], includePreviews: boolean) => Promise<boolean>;
 }) {
-  const orderedSamples = useMemo(
-    () => [...samples].sort((left, right) => {
-      const classOrder = left.class_name.localeCompare(right.class_name, "ru");
-      if (classOrder) return classOrder;
-      const datasetOrder = left.dataset_name.localeCompare(right.dataset_name, "ru");
-      if (datasetOrder) return datasetOrder;
-      const nameOrder = left.name.localeCompare(right.name, "ru");
-      return nameOrder || left.id.localeCompare(right.id);
-    }),
-    [samples],
-  );
+  const options = useMemo(() => testMarkupDownloadOptions(catalog), [catalog]);
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(
-      samples
-        .filter((sample) => sample.is_primary && sample.enabled_image_count > 0)
-        .map((sample) => sample.id),
-    ),
+    () => initialTestMarkupDownloadSelection(options),
   );
   const [includePreviews, setIncludePreviews] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const selectedIds = orderedSamples
-    .filter((sample) => selected.has(sample.id))
-    .map((sample) => sample.id);
+  const selectedIds = options
+    .filter(({ sample }) => selected.has(sample.id))
+    .map(({ sample }) => sample.id);
 
   const toggle = (sampleId: string, checked: boolean) => {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (checked) next.add(sampleId);
-      else next.delete(sampleId);
-      return next;
-    });
+    setSelected((current) => changeTestMarkupDownloadSelection(
+      options,
+      current,
+      { type: "toggle", sampleId, checked },
+    ));
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -1274,39 +1263,46 @@ function BulkTestSampleDownloadForm({
   };
 
   return (
-    <form className="form-stack" onSubmit={submit}>
+    <form className="form-stack bulk-test-sample-download-form" onSubmit={submit}>
       <div className="download-selection-header">
         <span className="field-label">Разметки</span>
         <button
           className="secondary compact-action"
           type="button"
           disabled={!selectedIds.length || submitting}
-          onClick={() => setSelected(new Set())}
+          onClick={() => setSelected((current) => changeTestMarkupDownloadSelection(
+            options,
+            current,
+            { type: "clear" },
+          ))}
         >
           Снять все
         </button>
       </div>
       <div className="test-sample-download-grid">
-        {orderedSamples.map((sample) => {
+        {options.map(({ datasetName, sample }: TestMarkupDownloadOption) => {
           const available = sample.enabled_image_count > 0;
+          const displayName = `${sample.class_name}_${datasetName}`;
+          const createdAt = formatDateTime(sample.created_at);
           return (
             <label
               className={`test-sample-download-choice ${available ? "" : "disabled-row"}`}
               key={sample.id}
-              title={available ? sample.name : "В разметке нет включённых тайлов"}
+              title={available ? sample.name : `${sample.name}: в разметке нет включённых тайлов`}
             >
               <input
                 type="checkbox"
                 checked={available && selected.has(sample.id)}
                 disabled={!available || submitting}
+                aria-label={`Выбрать разметку ${displayName}: ${sample.name}, создана ${createdAt}`}
                 onChange={(event) => toggle(sample.id, event.target.checked)}
               />
               <span className="source-lines">
                 <strong>
-                  {sample.name}
+                  {displayName}
                   {sample.is_primary ? <Star className="primary-star" size={14} fill="currentColor" aria-label="Основная разметка" /> : null}
                 </strong>
-                <span>{sample.dataset_name} · {sample.enabled_image_count} тайлов</span>
+                <span className="test-sample-download-created-at">{createdAt}</span>
               </span>
             </label>
           );

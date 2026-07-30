@@ -17,10 +17,85 @@ export type TestMarkupStats = {
   hasPrimary: boolean;
 };
 
+export type TestMarkupDownloadOption = {
+  datasetName: string;
+  sample: TestSampleSummary;
+};
+
+export type TestMarkupDownloadSelectionChange =
+  | { type: "clear" }
+  | { type: "toggle"; sampleId: string; checked: boolean };
+
 export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): TestSampleSummary[] {
   return (catalog?.classes || []).flatMap((classGroup) =>
     (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []),
   );
+}
+
+export function testMarkupDownloadOptions(
+  catalog: TestSampleCatalogResponse | null,
+): TestMarkupDownloadOption[] {
+  return (catalog?.classes || [])
+    .flatMap((classGroup) =>
+      (classGroup.datasets || []).flatMap((dataset) =>
+        (dataset.samples || []).map((sample) => ({
+          datasetName: dataset.name,
+          sample,
+        })),
+      ),
+    )
+    .sort((left, right) => {
+      const classOrder = left.sample.class_name.localeCompare(right.sample.class_name, "ru");
+      if (classOrder) return classOrder;
+      const datasetOrder = left.datasetName.localeCompare(right.datasetName, "ru");
+      if (datasetOrder) return datasetOrder;
+      const primaryOrder = Number(right.sample.is_primary) - Number(left.sample.is_primary);
+      if (primaryOrder) return primaryOrder;
+      const createdOrder = right.sample.created_at.localeCompare(left.sample.created_at);
+      return createdOrder || left.sample.id.localeCompare(right.sample.id);
+    });
+}
+
+export function initialTestMarkupDownloadSelection(
+  options: TestMarkupDownloadOption[],
+): Set<string> {
+  const selected = new Set<string>();
+  const selectedDatasets = new Set<string>();
+  for (const { sample } of options) {
+    if (
+      sample.is_primary
+      && sample.enabled_image_count > 0
+      && !selectedDatasets.has(sample.dataset_key)
+    ) {
+      selected.add(sample.id);
+      selectedDatasets.add(sample.dataset_key);
+    }
+  }
+  return selected;
+}
+
+export function changeTestMarkupDownloadSelection(
+  options: TestMarkupDownloadOption[],
+  current: ReadonlySet<string>,
+  change: TestMarkupDownloadSelectionChange,
+): Set<string> {
+  if (change.type === "clear") return new Set();
+
+  const option = options.find(({ sample }) => sample.id === change.sampleId);
+  const next = new Set(current);
+  if (!option || option.sample.enabled_image_count <= 0) return next;
+  if (!change.checked) {
+    next.delete(change.sampleId);
+    return next;
+  }
+
+  for (const candidate of options) {
+    if (candidate.sample.dataset_key === option.sample.dataset_key) {
+      next.delete(candidate.sample.id);
+    }
+  }
+  next.add(change.sampleId);
+  return next;
 }
 
 export function testMarkupStats(

@@ -1535,23 +1535,39 @@ def build_test_samples_download(
         key=lambda row: (
             row.class_name.casefold(),
             row.dataset_short_name.casefold(),
-            row.name.casefold(),
             str(row.id),
         ),
     )
+    rows_by_dataset: dict[str, list[TestSampleRow]] = defaultdict(list)
+    for row in ordered_rows:
+        rows_by_dataset[row.dataset_key].append(row)
+    duplicate_datasets = sorted(
+        {
+            dataset_rows[0].dataset_name
+            for dataset_rows in rows_by_dataset.values()
+            if len(dataset_rows) > 1
+        },
+        key=str.casefold,
+    )
+    if duplicate_datasets:
+        raise TrainingUIAPIError(
+            "Для группового скачивания можно выбрать не более одной разметки "
+            "каждого датасета. Повторяются датасеты: "
+            + ", ".join(duplicate_datasets)
+        )
     empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
     if empty:
         raise TrainingUIAPIError(
             "В выбранных тестовых разметках нет включённых тайлов: " + ", ".join(empty)
         )
 
-    download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
-    download_root.mkdir(parents=True, exist_ok=True)
-    archive_path = download_root / f"selected-{uuid.uuid4()}.zip"
     descriptors = _test_sample_download_descriptors(
         ordered_rows,
         config,
     )
+    download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    download_root.mkdir(parents=True, exist_ok=True)
+    archive_path = download_root / f"selected-{uuid.uuid4()}.zip"
     try:
         with TemporaryDirectory(
             dir=download_root,
@@ -1608,16 +1624,23 @@ def _test_sample_download_descriptors(
     rows: list[TestSampleRow],
     config: TrainingUIAPIConfig,
 ) -> list[_TestSampleDownloadDescriptor]:
-    used_folders: set[str] = set()
+    used_folders: dict[str, tuple[str, str]] = {}
     result: list[_TestSampleDownloadDescriptor] = []
     for row in rows:
         folder = _safe_name(
-            f"{row.class_name}_{row.dataset_short_name}_{row.name}",
+            f"{row.class_name}_{row.dataset_short_name}",
             "test_sample",
         )
-        if folder.casefold() in used_folders:
-            folder = f"{folder}_{str(row.id)[:8]}"
-        used_folders.add(folder.casefold())
+        collision = used_folders.get(folder.casefold())
+        if collision is not None:
+            previous_dataset_key, previous_dataset_name = collision
+            raise TrainingUIAPIError(
+                "После нормализации разные датасеты получают одинаковое имя "
+                f"папки архива «{folder}»: "
+                f"{previous_dataset_name} ({previous_dataset_key}) и "
+                f"{row.dataset_name} ({row.dataset_key})."
+            )
+        used_folders[folder.casefold()] = (row.dataset_key, row.dataset_name)
         enabled = tuple(
             tile.tile_index
             for tile in sorted(row.tiles, key=lambda tile: tile.tile_index)

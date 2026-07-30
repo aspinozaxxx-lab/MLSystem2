@@ -401,9 +401,10 @@ tr:last-child td {
 
 .modal-card {
   width: min(560px, 100%);
-  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .modal-card.wide {
@@ -432,8 +433,10 @@ tr:last-child td {
 }
 
 .modal-body {
+  min-height: 0;
   padding: 18px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .log-view {
