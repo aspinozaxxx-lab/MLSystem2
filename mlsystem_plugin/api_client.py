@@ -6,7 +6,12 @@ import json
 from typing import Any
 
 from qgis.PyQt.QtCore import QByteArray, QObject, QTimer, QUrl, pyqtSignal
-from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from qgis.PyQt.QtNetwork import (
+    QNetworkAccessManager,
+    QNetworkCookieJar,
+    QNetworkReply,
+    QNetworkRequest,
+)
 
 from .contracts import build_job_payload
 
@@ -22,16 +27,27 @@ class APIClient(QObject):
         super().__init__(parent)
         self._manager = QNetworkAccessManager(self)
         self._server_url = ""
-        self._token = ""
         self._timeout_ms = 30_000
         self._pending: set[QNetworkReply] = set()
 
-    def configure(self, server_url: str, token: str, timeout_ms: int) -> None:
-        """Obnovit parametry bez logirovaniya sekreta."""
+    def configure(self, server_url: str, timeout_ms: int) -> None:
+        """Обновить адрес сервера и сетевой тайм-аут."""
 
-        self._server_url = server_url.rstrip("/")
-        self._token = token
+        normalized_url = server_url.rstrip("/")
+        if normalized_url != self._server_url:
+            self._manager.setCookieJar(QNetworkCookieJar(self._manager))
+        self._server_url = normalized_url
         self._timeout_ms = max(1_000, int(timeout_ms))
+
+    def login(self, username: str, password: str) -> None:
+        """Создать серверную сессию по обычной учётной записи MLSystem."""
+
+        self._request(
+            "login",
+            "POST",
+            "/api/v1/auth/login",
+            {"username": username, "password": password},
+        )
 
     # Zaprashivaet dostupnye klassy.
     def get_classes(self, operation: str = "classes") -> None:
@@ -84,11 +100,6 @@ class APIClient(QObject):
         request = QNetworkRequest(QUrl(f"{self._server_url}{path}"))
         request.setRawHeader(QByteArray(b"Accept"), QByteArray(b"application/json"))
         request.setRawHeader(QByteArray(b"Content-Type"), QByteArray(b"application/json"))
-        if self._token:
-            request.setRawHeader(
-                QByteArray(b"Authorization"),
-                QByteArray(f"Bearer {self._token}".encode("utf-8")),
-            )
         data = QByteArray(json.dumps(payload or {}, ensure_ascii=False).encode("utf-8"))
         if method == "GET":
             reply = self._manager.get(request)
@@ -105,7 +116,7 @@ class APIClient(QObject):
         timer.start(self._timeout_ms)
         reply.finished.connect(lambda: self._finished(operation, reply, timer))
 
-    # Razbiraet otvet bez vyvoda tokena v log.
+    # Разбирает ответ без вывода пароля или cookie в журнал.
     def _finished(self, operation: str, reply: QNetworkReply, timer: QTimer) -> None:
         timer.stop()
         self._pending.discard(reply)
@@ -129,9 +140,15 @@ class APIClient(QObject):
             error = payload["error"]
             code = str(error.get("code") or code)
             message = str(error.get("message") or message)
-        elif status in {401, 403}:
+        elif status == 401 and operation == "login":
             code = "AUTH_FAILED"
-            message = "Сервер отклонил токен доступа."
+            message = str(payload.get("detail") or "Неверные имя пользователя или пароль.")
+        elif status == 401:
+            code = "SESSION_EXPIRED"
+            message = "Сеанс истёк. Войдите повторно."
+        elif status == 403:
+            code = "ACCESS_DENIED"
+            message = "Сервер запретил доступ для этой учётной записи."
         elif status:
             code = f"HTTP_{status}"
             message = f"Сервер вернул ошибку HTTP {status}."

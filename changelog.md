@@ -2,11 +2,12 @@
 
 ## 2026-08-03
 
-- Dobavlen servernyi AOI API dlya QGIS s fiksaciei poslednei prigodnoi modeli, prostranstvennym otborom TIFF i obshchei inference-ocheredyu.
-- Psevdorazmetka obrabatyvaetsya tolko v peresekayushchih AOI oknah, obrezaetsya po AOI i vozvrashchaetsya kak FeatureCollection so stabilnymi candidate_id i metadannymi pokrytiya.
-- Dobavlen otdelnyi QGIS-plagin s neblokiruyushchim HTTP, persistent GeoPackage staging, yavno vybrannymi celevymi sloyami i sopostavleniem polei.
-- Resheniya review i razbienie poligonov poluchili edinyi QUndoStack; primenenie v dva sloya proveriaet candidate_id i ne sozdaet dublikaty.
-- Dobavleny servernye, chistye Python i headless QGIS 4.0 testy, a takzhe dokumentaciya API, ustanovki i ruchnoi proverki.
+- Добавлен серверный AOI API для QGIS с фиксацией последней пригодной модели, пространственным отбором TIFF и общей очередью инференса.
+- Псевдоразметка обрабатывается только в пересекающих AOI окнах, обрезается по AOI и возвращается как FeatureCollection со стабильными candidate_id и метаданными покрытия.
+- Добавлен отдельный QGIS-плагин с неблокирующим HTTP, постоянным GeoPackage staging, явно выбранными целевыми слоями и сопоставлением полей.
+- Решения проверки и разбиение полигонов получили единый QUndoStack; применение в два слоя проверяет candidate_id и не создаёт дубликаты.
+- Добавлены серверные, чистые Python и headless QGIS 4.0 тесты, а также документация API, установки и ручной проверки.
+- Плагин версии 0.1.1 использует обычный вход MLSystem вместо ручного Bearer-токена; адрес `https://grovika.ru` и пользователь `mluser` заполнены по умолчанию.
 
 ## 2026-07-30
 

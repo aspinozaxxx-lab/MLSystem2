@@ -11,14 +11,16 @@ from qgis.core import QgsProject, QgsSettings
 
 _ROOT = "mlsystem2/pseudolabel"
 _MAPPING_KEYS = ("class_id", "source", "confidence", "candidate_id", "model_version")
+_DEFAULT_SERVER_URL = "https://grovika.ru"
+_LEGACY_SERVER_URL = "http://127.0.0.1:8091"
 
 
 @dataclass(frozen=True)
 class PluginSettings:
     """Minimalnye sohranyaemye nastroiki plagina."""
 
-    server_url: str = "http://127.0.0.1:8091"
-    token: str = ""
+    server_url: str = _DEFAULT_SERVER_URL
+    username: str = "mluser"
     request_timeout_ms: int = 30_000
     poll_interval_ms: int = 2_000
     max_part_area_m2: float = 1_000_000.0
@@ -30,9 +32,13 @@ def load_settings() -> PluginSettings:
     """Zagruzit nastroiki iz QgsSettings."""
 
     settings = QgsSettings()
+    server_url = str(settings.value(f"{_ROOT}/server_url", _DEFAULT_SERVER_URL)).strip()
+    if not server_url or server_url == _LEGACY_SERVER_URL:
+        server_url = _DEFAULT_SERVER_URL
+    settings.remove(f"{_ROOT}/token")
     return PluginSettings(
-        server_url=str(settings.value(f"{_ROOT}/server_url", "http://127.0.0.1:8091")),
-        token=str(settings.value(f"{_ROOT}/token", "")),
+        server_url=server_url,
+        username=str(settings.value(f"{_ROOT}/username", "mluser")).strip() or "mluser",
         request_timeout_ms=int(settings.value(f"{_ROOT}/request_timeout_ms", 30_000)),
         poll_interval_ms=int(settings.value(f"{_ROOT}/poll_interval_ms", 2_000)),
         max_part_area_m2=float(settings.value(f"{_ROOT}/max_part_area_m2", 1_000_000.0)),
@@ -42,9 +48,10 @@ def load_settings() -> PluginSettings:
 
 
 def save_settings(value: PluginSettings) -> None:
-    """Sohranit nastroiki bez vyvoda tokena v log."""
+    """Сохранить несекретные настройки плагина."""
 
     settings = QgsSettings()
+    settings.remove(f"{_ROOT}/token")
     for key, item in value.__dict__.items():
         settings.setValue(f"{_ROOT}/{key}", item)
 

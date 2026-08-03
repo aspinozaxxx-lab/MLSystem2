@@ -187,12 +187,15 @@ class MLSystemDockWidget(QDockWidget):
         connection = QGroupBox("Подключение")
         connection_form = QFormLayout(connection)
         self.server_url = QLineEdit()
-        self.token = QLineEdit()
-        self.token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.check_connection = QPushButton("Проверить и загрузить классы")
+        self.username = QLineEdit()
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.returnPressed.connect(self._request_classes)
+        self.check_connection = QPushButton("Войти и загрузить классы")
         self.check_connection.clicked.connect(self._request_classes)
         connection_form.addRow("URL сервера", self.server_url)
-        connection_form.addRow("Токен", self.token)
+        connection_form.addRow("Пользователь", self.username)
+        connection_form.addRow("Пароль", self.password)
         connection_form.addRow(self.check_connection)
         root.addWidget(connection)
 
@@ -344,7 +347,7 @@ class MLSystemDockWidget(QDockWidget):
     # Perenosit sohranennye nastroiki v kontroly.
     def _load_settings_to_ui(self) -> None:
         self.server_url.setText(self.settings.server_url)
-        self.token.setText(self.settings.token)
+        self.username.setText(self.settings.username)
         self.max_area.setValue(self.settings.max_part_area_m2)
         self.min_area.setValue(self.settings.min_part_area_m2)
         self.auto_split.setChecked(self.settings.auto_split)
@@ -354,7 +357,7 @@ class MLSystemDockWidget(QDockWidget):
         self.settings = replace(
             self.settings,
             server_url=self.server_url.text().strip(),
-            token=self.token.text(),
+            username=self.username.text().strip(),
             max_part_area_m2=self.max_area.value(),
             min_part_area_m2=self.min_area.value(),
             auto_split=self.auto_split.isChecked(),
@@ -362,7 +365,6 @@ class MLSystemDockWidget(QDockWidget):
         save_settings(self.settings)
         self.api.configure(
             self.settings.server_url,
-            self.settings.token,
             self.settings.request_timeout_ms,
         )
 
@@ -388,11 +390,17 @@ class MLSystemDockWidget(QDockWidget):
             if index >= 0:
                 combo.setCurrentIndex(index)
 
-    # Proveriaet podklyuchenie cherez zashchishchennyi endpoint klassov.
+    # Выполняет вход и после него загружает доступные классы.
     def _request_classes(self) -> None:
         self.save_current_settings()
-        self.status_label.setText("Статус: подключение…")
-        self.api.get_classes()
+        username = self.username.text().strip()
+        password = self.password.text()
+        if not username or not password:
+            self._show_error("Введите имя пользователя и пароль MLSystem.")
+            return
+        self.check_connection.setEnabled(False)
+        self.status_label.setText("Статус: вход…")
+        self.api.login(username, password)
 
     # Pokazyvaet versiyu modeli vybrannogo klassa.
     def _class_changed(self) -> None:
@@ -489,7 +497,12 @@ class MLSystemDockWidget(QDockWidget):
 
     # Marshrutiziruet uspeshnyi asinkhronnyi otvet.
     def _api_succeeded(self, operation: str, payload: object) -> None:
-        if operation == "classes":
+        if operation == "login":
+            self.password.clear()
+            self.status_label.setText("Статус: вход выполнен; загрузка классов…")
+            self.api.get_classes()
+        elif operation == "classes":
+            self.check_connection.setEnabled(True)
             self.class_combo.clear()
             classes = payload.get("classes", []) if isinstance(payload, dict) else []
             for item in classes:
@@ -571,6 +584,8 @@ class MLSystemDockWidget(QDockWidget):
             self._schedule_poll(delay)
             return
         self._show_error(f"{message} [{code}]")
+        if operation in {"login", "classes"}:
+            self.check_connection.setEnabled(True)
         if operation in {"create_job", "job_result", "cancel_job"}:
             self._job_finished()
 

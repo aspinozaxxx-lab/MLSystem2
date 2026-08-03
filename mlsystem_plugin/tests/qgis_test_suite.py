@@ -63,7 +63,7 @@ class QGISPluginTests(unittest.TestCase):
     # Proveriaet nemedlennyi vozvrat upravleniya event loop.
     def test_api_start_is_non_blocking(self) -> None:
         client = APIClient()
-        client.configure("http://127.0.0.1:9", "secret", 1_000)
+        client.configure("http://127.0.0.1:9", 1_000)
         started = time.perf_counter()
 
         client.create_job(
@@ -76,19 +76,27 @@ class QGISPluginTests(unittest.TestCase):
         client.abort_all()
         QCoreApplication.processEvents()
 
-    # Proveriaet realnyi asinkhronnyi GET spiska klassov.
-    def test_api_fetches_class_list(self) -> None:
+    # Проверяет вход по учётной записи и передачу серверной cookie.
+    def test_api_login_and_fetches_class_list(self) -> None:
         server = ThreadingHTTPServer(("127.0.0.1", 0), _ClassListHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         client = APIClient()
-        client.configure(f"http://127.0.0.1:{server.server_port}", "secret", 2_000)
+        client.configure(f"http://127.0.0.1:{server.server_port}", 2_000)
         loop = QEventLoop()
         received: list[object] = []
-        client.succeeded.connect(lambda operation, payload: (received.append(payload), loop.quit()))
+
+        def handle_success(operation: str, payload: object) -> None:
+            if operation == "login":
+                client.get_classes()
+                return
+            received.append(payload)
+            loop.quit()
+
+        client.succeeded.connect(handle_success)
         client.failed.connect(lambda *args: loop.quit())
 
-        client.get_classes()
+        client.login("mluser", "secret")
         QTimer.singleShot(3_000, loop.quit)
         loop.exec()
         server.shutdown()
@@ -104,6 +112,8 @@ class QGISPluginTests(unittest.TestCase):
         plugin.initGui()
 
         self.assertIsNotNone(plugin.dock)
+        self.assertEqual(plugin.dock.server_url.text(), "https://grovika.ru")
+        self.assertEqual(plugin.dock.username.text(), "mluser")
         self.assertEqual(len(plugin._shortcuts), 9)
         self.assertTrue(all(not shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(True)
@@ -308,12 +318,42 @@ class _FakeIface:
 class _ClassListHandler(BaseHTTPRequestHandler):
     """Minimalnyi lokalnyi server dlya proverki Qt network."""
 
+    # Создаёт тестовую cookie после проверки обычной учётной записи.
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        if self.path != "/api/v1/auth/login" or payload != {
+            "username": "mluser",
+            "password": "secret",
+        }:
+            self._json_response(401, {"detail": "Неверный логин или пароль"})
+            return
+        self._json_response(
+            200,
+            {"status": "ok"},
+            {"Set-Cookie": "mlsystem2_session=test-session; Path=/; HttpOnly"},
+        )
+
     # Vozvrashchaet testovyi spisok klassov.
     def do_GET(self) -> None:  # noqa: N802
-        body = json.dumps({"classes": [{"class_id": "class-1"}]}).encode("utf-8")
-        self.send_response(200)
+        if "mlsystem2_session=test-session" not in self.headers.get("Cookie", ""):
+            self._json_response(401, {"detail": "Требуется авторизация"})
+            return
+        self._json_response(200, {"classes": [{"class_id": "class-1"}]})
+
+    # Отправляет компактный JSON-ответ локального сервера.
+    def _json_response(
+        self,
+        status: int,
+        payload: dict[str, object],
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
