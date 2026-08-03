@@ -553,6 +553,9 @@ class MLSystemDockWidget(QDockWidget):
             warnings = payload.get("warnings") or []
             coverage = payload.get("coverage_percent")
             messages = [str(item) for item in warnings]
+            source_image_ids = payload.get("source_image_ids") or []
+            if isinstance(source_image_ids, list) and source_image_ids:
+                messages.append(f"Выбрано снимков: {len(source_image_ids)}")
             if coverage is not None:
                 messages.append(f"Покрытие AOI: {float(coverage):.2f}%")
             self.warning_label.setText("\n".join(messages))
@@ -561,6 +564,18 @@ class MLSystemDockWidget(QDockWidget):
             elif status in {"failed", "cancelled"}:
                 error = payload.get("error")
                 if isinstance(error, dict):
+                    details = error.get("details")
+                    failed_sources = (
+                        details.get("failed_source_image_ids")
+                        if isinstance(details, dict)
+                        else None
+                    )
+                    if isinstance(failed_sources, list) and failed_sources:
+                        messages.append(
+                            "Не обработаны снимки: "
+                            + ", ".join(str(item) for item in failed_sources)
+                        )
+                        self.warning_label.setText("\n".join(messages))
                     self._show_error(str(error.get("message") or "Задание завершилось с ошибкой."))
                 self._job_finished()
             else:

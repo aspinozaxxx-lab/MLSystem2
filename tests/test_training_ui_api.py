@@ -54,6 +54,14 @@ def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
 
 
+def test_aoi_report_requires_every_selected_image_to_finish() -> None:
+    complete = {"status": "ok", "processed": 2, "unique_image_count": 2, "failed": 0}
+    partial = {"status": "partial", "processed": 1, "unique_image_count": 2, "failed": 1}
+
+    assert _worker._pseudolabel_aoi_report_allows_success(complete) is True
+    assert _worker._pseudolabel_aoi_report_allows_success(partial) is False
+
+
 def test_pseudo_geojson_download_name_normalizes_legacy_slashes() -> None:
     row = StoredFileRow(
         kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,

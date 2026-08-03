@@ -617,7 +617,23 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         if not is_aoi:
             return summary
         error = None
-        if status == "error":
+        if failures:
+            error = {
+                "code": "SOURCE_IMAGE_PROCESSING_FAILED",
+                "message": "Не удалось обработать все снимки зоны интереса.",
+                "details": {
+                    "failed_source_image_ids": [
+                        str(item.get("scene_id"))
+                        for item in failures
+                        if item.get("scene_id") is not None
+                    ],
+                    "selected_image_count": len(scene_inputs),
+                    "processed_image_count": sum(
+                        1 for item in scene_reports if item.get("status") == "ok"
+                    ),
+                },
+            }
+        elif status == "error":
             error = {
                 "code": "INFERENCE_FAILED",
                 "message": "Не удалось обработать ни одного исходного снимка.",
@@ -707,63 +723,43 @@ def _infer_scene(
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
-        raster_aoi = None
-        selected_windows = _windows(dataset.width, dataset.height, tile_size, stride)
-        mask_window = Window(0, 0, dataset.width, dataset.height)
         if aoi_wgs84 is not None:
             if dataset.crs is None:
                 raise RuntimeError("У исходного снимка отсутствует CRS.")
             to_raster = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
             raster_aoi = shapely_transform(to_raster.transform, aoi_wgs84)
-            selected_windows = [
-                window
-                for window in _windows(dataset.width, dataset.height, tile_size, stride)
-                if box(*window_bounds(window, dataset.transform)).intersects(raster_aoi)
-            ]
-            if not selected_windows:
-                return []
-            min_col = max(0, min(int(window.col_off) for window in selected_windows))
-            min_row = max(0, min(int(window.row_off) for window in selected_windows))
-            max_col = min(
-                dataset.width,
-                max(int(window.col_off + window.width) for window in selected_windows),
-            )
-            max_row = min(
-                dataset.height,
-                max(int(window.row_off + window.height) for window in selected_windows),
-            )
-            mask_window = Window(min_col, min_row, max_col - min_col, max_row - min_row)
-        mask = np.zeros((int(mask_window.height), int(mask_window.width)), dtype=np.uint8)
-        confidence_map = np.zeros(mask.shape, dtype=np.float32)
-        for window in selected_windows:
-            image = dataset.read(
-                indexes=input_indexes,
-                window=window,
-                boundless=True,
-                fill_value=nodata,
-                out_shape=(len(input_indexes), tile_size, tile_size),
-                masked=False,
-            )
-            if np.all(_nodata_pixels(image, nodata)):
-                continue
-            tile_mask, tile_confidence = _predict_tile(
-                torch,
-                model,
-                image.astype(np.float32, copy=False),
+            prediction = _infer_aoi_scene_mask(
+                dataset=dataset,
+                input_indexes=input_indexes,
+                nodata=nodata,
+                raster_aoi=raster_aoi,
+                tile_size=tile_size,
+                stride=stride,
+                torch=torch,
+                model=model,
                 threshold=threshold,
                 device=device,
             )
-            crop_h = min(tile_size, dataset.height - int(window.row_off))
-            crop_w = min(tile_size, dataset.width - int(window.col_off))
-            y0 = int(window.row_off - mask_window.row_off)
-            x0 = int(window.col_off - mask_window.col_off)
-            mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
-                mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
-                tile_mask[:crop_h, :crop_w],
-            )
-            confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
-                confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w],
-                tile_confidence[:crop_h, :crop_w],
+            if prediction is None:
+                return []
+            mask, confidence_map, mask_window = prediction
+        else:
+            mask_window = Window(0, 0, dataset.width, dataset.height)
+            mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
+            confidence_map = np.zeros(mask.shape, dtype=np.float32)
+            _infer_windows_into_mask(
+                dataset=dataset,
+                input_indexes=input_indexes,
+                nodata=nodata,
+                windows=list(_windows(dataset.width, dataset.height, tile_size, stride)),
+                mask_window=mask_window,
+                mask=mask,
+                confidence_map=confidence_map,
+                tile_size=tile_size,
+                torch=torch,
+                model=model,
+                threshold=threshold,
+                device=device,
             )
         mask = _postprocess_mask(mask, postprocess_profile)
         return _features_from_mask(
@@ -776,6 +772,263 @@ def _infer_scene(
             postprocess_profile=postprocess_profile,
             confidence_map=confidence_map,
         )
+
+
+def _infer_aoi_scene_mask(
+    *,
+    dataset,
+    input_indexes: tuple[int, ...],
+    nodata: object,
+    raster_aoi: BaseGeometry,
+    tile_size: int,
+    stride: int,
+    torch,
+    model,
+    threshold: float,
+    device: str,
+) -> tuple[np.ndarray, np.ndarray, Window] | None:
+    """Распознать AOI и расширить контекст до окончания связных объектов."""
+
+    _validate_window_grid(tile_size, stride)
+    row_offsets = list(range(0, dataset.height, stride))
+    column_offsets = list(range(0, dataset.width, stride))
+    active_keys = {
+        (row_index, column_index)
+        for row_index, row_offset in enumerate(row_offsets)
+        for column_index, column_offset in enumerate(column_offsets)
+        if box(
+            *window_bounds(
+                Window(column_offset, row_offset, tile_size, tile_size),
+                dataset.transform,
+            )
+        ).intersects(raster_aoi)
+    }
+    if not active_keys:
+        return None
+
+    processed_keys: set[tuple[int, int]] = set()
+    mask_window: Window | None = None
+    mask: np.ndarray | None = None
+    confidence_map: np.ndarray | None = None
+    while True:
+        expanded_window = _window_keys_envelope(
+            active_keys,
+            row_offsets,
+            column_offsets,
+            dataset.width,
+            dataset.height,
+            tile_size,
+        )
+        if mask_window != expanded_window:
+            expanded_shape = (int(expanded_window.height), int(expanded_window.width))
+            expanded_mask = np.zeros(expanded_shape, dtype=np.uint8)
+            expanded_confidence = np.zeros(expanded_shape, dtype=np.float32)
+            if mask_window is not None and mask is not None and confidence_map is not None:
+                y0 = int(mask_window.row_off - expanded_window.row_off)
+                x0 = int(mask_window.col_off - expanded_window.col_off)
+                expanded_mask[y0 : y0 + mask.shape[0], x0 : x0 + mask.shape[1]] = mask
+                expanded_confidence[
+                    y0 : y0 + confidence_map.shape[0],
+                    x0 : x0 + confidence_map.shape[1],
+                ] = confidence_map
+            mask_window = expanded_window
+            mask = expanded_mask
+            confidence_map = expanded_confidence
+
+        pending_keys = sorted(active_keys - processed_keys)
+        pending_windows = [
+            Window(
+                column_offsets[column_index],
+                row_offsets[row_index],
+                tile_size,
+                tile_size,
+            )
+            for row_index, column_index in pending_keys
+        ]
+        assert mask_window is not None and mask is not None and confidence_map is not None
+        _infer_windows_into_mask(
+            dataset=dataset,
+            input_indexes=input_indexes,
+            nodata=nodata,
+            windows=pending_windows,
+            mask_window=mask_window,
+            mask=mask,
+            confidence_map=confidence_map,
+            tile_size=tile_size,
+            torch=torch,
+            model=model,
+            threshold=threshold,
+            device=device,
+        )
+        processed_keys.update(pending_keys)
+        coverage_mask = _window_keys_coverage_mask(
+            active_keys,
+            row_offsets,
+            column_offsets,
+            mask_window,
+            dataset.width,
+            dataset.height,
+            tile_size,
+        )
+        if not _aoi_component_touches_unprocessed_area(
+            mask,
+            coverage_mask,
+            dataset.window_transform(mask_window),
+            raster_aoi,
+        ):
+            break
+        expanded_keys = _expand_window_keys(
+            active_keys,
+            len(row_offsets),
+            len(column_offsets),
+        )
+        if expanded_keys == active_keys:
+            break
+        active_keys = expanded_keys
+
+    return mask, confidence_map, mask_window
+
+
+def _infer_windows_into_mask(
+    *,
+    dataset,
+    input_indexes: tuple[int, ...],
+    nodata: object,
+    windows: list[Window],
+    mask_window: Window,
+    mask: np.ndarray,
+    confidence_map: np.ndarray,
+    tile_size: int,
+    torch,
+    model,
+    threshold: float,
+    device: str,
+) -> None:
+    """Добавить предсказания окон в общую маску без повторной обработки."""
+
+    for window in windows:
+        image = dataset.read(
+            indexes=input_indexes,
+            window=window,
+            boundless=True,
+            fill_value=nodata,
+            out_shape=(len(input_indexes), tile_size, tile_size),
+            masked=False,
+        )
+        if np.all(_nodata_pixels(image, nodata)):
+            continue
+        tile_mask, tile_confidence = _predict_tile(
+            torch,
+            model,
+            image.astype(np.float32, copy=False),
+            threshold=threshold,
+            device=device,
+        )
+        crop_h = min(tile_size, dataset.height - int(window.row_off))
+        crop_w = min(tile_size, dataset.width - int(window.col_off))
+        y0 = int(window.row_off - mask_window.row_off)
+        x0 = int(window.col_off - mask_window.col_off)
+        mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
+            mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
+            tile_mask[:crop_h, :crop_w],
+        )
+        confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
+            confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w],
+            tile_confidence[:crop_h, :crop_w],
+        )
+
+
+def _window_keys_envelope(
+    keys: set[tuple[int, int]],
+    row_offsets: list[int],
+    column_offsets: list[int],
+    width: int,
+    height: int,
+    tile_size: int,
+) -> Window:
+    rows = [row_offsets[row_index] for row_index, _ in keys]
+    columns = [column_offsets[column_index] for _, column_index in keys]
+    min_row = min(rows)
+    min_column = min(columns)
+    max_row = min(height, max(rows) + tile_size)
+    max_column = min(width, max(columns) + tile_size)
+    return Window(
+        min_column,
+        min_row,
+        max_column - min_column,
+        max_row - min_row,
+    )
+
+
+def _window_keys_coverage_mask(
+    keys: set[tuple[int, int]],
+    row_offsets: list[int],
+    column_offsets: list[int],
+    mask_window: Window,
+    width: int,
+    height: int,
+    tile_size: int,
+) -> np.ndarray:
+    coverage = np.zeros((int(mask_window.height), int(mask_window.width)), dtype=bool)
+    for row_index, column_index in keys:
+        row_offset = row_offsets[row_index]
+        column_offset = column_offsets[column_index]
+        crop_h = min(tile_size, height - row_offset)
+        crop_w = min(tile_size, width - column_offset)
+        y0 = int(row_offset - mask_window.row_off)
+        x0 = int(column_offset - mask_window.col_off)
+        coverage[y0 : y0 + crop_h, x0 : x0 + crop_w] = True
+    return coverage
+
+
+def _aoi_component_touches_unprocessed_area(
+    mask: np.ndarray,
+    coverage_mask: np.ndarray,
+    transform,
+    raster_aoi: BaseGeometry,
+) -> bool:
+    labels, component_count = label_components(mask > 0, structure=_label_structure())
+    if not component_count:
+        return False
+    aoi_mask = rasterio_features.rasterize(
+        [(raster_aoi, 1)],
+        out_shape=mask.shape,
+        transform=transform,
+        fill=0,
+        dtype="uint8",
+        all_touched=True,
+    )
+    component_ids = np.unique(labels[aoi_mask > 0])
+    component_ids = component_ids[component_ids > 0]
+    if component_ids.size == 0:
+        return False
+    relevant = np.isin(labels, component_ids)
+    adjacent_unprocessed = np.zeros(mask.shape, dtype=bool)
+    adjacent_unprocessed[0, :] = True
+    adjacent_unprocessed[-1, :] = True
+    adjacent_unprocessed[:, 0] = True
+    adjacent_unprocessed[:, -1] = True
+    adjacent_unprocessed[1:, :] |= ~coverage_mask[:-1, :]
+    adjacent_unprocessed[:-1, :] |= ~coverage_mask[1:, :]
+    adjacent_unprocessed[:, 1:] |= ~coverage_mask[:, :-1]
+    adjacent_unprocessed[:, :-1] |= ~coverage_mask[:, 1:]
+    return bool(np.any(relevant & adjacent_unprocessed))
+
+
+def _expand_window_keys(
+    keys: set[tuple[int, int]],
+    row_count: int,
+    column_count: int,
+) -> set[tuple[int, int]]:
+    expanded = set(keys)
+    for row_index, column_index in keys:
+        for row_delta in (-1, 0, 1):
+            for column_delta in (-1, 0, 1):
+                row = row_index + row_delta
+                column = column_index + column_delta
+                if 0 <= row < row_count and 0 <= column < column_count:
+                    expanded.add((row, column))
+    return expanded
 
 
 def _infer_test_tile_mask(
@@ -1071,14 +1324,14 @@ def _finalize_aoi_features(
     config: dict[str, Any],
     source_image_ids: list[str],
 ) -> list[dict[str, Any]]:
-    """Obrezat kandidaty, razdelit Polygon i prisvoit stabilnye ID."""
+    """Оставить целые пересекающие AOI полигоны и присвоить стабильные ID."""
 
-    clipped: list[tuple[Polygon, list[str], float | None]] = []
+    selected: list[tuple[Polygon, list[str], float | None]] = []
     for feature in features:
         geometry_data = feature.get("geometry")
         if geometry_data is None:
             continue
-        geometry = _make_valid(shape(geometry_data).intersection(aoi_wgs84))
+        geometry = _make_valid(shape(geometry_data))
         properties = feature.get("properties") or {}
         feature_sources = properties.get("source_scene_ids")
         if not isinstance(feature_sources, list):
@@ -1090,12 +1343,16 @@ def _finalize_aoi_features(
         ]
         confidence = _normalized_confidence(properties.get("confidence"))
         for polygon in _iter_polygons(geometry):
-            if not polygon.is_empty and polygon.area > 0:
-                clipped.append((polygon, normalized_sources, confidence))
-    clipped.sort(key=lambda item: item[0].wkb_hex)
+            if polygon.is_empty or polygon.area <= 0:
+                continue
+            overlap = _make_valid(polygon.intersection(aoi_wgs84))
+            if overlap.is_empty or overlap.area <= 0:
+                continue
+            selected.append((polygon, normalized_sources, confidence))
+    selected.sort(key=lambda item: item[0].wkb_hex)
     output: list[dict[str, Any]] = []
     job_id = str(config.get("job_id") or "")
-    for polygon, feature_sources, confidence in clipped:
+    for polygon, feature_sources, confidence in selected:
         candidate_id = uuid.uuid5(
             uuid.NAMESPACE_URL,
             f"mlsystem2:pseudolabel:{job_id}:{polygon.wkb_hex}",
@@ -1671,9 +1928,17 @@ def _resolve_checkpoint(config: dict[str, Any], dst_dir: Path) -> Path:
 
 
 def _windows(width: int, height: int, tile_size: int, stride: int):
+    _validate_window_grid(tile_size, stride)
     for y in range(0, height, stride):
         for x in range(0, width, stride):
             yield Window(x, y, tile_size, tile_size)
+
+
+def _validate_window_grid(tile_size: int, stride: int) -> None:
+    if tile_size <= 0 or stride <= 0:
+        raise RuntimeError("Размер тайла и шаг окон должны быть положительными.")
+    if stride > tile_size:
+        raise RuntimeError("Шаг окон не должен превышать размер тайла: иначе появляются разрывы.")
 
 
 def _safe_dir_name(value: str) -> str:

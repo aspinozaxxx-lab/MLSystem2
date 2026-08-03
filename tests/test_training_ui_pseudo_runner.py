@@ -60,6 +60,60 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     assert features[0]["properties"]["confidence"] == pytest.approx(0.83)
 
 
+def test_aoi_inference_expands_windows_until_internal_object_is_complete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "scene.tif"
+    image = np.ones((4, 32, 64), dtype=np.uint8)
+    image[0, 8:24, 4:45] = 9
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=64,
+        height=32,
+        count=4,
+        dtype="uint8",
+        nodata=0,
+        crs="EPSG:4326",
+        transform=from_origin(0, 32, 1, 1),
+    ) as dataset:
+        dataset.write(image)
+
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "_predict_tile",
+        lambda _torch, _model, tile, **_kwargs: (
+            (tile[0] == 9).astype(np.uint8),
+            (tile[0] == 9).astype(np.float32),
+        ),
+    )
+
+    features = _pseudo_runner._infer_scene(
+        torch=object(),
+        model=object(),
+        image_path=image_path,
+        scene="scene",
+        config={"class_key": "rivers"},
+        tile_size=16,
+        stride=16,
+        batch_size=1,
+        threshold=0.5,
+        device="cpu",
+        postprocess_profile=_select_postprocess_profile(1),
+        aoi_wgs84=box(20, 10, 24, 22),
+    )
+
+    assert len(features) == 1
+    assert shape(features[0]["geometry"]).bounds == pytest.approx((4.0, 8.0, 45.0, 24.0))
+
+
+def test_window_grid_rejects_stride_that_would_leave_internal_gaps() -> None:
+    with pytest.raises(RuntimeError, match="появляются разрывы"):
+        list(_pseudo_runner._windows(100, 100, tile_size=16, stride=17))
+
+
 def test_pseudo_runner_accepts_only_rgb_or_rgba_for_three_channel_checkpoint(tmp_path: Path) -> None:
     image_path = tmp_path / "rgb.tif"
     with rasterio.open(

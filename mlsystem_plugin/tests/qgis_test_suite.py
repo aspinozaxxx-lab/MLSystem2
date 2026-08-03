@@ -177,6 +177,28 @@ class QGISPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.dock._aoi_tool.last_capture())
         plugin.unload()
 
+    # Показывает число реально выбранных сервером снимков для контроля покрытия AOI.
+    def test_job_status_shows_selected_image_count(self) -> None:
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+
+        plugin.dock._api_succeeded(
+            "job_status",
+            {
+                "status": "running",
+                "current_stage": "inference",
+                "progress": 50,
+                "warnings": [],
+                "coverage_percent": 100.0,
+                "source_image_ids": ["scene-a", "scene-b"],
+            },
+        )
+
+        self.assertIn("Выбрано снимков: 2", plugin.dock.warning_label.text())
+        self.assertIn("Покрытие AOI: 100.00%", plugin.dock.warning_label.text())
+        plugin.unload()
+
     # Проверяет единые пороги очереди и фактически отображаемого слоя.
     def test_review_thresholds_filter_queue_and_layer_renderer(self) -> None:
         session = self._session()

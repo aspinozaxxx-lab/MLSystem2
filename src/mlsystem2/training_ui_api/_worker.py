@@ -978,7 +978,7 @@ def _finish_pseudolabel_aoi_job(
     row.process_pid = None
     output_path = _pseudo_output_path(row)
     report = _pseudo_report(row)
-    succeeded = succeeded and _pseudo_report_allows_success(report)
+    succeeded = succeeded and _pseudolabel_aoi_report_allows_success(report)
     has_geojson = output_path is not None and output_path.is_file()
     file_row = None
     if succeeded and has_geojson:
@@ -1187,6 +1187,20 @@ def _pseudo_report_allows_success(report: dict[str, Any] | None) -> bool:
     except (TypeError, ValueError):
         return False
     return processed > 0
+
+
+def _pseudolabel_aoi_report_allows_success(report: dict[str, Any] | None) -> bool:
+    """Не публиковать геометрически неполный результат AOI."""
+
+    if not _pseudo_report_allows_success(report) or report is None:
+        return False
+    try:
+        processed = int(report.get("processed") or 0)
+        selected = int(report.get("unique_image_count") or 0)
+        failed = int(report.get("failed") or 0)
+    except (TypeError, ValueError):
+        return False
+    return selected > 0 and processed == selected and failed == 0
 
 
 def _store_generated_geojson(

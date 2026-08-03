@@ -143,6 +143,8 @@ def test_pseudolabel_http_flow_pins_model_and_stores_result(tmp_path: Path, monk
                     {
                         "status": "ok",
                         "processed": 1,
+                        "unique_image_count": 1,
+                        "failed": 0,
                         "feature_count": 1,
                         "source_image_ids": ["region/scene-a"],
                         "coverage_percent": 100.0,
@@ -226,16 +228,17 @@ def test_pseudolabel_http_flow_pins_model_and_stores_result(tmp_path: Path, monk
         assert failed_status.json()["error"]["code"] == "MODEL_EXECUTION_FAILED"
 
 
-# Proveriaet otbor TIFF, clipping i stabilnye ID.
-def test_pseudolabel_spatial_selection_clipping_and_stable_ids(tmp_path: Path) -> None:
+# Проверяет полный отбор TIFF, фильтрацию по AOI без обрезания и стабильные ID.
+def test_pseudolabel_spatial_selection_keeps_whole_intersecting_objects(tmp_path: Path) -> None:
     images_root = tmp_path / "images"
-    _write_raster(images_root / "inside.tif", 30.0, 60.0)
-    _write_raster(images_root / "outside.tif", 40.0, 60.0)
+    _write_raster(images_root / "a_inside.tif", 30.0, 60.0)
+    _write_raster(images_root / "b_inside.tif", 30.04, 60.0)
+    _write_raster(images_root / "z_outside.tif", 40.0, 60.0)
     aoi = box(30.01, 59.95, 30.05, 59.99)
 
     selected = _markup_export.find_intersecting_images(aoi, images_root)
 
-    assert [item.source_id for item in selected.images] == ["inside"]
+    assert [item.source_id for item in selected.images] == ["a_inside", "b_inside"]
     assert 99.0 <= selected.coverage_percent <= 100.0
     config = {
         "job_id": "job-1",
@@ -247,21 +250,28 @@ def test_pseudolabel_spatial_selection_clipping_and_stable_ids(tmp_path: Path) -
         {
             "type": "Feature",
             "geometry": box(29.9, 59.9, 30.03, 60.1).__geo_interface__,
-            "properties": {"scene_id": "inside", "confidence": 0.87654321},
-        }
+            "properties": {"scene_id": "a_inside", "confidence": 0.87654321},
+        },
+        {
+            "type": "Feature",
+            "geometry": box(31.0, 59.9, 31.1, 60.0).__geo_interface__,
+            "properties": {"scene_id": "a_inside", "confidence": 0.5},
+        },
     ]
-    first = _pseudo_runner._finalize_aoi_features(features, aoi, config, ["inside"])
-    second = _pseudo_runner._finalize_aoi_features(features, aoi, config, ["inside"])
+    source_ids = ["a_inside", "b_inside"]
+    first = _pseudo_runner._finalize_aoi_features(features, aoi, config, source_ids)
+    second = _pseudo_runner._finalize_aoi_features(features, aoi, config, source_ids)
 
     assert first == second
     assert len(first) == 1
-    assert shape(first[0]["geometry"]).within(aoi)
+    assert shape(first[0]["geometry"]).equals(box(29.9, 59.9, 30.03, 60.1))
+    assert not shape(first[0]["geometry"]).within(aoi)
     assert first[0]["properties"]["candidate_id"]
-    assert first[0]["properties"]["source_image_ids"] == ["inside"]
+    assert first[0]["properties"]["source_image_ids"] == ["a_inside"]
     assert first[0]["properties"]["area_m2"] > 0
     assert first[0]["properties"]["confidence"] == 0.876543
     partial = _markup_export.find_intersecting_images(
-        box(30.01, 59.95, 30.08, 59.99),
+        box(30.01, 59.95, 30.12, 59.99),
         images_root,
     )
     assert 0 < partial.coverage_percent < 100
