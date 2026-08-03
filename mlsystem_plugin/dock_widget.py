@@ -48,7 +48,7 @@ from .layer_utils import (
     apply_reviewed_candidates,
     polygon_layers,
 )
-from .review_session import ReviewSession, ReviewSessionError
+from .review_session import ReviewSession, ReviewSessionError, is_review_session_layer
 from .settings import (
     SERVER_URL,
     SERVER_USERNAME,
@@ -513,6 +513,11 @@ class MLSystemDockWidget(QDockWidget):
         except json.JSONDecodeError as exc:
             self._show_error(f"Не удалось сформировать GeoJSON AOI: {exc}")
             return
+        if self.session is not None:
+            self.close_session(remove_layer=True)
+        self._remove_stale_candidate_layers()
+        self.refresh_layers()
+        self._job_id = None
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self._job_class_name = str(class_info.get("display_name") or "").strip() or None
@@ -651,6 +656,7 @@ class MLSystemDockWidget(QDockWidget):
     def _set_session(self, session: ReviewSession, *, reset_filter: bool = False) -> None:
         if self.session is not None:
             self.close_session(remove_layer=True)
+        self._remove_stale_candidate_layers(except_layer_id=session.layer_id)
         if reset_filter:
             new_filter_index = self.filter_combo.findData("new")
             if new_filter_index >= 0:
@@ -666,6 +672,23 @@ class MLSystemDockWidget(QDockWidget):
         self._update_review_ui()
         self._highlight_current_candidate(session.current_feature())
         self.session_active_changed.emit(self.isVisible())
+
+    def _remove_stale_candidate_layers(self, *, except_layer_id: str | None = None) -> None:
+        """Убрать с карты старые кандидаты, не удаляя их GeoPackage."""
+
+        project = QgsProject.instance()
+        layer_ids = [
+            layer.id()
+            for layer in project.mapLayers().values()
+            if layer.id() != except_layer_id and is_review_session_layer(layer)
+        ]
+        if not layer_ids:
+            return
+        self._removing_candidate_layer = True
+        try:
+            project.removeMapLayers(layer_ids)
+        finally:
+            self._removing_candidate_layer = False
 
     # Zakryvaet tekushchuyu sessiyu bez poteri GeoPackage.
     def close_session(self, *, remove_layer: bool) -> None:

@@ -57,6 +57,7 @@ _FIELD_NAMES = (
 )
 # Otdelyaet avtomaticheskoe vremya ot yavnogo vosstanovleniya NULL pri undo.
 _AUTO_REVIEWED_AT = object()
+_SESSION_LAYER_PROPERTY = "mlsystem2/review_session"
 
 
 class ReviewSessionError(RuntimeError):
@@ -75,6 +76,7 @@ class ReviewSession(QObject):
         self.layer = layer
         self.layer_id = layer.id()
         self.path = path
+        self.layer.setCustomProperty(_SESSION_LAYER_PROPERTY, True)
         self.undo_stack = QUndoStack(self)
         self._filter = "new"
         self._sort = "original"
@@ -544,9 +546,26 @@ def _numeric_attribute(value: object) -> float | None:
         return None
 
 
+def is_review_session_layer(layer: object) -> bool:
+    """Распознать слой сессии, включая сохранённые в старых проектах слои."""
+
+    if not isinstance(layer, QgsVectorLayer):
+        return False
+    marker = str(layer.customProperty(_SESSION_LAYER_PROPERTY, "")).casefold()
+    if marker in {"1", "true"}:
+        return True
+    source = layer.source().replace("\\", "/").casefold()
+    return (
+        layer.name().startswith("Кандидаты MLSystem2")
+        and "/.mlsystem2/review_sessions/pseudolabel_" in source
+        and "|layername=candidates" in source
+        and all(layer.fields().indexOf(name) >= 0 for name in _FIELD_NAMES)
+    )
+
+
 # Formiruet UTC-vremya audita v ISO 8601.
 def _now_text() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-__all__ = ["ReviewSession", "ReviewSessionError"]
+__all__ = ["ReviewSession", "ReviewSessionError", "is_review_session_layer"]

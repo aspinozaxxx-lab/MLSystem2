@@ -191,6 +191,29 @@ class QGISPluginTests(unittest.TestCase):
         self.assertIn("Статус: «Принятые»", plugin.dock.candidate_label.text())
         plugin.unload()
 
+    # Запуск нового распознавания убирает даже не привязанную после перезапуска старую сессию.
+    def test_starting_job_removes_stale_candidate_layers_but_keeps_session_file(self) -> None:
+        stale_session = self._session()
+        stale_layer_id = stale_session.layer_id
+        stale_path = stale_session.path
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+        plugin.dock.class_combo.addItem("Реки", {"class_id": "rivers", "display_name": "Реки"})
+        plugin.dock._set_aoi(
+            QgsGeometry.fromWkt("POLYGON((0 0, 1000 0, 1000 1000, 0 1000, 0 0))"),
+            QgsCoordinateReferenceSystem("EPSG:3857"),
+        )
+        requests: list[tuple[object, ...]] = []
+        plugin.dock.api.create_job = lambda *args: requests.append(args)
+
+        plugin.dock._start_job()
+
+        self.assertIsNone(QgsProject.instance().mapLayer(stale_layer_id))
+        self.assertTrue(stale_path.is_file())
+        self.assertEqual(len(requests), 1)
+        plugin.unload()
+
     # Проверяет площадь AOI и автоматический выбор двух очевидных рабочих слоёв.
     def test_plugin_shows_aoi_area_and_selects_example_layers(self) -> None:
         annotation = self._example_target("wind_erosion")
