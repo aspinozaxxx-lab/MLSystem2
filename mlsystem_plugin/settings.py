@@ -11,6 +11,7 @@ from qgis.core import QgsProject, QgsSettings, QgsVectorLayer
 
 _ROOT = "mlsystem2/pseudolabel"
 _MAPPING_KEYS = ("class_id", "source", "confidence", "candidate_id", "model_version")
+_MAPPING_VERSION = 2
 _DISABLED_FIELD = "__none__"
 _FIELD_ALIASES = {
     "class_id": ("classid", "classname", "class", "класс", "имякласса"),
@@ -40,6 +41,10 @@ def load_settings() -> PluginSettings:
     """Zagruzit nastroiki iz QgsSettings."""
 
     settings = QgsSettings()
+    mapping_version = int(settings.value(f"{_ROOT}/mapping_version", 0))
+    if mapping_version < _MAPPING_VERSION:
+        settings.remove(f"{_ROOT}/mapping")
+        settings.setValue(f"{_ROOT}/mapping_version", _MAPPING_VERSION)
     server_url = str(settings.value(f"{_ROOT}/server_url", _DEFAULT_SERVER_URL)).strip()
     if not server_url or server_url == _LEGACY_SERVER_URL:
         server_url = _DEFAULT_SERVER_URL
