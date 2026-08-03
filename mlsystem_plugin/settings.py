@@ -6,11 +6,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QStandardPaths
-from qgis.core import QgsProject, QgsSettings
+from qgis.core import QgsProject, QgsSettings, QgsVectorLayer
 
 
 _ROOT = "mlsystem2/pseudolabel"
 _MAPPING_KEYS = ("class_id", "source", "confidence", "candidate_id", "model_version")
+_DISABLED_FIELD = "__none__"
+_FIELD_ALIASES = {
+    "class_id": ("classid", "classname", "class", "класс", "имякласса"),
+    "source": ("sourceimageids", "sourceids", "source", "источник"),
+    "confidence": ("confidence", "score", "уверенность"),
+    "candidate_id": ("candidateid", "candidateuuid"),
+    "model_version": ("modelversion", "version", "версиямодели"),
+}
 _DEFAULT_SERVER_URL = "https://grovika.ru"
 _LEGACY_SERVER_URL = "http://127.0.0.1:8091"
 
@@ -56,14 +64,25 @@ def save_settings(value: PluginSettings) -> None:
         settings.setValue(f"{_ROOT}/{key}", item)
 
 
-def load_field_mapping(role: str) -> dict[str, str]:
-    """Zagruzit sopostavlenie polei celevoi roli."""
+def load_field_mapping(
+    role: str,
+    layer: QgsVectorLayer | None = None,
+) -> dict[str, str]:
+    """Загрузить ручное сопоставление и дополнить его по схеме слоя."""
 
     settings = QgsSettings()
-    return {
-        key: str(settings.value(f"{_ROOT}/mapping/{role}/{key}", ""))
-        for key in _MAPPING_KEYS
-    }
+    automatic = automatic_field_mapping(layer) if layer is not None else {}
+    result: dict[str, str] = {}
+    for key in _MAPPING_KEYS:
+        path = f"{_ROOT}/mapping/{role}/{key}"
+        saved = str(settings.value(path, ""))
+        if saved == _DISABLED_FIELD:
+            result[key] = ""
+        elif layer is not None and saved and layer.fields().indexOf(saved) >= 0:
+            result[key] = saved
+        else:
+            result[key] = automatic.get(key, saved if layer is None else "")
+    return result
 
 
 def save_field_mapping(role: str, mapping: dict[str, str]) -> None:
@@ -71,7 +90,27 @@ def save_field_mapping(role: str, mapping: dict[str, str]) -> None:
 
     settings = QgsSettings()
     for key in _MAPPING_KEYS:
-        settings.setValue(f"{_ROOT}/mapping/{role}/{key}", mapping.get(key, ""))
+        settings.setValue(
+            f"{_ROOT}/mapping/{role}/{key}",
+            mapping.get(key) or _DISABLED_FIELD,
+        )
+
+
+def automatic_field_mapping(layer: QgsVectorLayer) -> dict[str, str]:
+    """Сопоставить известные варианты имён без изменения схемы слоя."""
+
+    normalized_fields = {_normalized_field_name(field.name()): field.name() for field in layer.fields()}
+    return {
+        key: next(
+            (normalized_fields[alias] for alias in aliases if alias in normalized_fields),
+            "",
+        )
+        for key, aliases in _FIELD_ALIASES.items()
+    }
+
+
+def _normalized_field_name(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def session_directory(project: QgsProject | None = None) -> Path:
@@ -91,6 +130,7 @@ def session_directory(project: QgsProject | None = None) -> Path:
 
 __all__ = [
     "PluginSettings",
+    "automatic_field_mapping",
     "load_field_mapping",
     "load_settings",
     "save_field_mapping",

@@ -12,6 +12,7 @@ from qgis.PyQt.QtCore import QCoreApplication, QEventLoop, QTimer
 from qgis.PyQt.QtWidgets import QMainWindow
 from qgis.core import (
     QgsApplication,
+    QgsCoordinateReferenceSystem,
     QgsField,
     QgsGeometry,
     QgsProject,
@@ -22,6 +23,7 @@ from qgis.gui import QgsMapCanvas, QgsMessageBar
 from mlsystem_plugin.api_client import APIClient
 from mlsystem_plugin.geometry_splitter import split_geometry
 from mlsystem_plugin.layer_utils import LayerOperationError, apply_reviewed_candidates
+from mlsystem_plugin.settings import automatic_field_mapping
 from mlsystem_plugin.plugin import MLSystemPlugin
 from mlsystem_plugin.review_session import ReviewSession, ReviewSessionError
 
@@ -29,10 +31,12 @@ try:
     from qgis.PyQt.QtCore import QMetaType
 
     STRING_TYPE = QMetaType.Type.QString
+    INT_TYPE = QMetaType.Type.Int
 except (ImportError, AttributeError):
     from qgis.PyQt.QtCore import QVariant
 
     STRING_TYPE = QVariant.String
+    INT_TYPE = QVariant.Int
 
 
 class QGISPluginTests(unittest.TestCase):
@@ -120,6 +124,25 @@ class QGISPluginTests(unittest.TestCase):
         iface.mapCanvas().setFocus()
         self.assertTrue(all(shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(False)
+        plugin.unload()
+
+    # Проверяет площадь AOI и автоматический выбор двух очевидных рабочих слоёв.
+    def test_plugin_shows_aoi_area_and_selects_example_layers(self) -> None:
+        annotation = self._example_target("wind_erosion")
+        hard = self._example_target("hard_negative")
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+
+        plugin.dock._set_aoi(
+            QgsGeometry.fromWkt("POLYGON((0 0, 1000 0, 1000 1000, 0 1000, 0 0))"),
+            QgsCoordinateReferenceSystem("EPSG:3857"),
+        )
+
+        self.assertEqual(plugin.dock.annotation_layer_combo.currentData(), annotation.id())
+        self.assertEqual(plugin.dock.hard_layer_combo.currentData(), hard.id())
+        self.assertIn("площадь:", plugin.dock.aoi_label.text())
+        self.assertIn("м²", plugin.dock.aoi_label.text())
         plugin.unload()
 
     # Proveriaet tri kategorii, undo, redo i povtornoe otkrytie.
@@ -216,6 +239,51 @@ class QGISPluginTests(unittest.TestCase):
         self.assertEqual(hard.featureCount(), 1)
         self.assertGreater(annotation.extent().xMaximum(), 100_000)
 
+    # Проверяет схему примеров fid/Classname без создания служебных полей.
+    def test_example_schema_is_mapped_automatically_and_remains_idempotent(self) -> None:
+        session = self._session()
+        session.set_filter("all")
+        first_id, second_id = session.feature_ids()
+        session.select_feature(first_id)
+        session.classify("annotation")
+        session.select_feature(second_id)
+        session.classify("hard_negative")
+        annotation = self._example_target("wind_erosion")
+        hard = self._example_target("hard_negative")
+        annotation_mapping = automatic_field_mapping(annotation)
+        hard_mapping = automatic_field_mapping(hard)
+
+        self.assertEqual(annotation_mapping["class_id"], "Classname")
+        self.assertEqual(annotation_mapping["candidate_id"], "")
+        first = apply_reviewed_candidates(
+            session.layer,
+            annotation,
+            hard,
+            annotation_mapping,
+            hard_mapping,
+        )
+        self.assertTrue(annotation.commitChanges())
+        self.assertTrue(hard.commitChanges())
+        second = apply_reviewed_candidates(
+            session.layer,
+            annotation,
+            hard,
+            annotation_mapping,
+            hard_mapping,
+        )
+
+        self.assertEqual(first.added, 2)
+        self.assertEqual(second.added, 0)
+        self.assertEqual(second.existing, 2)
+        self.assertEqual(
+            {feature["Classname"] for feature in annotation.getFeatures()},
+            {"Опустынивание"},
+        )
+        self.assertEqual(
+            {feature["Classname"] for feature in hard.getFeatures()},
+            {"Опустынивание"},
+        )
+
     # Proveriaet rollback validacii i udalenie sloya sessii.
     def test_apply_validation_leaves_targets_unchanged_and_removed_session_fails(self) -> None:
         session = self._session(single=True)
@@ -223,7 +291,13 @@ class QGISPluginTests(unittest.TestCase):
         annotation = self._target("Разметка", "EPSG:4326")
         hard = self._target("Hard negative", "EPSG:4326")
         with self.assertRaises(LayerOperationError):
-            apply_reviewed_candidates(session.layer, annotation, hard, {}, {})
+            apply_reviewed_candidates(
+                session.layer,
+                annotation,
+                hard,
+                {"candidate_id": "missing"},
+                {"candidate_id": "missing"},
+            )
         self.assertEqual(annotation.featureCount(), 0)
         self.assertEqual(hard.featureCount(), 0)
 
@@ -259,6 +333,7 @@ class QGISPluginTests(unittest.TestCase):
                 "candidate_id": candidate_id,
                 "job_id": "job-1",
                 "class_id": "class-1",
+                "class_name": "Опустынивание",
                 "confidence": 0.75,
                 "model_id": "model-1",
                 "model_version": "run-1",
@@ -272,6 +347,17 @@ class QGISPluginTests(unittest.TestCase):
     def _target(name: str, crs: str) -> QgsVectorLayer:
         layer = QgsVectorLayer(f"MultiPolygon?crs={crs}", name, "memory")
         layer.dataProvider().addAttributes([QgsField("candidate_id", STRING_TYPE)])
+        layer.updateFields()
+        QgsProject.instance().addMapLayer(layer)
+        return layer
+
+    # Создаёт целевой слой с той же схемой, что у пользовательских GeoJSON.
+    @staticmethod
+    def _example_target(name: str) -> QgsVectorLayer:
+        layer = QgsVectorLayer("MultiPolygon?crs=EPSG:3857", name, "memory")
+        layer.dataProvider().addAttributes(
+            [QgsField("fid", INT_TYPE), QgsField("Classname", STRING_TYPE)]
+        )
         layer.updateFields()
         QgsProject.instance().addMapLayer(layer)
         return layer

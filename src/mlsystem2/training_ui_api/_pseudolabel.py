@@ -415,7 +415,10 @@ def _validated_aoi(
             "Площадь зоны интереса должна быть больше нуля.",
             status_code=422,
         )
-    if area_m2 > config.pseudolabel_max_aoi_area_m2:
+    if (
+        config.pseudolabel_max_aoi_area_m2 is not None
+        and area_m2 > config.pseudolabel_max_aoi_area_m2
+    ):
         raise PseudolabelAPIError(
             "AOI_TOO_LARGE",
             "Площадь зоны интереса превышает допустимый предел.",

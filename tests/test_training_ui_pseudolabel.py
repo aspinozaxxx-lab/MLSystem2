@@ -310,6 +310,12 @@ def test_pseudolabel_rejects_area_and_vertex_limits(tmp_path: Path, monkeypatch)
             replace(config, pseudolabel_max_aoi_area_m2=1.0),
         )
     assert area_error.value.code == "AOI_TOO_LARGE"
+    unlimited_geometry, unlimited_area, _ = _pseudolabel._validated_aoi(
+        request,
+        replace(config, pseudolabel_max_aoi_area_m2=None),
+    )
+    assert not unlimited_geometry.is_empty
+    assert unlimited_area > 1.0
     with pytest.raises(PseudolabelAPIError) as vertex_error:
         _pseudolabel._validated_aoi(
             request,

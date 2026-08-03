@@ -32,6 +32,7 @@ from qgis.core import (
     Qgis,
     QgsCoordinateTransform,
     QgsCsException,
+    QgsDistanceArea,
     QgsGeometry,
     QgsMessageLog,
     QgsProject,
@@ -88,6 +89,21 @@ def _stage_text(value: str) -> str:
     }.get(value, value)
 
 
+def _format_area(area_m2: float) -> str:
+    """Показать площадь в удобной для масштаба единице."""
+
+    if area_m2 >= 1_000_000.0:
+        value = f"{area_m2 / 1_000_000.0:,.2f}".replace(",", " ").replace(".", ",")
+        return f"{value} км²"
+    value = f"{area_m2:,.0f}".replace(",", " ")
+    return f"{value} м²"
+
+
+def _is_hard_negative_layer(layer: QgsVectorLayer) -> bool:
+    name = "".join(character for character in layer.name().casefold() if character.isalnum())
+    return "hardnegative" in name or "негатив" in name
+
+
 class FieldMappingDialog(QDialog):
     """Nastroika sopostavleniya bez izmeneniya skhemy sloya."""
 
@@ -116,7 +132,7 @@ class FieldMappingDialog(QDialog):
         ):
             group = QGroupBox(title)
             form = QFormLayout(group)
-            current = load_field_mapping(role)
+            current = load_field_mapping(role, layer)
             names = [field.name() for field in layer.fields()]
             for key, label in self._LABELS.items():
                 combo = QComboBox()
@@ -162,6 +178,7 @@ class MLSystemDockWidget(QDockWidget):
         self._aoi_geometry: QgsGeometry | None = None
         self._aoi_crs = None
         self._job_id: str | None = None
+        self._job_class_name: str | None = None
         self._poll_failures = 0
         self._removing_candidate_layer = False
         self._previous_map_tool = None
@@ -212,6 +229,7 @@ class MLSystemDockWidget(QDockWidget):
         extent_aoi.clicked.connect(self._extent_aoi)
         selection_aoi.clicked.connect(self._selection_aoi)
         self.aoi_label = QLabel("AOI не задана")
+        self.aoi_label.setWordWrap(True)
         self.start_button = QPushButton("Запустить распознавание")
         self.cancel_button = QPushButton("Отменить задание")
         self.cancel_button.setEnabled(False)
@@ -386,9 +404,17 @@ class MLSystemDockWidget(QDockWidget):
             combo.addItem("— не выбран —", "")
             for layer in layers:
                 combo.addItem(layer.name(), layer.id())
-            index = combo.findData(previous[key])
+            index = combo.findData(previous[key]) if previous[key] else -1
             if index >= 0:
                 combo.setCurrentIndex(index)
+            elif key == "hard":
+                matches = [layer for layer in layers if _is_hard_negative_layer(layer)]
+                if len(matches) == 1:
+                    combo.setCurrentIndex(combo.findData(matches[0].id()))
+            elif key == "annotation":
+                matches = [layer for layer in layers if not _is_hard_negative_layer(layer)]
+                if len(matches) == 1:
+                    combo.setCurrentIndex(combo.findData(matches[0].id()))
 
     # Выполняет вход и после него загружает доступные классы.
     def _request_classes(self) -> None:
@@ -452,9 +478,21 @@ class MLSystemDockWidget(QDockWidget):
         if geometry.type() != Qgis.GeometryType.Polygon:
             self._show_error("AOI должна быть Polygon или MultiPolygon.")
             return
+        calculator = QgsDistanceArea()
+        calculator.setSourceCrs(crs, QgsProject.instance().transformContext())
+        ellipsoid = QgsProject.instance().ellipsoid()
+        calculator.setEllipsoid(ellipsoid if ellipsoid and ellipsoid != "NONE" else "WGS84")
+        try:
+            area_m2 = abs(float(calculator.measureArea(geometry)))
+        except QgsCsException as exc:
+            self._show_error(f"Не удалось рассчитать площадь AOI: {exc}")
+            return
         self._aoi_geometry = geometry
         self._aoi_crs = crs
-        self.aoi_label.setText(f"AOI задана; CRS: {crs.authid() or crs.toWkt()[:40]}")
+        self.aoi_label.setText(
+            f"AOI задана; площадь: {_format_area(area_m2)}; "
+            f"CRS: {crs.authid() or crs.toWkt()[:40]}"
+        )
 
     # Otpravlyaet tolko class_id, AOI i ee CRS.
     def _start_job(self) -> None:
@@ -473,6 +511,7 @@ class MLSystemDockWidget(QDockWidget):
             return
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._job_class_name = str(class_info.get("display_name") or "").strip() or None
         self.status_label.setText("Статус: создание задания…")
         self.warning_label.clear()
         self.api.create_job(
@@ -543,6 +582,9 @@ class MLSystemDockWidget(QDockWidget):
         elif operation == "job_result":
             try:
                 validated = validate_feature_collection(payload)
+                if self._job_class_name:
+                    for feature in validated["features"]:
+                        feature["properties"].setdefault("class_name", self._job_class_name)
                 session = ReviewSession.from_geojson(
                     validated,
                     self._job_id or "unknown",
@@ -759,8 +801,8 @@ class MLSystemDockWidget(QDockWidget):
                 candidate_layer,
                 annotation,
                 hard,
-                load_field_mapping("annotation"),
-                load_field_mapping("hard_negative"),
+                load_field_mapping("annotation", annotation),
+                load_field_mapping("hard_negative", hard),
             )
         except LayerOperationError as exc:
             self._show_error(str(exc))

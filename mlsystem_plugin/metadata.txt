@@ -1,7 +1,7 @@
 [general]
 name=MLSystem2 — проверка псевдоразметки
 description=Распознавание зоны интереса и проверка кандидатов через сервер MLSystem2
-version=0.1.1
+version=0.2.0
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 author=MLSystem2
