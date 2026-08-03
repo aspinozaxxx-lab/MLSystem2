@@ -593,11 +593,14 @@ class MLSystemDockWidget(QDockWidget):
                     self._job_id or "unknown",
                     session_directory(),
                 )
-                self._set_session(session)
+                self._set_session(session, reset_filter=True)
                 if self.auto_split.isChecked():
                     session.split_large_candidates(self.max_area.value(), self.min_area.value())
                 count = session.counts()["total"]
-                self.status_label.setText(f"Статус: результат загружен; объектов: {count}")
+                job_short_id = (self._job_id or "unknown")[:8]
+                self.status_label.setText(
+                    f"Статус: результат задания {job_short_id} загружен; объектов: {count}"
+                )
                 if count == 0:
                     self.warning_label.setText("Сервер не нашёл объектов в AOI.")
             except (PluginContractError, ReviewSessionError) as exc:
@@ -645,9 +648,13 @@ class MLSystemDockWidget(QDockWidget):
         self.cancel_button.setEnabled(False)
 
     # Aktiviruet novuyu persistent review session.
-    def _set_session(self, session: ReviewSession) -> None:
+    def _set_session(self, session: ReviewSession, *, reset_filter: bool = False) -> None:
         if self.session is not None:
             self.close_session(remove_layer=True)
+        if reset_filter:
+            new_filter_index = self.filter_combo.findData("new")
+            if new_filter_index >= 0:
+                self.filter_combo.setCurrentIndex(new_filter_index)
         self.session = session
         session.changed.connect(self._update_review_ui)
         session.current_changed.connect(self._highlight_current_candidate)
@@ -739,10 +746,26 @@ class MLSystemDockWidget(QDockWidget):
             return
         position, visible = self.session.position()
         counts = self.session.counts()
-        self.counter_label.setText(f"{position} из {visible}; осталось {counts['new']}; всего {counts['total']}")
+        if visible == 0 and counts["total"] > 0:
+            self.counter_label.setText(
+                f"0 отображается; скрыто фильтрами: {counts['total']}; "
+                f"осталось {counts['new']}; всего {counts['total']}"
+            )
+        else:
+            self.counter_label.setText(
+                f"{position} из {visible}; осталось {counts['new']}; всего {counts['total']}"
+            )
         feature = self.session.current_feature()
         if feature is None:
-            self.candidate_label.setText("Текущий объект: —")
+            if counts["total"] > 0:
+                self.candidate_label.setText(
+                    "Нет объектов при текущем отборе.\n"
+                    f"Статус: «{self.filter_combo.currentText()}»; "
+                    f"площадь ≥ {_format_area(self.min_area.value())}; "
+                    f"уверенность ≥ {self.min_confidence.value():.3f}."
+                )
+            else:
+                self.candidate_label.setText("Текущий объект: —")
             return
         confidence = feature["confidence"]
         confidence_text = "—" if confidence is None else f"{float(confidence):.3f}"

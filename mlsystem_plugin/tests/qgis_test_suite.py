@@ -171,6 +171,26 @@ class QGISPluginTests(unittest.TestCase):
         self.assertFalse(plugin.dock._candidate_highlight.isVisible())
         plugin.unload()
 
+    # Новый результат всегда открывается на непроверенных, а пустой фильтр объясняется.
+    def test_new_result_resets_status_filter_and_empty_filter_is_explained(self) -> None:
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+        plugin.dock.min_area.setValue(0.0)
+        plugin.dock.min_confidence.setValue(0.0)
+        accepted_index = plugin.dock.filter_combo.findData("annotation")
+        plugin.dock.filter_combo.setCurrentIndex(accepted_index)
+        session = self._session()
+
+        plugin.dock._set_session(session, reset_filter=True)
+
+        self.assertEqual(plugin.dock.filter_combo.currentData(), "new")
+        self.assertEqual(session.position(), (1, 2))
+        plugin.dock.filter_combo.setCurrentIndex(accepted_index)
+        self.assertIn("скрыто фильтрами: 2", plugin.dock.counter_label.text())
+        self.assertIn("Статус: «Принятые»", plugin.dock.candidate_label.text())
+        plugin.unload()
+
     # Проверяет площадь AOI и автоматический выбор двух очевидных рабочих слоёв.
     def test_plugin_shows_aoi_area_and_selects_example_layers(self) -> None:
         annotation = self._example_target("wind_erosion")
