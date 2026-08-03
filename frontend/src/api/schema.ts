@@ -3257,7 +3257,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description TXT со списком имён сцен без расширений. */
+            /** @description TXT с относительными путями сцен внутри выбранного типа снимков, без расширений. */
             200: {
                 headers: {
                     [name: string]: unknown;

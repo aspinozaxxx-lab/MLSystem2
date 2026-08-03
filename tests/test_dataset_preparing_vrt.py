@@ -384,6 +384,47 @@ def test_resolve_scene_images_keeps_extensionless_dotted_scene_exact(tmp_path: P
     assert resolution.ambiguous_scenes == {}
 
 
+def test_training_pipeline_accepts_unicode_relative_scene_path_without_extension(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    duplicate_name = "Канопус PMS.SCN02.tif"
+    other = images / "Качугский" / duplicate_name
+    selected = images / "Ольхонский район" / duplicate_name
+    other.parent.mkdir(parents=True)
+    selected.parent.mkdir(parents=True)
+    _write_raster(other, 1, 1_000_000)
+    _write_raster(selected, 2, 0)
+    scene_id = "Ольхонский район/Канопус PMS.SCN02"
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text(f"{scene_id}\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, [duplicate_name])
+
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+        )
+    )
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.5,
+        )
+    )
+
+    assert [Path(item.image_path) for item in resolution.images] == [selected]
+    assert resolution.missing_scenes == []
+    assert resolution.ambiguous_scenes == {}
+    assert result.report.status == "ok"
+    assert result.dataset is not None
+    assert [scene.scene_id for scene in result.report.scenes] == [scene_id]
+    assert result.report.scenes[0].image_path == selected.resolve().as_posix()
+
+
 def test_resolve_scene_images_uses_annotation_for_duplicate_stem(tmp_path: Path) -> None:
     images = tmp_path / "images"
     far = images / "far" / "scene_a.tif"

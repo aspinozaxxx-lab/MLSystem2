@@ -178,11 +178,7 @@ def build_scene_list_export(
         ),
         key=lambda path: path.relative_to(root).as_posix().casefold(),
     )
-    paths_by_stem: dict[str, list[tuple[str, Path]]] = {}
-    for source_path in source_paths:
-        paths_by_stem.setdefault(source_path.stem.casefold(), []).append(
-            (source_path.stem, source_path.relative_to(root))
-        )
+    paths_by_scene_id: dict[str, list[tuple[str, Path]]] = {}
     transformed_cache: dict[str, _TransformedAnnotations] = {}
     matches: list[tuple[str, Path]] = []
     for source_path in source_paths:
@@ -193,6 +189,10 @@ def build_scene_list_export(
             raise TrainingUIAPIError(
                 f"Снимок выходит за пределы папки подготовленных изображений: {source_path.name}."
             ) from exc
+        scene_id = relative_path.with_suffix("").as_posix()
+        paths_by_scene_id.setdefault(scene_id.casefold(), []).append(
+            (scene_id, relative_path)
+        )
         try:
             with rasterio.open(resolved_path) as dataset:
                 if dataset.crs is None:
@@ -225,13 +225,13 @@ def build_scene_list_export(
                 f"Не удалось прочитать снимок {relative_path.as_posix()}: {exc}"
             ) from exc
         if has_objects:
-            matches.append((resolved_path.stem, relative_path))
+            matches.append((scene_id, relative_path))
 
-    matched_stems = {scene_name.casefold() for scene_name, _ in matches}
+    matched_scene_ids = {scene_name.casefold() for scene_name, _ in matches}
     ambiguous = [
-        paths_by_stem[stem]
-        for stem in sorted(matched_stems)
-        if len(paths_by_stem[stem]) > 1
+        paths_by_scene_id[scene_id]
+        for scene_id in sorted(matched_scene_ids)
+        if len(paths_by_scene_id[scene_id]) > 1
     ]
     if ambiguous:
         details = "; ".join(
@@ -239,7 +239,7 @@ def build_scene_list_export(
             for items in ambiguous
         )
         raise TrainingUIAPIError(
-            "У выбранных сцен совпадают имена снимков без расширения. "
+            "У выбранных сцен совпадают относительные пути без расширения. "
             f"Список сцен был бы неоднозначным: {details}"
         )
 

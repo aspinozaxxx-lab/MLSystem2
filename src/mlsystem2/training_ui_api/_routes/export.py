@@ -36,7 +36,10 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
         response_class=Response,
         responses={
             200: {
-                "description": "TXT со списком имён сцен без расширений.",
+                "description": (
+                    "TXT с относительными путями сцен внутри выбранного типа снимков, "
+                    "без расширений."
+                ),
                 "content": {
                     "text/plain": {"schema": {"type": "string", "format": "binary"}}
                 },

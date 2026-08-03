@@ -26,7 +26,7 @@ def read_scene_list(txt_path: Path) -> list[str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        scenes.append(line.split()[0])
+        scenes.append(line)
     return scenes
 
 
@@ -58,9 +58,12 @@ def index_image_files(
     by_normalized: dict[str, list[Path]] = defaultdict(list)
     by_relative: dict[str, list[Path]] = defaultdict(list)
     by_relative_casefold: dict[str, list[Path]] = defaultdict(list)
+    by_relative_stem: dict[str, list[Path]] = defaultdict(list)
+    by_relative_stem_casefold: dict[str, list[Path]] = defaultdict(list)
 
     for path in paths:
         relative = path.relative_to(root).as_posix()
+        relative_stem = _strip_image_extension(relative)
         by_name[path.name].append(path)
         by_name_casefold[path.name.casefold()].append(path)
         by_stem[path.stem].append(path)
@@ -68,6 +71,8 @@ def index_image_files(
         by_normalized[_normalized_scene_key(path.name)].append(path)
         by_relative[relative].append(path)
         by_relative_casefold[relative.casefold()].append(path)
+        by_relative_stem[relative_stem].append(path)
+        by_relative_stem_casefold[relative_stem.casefold()].append(path)
 
     return {
         "root": root,
@@ -79,6 +84,8 @@ def index_image_files(
         "by_normalized": dict(by_normalized),
         "by_relative": dict(by_relative),
         "by_relative_casefold": dict(by_relative_casefold),
+        "by_relative_stem": dict(by_relative_stem),
+        "by_relative_stem_casefold": dict(by_relative_stem_casefold),
     }
 
 
@@ -124,13 +131,35 @@ def filter_existing_scenes(scene_names: list[str], image_index: dict[str, Any]) 
         if relative_matches:
             candidates: list[tuple[str, list[Path]]] = [("relative_path", relative_matches)]
         else:
-            candidates = [
-                ("filename_exact", image_index.get("by_name", {}).get(name, [])),
-                ("stem_exact", image_index.get("by_stem", {}).get(stem, [])),
-                ("filename_casefold", image_index.get("by_name_casefold", {}).get(name.casefold(), [])),
-                ("stem_casefold", image_index.get("by_stem_casefold", {}).get(stem.casefold(), [])),
-                ("normalized_scene", image_index.get("by_normalized", {}).get(_normalized_scene_key(scene), [])),
-            ]
+            relative_stem = _strip_image_extension(relative)
+            relative_stem_matches = (
+                image_index.get("by_relative_stem", {}).get(relative_stem, [])
+                or image_index.get("by_relative_stem_casefold", {}).get(
+                    relative_stem.casefold(), []
+                )
+            )
+            candidates = (
+                [("relative_path_without_extension", relative_stem_matches)]
+                if relative_stem_matches
+                else [
+                    ("filename_exact", image_index.get("by_name", {}).get(name, [])),
+                    ("stem_exact", image_index.get("by_stem", {}).get(stem, [])),
+                    (
+                        "filename_casefold",
+                        image_index.get("by_name_casefold", {}).get(name.casefold(), []),
+                    ),
+                    (
+                        "stem_casefold",
+                        image_index.get("by_stem_casefold", {}).get(stem.casefold(), []),
+                    ),
+                    (
+                        "normalized_scene",
+                        image_index.get("by_normalized", {}).get(
+                            _normalized_scene_key(scene), []
+                        ),
+                    ),
+                ]
+            )
             candidates = [next((item for item in candidates if item[1]), ("", []))]
 
         ordered_matches: list[tuple[str, Path]] = []
@@ -182,8 +211,15 @@ def _scene_relative(value: str) -> str:
 
 def _scene_stem(value: str) -> str:
     name = _scene_basename(value)
-    suffix = Path(name).suffix
-    return Path(name).stem if suffix.lower() in IMAGE_EXTENSIONS else name
+    return _strip_image_extension(name)
+
+
+def _strip_image_extension(value: str) -> str:
+    lowered = value.casefold()
+    for extension in IMAGE_EXTENSIONS:
+        if lowered.endswith(extension):
+            return value[: -len(extension)]
+    return value
 
 
 def _normalized_scene_key(value: str) -> str:
@@ -222,6 +258,7 @@ def _folder_entry_paths(entry: str, image_index: dict[str, Any]) -> list[Path]:
 
 def _has_file_match(entry: str, image_index: dict[str, Any]) -> bool:
     relative = _scene_relative(entry)
+    relative_stem = _strip_image_extension(relative)
     name = _scene_basename(entry)
     stem = _scene_stem(entry)
     return any(
@@ -229,6 +266,8 @@ def _has_file_match(entry: str, image_index: dict[str, Any]) -> bool:
         for bucket, key in (
             ("by_relative", relative),
             ("by_relative_casefold", relative.casefold()),
+            ("by_relative_stem", relative_stem),
+            ("by_relative_stem_casefold", relative_stem.casefold()),
             ("by_name", name),
             ("by_name_casefold", name.casefold()),
             ("by_stem", stem),

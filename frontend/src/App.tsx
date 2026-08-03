@@ -741,7 +741,7 @@ function SceneListExportPage({ run, showModal }: RoutedPageProps) {
         <section className="panel">
           <PanelHeader
             title="Исходные данные"
-            subtitle="Поиск выполняется во всех подпапках выбранного типа снимков"
+            subtitle="В TXT сохраняются относительные пути с папками, без расширений TIFF"
           />
           <div className="form-grid">
             <label className="field">

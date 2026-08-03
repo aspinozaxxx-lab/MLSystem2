@@ -25,6 +25,11 @@ from shapely.geometry import Polygon, box, mapping, shape
 from shapely.ops import transform as transform_geometry
 from sqlalchemy import select
 
+from mlsystem2.dataset_preparing.api import prepare_dataset, resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import (
+    DatasetPreparationRequest,
+    SceneImageResolutionRequest,
+)
 from mlsystem2.training_ui_api import _markup_export, _test_samples
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
@@ -862,7 +867,10 @@ def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
 
     assert artifact.filename == "Разметка рек.txt"
     assert artifact.scene_count == 2
-    assert artifact.content.decode("utf-8") == "Берёза\nЯблоня\n"
+    assert artifact.content.decode("utf-8") == (
+        "регион_а/Яблоня\n"
+        "регион_б/Берёза\n"
+    )
 
     touching_artifact = _markup_export.build_scene_list_export(
         imagery_type=ImageryType.KANOPUS,
@@ -897,7 +905,7 @@ def test_scene_list_export_returns_empty_txt_without_matches(
     assert artifact.content == b""
 
 
-def test_scene_list_export_rejects_duplicate_stem_outside_markup(
+def test_scene_list_export_disambiguates_duplicate_stems_with_relative_paths(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -915,7 +923,98 @@ def test_scene_list_export_rejects_duplicate_stem_outside_markup(
         valid_slice=(slice(0, 64), slice(0, 64)),
     )
 
-    with pytest.raises(TrainingUIAPIError, match="совпадают имена снимков без расширения"):
+    artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.KANOPUS,
+        geojson_filename="разметка.geojson",
+        geojson_bytes=_geojson_bytes(
+            [box(10, 10, 20, 20), box(110, 10, 120, 20)]
+        ),
+        config=config,
+    )
+
+    assert artifact.content.decode("utf-8") == (
+        "вторая/одинаковая\n"
+        "первая/Одинаковая\n"
+    )
+
+
+def test_scene_list_export_is_accepted_by_training_pipeline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    images_root = config.images_root / "kanopus"
+    duplicate_name = "Канопус PMS.SCN02.tif"
+    _write_cog(
+        images_root / "Качугский" / duplicate_name,
+        left=100,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    selected = images_root / "Ольхонский район" / duplicate_name
+    _write_cog(
+        selected,
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    geojson = _geojson_bytes([box(10, 10, 20, 20)])
+    artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.KANOPUS,
+        geojson_filename="Ветровая эрозия.geojson",
+        geojson_bytes=geojson,
+        config=config,
+    )
+    scenes_file = tmp_path / artifact.filename
+    scenes_file.write_bytes(artifact.content)
+    annotation_file = tmp_path / "Ветровая эрозия.geojson"
+    annotation_file.write_bytes(geojson)
+
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(images_root),
+            scenes_file=str(scenes_file),
+        )
+    )
+    prepared = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images_root),
+            scenes_file=str(scenes_file),
+            annotation_file=str(annotation_file),
+            val_fraction=0.5,
+            expected_band_count=4,
+            expected_dtype="uint8",
+        )
+    )
+
+    assert artifact.content.decode("utf-8") == (
+        "Ольхонский район/Канопус PMS.SCN02\n"
+    )
+    assert [Path(item.image_path) for item in resolution.images] == [selected]
+    assert prepared.report.status == "ok"
+    assert prepared.dataset is not None
+    assert prepared.report.scenes[0].image_path == selected.resolve().as_posix()
+
+
+def test_scene_list_export_rejects_duplicate_relative_path_without_extension(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "kanopus" / "регион" / "Одинаковая.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "регион" / "Одинаковая.tiff",
+        left=100,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+
+    with pytest.raises(TrainingUIAPIError, match="совпадают относительные пути"):
         _markup_export.build_scene_list_export(
             imagery_type=ImageryType.KANOPUS,
             geojson_filename="разметка.geojson",
@@ -1028,7 +1127,7 @@ def test_scene_list_export_http_downloads_unicode_filename(
         )
         assert response.status_code == 200
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
-        assert response.content.decode("utf-8") == "Сцена один\n"
+        assert response.content.decode("utf-8") == "регион/Сцена один\n"
         assert "Разметка рек.txt" in unquote(response.headers["content-disposition"])
 
         empty_response = client.post(
