@@ -1,4 +1,4 @@
-# Runbook ручного развертывания training UI
+﻿# Runbook ручного развертывания training UI
 
 Инфраструктура поднимается вручную на сервере. В CI/CD не добавляется создание контейнеров,
 Postgres, сетей или reverse proxy.
@@ -54,6 +54,10 @@ MLSYSTEM2_TRAINING_UI_PASSWORD=<тот же пароль, что в старом
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
 MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=true
 MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS=5
+MLSYSTEM2_PSEUDOLABEL_API_TOKEN=<отдельный случайный токен QGIS>
+MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2=100000000
+MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES=10000
+MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS=3600
 ```
 
 Секреты не коммитить.

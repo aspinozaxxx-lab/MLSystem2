@@ -1,0 +1,13 @@
+[general]
+name=MLSystem2 — проверка псевдоразметки
+description=Распознавание зоны интереса и проверка кандидатов через сервер MLSystem2
+version=0.1.0
+qgisMinimumVersion=3.34
+qgisMaximumVersion=4.99
+author=MLSystem2
+email=
+about=Плагин отправляет на сервер только геометрию AOI, CRS и идентификатор класса.
+category=Vector
+experimental=False
+deprecated=False
+hasProcessingProvider=False

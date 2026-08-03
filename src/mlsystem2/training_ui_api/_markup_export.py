@@ -1,4 +1,4 @@
-"""Самостоятельное формирование временного набора тестовой разметки."""
+﻿"""Самостоятельное формирование временного набора тестовой разметки."""
 
 from __future__ import annotations
 
@@ -16,11 +16,12 @@ from typing import Any
 import numpy as np
 import rasterio
 from pyproj import CRS as PyprojCRS
-from pyproj import Transformer
+from pyproj import Geod, Transformer
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import rasterize
 from rasterio.shutil import copy as raster_copy
 from rasterio.windows import Window, bounds as window_bounds
+from rasterio.warp import transform_bounds
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import coo_matrix
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
@@ -87,6 +88,23 @@ class SceneListExportArtifact:
 
 
 @dataclass(frozen=True)
+class IntersectingImage:
+    """Servernyi TIFF so stabilnym otnositelnym ID."""
+
+    source_id: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class IntersectingImages:
+    """Rezultat prostranstvennogo otbora i pokrytiya AOI."""
+
+    images: tuple[IntersectingImage, ...]
+    coverage_percent: float
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class GeneratedMarkupTile:
     index: int
     source_name: str
@@ -150,6 +168,89 @@ class _Candidate:
     @property
     def object_count(self) -> int:
         return len(self.feature_positions)
+
+
+def find_intersecting_images(
+    aoi_wgs84: BaseGeometry,
+    images_root: Path,
+) -> IntersectingImages:
+    """Naiti originalnye TIFF, peresekayushchie AOI."""
+
+    root = images_root.resolve()
+    if not root.is_dir():
+        return IntersectingImages(
+            images=(),
+            coverage_percent=0.0,
+            warnings=("Папка исходных снимков недоступна.",),
+        )
+    source_paths = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
+        ),
+        key=lambda path: path.relative_to(root).as_posix().casefold(),
+    )
+    matches: list[IntersectingImage] = []
+    coverage_parts: list[BaseGeometry] = []
+    warnings_list: list[str] = []
+    for source_path in source_paths:
+        try:
+            resolved_path = source_path.resolve(strict=True)
+            relative_path = resolved_path.relative_to(root)
+            source_id = relative_path.with_suffix("").as_posix()
+        except (OSError, ValueError):
+            warnings_list.append(f"Пропущен снимок вне разрешённой папки: {source_path.name}.")
+            continue
+        try:
+            with rasterio.open(resolved_path) as dataset:
+                if dataset.crs is None:
+                    raise ValueError("CRS не задана")
+                raster_crs = PyprojCRS.from_user_input(dataset.crs)
+                to_raster = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+                raster_aoi = transform_geometry(to_raster.transform, aoi_wgs84)
+                raster_footprint = box(*dataset.bounds)
+                if (
+                    raster_footprint.is_empty
+                    or not raster_footprint.is_valid
+                    or raster_footprint.area <= 0
+                ):
+                    raise ValueError("некорректный географический контур")
+                if raster_aoi.intersection(raster_footprint).area <= 0:
+                    continue
+                wgs84_bounds = transform_bounds(
+                    dataset.crs,
+                    "EPSG:4326",
+                    *dataset.bounds,
+                    densify_pts=21,
+                )
+                coverage_parts.append(box(*wgs84_bounds).intersection(aoi_wgs84))
+                matches.append(IntersectingImage(source_id=source_id, path=resolved_path))
+        except Exception as exc:  # noqa: BLE001
+            warnings_list.append(f"Пропущен нечитаемый снимок {source_id}: {exc}.")
+    aoi_area = _geodesic_geometry_area(aoi_wgs84)
+    covered_area = (
+        _geodesic_geometry_area(unary_union(coverage_parts).intersection(aoi_wgs84))
+        if coverage_parts
+        else 0.0
+    )
+    coverage_percent = min(100.0, max(0.0, covered_area * 100.0 / aoi_area)) if aoi_area else 0.0
+    if matches and coverage_percent < 99.99:
+        warnings_list.append(
+            f"Исходные снимки покрывают {coverage_percent:.2f}% зоны интереса."
+        )
+    return IntersectingImages(
+        images=tuple(matches),
+        coverage_percent=round(coverage_percent, 6),
+        warnings=tuple(warnings_list),
+    )
+
+
+def _geodesic_geometry_area(geometry: BaseGeometry) -> float:
+    """Poschitat ploshchad WGS84-geometrii v kvadratnyh metrah."""
+
+    area, _ = Geod(ellps="WGS84").geometry_area_perimeter(geometry)
+    return abs(float(area))
 
 
 def build_scene_list_export(

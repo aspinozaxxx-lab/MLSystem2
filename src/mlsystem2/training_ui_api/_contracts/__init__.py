@@ -1,4 +1,4 @@
-"""Public DTO collection for training UI API."""
+﻿"""Public DTO collection for training UI API."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ _MODULES = (
     "common",
     "exports",
     "jobs",
+    "pseudolabel",
     "results",
     "test_samples",
     "templates",

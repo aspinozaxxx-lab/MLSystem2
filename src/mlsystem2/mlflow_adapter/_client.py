@@ -1,4 +1,4 @@
-"""Обертка клиента MLflow."""
+﻿"""Обертка клиента MLflow."""
 
 from __future__ import annotations
 
@@ -113,6 +113,31 @@ def get_best_training_checkpoint(
         artifact_path=BEST_CHECKPOINT_ARTIFACT_PATH,
         artifact_uri=artifact_uri,
     )
+
+
+def get_usable_training_checkpoint(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowBestCheckpoint | None:
+    """Proverit, chto best checkpoint gotov k inference."""
+
+    checkpoint = get_best_training_checkpoint(tracking_uri, run_id)
+    if checkpoint is None or checkpoint.threshold is None:
+        return None
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        if str(getattr(run.info, "status", "")) != MLflowRunStatus.FINISHED.value:
+            return None
+        artifacts = client.list_artifacts(run_id, "checkpoints")
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось проверить best checkpoint training run") from exc
+    expected = BEST_CHECKPOINT_ARTIFACT_PATH
+    if not any(str(getattr(item, "path", "")) == expected for item in artifacts):
+        return None
+    return checkpoint
 
 
 def get_training_epoch_progress(

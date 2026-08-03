@@ -1,4 +1,4 @@
-"""Сессионная авторизация UI по тем же env vars, что и старый frontend."""
+﻿"""Сессионная авторизация UI по тем же env vars, что и старый frontend."""
 
 from __future__ import annotations
 
@@ -66,6 +66,23 @@ def require_user(request: Request, config: TrainingUIAPIConfig) -> str:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Требуется вход")
     return user
+
+
+def require_pseudolabel_user(request: Request, config: TrainingUIAPIConfig) -> str:
+    """Proverit session cookie ili otdelnyi bearer token QGIS."""
+
+    user = current_user(request, config)
+    if user is not None:
+        return user
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if (
+        config.pseudolabel_api_token
+        and scheme.casefold() == "bearer"
+        and hmac.compare_digest(token, config.pseudolabel_api_token)
+    ):
+        return "qgis"
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Требуется авторизация")
 
 
 def _encode_cookie(payload: dict[str, Any], secret: str) -> str:

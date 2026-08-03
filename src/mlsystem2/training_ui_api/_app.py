@@ -1,4 +1,4 @@
-"""FastAPI application factory for the training UI API."""
+﻿"""FastAPI application factory for the training UI API."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from ._auth import require_user
+from ._auth import require_pseudolabel_user, require_user
 from ._config import get_config
 from ._database import Base, configure_schema, create_session_factory, session_scope
 from ._dataset_catalog import synchronize_dataset_catalog
@@ -24,6 +26,7 @@ from ._routes.export import register_export_routes
 from ._routes.files import register_file_routes
 from ._routes.frontend import register_frontend_routes
 from ._routes.jobs import register_job_routes
+from ._routes.pseudolabel import register_pseudolabel_routes
 from ._routes.results import register_result_routes
 from ._routes.templates import register_template_routes
 from ._routes.test_samples import register_test_sample_routes
@@ -35,7 +38,7 @@ from ._test_samples import (
     run_test_sample_batch_worker,
 )
 from ._worker import run_queue_worker
-from .contracts import TrainingUIAPIError
+from .contracts import PseudolabelAPIError, TrainingUIAPIError
 
 
 def create_app() -> FastAPI:
@@ -91,7 +94,56 @@ def create_app() -> FastAPI:
     def authenticated(request: Request) -> str:
         return require_user(request, config)
 
-    route_context = RouteContext(config=config, get_db=get_db, authenticated=authenticated)
+    def pseudolabel_authenticated(request: Request) -> str:
+        """Proverit cookie ili otdelnyi Bearer-token QGIS."""
+
+        return require_pseudolabel_user(request, config)
+
+    route_context = RouteContext(
+        config=config,
+        get_db=get_db,
+        authenticated=authenticated,
+        pseudolabel_authenticated=pseudolabel_authenticated,
+    )
+
+    @app.exception_handler(PseudolabelAPIError)
+    def pseudolabel_error_handler(_: Request, exc: PseudolabelAPIError):
+        """Vernut stabilnyi JSON domennoi oshibki."""
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": exc.details,
+                }
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        """Ne menyat legacy-oshibki i strukturirovat tolko AOI API."""
+
+        if request.url.path.startswith("/api/v1/pseudolabel/"):
+            errors = [
+                {
+                    "field": ".".join(str(item) for item in error.get("loc", [])[1:]),
+                    "type": str(error.get("type") or "validation_error"),
+                }
+                for error in exc.errors()
+            ]
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Параметры запроса не прошли проверку.",
+                        "details": {"errors": errors},
+                    }
+                },
+            )
+        return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(TrainingUIAPIError)
     def training_ui_error_handler(_: Request, exc: TrainingUIAPIError):
@@ -111,6 +163,7 @@ def create_app() -> FastAPI:
     register_automation_routes(app, route_context)
     register_template_routes(app, route_context)
     register_job_routes(app, route_context)
+    register_pseudolabel_routes(app, route_context)
     register_result_routes(app, route_context)
     register_file_routes(app, route_context)
     register_frontend_routes(app, config)

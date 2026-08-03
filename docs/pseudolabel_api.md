@@ -1,0 +1,95 @@
+﻿# API распознавания зоны интереса
+
+API является частью модуля `training_ui_api` и использует общую таблицу и исполнитель `jobs`.
+Отдельный сервис, реестр моделей и очередь не создаются.
+
+## Авторизация
+
+Запрос разрешён при действующей cookie-сессии Training UI либо при заголовке:
+
+```http
+Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
+```
+
+Токен задаётся только в окружении сервера и настройках QGIS. Он не входит в URL, тело запроса,
+ответ или серверный лог.
+
+## Настройки сервера
+
+- `MLSYSTEM2_PSEUDOLABEL_API_TOKEN` — отдельный статический токен клиента QGIS; пустое значение
+  отключает Bearer-доступ, но не cookie-сессию.
+- `MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2` — максимальная площадь AOI, по умолчанию
+  `100000000` м².
+- `MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES` — максимальное число вершин, по умолчанию `10000`.
+- `MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS` — тайм-аут исполнения, по умолчанию `3600` секунд.
+
+## Контракт
+
+### `GET /api/v1/pseudolabel/classes`
+
+Возвращает только классы, у основного датасета которых есть последний успешный `TrainingResultRow`
+с завершённым MLflow run, метрикой порога и доступным `checkpoints/best.pt`. В ответе есть
+`class_id`, `display_name`, `model_id`, `model_version`, `model_name`, `trained_at`.
+
+### `POST /api/v1/pseudolabel/jobs`
+
+Принимает только `application/json` или `application/geo+json`:
+
+```json
+{
+  "class_id": "идентификатор-класса",
+  "aoi": {
+    "type": "Polygon",
+    "coordinates": [[[30.0, 60.0], [30.1, 60.0], [30.1, 59.9], [30.0, 60.0]]]
+  },
+  "aoi_crs": "EPSG:4326"
+}
+```
+
+Поддерживаются `Polygon` и `MultiPolygon`. Лишние поля запрещены, поэтому API не принимает
+растр, WMS URL, клиентские пути, путь модели или команду инференса. При создании фиксируются
+`model_id`, MLflow run id как `model_version`, checkpoint, threshold, inference-шаблон и параметры
+тайлинга. Более новая модель не изменяет уже созданное задание.
+
+### `GET /api/v1/pseudolabel/jobs/{job_id}`
+
+Возвращает `queued`, `running`, `succeeded`, `failed` или `cancelled`, процент прогресса,
+текущий этап, структурированную ошибку, предупреждения, стабильные `source_image_ids` и процент
+покрытия AOI.
+
+### `GET /api/v1/pseudolabel/jobs/{job_id}/result`
+
+Для завершённого задания возвращает GeoJSON `FeatureCollection` в `EPSG:4326`. Каждый объект
+содержит `candidate_id`, `class_id`, `model_id`, `model_version`, `job_id`, `source_image_ids` и
+`area_m2`. `confidence` отсутствует, поскольку действующий бинарный runner после пороговой обработки
+не сохраняет достоверную вероятность объекта.
+
+В `metadata` находятся `job_id`, `class_id`, `model_id`, `model_version`, `generated_at`,
+`output_crs`, `object_count`, `aoi_area_m2`, `source_image_ids`, `coverage_percent` и `warnings`.
+
+### `DELETE /api/v1/pseudolabel/jobs/{job_id}`
+
+Безопасно останавливает queued/running subprocess и сохраняет строку задания со статусом
+`cancelled`. Завершённое задание отменить нельзя.
+
+## Исполнение
+
+Сервер рекурсивно и детерминированно просматривает TIFF только в корне типа снимков основного
+датасета. Все пересекающие AOI снимки участвуют в обработке. Нулевое покрытие завершает задание
+ошибкой `SOURCE_IMAGES_NOT_FOUND`; частичное покрытие допустимо и возвращается как предупреждение.
+Runner читает только тайловые окна, пересекающие AOI, вызывает существующие загрузку checkpoint,
+PyTorch-инференс, постобработку и векторизацию. Векторные объекты объединяются только внутри
+связных компонент, разделяются на Polygon-кандидаты, исправляются, обрезаются по AOI и получают
+детерминированные UUID.
+
+Ошибка имеет единый вид:
+
+```json
+{
+  "error": {
+    "code": "AOI_TOO_LARGE",
+    "message": "Площадь зоны интереса превышает допустимый предел.",
+    "details": {}
+  }
+}
+```

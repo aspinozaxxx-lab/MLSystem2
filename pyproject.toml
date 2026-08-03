@@ -52,7 +52,7 @@ mlsystem2-training-ui-api = "mlsystem2.training_ui_api.api:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 testpaths = ["tests"]
 
 [tool.ruff]

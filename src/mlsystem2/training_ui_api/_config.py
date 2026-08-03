@@ -1,4 +1,4 @@
-"""Конфигурация training UI API из переменных окружения."""
+﻿"""Конфигурация training UI API из переменных окружения."""
 
 from __future__ import annotations
 
@@ -19,6 +19,15 @@ def _bool_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float_env(name: str, default: float) -> float:
+    """Prochitat float iz okruzheniya s ponyatnoi oshibkoi."""
+
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return float(value)
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,10 @@ class TrainingUIAPIConfig:
     cors_origin: str | None
     worker_enabled: bool
     worker_interval_seconds: int
+    pseudolabel_api_token: str
+    pseudolabel_max_aoi_area_m2: float
+    pseudolabel_max_vertices: int
+    pseudolabel_job_timeout_seconds: int
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -115,4 +128,17 @@ def get_config() -> TrainingUIAPIConfig:
         cors_origin=os.getenv("MLSYSTEM2_TRAINING_UI_CORS_ORIGIN"),
         worker_enabled=_bool_env("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", True),
         worker_interval_seconds=_int_env("MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS", 5),
+        pseudolabel_api_token=os.getenv("MLSYSTEM2_PSEUDOLABEL_API_TOKEN", ""),
+        pseudolabel_max_aoi_area_m2=max(
+            1.0,
+            _float_env("MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2", 100_000_000.0),
+        ),
+        pseudolabel_max_vertices=max(
+            4,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES", 10_000),
+        ),
+        pseudolabel_job_timeout_seconds=max(
+            1,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS", 3600),
+        ),
     )

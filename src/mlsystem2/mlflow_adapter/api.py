@@ -1,4 +1,4 @@
-"""Публичный фасад адаптера MLflow."""
+﻿"""Публичный фасад адаптера MLflow."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from ._client import end_run as _end_run
 from ._client import create_experiment as _create_experiment
 from ._client import download_run_artifact as _download_run_artifact
 from ._client import get_best_training_checkpoint as _get_best_training_checkpoint
+from ._client import get_usable_training_checkpoint as _get_usable_training_checkpoint
 from ._client import get_training_epoch_progress as _get_training_epoch_progress
 from ._client import list_experiments as _list_experiments
 from ._client import log_dataset_artifacts as _log_dataset_artifacts
@@ -50,6 +51,15 @@ def get_best_training_checkpoint(
     run_id: str,
 ) -> MLflowBestCheckpoint | None:
     return _get_best_training_checkpoint(tracking_uri, run_id)
+
+
+def get_usable_training_checkpoint(
+    tracking_uri: str,
+    run_id: str,
+) -> MLflowBestCheckpoint | None:
+    """Vernut tolko zavershennyi run s fakticheskim best.pt."""
+
+    return _get_usable_training_checkpoint(tracking_uri, run_id)
 
 
 def get_training_epoch_progress(
@@ -126,6 +136,7 @@ __all__ = [
     "list_experiments",
     "create_experiment",
     "get_best_training_checkpoint",
+    "get_usable_training_checkpoint",
     "get_training_epoch_progress",
     "download_run_artifact",
     "start_run",

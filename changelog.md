@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## 2026-08-03
+
+- Dobavlen servernyi AOI API dlya QGIS s fiksaciei poslednei prigodnoi modeli, prostranstvennym otborom TIFF i obshchei inference-ocheredyu.
+- Psevdorazmetka obrabatyvaetsya tolko v peresekayushchih AOI oknah, obrezaetsya po AOI i vozvrashchaetsya kak FeatureCollection so stabilnymi candidate_id i metadannymi pokrytiya.
+- Dobavlen otdelnyi QGIS-plagin s neblokiruyushchim HTTP, persistent GeoPackage staging, yavno vybrannymi celevymi sloyami i sopostavleniem polei.
+- Resheniya review i razbienie poligonov poluchili edinyi QUndoStack; primenenie v dva sloya proveriaet candidate_id i ne sozdaet dublikaty.
+- Dobavleny servernye, chistye Python i headless QGIS 4.0 testy, a takzhe dokumentaciya API, ustanovki i ruchnoi proverki.
+
 ## 2026-07-30
 
 - Исправлено восстановление полигонов, становящихся невалидными после преобразования CRS при расчёте тестового F1.

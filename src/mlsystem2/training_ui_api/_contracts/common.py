@@ -1,4 +1,4 @@
-"""Shared public contracts for the training UI API."""
+﻿"""Shared public contracts for the training UI API."""
 
 from __future__ import annotations
 
@@ -49,6 +49,7 @@ class StoredFileKind(StrEnum):
     SCENES_TXT = "scenes_txt"
     ANNOTATION_GEOJSON = "annotation_geojson"
     PSEUDO_MARKUP_GEOJSON = "pseudo_markup_geojson"
+    PSEUDOLABEL_GEOJSON = "pseudolabel_geojson"
 
 
 class RuntimeProgress(BaseModel):

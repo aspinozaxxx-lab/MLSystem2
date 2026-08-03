@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 
@@ -14,6 +14,7 @@ EXPECTED_API = {
         "list_experiments",
         "create_experiment",
         "get_best_training_checkpoint",
+        "get_usable_training_checkpoint",
         "get_training_epoch_progress",
         "download_run_artifact",
         "start_run",

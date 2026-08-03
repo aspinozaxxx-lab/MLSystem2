@@ -41,6 +41,8 @@ from ._models import (
     TrainingResultRow,
     TrainingResultTestMetricRow,
 )
+from ._processes import terminate_job_process
+from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
 from ._queueing import dispatch_sort_key, ensure_queue_positions
 from ._templates import normalize_tile_factors
 from ._test_samples import (
@@ -65,6 +67,12 @@ ProcessLauncher = Callable[..., _StartedProcess]
 
 def _is_test_sample_f1_job(row: JobRow) -> bool:
     return (row.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION
+
+
+def _is_pseudolabel_aoi_job(row: JobRow) -> bool:
+    """Proverit domennoe naznachenie inference job."""
+
+    return (row.config or {}).get("operation") == PSEUDOLABEL_AOI_OPERATION
 
 
 async def run_queue_worker(
@@ -219,6 +227,15 @@ def _reconcile_running_inference_jobs(session: Session, config: TrainingUIAPICon
         if exit_code is not None:
             _finish_inference_job(session, row, config, succeeded=exit_code == 0)
             continue
+        if _pseudolabel_timed_out(row):
+            terminate_job_process(row)
+            _set_pseudolabel_error(
+                row,
+                "TIMEOUT",
+                "Превышено допустимое время распознавания зоны интереса.",
+            )
+            _finish_inference_job(session, row, config, succeeded=False)
+            continue
         if row.process_pid is not None and _pid_is_alive(row.process_pid):
             continue
         _finish_inference_job(session, row, config, succeeded=False)
@@ -312,17 +329,26 @@ def _start_inference_job(
     popen_factory: ProcessLauncher,
 ) -> None:
     is_test_f1 = _is_test_sample_f1_job(row)
+    is_pseudolabel_aoi = _is_pseudolabel_aoi_job(row)
     run_dir = config.scratch_root / "jobs" / str(row.id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    row.tmp_path = str(run_dir)
     try:
-        config_path = run_dir / ("test_f1_config.yaml" if is_test_f1 else "pseudo_config.yaml")
-        payload = (
-            _build_test_sample_f1_config(session, row, config, run_dir)
+        config_path = run_dir / (
+            "test_f1_config.yaml"
             if is_test_f1
-            else _build_pseudo_markup_config(session, row, config, run_dir)
+            else "pseudolabel_config.yaml"
+            if is_pseudolabel_aoi
+            else "pseudo_config.yaml"
         )
+        if is_test_f1:
+            payload = _build_test_sample_f1_config(session, row, config, run_dir)
+        elif is_pseudolabel_aoi:
+            payload = _build_pseudolabel_aoi_config(row, config, run_dir)
+        else:
+            payload = _build_pseudo_markup_config(session, row, config, run_dir)
         _write_yaml(config_path, payload)
         script_path = _write_pseudo_run_script(
             config,
@@ -342,10 +368,18 @@ def _start_inference_job(
             (
                 "Не удалось запустить расчёт F1 на тестовой разметке.\n\n"
                 if is_test_f1
+                else "Не удалось запустить распознавание зоны интереса.\n\n"
+                if is_pseudolabel_aoi
                 else "Не удалось запустить псевдоразметку.\n\n"
             )
             + traceback.format_exc(),
         )
+        if is_pseudolabel_aoi:
+            _set_pseudolabel_error(
+                row,
+                "START_FAILED",
+                "Не удалось запустить распознавание зоны интереса.",
+            )
         _finish_inference_job(session, row, config, succeeded=False)
         return
 
@@ -353,13 +387,12 @@ def _start_inference_job(
     row.started_at = _now()
     row.finished_at = None
     row.process_pid = process.pid
-    row.tmp_path = str(run_dir)
     if is_test_f1:
         metric = _test_sample_f1_metric(session, row)
         if metric is not None:
             metric.status = "running"
             metric.updated_at = _now()
-    else:
+    elif not is_pseudolabel_aoi:
         for result in _pseudo_markup_results(session, row):
             result.status = ResultStatus.RUNNING.value
             result.updated_at = _now()
@@ -501,6 +534,52 @@ def _build_pseudo_markup_config(
         "tile_size": tile_size,
         "stride": _int_value(flat, "tile_preparation.stride", tile_size),
         "batch_size": _int_value(flat, "train.batch_size", 1),
+        "device": "cuda",
+    }
+
+
+def _build_pseudolabel_aoi_config(
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    run_dir: Path,
+) -> dict[str, Any]:
+    """Sobrat runner-config tolko iz servernogo snapshot job."""
+
+    state = (row.config or {}).get("pseudolabel")
+    if not isinstance(state, dict):
+        raise RuntimeError("В задании распознавания отсутствуют зафиксированные параметры.")
+    threshold = state.get("checkpoint_threshold")
+    if threshold is None:
+        raise RuntimeError("У зафиксированной модели отсутствует порог распознавания.")
+    return {
+        "operation": PSEUDOLABEL_AOI_OPERATION,
+        "job_id": str(row.id),
+        "run_root": str(run_dir / "scratch"),
+        "inference_backend": "pytorch_one_off",
+        "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
+        "report_path": str(run_dir / "scratch" / "report.json"),
+        "images_root": str(state.get("images_root") or ""),
+        "aoi": state.get("aoi"),
+        "aoi_crs": "EPSG:4326",
+        "aoi_area_m2": state.get("aoi_area_m2"),
+        "class_key": state.get("class_id"),
+        "class_name": state.get("class_name"),
+        "model_id": state.get("model_id"),
+        "model_version": state.get("model_version"),
+        "source_model": state.get("model_name"),
+        "mlflow_tracking_uri": config.mlflow_tracking_uri,
+        "mlflow_run_id": state.get("mlflow_run_id"),
+        "checkpoint_uri": state.get("checkpoint_uri"),
+        "checkpoint_artifact_path": state.get("checkpoint_artifact_path") or "checkpoints/best.pt",
+        "checkpoint_f1_score": state.get("checkpoint_f1_score"),
+        "checkpoint_epoch": state.get("checkpoint_epoch"),
+        "imagery_type": state.get("imagery_type"),
+        "input_channels": _int_value(state, "input_channels", 4),
+        "postprocess_config": state.get("inference_template_config") or {},
+        "threshold": float(threshold),
+        "tile_size": _int_value(state, "tile_size", 768),
+        "stride": _int_value(state, "stride", 768),
+        "batch_size": _int_value(state, "batch_size", 1),
         "device": "cuda",
     }
 
@@ -816,6 +895,9 @@ def _finish_inference_job(
     if _is_test_sample_f1_job(row):
         _finish_test_sample_f1_job(session, row, succeeded=succeeded)
         return
+    if _is_pseudolabel_aoi_job(row):
+        _finish_pseudolabel_aoi_job(session, row, config, succeeded=succeeded)
+        return
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     row.finished_at = _now()
     row.process_pid = None
@@ -877,6 +959,73 @@ def _finish_inference_job(
     _cleanup_inference_scratch(row)
     LOGGER.info(
         "Finished pseudo-markup job %s with status %s report=%s",
+        row.id,
+        row.status,
+        report,
+    )
+
+
+def _finish_pseudolabel_aoi_job(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    *,
+    succeeded: bool,
+) -> None:
+    """Sohranit rezultat i publichnoe sostoyanie AOI job."""
+
+    row.finished_at = _now()
+    row.process_pid = None
+    output_path = _pseudo_output_path(row)
+    report = _pseudo_report(row)
+    succeeded = succeeded and _pseudo_report_allows_success(report)
+    has_geojson = output_path is not None and output_path.is_file()
+    file_row = None
+    if succeeded and has_geojson:
+        file_row = _store_generated_geojson(
+            session,
+            output_path,
+            config,
+            original_name=f"pseudolabel_{row.id}.geojson",
+            object_count=_pseudo_geojson_object_count(output_path, report),
+            kind=StoredFileKind.PSEUDOLABEL_GEOJSON,
+        )
+    succeeded = file_row is not None
+    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    state = dict((row.config or {}).get("pseudolabel") or {})
+    if report is not None:
+        state["source_image_ids"] = _string_values(report.get("source_image_ids"))
+        state["coverage_percent"] = _optional_number(report.get("coverage_percent"))
+        state["warnings"] = _string_values(report.get("warnings"))
+    state["result_file_id"] = str(file_row.id) if file_row is not None else None
+    if succeeded:
+        state["error"] = None
+    elif not isinstance(state.get("error"), dict):
+        report_error = report.get("error") if report is not None else None
+        if isinstance(report_error, dict):
+            state["error"] = {
+                "code": str(report_error.get("code") or "INFERENCE_FAILED"),
+                "message": str(
+                    report_error.get("message")
+                    or "Не удалось выполнить распознавание зоны интереса."
+                ),
+                "details": (
+                    report_error.get("details")
+                    if isinstance(report_error.get("details"), dict)
+                    else {}
+                ),
+            }
+        else:
+            state["error"] = {
+                "code": "INFERENCE_FAILED",
+                "message": "Не удалось выполнить распознавание зоны интереса.",
+                "details": {},
+            }
+    row.config = {**(row.config or {}), "pseudolabel": state}
+    session.flush()
+    _cleanup_inference_scratch(row)
+    LOGGER.info(
+        "Завершено задание распознавания AOI %s со статусом %s, отчёт=%s",
         row.id,
         row.status,
         report,
@@ -1047,9 +1196,10 @@ def _store_generated_geojson(
     *,
     original_name: str,
     object_count: int | None,
+    kind: StoredFileKind = StoredFileKind.PSEUDO_MARKUP_GEOJSON,
 ) -> StoredFileRow:
     file_id = uuid.uuid4()
-    target_dir = config.stored_files_root / StoredFileKind.PSEUDO_MARKUP_GEOJSON.value
+    target_dir = config.stored_files_root / kind.value
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{file_id}.geojson"
     tmp_path = target_dir / f".{file_id}.geojson.tmp"
@@ -1062,7 +1212,7 @@ def _store_generated_geojson(
         raise
     row = StoredFileRow(
         id=file_id,
-        kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+        kind=kind.value,
         original_name=original_name,
         content_type="application/geo+json",
         path=str(target_path),
@@ -1266,6 +1416,48 @@ def _pid_is_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _pseudolabel_timed_out(row: JobRow) -> bool:
+    """Proverit zafiksirovannyi timeout s uchetom timezone."""
+
+    if not _is_pseudolabel_aoi_job(row) or row.started_at is None:
+        return False
+    state = (row.config or {}).get("pseudolabel")
+    if not isinstance(state, dict):
+        return False
+    timeout_seconds = _int_value(state, "timeout_seconds", 0)
+    if timeout_seconds <= 0:
+        return False
+    started_at = row.started_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return (_now() - started_at).total_seconds() >= timeout_seconds
+
+
+def _set_pseudolabel_error(row: JobRow, code: str, message: str) -> None:
+    """Atomarno zapisat strukturirovannuyu oshibku v JSON job."""
+
+    state = dict((row.config or {}).get("pseudolabel") or {})
+    state["error"] = {"code": code, "message": message, "details": {}}
+    row.config = {**(row.config or {}), "pseudolabel": state}
+
+
+def _string_values(value: object) -> list[str]:
+    """Normalizovat optional JSON-massiv strok."""
+
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _optional_number(value: object) -> float | None:
+    """Bezopasno preobrazovat optional chislo."""
+
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_worker_error(run_dir: Path, message: str) -> None:

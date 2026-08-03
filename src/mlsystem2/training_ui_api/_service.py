@@ -927,7 +927,12 @@ def job_log(
     raise TrainingUIAPIError("Лог задания не найден.")
 
 
-def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
+def delete_job(
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    preserve_cancelled: bool = False,
+) -> JobDetail:
     row = session.get(JobRow, job_id)
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
@@ -939,6 +944,12 @@ def delete_job(session: Session, job_id: uuid.UUID) -> JobDetail:
         _stop_process_and_cleanup(row)
         if mlflow_run_id:
             _mark_mlflow_run_killed(mlflow_run_id)
+    if preserve_cancelled:
+        row.status = JobStatus.CANCELLED.value
+        row.finished_at = _now()
+        row.process_pid = None
+        session.flush()
+        return detail
     _delete_job_rows(session, row)
     session.flush()
     return detail

@@ -1,0 +1,812 @@
+﻿"""Kompaktnaya dock-panel proverki psevdorazmetki."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+from qgis.PyQt.QtCore import QTimer, pyqtSignal
+from qgis.PyQt.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDockWidget,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+from qgis.core import (
+    Qgis,
+    QgsCoordinateTransform,
+    QgsCsException,
+    QgsGeometry,
+    QgsMessageLog,
+    QgsProject,
+    QgsVectorLayer,
+)
+
+from .aoi_map_tool import AOIPolygonMapTool
+from .api_client import APIClient
+from .contracts import PluginContractError, validate_feature_collection
+from .layer_utils import (
+    LayerOperationError,
+    apply_reviewed_candidates,
+    polygon_layers,
+)
+from .review_session import ReviewSession, ReviewSessionError
+from .settings import (
+    load_field_mapping,
+    load_settings,
+    save_field_mapping,
+    save_settings,
+    session_directory,
+)
+
+
+# Vozvrashchaet sovmestimyi kod prinyatiya dialoga Qt5/Qt6.
+def _accepted_dialog_code():
+    enum = getattr(QDialog, "DialogCode", QDialog)
+    return enum.Accepted
+
+
+# Perevodit mashinnyi status v korotkii russkii tekst.
+def _status_text(value: str) -> str:
+    return {
+        "queued": "в очереди",
+        "running": "выполняется",
+        "succeeded": "успешно",
+        "failed": "ошибка",
+        "cancelled": "отменено",
+    }.get(value, value)
+
+
+# Perevodit etap runner v russkii tekst.
+def _stage_text(value: str) -> str:
+    return {
+        "queued": "ожидание",
+        "running": "выполнение",
+        "selecting_images": "подбор снимков",
+        "loading_model": "загрузка модели",
+        "inference": "инференс",
+        "vectorization": "векторизация",
+        "succeeded": "готово",
+        "failed": "ошибка",
+        "cancelled": "отменено",
+    }.get(value, value)
+
+
+class FieldMappingDialog(QDialog):
+    """Nastroika sopostavleniya bez izmeneniya skhemy sloya."""
+
+    _LABELS = {
+        "class_id": "Класс",
+        "source": "Источник",
+        "confidence": "Confidence",
+        "candidate_id": "Candidate ID",
+        "model_version": "Версия модели",
+    }
+
+    # Stroit dve nezavisimye formy po realnym polyam sloev.
+    def __init__(
+        self,
+        annotation_layer: QgsVectorLayer,
+        hard_negative_layer: QgsVectorLayer,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Сопоставление полей")
+        layout = QVBoxLayout(self)
+        self._combos: dict[tuple[str, str], QComboBox] = {}
+        for role, title, layer in (
+            ("annotation", "Слой разметки", annotation_layer),
+            ("hard_negative", "Слой hard_negative", hard_negative_layer),
+        ):
+            group = QGroupBox(title)
+            form = QFormLayout(group)
+            current = load_field_mapping(role)
+            names = [field.name() for field in layer.fields()]
+            for key, label in self._LABELS.items():
+                combo = QComboBox()
+                combo.addItem("— не копировать —", "")
+                for name in names:
+                    combo.addItem(name, name)
+                index = combo.findData(current.get(key, ""))
+                combo.setCurrentIndex(max(0, index))
+                form.addRow(label, combo)
+                self._combos[(role, key)] = combo
+            layout.addWidget(group)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    # Vozvrashchaet vybrannye sopostavleniya obeih rolei.
+    def mappings(self) -> dict[str, dict[str, str]]:
+        return {
+            role: {
+                key: str(self._combos[(role, key)].currentData() or "")
+                for key in self._LABELS
+            }
+            for role in ("annotation", "hard_negative")
+        }
+
+
+class MLSystemDockWidget(QDockWidget):
+    """Svyazyvaet neblokiruyushchii API i persistent staging."""
+
+    session_active_changed = pyqtSignal(bool)
+
+    # Inicializiruet sostoyanie bez setevyh ili proektnyh mutacii.
+    def __init__(self, iface, parent: QWidget | None = None) -> None:
+        super().__init__("MLSystem2 — псевдоразметка", parent)
+        self.iface = iface
+        self.canvas = iface.mapCanvas()
+        self.api = APIClient(self)
+        self.settings = load_settings()
+        self.session: ReviewSession | None = None
+        self._aoi_geometry: QgsGeometry | None = None
+        self._aoi_crs = None
+        self._job_id: str | None = None
+        self._poll_failures = 0
+        self._removing_candidate_layer = False
+        self._previous_map_tool = None
+        self._aoi_tool = AOIPolygonMapTool(self.canvas)
+        self._aoi_tool.captured.connect(self._aoi_captured)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setSingleShot(True)
+        self._poll_timer.timeout.connect(self._poll_job)
+        self.api.succeeded.connect(self._api_succeeded)
+        self.api.failed.connect(self._api_failed)
+        QgsProject.instance().layersRemoved.connect(self._layers_removed)
+        self._build_ui()
+        self._load_settings_to_ui()
+        self.refresh_layers()
+        self._update_review_ui()
+
+    # Stroit kompaktnyi UI programmnymi sredstvami Qt.
+    def _build_ui(self) -> None:
+        content = QWidget()
+        root = QVBoxLayout(content)
+        root.setContentsMargins(6, 6, 6, 6)
+
+        connection = QGroupBox("Подключение")
+        connection_form = QFormLayout(connection)
+        self.server_url = QLineEdit()
+        self.token = QLineEdit()
+        self.token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.check_connection = QPushButton("Проверить и загрузить классы")
+        self.check_connection.clicked.connect(self._request_classes)
+        connection_form.addRow("URL сервера", self.server_url)
+        connection_form.addRow("Токен", self.token)
+        connection_form.addRow(self.check_connection)
+        root.addWidget(connection)
+
+        recognition = QGroupBox("Распознавание")
+        recognition_layout = QGridLayout(recognition)
+        self.class_combo = QComboBox()
+        self.class_combo.currentIndexChanged.connect(self._class_changed)
+        self.model_label = QLabel("Модель: —")
+        self.aoi_layer_combo = QComboBox()
+        draw_aoi = QPushButton("Нарисовать")
+        extent_aoi = QPushButton("Текущий охват")
+        selection_aoi = QPushButton("Из выделения")
+        draw_aoi.clicked.connect(self._draw_aoi)
+        extent_aoi.clicked.connect(self._extent_aoi)
+        selection_aoi.clicked.connect(self._selection_aoi)
+        self.aoi_label = QLabel("AOI не задана")
+        self.start_button = QPushButton("Запустить распознавание")
+        self.cancel_button = QPushButton("Отменить задание")
+        self.cancel_button.setEnabled(False)
+        self.start_button.clicked.connect(self._start_job)
+        self.cancel_button.clicked.connect(self._cancel_job)
+        self.status_label = QLabel("Статус: —")
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.warning_label = QLabel("")
+        self.warning_label.setWordWrap(True)
+        recognition_layout.addWidget(QLabel("Класс"), 0, 0)
+        recognition_layout.addWidget(self.class_combo, 0, 1, 1, 2)
+        recognition_layout.addWidget(self.model_label, 1, 0, 1, 3)
+        recognition_layout.addWidget(QLabel("Слой выделения"), 2, 0)
+        recognition_layout.addWidget(self.aoi_layer_combo, 2, 1, 1, 2)
+        recognition_layout.addWidget(draw_aoi, 3, 0)
+        recognition_layout.addWidget(extent_aoi, 3, 1)
+        recognition_layout.addWidget(selection_aoi, 3, 2)
+        recognition_layout.addWidget(self.aoi_label, 4, 0, 1, 3)
+        recognition_layout.addWidget(self.start_button, 5, 0, 1, 2)
+        recognition_layout.addWidget(self.cancel_button, 5, 2)
+        recognition_layout.addWidget(self.status_label, 6, 0, 1, 3)
+        recognition_layout.addWidget(self.progress, 7, 0, 1, 3)
+        recognition_layout.addWidget(self.warning_label, 8, 0, 1, 3)
+        root.addWidget(recognition)
+
+        layers_group = QGroupBox("Рабочие слои")
+        layers_form = QFormLayout(layers_group)
+        self.annotation_layer_combo = QComboBox()
+        self.hard_layer_combo = QComboBox()
+        layer_buttons = QHBoxLayout()
+        refresh_layers = QPushButton("Обновить")
+        map_fields = QPushButton("Сопоставить поля")
+        refresh_layers.clicked.connect(self.refresh_layers)
+        map_fields.clicked.connect(self._map_fields)
+        layer_buttons.addWidget(refresh_layers)
+        layer_buttons.addWidget(map_fields)
+        layers_form.addRow("Разметка", self.annotation_layer_combo)
+        layers_form.addRow("Hard negative", self.hard_layer_combo)
+        layers_form.addRow(layer_buttons)
+        root.addWidget(layers_group)
+
+        review = QGroupBox("Проверка кандидатов")
+        review_layout = QGridLayout(review)
+        self.filter_combo = QComboBox()
+        for text, value in (
+            ("Только непроверенные", "new"),
+            ("Все", "all"),
+            ("Принятые", "annotation"),
+            ("Hard negative", "hard_negative"),
+            ("Отклонённые", "discarded"),
+            ("Выгруженные", "exported"),
+        ):
+            self.filter_combo.addItem(text, value)
+        self.sort_combo = QComboBox()
+        for text, value in (
+            ("Исходный порядок", "original"),
+            ("Confidence ↓", "confidence_desc"),
+            ("Площадь ↓", "area_desc"),
+        ):
+            self.sort_combo.addItem(text, value)
+        self.filter_combo.currentIndexChanged.connect(self._review_filter_changed)
+        self.sort_combo.currentIndexChanged.connect(self._review_sort_changed)
+        self.counter_label = QLabel("0 из 0; осталось 0")
+        self.candidate_label = QLabel("Текущий объект: —")
+        self.candidate_label.setWordWrap(True)
+        previous_button = QPushButton("Предыдущий")
+        next_button = QPushButton("Следующий")
+        zoom_button = QPushButton("Приблизить")
+        previous_button.clicked.connect(self.previous_candidate)
+        next_button.clicked.connect(self.next_candidate)
+        zoom_button.clicked.connect(self.zoom_candidate)
+        annotation_button = QPushButton("1 — В разметку")
+        hard_button = QPushButton("2 — Hard negative")
+        discard_button = QPushButton("3 — Выкинуть")
+        split_button = QPushButton("S — Разбить")
+        annotation_button.clicked.connect(lambda: self.classify("annotation"))
+        hard_button.clicked.connect(lambda: self.classify("hard_negative"))
+        discard_button.clicked.connect(lambda: self.classify("discarded"))
+        split_button.clicked.connect(self.split_candidate)
+        undo_button = QPushButton("Отменить")
+        redo_button = QPushButton("Повторить")
+        undo_button.clicked.connect(self.undo)
+        redo_button.clicked.connect(self.redo)
+        self.max_area = QDoubleSpinBox()
+        self.max_area.setRange(1.0, 1_000_000_000_000.0)
+        self.max_area.setDecimals(1)
+        self.max_area.setSuffix(" м²")
+        self.min_area = QDoubleSpinBox()
+        self.min_area.setRange(0.0, 1_000_000_000.0)
+        self.min_area.setDecimals(1)
+        self.min_area.setSuffix(" м²")
+        self.auto_split = QCheckBox("Автоматически разбивать после загрузки")
+        self.apply_button = QPushButton("Применить результаты в рабочие слои")
+        self.apply_button.clicked.connect(self._apply_results)
+        self.session_path_label = QLabel("Сессия: —")
+        self.session_path_label.setWordWrap(True)
+        open_session = QPushButton("Открыть сохранённую сессию…")
+        open_session.clicked.connect(self._open_session)
+        review_layout.addWidget(QLabel("Фильтр"), 0, 0)
+        review_layout.addWidget(self.filter_combo, 0, 1, 1, 2)
+        review_layout.addWidget(QLabel("Сортировка"), 1, 0)
+        review_layout.addWidget(self.sort_combo, 1, 1, 1, 2)
+        review_layout.addWidget(self.counter_label, 2, 0, 1, 3)
+        review_layout.addWidget(self.candidate_label, 3, 0, 1, 3)
+        review_layout.addWidget(previous_button, 4, 0)
+        review_layout.addWidget(next_button, 4, 1)
+        review_layout.addWidget(zoom_button, 4, 2)
+        review_layout.addWidget(annotation_button, 5, 0)
+        review_layout.addWidget(hard_button, 5, 1)
+        review_layout.addWidget(discard_button, 5, 2)
+        review_layout.addWidget(split_button, 6, 0)
+        review_layout.addWidget(undo_button, 6, 1)
+        review_layout.addWidget(redo_button, 6, 2)
+        review_layout.addWidget(QLabel("Макс. часть"), 7, 0)
+        review_layout.addWidget(self.max_area, 7, 1, 1, 2)
+        review_layout.addWidget(QLabel("Мин. часть"), 8, 0)
+        review_layout.addWidget(self.min_area, 8, 1, 1, 2)
+        review_layout.addWidget(self.auto_split, 9, 0, 1, 3)
+        review_layout.addWidget(self.apply_button, 10, 0, 1, 3)
+        review_layout.addWidget(self.session_path_label, 11, 0, 1, 3)
+        review_layout.addWidget(open_session, 12, 0, 1, 3)
+        root.addWidget(review)
+        root.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        self.setWidget(scroll)
+        self.setMinimumWidth(360)
+
+    # Perenosit sohranennye nastroiki v kontroly.
+    def _load_settings_to_ui(self) -> None:
+        self.server_url.setText(self.settings.server_url)
+        self.token.setText(self.settings.token)
+        self.max_area.setValue(self.settings.max_part_area_m2)
+        self.min_area.setValue(self.settings.min_part_area_m2)
+        self.auto_split.setChecked(self.settings.auto_split)
+
+    # Sohranyaet tekushchie kontroly i konfiguriruet API-klient.
+    def save_current_settings(self) -> None:
+        self.settings = replace(
+            self.settings,
+            server_url=self.server_url.text().strip(),
+            token=self.token.text(),
+            max_part_area_m2=self.max_area.value(),
+            min_part_area_m2=self.min_area.value(),
+            auto_split=self.auto_split.isChecked(),
+        )
+        save_settings(self.settings)
+        self.api.configure(
+            self.settings.server_url,
+            self.settings.token,
+            self.settings.request_timeout_ms,
+        )
+
+    def refresh_layers(self) -> None:
+        """Obnovit spiski, ne menyaya aktivnyi sloi QGIS."""
+
+        previous = {
+            "aoi": self.aoi_layer_combo.currentData(),
+            "annotation": self.annotation_layer_combo.currentData(),
+            "hard": self.hard_layer_combo.currentData(),
+        }
+        layers = [layer for layer in polygon_layers() if self.session is None or layer.id() != self.session.layer.id()]
+        for combo, key in (
+            (self.aoi_layer_combo, "aoi"),
+            (self.annotation_layer_combo, "annotation"),
+            (self.hard_layer_combo, "hard"),
+        ):
+            combo.clear()
+            combo.addItem("— не выбран —", "")
+            for layer in layers:
+                combo.addItem(layer.name(), layer.id())
+            index = combo.findData(previous[key])
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+    # Proveriaet podklyuchenie cherez zashchishchennyi endpoint klassov.
+    def _request_classes(self) -> None:
+        self.save_current_settings()
+        self.status_label.setText("Статус: подключение…")
+        self.api.get_classes()
+
+    # Pokazyvaet versiyu modeli vybrannogo klassa.
+    def _class_changed(self) -> None:
+        item = self.class_combo.currentData()
+        self.model_label.setText(
+            f"Модель: {item.get('model_name')} / {item.get('model_version')}"
+            if isinstance(item, dict)
+            else "Модель: —"
+        )
+
+    # Aktiviruet instrument risovaniya bez smeny aktivnogo sloya.
+    def _draw_aoi(self) -> None:
+        self._previous_map_tool = self.canvas.mapTool()
+        self.canvas.setMapTool(self._aoi_tool)
+        self.status_label.setText("Статус: рисуйте левой кнопкой, завершите правой")
+
+    # Ispolzuet tekushchii ohvat map canvas kak AOI.
+    def _extent_aoi(self) -> None:
+        self._set_aoi(
+            QgsGeometry.fromRect(self.canvas.extent()),
+            self.canvas.mapSettings().destinationCrs(),
+        )
+
+    # Obedinyaet vydelennye poligony yavno vybrannogo sloya.
+    def _selection_aoi(self) -> None:
+        layer = self._layer_from_combo(self.aoi_layer_combo)
+        if layer is None:
+            self._show_error("Сначала явно выберите слой с выделением.")
+            return
+        geometries = [feature.geometry() for feature in layer.selectedFeatures()]
+        if not geometries:
+            self._show_error("В выбранном слое нет выделенных объектов.")
+            return
+        self._set_aoi(QgsGeometry.unaryUnion(geometries), layer.crs())
+
+    # Prinimaet rezultat map tool i vosstanavlivaet prezhnii instrument.
+    def _aoi_captured(self, geometry: QgsGeometry, crs) -> None:
+        self._set_aoi(geometry, crs)
+        if self._previous_map_tool is not None:
+            self.canvas.setMapTool(self._previous_map_tool)
+            self._previous_map_tool = None
+
+    # Proveriaet i sohranyaet itogovuyu geometriyu AOI.
+    def _set_aoi(self, geometry: QgsGeometry, crs) -> None:
+        geometry = geometry.makeValid()
+        if geometry.isNull() or geometry.isEmpty() or not crs.isValid():
+            self._show_error("AOI или её CRS некорректна.")
+            return
+        if geometry.type() != Qgis.GeometryType.Polygon:
+            self._show_error("AOI должна быть Polygon или MultiPolygon.")
+            return
+        self._aoi_geometry = geometry
+        self._aoi_crs = crs
+        self.aoi_label.setText(f"AOI задана; CRS: {crs.authid() or crs.toWkt()[:40]}")
+
+    # Otpravlyaet tolko class_id, AOI i ee CRS.
+    def _start_job(self) -> None:
+        self.save_current_settings()
+        class_info = self.class_combo.currentData()
+        if not isinstance(class_info, dict):
+            self._show_error("Выберите класс распознавания.")
+            return
+        if self._aoi_geometry is None or self._aoi_crs is None:
+            self._show_error("Сначала задайте AOI.")
+            return
+        try:
+            aoi = json.loads(self._aoi_geometry.asJson())
+        except json.JSONDecodeError as exc:
+            self._show_error(f"Не удалось сформировать GeoJSON AOI: {exc}")
+            return
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.status_label.setText("Статус: создание задания…")
+        self.warning_label.clear()
+        self.api.create_job(
+            str(class_info["class_id"]),
+            aoi,
+            self._aoi_crs.authid() or self._aoi_crs.toWkt(),
+        )
+
+    # Ostanavlivaet polling i zaprashivaet servernuyu otmenu.
+    def _cancel_job(self) -> None:
+        self._poll_timer.stop()
+        if self._job_id:
+            self.api.cancel_job(self._job_id)
+        else:
+            self.api.abort_all()
+            self._job_finished()
+
+    # Zaprashivaet odin snapshot tekushchego zadaniya.
+    def _poll_job(self) -> None:
+        if self._job_id:
+            self.api.get_job(self._job_id)
+
+    # Marshrutiziruet uspeshnyi asinkhronnyi otvet.
+    def _api_succeeded(self, operation: str, payload: object) -> None:
+        if operation == "classes":
+            self.class_combo.clear()
+            classes = payload.get("classes", []) if isinstance(payload, dict) else []
+            for item in classes:
+                self.class_combo.addItem(str(item.get("display_name") or item.get("class_id")), item)
+            self.status_label.setText(f"Статус: подключено; классов: {len(classes)}")
+        elif operation == "create_job" and isinstance(payload, dict):
+            self._job_id = str(payload["job_id"])
+            self.status_label.setText("Статус: в очереди")
+            self._schedule_poll(0)
+        elif operation == "job_status" and isinstance(payload, dict):
+            self._poll_failures = 0
+            status = str(payload.get("status") or "")
+            stage = str(payload.get("current_stage") or "")
+            self.status_label.setText(
+                f"Статус: {_status_text(status)}; этап: {_stage_text(stage)}"
+            )
+            progress = payload.get("progress")
+            if progress is None:
+                self.progress.setRange(0, 0)
+            else:
+                self.progress.setRange(0, 100)
+                self.progress.setValue(int(float(progress)))
+            warnings = payload.get("warnings") or []
+            coverage = payload.get("coverage_percent")
+            messages = [str(item) for item in warnings]
+            if coverage is not None:
+                messages.append(f"Покрытие AOI: {float(coverage):.2f}%")
+            self.warning_label.setText("\n".join(messages))
+            if status == "succeeded":
+                self.api.get_result(self._job_id or "")
+            elif status in {"failed", "cancelled"}:
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    self._show_error(str(error.get("message") or "Задание завершилось с ошибкой."))
+                self._job_finished()
+            else:
+                self._schedule_poll(self.settings.poll_interval_ms)
+        elif operation == "job_result":
+            try:
+                validated = validate_feature_collection(payload)
+                session = ReviewSession.from_geojson(
+                    validated,
+                    self._job_id or "unknown",
+                    session_directory(),
+                )
+                self._set_session(session)
+                if self.auto_split.isChecked():
+                    session.split_large_candidates(self.max_area.value(), self.min_area.value())
+                count = session.counts()["total"]
+                self.status_label.setText(f"Статус: результат загружен; объектов: {count}")
+                if count == 0:
+                    self.warning_label.setText("Сервер не нашёл объектов в AOI.")
+            except (PluginContractError, ReviewSessionError) as exc:
+                self._show_error(str(exc))
+            finally:
+                self._job_finished()
+        elif operation == "cancel_job":
+            self.status_label.setText("Статус: отменено")
+            self._job_finished()
+
+    # Pokazyvaet oshibku ili planiruet povtor vremennogo sboya.
+    def _api_failed(
+        self,
+        operation: str,
+        code: str,
+        message: str,
+        status: int,
+        transient: bool,
+    ) -> None:
+        QgsMessageLog.logMessage(
+            f"Операция {operation}: {code}; HTTP {status}",
+            "MLSystem2",
+            Qgis.MessageLevel.Warning,
+        )
+        if operation == "job_status" and transient and self._job_id:
+            self._poll_failures += 1
+            delay = min(15_000, self.settings.poll_interval_ms * (2 ** min(3, self._poll_failures)))
+            self.status_label.setText(f"Статус: временная ошибка сети; повтор через {delay // 1000} с")
+            self._schedule_poll(delay)
+            return
+        self._show_error(f"{message} [{code}]")
+        if operation in {"create_job", "job_result", "cancel_job"}:
+            self._job_finished()
+
+    # Planiruet sleduyushchii polling cherez event loop.
+    def _schedule_poll(self, delay_ms: int) -> None:
+        self._poll_timer.start(max(0, delay_ms))
+
+    # Vozvrashchaet knopki v sostoyanie bez aktivnogo job.
+    def _job_finished(self) -> None:
+        self._poll_timer.stop()
+        self.start_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+
+    # Aktiviruet novuyu persistent review session.
+    def _set_session(self, session: ReviewSession) -> None:
+        if self.session is not None:
+            self.close_session(remove_layer=True)
+        self.session = session
+        session.changed.connect(self._update_review_ui)
+        self.session_path_label.setText(f"Сессия: {session.path}")
+        self.refresh_layers()
+        self._update_review_ui()
+        self.session_active_changed.emit(self.isVisible())
+
+    # Zakryvaet tekushchuyu sessiyu bez poteri GeoPackage.
+    def close_session(self, *, remove_layer: bool) -> None:
+        if self.session is None:
+            return
+        session = self.session
+        self.session = None
+        self._removing_candidate_layer = True
+        try:
+            session.close(remove_layer=remove_layer)
+        finally:
+            self._removing_candidate_layer = False
+        self.session_active_changed.emit(False)
+        self._update_review_ui()
+
+    # Deaktiviruet sessiyu pri vneshnem udalenii sloya kandidatov.
+    def _layers_removed(self, layer_ids: list[str]) -> None:
+        if (
+            self._removing_candidate_layer
+            or self.session is None
+            or self.session.layer_id not in layer_ids
+        ):
+            return
+        self.session.undo_stack.clear()
+        self.session = None
+        self.session_active_changed.emit(False)
+        self._update_review_ui()
+        self._show_error("Слой кандидатов удалён во время сессии.")
+
+    # Otkryvaet vybrannyi polzovatelem GeoPackage sessii.
+    def _open_session(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Открыть сессию MLSystem2",
+            str(session_directory()),
+            "GeoPackage (*.gpkg)",
+        )
+        if not path:
+            return
+        try:
+            self._set_session(ReviewSession.open_existing(Path(path)))
+        except ReviewSessionError as exc:
+            self._show_error(str(exc))
+
+    # Peredaet filtr v model sessii.
+    def _review_filter_changed(self) -> None:
+        if self.session:
+            self.session.set_filter(str(self.filter_combo.currentData()))
+
+    # Peredaet sortirovku v model sessii.
+    def _review_sort_changed(self) -> None:
+        if self.session:
+            self.session.set_sort(str(self.sort_combo.currentData()))
+
+    # Obnovlyaet schetchiki i atributy tekushchego kandidata.
+    def _update_review_ui(self) -> None:
+        if self.session is None:
+            self.counter_label.setText("0 из 0; осталось 0")
+            self.candidate_label.setText("Текущий объект: —")
+            return
+        position, visible = self.session.position()
+        counts = self.session.counts()
+        self.counter_label.setText(f"{position} из {visible}; осталось {counts['new']}; всего {counts['total']}")
+        feature = self.session.current_feature()
+        if feature is None:
+            self.candidate_label.setText("Текущий объект: —")
+            return
+        confidence = feature["confidence"]
+        confidence_text = "—" if confidence is None else f"{float(confidence):.3f}"
+        self.candidate_label.setText(
+            f"ID: {feature['candidate_id']}\n"
+            f"Класс: {feature['class_id']}; версия: {feature['model_version']}\n"
+            f"Confidence: {confidence_text}; площадь: {float(feature['area_m2'] or 0):.1f} м²"
+        )
+
+    # Klassificiruet tekushchii obekt cherez edinyi undo stack.
+    def classify(self, status: str) -> None:
+        self._session_call(lambda: self.session.classify(status))
+
+    # Perehodit k sleduyushchemu kandidatu.
+    def next_candidate(self) -> None:
+        self._session_call(lambda: self.session.next())
+
+    # Perehodit k predydushchemu kandidatu.
+    def previous_candidate(self) -> None:
+        self._session_call(lambda: self.session.previous())
+
+    # Priblizhaet canvas bez smeny aktivnogo sloya.
+    def zoom_candidate(self) -> None:
+        if self.session is None or self.session.current_feature() is None:
+            return
+        extent = self.session.current_feature().geometry().boundingBox()
+        transform = QgsCoordinateTransform(
+            self.session.layer.crs(),
+            self.canvas.mapSettings().destinationCrs(),
+            QgsProject.instance(),
+        )
+        try:
+            extent = transform.transformBoundingBox(extent)
+        except QgsCsException as exc:
+            self._show_error(f"Не удалось преобразовать охват кандидата: {exc}")
+            return
+        extent.scale(1.3)
+        self.canvas.setExtent(extent)
+        self.canvas.refresh()
+
+    # Razbivaet tekushchii obekt po nastroyennym porogam.
+    def split_candidate(self) -> None:
+        self._session_call(
+            lambda: self.session.split_current(self.max_area.value(), self.min_area.value())
+        )
+
+    # Otmenyaet odno logicheskoe review-deistvie.
+    def undo(self) -> None:
+        if self.session and self.session.undo_stack.canUndo():
+            self.session.undo_stack.undo()
+
+    # Povtoryaet odno otmenennoe review-deistvie.
+    def redo(self) -> None:
+        if self.session and self.session.undo_stack.canRedo():
+            self.session.undo_stack.redo()
+
+    # Otkryvaet nastroiku polei dlya yavno vybrannyh sloev.
+    def _map_fields(self) -> None:
+        annotation = self._layer_from_combo(self.annotation_layer_combo)
+        hard = self._layer_from_combo(self.hard_layer_combo)
+        if annotation is None or hard is None or annotation.id() == hard.id():
+            self._show_error("Явно выберите два разных рабочих слоя.")
+            return
+        dialog = FieldMappingDialog(annotation, hard, self)
+        if dialog.exec() == _accepted_dialog_code():
+            for role, mapping in dialog.mappings().items():
+                save_field_mapping(role, mapping)
+
+    # Atomarno perenosit raspredelennye obekty v edit buffers.
+    def _apply_results(self) -> None:
+        if self.session is None:
+            self._show_error("Сначала загрузите сессию кандидатов.")
+            return
+        candidate_layer = QgsProject.instance().mapLayer(self.session.layer_id)
+        if not isinstance(candidate_layer, QgsVectorLayer):
+            self._show_error("Слой кандидатов удалён во время сессии.")
+            return
+        annotation = self._layer_from_combo(self.annotation_layer_combo)
+        hard = self._layer_from_combo(self.hard_layer_combo)
+        try:
+            result = apply_reviewed_candidates(
+                candidate_layer,
+                annotation,
+                hard,
+                load_field_mapping("annotation"),
+                load_field_mapping("hard_negative"),
+            )
+        except LayerOperationError as exc:
+            self._show_error(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            QgsMessageLog.logMessage(
+                f"Непредвиденная ошибка применения: {exc!r}",
+                "MLSystem2",
+                Qgis.MessageLevel.Critical,
+            )
+            self._show_error("Не удалось применить результаты. Подробности записаны в журнал QGIS.")
+            return
+        self.session.undo_stack.clear()
+        self._update_review_ui()
+        QMessageBox.information(
+            self,
+            "MLSystem2",
+            f"Добавлено: {result.added}; уже существовало: {result.existing}.\n"
+            "Правки целевых слоёв не сохранены: проверьте их и сохраните штатной командой QGIS.",
+        )
+
+    # Razreshaet ID combo tolko cherez QgsProject.
+    def _layer_from_combo(self, combo: QComboBox) -> QgsVectorLayer | None:
+        layer_id = str(combo.currentData() or "")
+        layer = QgsProject.instance().mapLayer(layer_id) if layer_id else None
+        return layer if isinstance(layer, QgsVectorLayer) else None
+
+    # Edinoobrazno obrabatyvaet domennye oshibki sessii.
+    def _session_call(self, action) -> None:
+        if self.session is None:
+            return
+        try:
+            action()
+        except ReviewSessionError as exc:
+            self._show_error(str(exc))
+
+    # Pokazyvaet kratkuyu oshibku bez sekretnyh dannyh.
+    def _show_error(self, message: str) -> None:
+        self.status_label.setText(f"Ошибка: {message}")
+        self.iface.messageBar().pushMessage(
+            "MLSystem2",
+            message,
+            level=Qgis.MessageLevel.Critical,
+            duration=8,
+        )
+
+    # Vklyuchaet hotkeys tolko pri vidimoi aktivnoi sessii.
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.session_active_changed.emit(self.session is not None)
+
+    # Vozvrashchaet globalnye hotkeys shtatnomu QGIS.
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self.session_active_changed.emit(False)
+
+    # Sohranyaet nastroiki i ostanavlivaet fonovye zaprosy.
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.save_current_settings()
+        self._poll_timer.stop()
+        self.api.abort_all()
+        self.session_active_changed.emit(False)
+        super().closeEvent(event)
+__all__ = ["MLSystemDockWidget"]

@@ -1,4 +1,4 @@
-"""Route registration helpers."""
+﻿"""Route registration helpers."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ class RouteContext:
     config: TrainingUIAPIConfig
     get_db: Callable[[], Iterator[Session]]
     authenticated: Callable[[Request], str]
+    pseudolabel_authenticated: Callable[[Request], str]
 
 
 __all__ = ["RouteContext"]

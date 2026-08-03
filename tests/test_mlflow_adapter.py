@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -6,6 +6,7 @@ from mlsystem2.mlflow_adapter.api import (
     download_run_artifact,
     get_best_training_checkpoint,
     get_training_epoch_progress,
+    get_usable_training_checkpoint,
     log_dataset_artifacts,
     log_run_config,
     log_tile_preparation,
@@ -188,6 +189,71 @@ def test_get_best_training_checkpoint_uses_metric_history(monkeypatch) -> None:
     assert checkpoint.artifact_uri == "s3://mlflow-artifacts/45/run-1/artifacts/checkpoints/best.pt"
     assert calls["tracking_uri"] == "http://mlflow:5000"
     assert calls["run_id"] == "run-1"
+
+
+# Proveriaet status run i fakticheskoe nalichie best.pt.
+def test_get_usable_training_checkpoint_requires_finished_run_and_artifact(monkeypatch) -> None:
+    checkpoint = _client.MLflowBestCheckpoint(
+        tracking_uri="http://mlflow:5000",
+        run_id="run-1",
+        metric_name="val/best_threshold_pixel_f1",
+        f1_score=0.8,
+        epoch=4,
+        artifact_path="checkpoints/best.pt",
+        artifact_uri="s3://artifacts/checkpoints/best.pt",
+        threshold=0.7,
+    )
+
+    class Info:
+        """Testovyi status MLflow run."""
+
+        status = "FINISHED"
+
+    class Run:
+        """Testovyi MLflow run."""
+
+        info = Info()
+
+    class Artifact:
+        """Testovyi artifact best checkpoint."""
+
+        path = "checkpoints/best.pt"
+
+    class Client:
+        """Minimalnyi fake MLflow client."""
+
+        # Vozvrashchaet zavershennyi run.
+        def get_run(self, run_id: str):
+            assert run_id == "run-1"
+            return Run()
+
+        # Vozvrashchaet spisok artefaktov checkpoints.
+        def list_artifacts(self, run_id: str, path: str):
+            assert (run_id, path) == ("run-1", "checkpoints")
+            return [Artifact()]
+
+    class MLflow:
+        """Minimalnyi fake modul MLflow."""
+
+        class tracking:
+            """Prostranstvo imen tracking klienta."""
+
+            @staticmethod
+            def MlflowClient():
+                """Sozdat fake client."""
+
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            """Proverit peredannyi tracking URI."""
+
+            assert uri == "http://mlflow:5000"
+
+    monkeypatch.setattr(_client, "get_best_training_checkpoint", lambda uri, run_id: checkpoint)
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    assert get_usable_training_checkpoint("http://mlflow:5000", "run-1") == checkpoint
 
 
 def test_get_training_epoch_progress_uses_epoch_time_history(monkeypatch) -> None:

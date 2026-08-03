@@ -1,13 +1,15 @@
-"""Запуск псевдоразметки для training UI API."""
+﻿"""Запуск псевдоразметки для training UI API."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 import math
 import shutil
 import time
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Callable
@@ -15,12 +17,12 @@ from typing import Any, Callable
 import numpy as np
 import rasterio
 from pyproj import CRS as PyprojCRS
-from pyproj import Transformer
+from pyproj import Geod, Transformer
 from rasterio import features as rasterio_features
 from rasterio.errors import NotGeoreferencedWarning
 from scipy.ndimage import label as label_components
 from rasterio.warp import transform_geom
-from rasterio.windows import Window
+from rasterio.windows import Window, bounds as window_bounds
 from scipy import ndimage
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
@@ -37,6 +39,8 @@ from mlsystem2.metrics.contracts import ObjectF1Request
 from mlsystem2.mlflow_adapter.api import download_run_artifact
 from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
+
+from ._markup_export import find_intersecting_images
 
 
 PSEUDO_INFERENCE_BACKEND = "pytorch_one_off"
@@ -318,25 +322,89 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         shutil.rmtree(run_root)
     run_root.mkdir(parents=True, exist_ok=True)
     output_geojson = Path(config["output_geojson"])
-
-    scene_inputs, missing, input_scene_count = _resolve_scene_inputs(config)
+    progress_path = run_root / "progress.json"
+    is_aoi = config.get("operation") == "pseudolabel_aoi"
+    aoi_wgs84: BaseGeometry | None = None
+    source_image_ids: list[str] = []
+    coverage_percent: float | None = None
+    api_warnings: list[str] = []
+    if is_aoi:
+        _write_pseudo_progress(
+            progress_path,
+            total=0,
+            started=started,
+            scene_reports=[],
+            failures=[],
+            stage="selecting_images",
+        )
+        aoi_wgs84 = _aoi_geometry(config)
+        selected = find_intersecting_images(aoi_wgs84, Path(str(config["images_root"])))
+        source_image_ids = [item.source_id for item in selected.images]
+        coverage_percent = selected.coverage_percent
+        api_warnings = list(selected.warnings)
+        scene_inputs = [
+            _SceneInput(
+                image_path=item.path,
+                scene_id=item.source_id,
+                request_scenes=(item.source_id,),
+                request_scene_count=1,
+            )
+            for item in selected.images
+        ]
+        missing: list[str] = []
+        input_scene_count = len(scene_inputs)
+    else:
+        scene_inputs, missing, input_scene_count = _resolve_scene_inputs(config)
     progress_total = len(scene_inputs) + len(missing)
     postprocess_profile = _postprocess_profile_from_config(
         _select_postprocess_profile(len(scene_inputs)),
         config.get("postprocess_config"),
     )
-    progress_path = run_root / "progress.json"
     all_features: list[dict[str, Any]] = []
     scene_reports: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    progress_context = {
+        "source_image_ids": source_image_ids,
+        "coverage_percent": coverage_percent,
+        "warnings": api_warnings,
+    }
     _write_pseudo_progress(
         progress_path,
         total=progress_total,
         started=started,
         scene_reports=scene_reports,
         failures=failures,
+        stage="loading_model" if scene_inputs else "selecting_images",
+        **progress_context,
     )
-    checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
+    if is_aoi and not scene_inputs:
+        metadata = _aoi_metadata(config, source_image_ids, coverage_percent, api_warnings)
+        _write_feature_collection(output_geojson, [], metadata=metadata)
+        summary = _summary(
+            config,
+            input_scene_count=0,
+            status="error",
+            output_geojson=output_geojson,
+            started=started,
+            scene_reports=[],
+            failures=[],
+            missing=[],
+            feature_count=0,
+            feature_count_before_merge=0,
+            unique_image_count=0,
+            postprocess_profile=postprocess_profile,
+        )
+        return _with_aoi_report(
+            summary,
+            source_image_ids,
+            coverage_percent,
+            api_warnings,
+            error={
+                "code": "SOURCE_IMAGES_NOT_FOUND",
+                "message": "Для зоны интереса не найдены пересекающиеся исходные снимки.",
+                "details": {},
+            },
+        )
     threshold = float(config.get("threshold") or 0.5)
     tile_size = int(config.get("tile_size") or 768)
     stride = int(config.get("stride") or tile_size)
@@ -347,6 +415,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     loaded = None
     model = None
     try:
+        checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
         torch = _torch()
         loaded = load_checkpoint(
             LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
@@ -370,9 +439,16 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             started=started,
             scene_reports=scene_reports,
             failures=failures,
+            stage="loading_model",
+            **progress_context,
         )
-        _write_feature_collection(output_geojson, [])
-        return _summary(
+        metadata = (
+            _aoi_metadata(config, source_image_ids, coverage_percent, api_warnings)
+            if is_aoi
+            else None
+        )
+        _write_feature_collection(output_geojson, [], metadata=metadata)
+        summary = _summary(
             config,
             input_scene_count=input_scene_count,
             status="error",
@@ -385,6 +461,19 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             feature_count_before_merge=0,
             unique_image_count=len(scene_inputs),
             postprocess_profile=postprocess_profile,
+        )
+        if not is_aoi:
+            return summary
+        return _with_aoi_report(
+            summary,
+            source_image_ids,
+            coverage_percent,
+            api_warnings,
+            error={
+                "code": "MODEL_LOAD_FAILED",
+                "message": "Не удалось загрузить зафиксированную модель распознавания.",
+                "details": {},
+            },
         )
 
     try:
@@ -403,6 +492,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             started=started,
             scene_reports=scene_reports,
             failures=failures,
+            stage="inference",
+            **progress_context,
         )
 
         for scene_input in scene_inputs:
@@ -421,6 +512,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                     threshold=threshold,
                     device=device,
                     postprocess_profile=postprocess_profile,
+                    aoi_wgs84=aoi_wgs84,
                 )
                 all_features.extend(scene_features)
                 _write_feature_collection(
@@ -467,14 +559,48 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 started=started,
                 scene_reports=scene_reports,
                 failures=failures,
+                stage="inference",
+                **progress_context,
             )
 
         feature_count_before_merge = len(all_features)
-        merged_features = _merge_overlapping_features(all_features)
+        _write_pseudo_progress(
+            progress_path,
+            total=progress_total,
+            started=started,
+            scene_reports=scene_reports,
+            failures=failures,
+            stage="vectorization",
+            **progress_context,
+        )
+        merged_features = (
+            _merge_connected_features(all_features)
+            if is_aoi
+            else _merge_overlapping_features(all_features)
+        )
         merged_features = _filter_compact_features(merged_features, postprocess_profile)
-        _write_feature_collection(output_geojson, merged_features)
+        if is_aoi:
+            assert aoi_wgs84 is not None
+            merged_features = _finalize_aoi_features(
+                merged_features,
+                aoi_wgs84,
+                config,
+                source_image_ids,
+            )
+        metadata = (
+            _aoi_metadata(
+                config,
+                source_image_ids,
+                coverage_percent,
+                api_warnings,
+                object_count=len(merged_features),
+            )
+            if is_aoi
+            else None
+        )
+        _write_feature_collection(output_geojson, merged_features, metadata=metadata)
         status = _final_status(scene_reports, failures, missing)
-        return _summary(
+        summary = _summary(
             config,
             input_scene_count=input_scene_count,
             status=status,
@@ -487,6 +613,22 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             feature_count_before_merge=feature_count_before_merge,
             unique_image_count=len(scene_inputs),
             postprocess_profile=postprocess_profile,
+        )
+        if not is_aoi:
+            return summary
+        error = None
+        if status == "error":
+            error = {
+                "code": "INFERENCE_FAILED",
+                "message": "Не удалось обработать ни одного исходного снимка.",
+                "details": {},
+            }
+        return _with_aoi_report(
+            summary,
+            source_image_ids,
+            coverage_percent,
+            api_warnings,
+            error=error,
         )
     finally:
         try:
@@ -559,13 +701,40 @@ def _infer_scene(
     threshold: float,
     device: str,
     postprocess_profile: _PostprocessProfile,
+    aoi_wgs84: BaseGeometry | None = None,
 ) -> list[dict[str, Any]]:
     del batch_size
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
-        mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
-        for window in _windows(dataset.width, dataset.height, tile_size, stride):
+        raster_aoi = None
+        selected_windows = _windows(dataset.width, dataset.height, tile_size, stride)
+        mask_window = Window(0, 0, dataset.width, dataset.height)
+        if aoi_wgs84 is not None:
+            if dataset.crs is None:
+                raise RuntimeError("У исходного снимка отсутствует CRS.")
+            to_raster = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
+            raster_aoi = shapely_transform(to_raster.transform, aoi_wgs84)
+            selected_windows = [
+                window
+                for window in _windows(dataset.width, dataset.height, tile_size, stride)
+                if box(*window_bounds(window, dataset.transform)).intersects(raster_aoi)
+            ]
+            if not selected_windows:
+                return []
+            min_col = max(0, min(int(window.col_off) for window in selected_windows))
+            min_row = max(0, min(int(window.row_off) for window in selected_windows))
+            max_col = min(
+                dataset.width,
+                max(int(window.col_off + window.width) for window in selected_windows),
+            )
+            max_row = min(
+                dataset.height,
+                max(int(window.row_off + window.height) for window in selected_windows),
+            )
+            mask_window = Window(min_col, min_row, max_col - min_col, max_row - min_row)
+        mask = np.zeros((int(mask_window.height), int(mask_window.width)), dtype=np.uint8)
+        for window in selected_windows:
             image = dataset.read(
                 indexes=input_indexes,
                 window=window,
@@ -585,8 +754,8 @@ def _infer_scene(
             )
             crop_h = min(tile_size, dataset.height - int(window.row_off))
             crop_w = min(tile_size, dataset.width - int(window.col_off))
-            y0 = int(window.row_off)
-            x0 = int(window.col_off)
+            y0 = int(window.row_off - mask_window.row_off)
+            x0 = int(window.col_off - mask_window.col_off)
             mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
                 mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
                 tile_mask[:crop_h, :crop_w],
@@ -594,7 +763,7 @@ def _infer_scene(
         mask = _postprocess_mask(mask, postprocess_profile)
         return _features_from_mask(
             mask,
-            dataset.transform,
+            dataset.window_transform(mask_window),
             dataset.crs,
             dataset.res,
             scene,
@@ -799,6 +968,182 @@ def _merge_overlapping_features(features: list[dict[str, Any]]) -> list[dict[str
             }
         )
     return output
+
+
+def _merge_connected_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Obedinit obekty tolko vnutri svyaznyh grupp."""
+
+    indexed_features: list[dict[str, Any]] = []
+    geometries: list[BaseGeometry] = []
+    for feature in features:
+        geometry_data = feature.get("geometry")
+        if geometry_data is None:
+            continue
+        geometry = _make_valid(shape(geometry_data))
+        polygon_geometry = _polygons_to_geometry(
+            [polygon for polygon in _iter_polygons(geometry) if not polygon.is_empty]
+        )
+        if polygon_geometry.is_empty:
+            continue
+        indexed_features.append(feature)
+        geometries.append(polygon_geometry)
+    if not geometries:
+        return []
+
+    tree = STRtree(geometries)
+    index_by_id = {id(geometry): index for index, geometry in enumerate(geometries)}
+    unseen = set(range(len(geometries)))
+    output: list[dict[str, Any]] = []
+    while unseen:
+        first = min(unseen)
+        unseen.remove(first)
+        component = {first}
+        pending = [first]
+        while pending:
+            current = pending.pop()
+            neighbours = _intersecting_geometry_indexes(
+                tree,
+                geometries,
+                index_by_id,
+                geometries[current],
+            )
+            for neighbour in neighbours:
+                if neighbour not in unseen:
+                    continue
+                unseen.remove(neighbour)
+                component.add(neighbour)
+                pending.append(neighbour)
+        merged = _make_valid(unary_union([geometries[index] for index in sorted(component)]))
+        properties = _merged_feature_properties(
+            [indexed_features[index] for index in sorted(component)]
+        )
+        for polygon in _iter_polygons(merged):
+            if not polygon.is_empty:
+                output.append(
+                    {
+                        "type": "Feature",
+                        "geometry": mapping(polygon),
+                        "properties": dict(properties),
+                    }
+                )
+    return output
+
+
+def _finalize_aoi_features(
+    features: list[dict[str, Any]],
+    aoi_wgs84: BaseGeometry,
+    config: dict[str, Any],
+    source_image_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Obrezat kandidaty, razdelit Polygon i prisvoit stabilnye ID."""
+
+    clipped: list[tuple[Polygon, list[str]]] = []
+    for feature in features:
+        geometry_data = feature.get("geometry")
+        if geometry_data is None:
+            continue
+        geometry = _make_valid(shape(geometry_data).intersection(aoi_wgs84))
+        properties = feature.get("properties") or {}
+        feature_sources = properties.get("source_scene_ids")
+        if not isinstance(feature_sources, list):
+            feature_sources = [properties.get("scene_id")]
+        normalized_sources = [
+            str(source_id)
+            for source_id in feature_sources
+            if source_id is not None and str(source_id) in source_image_ids
+        ]
+        for polygon in _iter_polygons(geometry):
+            if not polygon.is_empty and polygon.area > 0:
+                clipped.append((polygon, normalized_sources))
+    clipped.sort(key=lambda item: item[0].wkb_hex)
+    output: list[dict[str, Any]] = []
+    job_id = str(config.get("job_id") or "")
+    for polygon, feature_sources in clipped:
+        candidate_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"mlsystem2:pseudolabel:{job_id}:{polygon.wkb_hex}",
+        )
+        output.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(polygon),
+                "properties": {
+                    "candidate_id": str(candidate_id),
+                    "class_id": str(config.get("class_key") or ""),
+                    "model_id": str(config.get("model_id") or ""),
+                    "model_version": str(config.get("model_version") or ""),
+                    "job_id": job_id,
+                    "source_image_ids": feature_sources,
+                    "area_m2": round(_geodesic_area_m2(polygon), 3),
+                },
+            }
+        )
+    return output
+
+
+def _aoi_geometry(config: dict[str, Any]) -> BaseGeometry:
+    """Prochitat zafiksirovannuyu WGS84-geometriyu runner."""
+
+    geometry_data = config.get("aoi")
+    if not isinstance(geometry_data, dict):
+        raise RuntimeError("В задании отсутствует GeoJSON зоны интереса.")
+    geometry = shape(geometry_data)
+    if not isinstance(geometry, (Polygon, MultiPolygon)) or geometry.is_empty:
+        raise RuntimeError("Зона интереса должна быть Polygon или MultiPolygon.")
+    if not geometry.is_valid:
+        raise RuntimeError("Геометрия зоны интереса невалидна.")
+    return geometry
+
+
+def _aoi_metadata(
+    config: dict[str, Any],
+    source_image_ids: list[str],
+    coverage_percent: float | None,
+    api_warnings: list[str],
+    *,
+    object_count: int = 0,
+) -> dict[str, Any]:
+    """Sobrat publichnye metadannye FeatureCollection."""
+
+    return {
+        "job_id": str(config.get("job_id") or ""),
+        "class_id": str(config.get("class_key") or ""),
+        "model_id": str(config.get("model_id") or ""),
+        "model_version": str(config.get("model_version") or ""),
+        "source_image_ids": source_image_ids,
+        "coverage_percent": coverage_percent,
+        "warnings": api_warnings,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "output_crs": "EPSG:4326",
+        "object_count": object_count,
+        "aoi_area_m2": config.get("aoi_area_m2"),
+    }
+
+
+def _with_aoi_report(
+    summary: dict[str, Any],
+    source_image_ids: list[str],
+    coverage_percent: float | None,
+    api_warnings: list[str],
+    *,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Dobavit publichnoe pokrytie i oshibku v otchet worker."""
+
+    return {
+        **summary,
+        "source_image_ids": source_image_ids,
+        "coverage_percent": coverage_percent,
+        "warnings": api_warnings,
+        "error": error,
+    }
+
+
+def _geodesic_area_m2(geometry: BaseGeometry) -> float:
+    """Poschitat geodezicheskuyu ploshchad kandidata."""
+
+    area, _ = Geod(ellps="WGS84").geometry_area_perimeter(geometry)
+    return abs(float(area))
 
 
 def _intersecting_geometry_indexes(
@@ -1314,10 +1659,18 @@ def _is_nan(value: object) -> bool:
         return False
 
 
-def _write_feature_collection(path: Path, features: list[dict[str, Any]]) -> None:
+def _write_feature_collection(
+    path: Path,
+    features: list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {"type": "FeatureCollection", "features": features}
+    if metadata is not None:
+        payload["metadata"] = metadata
     path.write_text(
-        json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False),
+        json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -1329,6 +1682,10 @@ def _write_pseudo_progress(
     started: float,
     scene_reports: list[dict[str, Any]],
     failures: list[dict[str, Any]],
+    stage: str = "inference",
+    source_image_ids: list[str] | None = None,
+    coverage_percent: float | None = None,
+    warnings: list[str] | None = None,
 ) -> None:
     current = min(total, _completed_image_count(scene_reports))
     payload = {
@@ -1338,6 +1695,10 @@ def _write_pseudo_progress(
         "failed": len(failures),
         "missing": sum(1 for item in scene_reports if item.get("status") == "missing_image"),
         "elapsed_sec": round(time.time() - started, 3),
+        "stage": stage,
+        "source_image_ids": source_image_ids or [],
+        "coverage_percent": coverage_percent,
+        "warnings": warnings or [],
     }
     tmp_path = path.with_name(f".{path.name}.tmp")
     try:

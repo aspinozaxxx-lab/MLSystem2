@@ -1,4 +1,4 @@
-# Модуль mlflow_adapter
+﻿# Модуль mlflow_adapter
 
 ## Назначение
 
@@ -9,6 +9,7 @@
 - `list_experiments(tracking_uri: str) -> list[MLflowExperiment]` - возвращает доступные experiments из указанного MLflow tracking URI.
 - `create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment` - создает experiment или возвращает существующий с тем же именем.
 - `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает `val/quality_f1` для запуска с tag `quality_metric`, использует pixel fallback для старого запуска и возвращает эпоху, значение F1, threshold и ссылку на `checkpoints/best.pt`.
+- `get_usable_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - дополнительно требует статус MLflow `FINISHED`, threshold и фактический артефакт `checkpoints/best.pt`; используется при выборе модели для нового инференса.
 - `download_run_artifact(tracking_uri: str, run_id: str, artifact_path: str, dst_dir: str | Path) -> MLflowDownloadedArtifact` - скачивает артефакт запуска в локальную рабочую папку вызывающего модуля.
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
