@@ -10,7 +10,7 @@ import warnings
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -33,9 +33,10 @@ from sqlalchemy.orm import Session
 
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
-from ._datasets import find_dataset, resolve_scenes_file_images
+from ._datasets import find_dataset, imagery_images_dir, resolve_scenes_file_images
 from .contracts import (
     DatasetInfo,
+    ImageryType,
     MarkupExportInfo,
     MarkupExportRequest,
     MarkupExportTileInfo,
@@ -76,6 +77,13 @@ class MarkupExportArtifact:
     archive_path: Path
     archive_filename: str
     preview_paths: dict[int, Path]
+
+
+@dataclass(frozen=True)
+class SceneListExportArtifact:
+    filename: str
+    content: bytes
+    scene_count: int
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,106 @@ class _Candidate:
     @property
     def object_count(self) -> int:
         return len(self.feature_positions)
+
+
+def build_scene_list_export(
+    *,
+    imagery_type: ImageryType,
+    geojson_filename: str,
+    geojson_bytes: bytes,
+    config: TrainingUIAPIConfig,
+) -> SceneListExportArtifact:
+    """Сформировать TXT с именами сцен, пересекающихся с загруженной разметкой."""
+
+    download_filename = _scene_list_download_filename(geojson_filename)
+    annotations = _load_uploaded_annotations(geojson_bytes)
+    images_root = imagery_images_dir(config.images_root, imagery_type.value)
+    if not images_root.is_dir():
+        raise TrainingUIAPIError(
+            f"Папка снимков для типа «{_imagery_type_name(imagery_type)}» не найдена."
+        )
+
+    root = images_root.resolve()
+    source_paths = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
+        ),
+        key=lambda path: path.relative_to(root).as_posix().casefold(),
+    )
+    transformed_cache: dict[str, _TransformedAnnotations] = {}
+    matches: list[tuple[str, Path]] = []
+    for source_path in source_paths:
+        try:
+            resolved_path = source_path.resolve(strict=True)
+            relative_path = resolved_path.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise TrainingUIAPIError(
+                f"Снимок выходит за пределы папки подготовленных изображений: {source_path.name}."
+            ) from exc
+        try:
+            with rasterio.open(resolved_path) as dataset:
+                if dataset.crs is None:
+                    raise TrainingUIAPIError(
+                        f"У снимка отсутствует CRS: {relative_path.as_posix()}."
+                    )
+                raster_crs = PyprojCRS.from_user_input(dataset.crs)
+                transformed = _annotations_for_crs(
+                    annotations,
+                    raster_crs,
+                    transformed_cache,
+                )
+                image_footprint = box(*dataset.bounds)
+                if image_footprint.is_empty or not image_footprint.is_valid or image_footprint.area <= 0:
+                    raise TrainingUIAPIError(
+                        f"У снимка некорректный географический контур: {relative_path.as_posix()}."
+                    )
+                feature_indices = transformed.tree.query(
+                    image_footprint,
+                    predicate="intersects",
+                )
+                has_objects = any(
+                    transformed.geometries[int(index)].intersection(image_footprint).area > 0.0
+                    for index in feature_indices
+                )
+        except TrainingUIAPIError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise TrainingUIAPIError(
+                f"Не удалось прочитать снимок {relative_path.as_posix()}: {exc}"
+            ) from exc
+        if has_objects:
+            matches.append((resolved_path.stem, relative_path))
+
+    duplicate_groups: dict[str, list[tuple[str, Path]]] = {}
+    for scene_name, relative_path in matches:
+        duplicate_groups.setdefault(scene_name.casefold(), []).append(
+            (scene_name, relative_path)
+        )
+    ambiguous = [items for items in duplicate_groups.values() if len(items) > 1]
+    if ambiguous:
+        details = "; ".join(
+            ", ".join(path.as_posix() for _, path in items)
+            for items in ambiguous
+        )
+        raise TrainingUIAPIError(
+            "У подходящих снимков совпадают имена без расширения. "
+            f"Список сцен был бы неоднозначным: {details}"
+        )
+
+    scene_names = sorted(
+        (scene_name for scene_name, _ in matches),
+        key=lambda value: (value.casefold(), value),
+    )
+    text = "\n".join(scene_names)
+    if text:
+        text += "\n"
+    return SceneListExportArtifact(
+        filename=download_filename,
+        content=text.encode("utf-8"),
+        scene_count=len(scene_names),
+    )
 
 
 def build_markup_export(
@@ -545,6 +653,20 @@ def _load_annotations(path: Path) -> _AnnotationSet:
         raise TrainingUIAPIError(
             f"Не удалось прочитать GeoJSON положительной разметки: {exc}"
         ) from exc
+    return _annotations_from_payload(payload)
+
+
+def _load_uploaded_annotations(content: bytes) -> _AnnotationSet:
+    try:
+        payload = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise TrainingUIAPIError(
+            f"Не удалось прочитать загруженный GeoJSON: {exc}"
+        ) from exc
+    return _annotations_from_payload(payload)
+
+
+def _annotations_from_payload(payload: Any) -> _AnnotationSet:
     if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection":
         raise TrainingUIAPIError(
             "GeoJSON положительной разметки должен быть FeatureCollection."
@@ -1600,6 +1722,18 @@ def _safe_name(value: str, *, fallback: str) -> str:
     return (normalized or fallback)[:120]
 
 
+def _scene_list_download_filename(uploaded_name: str) -> str:
+    basename = PurePosixPath(str(uploaded_name).strip().replace("\\", "/")).name
+    path = PurePosixPath(basename)
+    if path.suffix.casefold() != ".geojson" or not path.stem.strip():
+        raise TrainingUIAPIError("Нужен файл GeoJSON с расширением .geojson.")
+    return f"{path.stem}.txt"
+
+
+def _imagery_type_name(imagery_type: ImageryType) -> str:
+    return "Канопус" if imagery_type == ImageryType.KANOPUS else "Ортофото"
+
+
 def _safe_child(root: Path, name: str) -> Path:
     root_resolved = root.resolve()
     candidate = (root / name).resolve()
@@ -1621,7 +1755,9 @@ def _utc_now() -> datetime:
 __all__ = [
     "MarkupExportArtifact",
     "MarkupExportUnavailable",
+    "SceneListExportArtifact",
     "build_markup_export",
+    "build_scene_list_export",
     "cleanup_expired_markup_exports",
     "generate_markup_files",
     "generate_markup_pool_files",

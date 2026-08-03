@@ -586,6 +586,45 @@
         }
       }
     },
+    "/api/v1/scene-list-export": {
+      "post": {
+        "summary": "Post Scene List Export",
+        "operationId": "post_scene_list_export_api_v1_scene_list_export_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_post_scene_list_export_api_v1_scene_list_export_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "TXT со списком имён сцен без расширений.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/markup-export": {
       "post": {
         "summary": "Post Markup Export",
@@ -3020,7 +3059,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -3032,7 +3071,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -3066,7 +3105,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -3080,7 +3119,7 @@
       },
       "Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post": {
         "properties": {
-          "dataset_key": {
+          "source_dataset_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -3089,7 +3128,7 @@
                 "type": "null"
               }
             ],
-            "title": "Dataset Key"
+            "title": "Source Dataset Key"
           },
           "image_folder_key": {
             "anyOf": [
@@ -3117,7 +3156,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "contentMediaType": "application/octet-stream"
+                "format": "binary"
               },
               {
                 "type": "null"
@@ -3128,6 +3167,24 @@
         },
         "type": "object",
         "title": "Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post"
+      },
+      "Body_post_scene_list_export_api_v1_scene_list_export_post": {
+        "properties": {
+          "imagery_type": {
+            "$ref": "#/components/schemas/ImageryType"
+          },
+          "geojson": {
+            "type": "string",
+            "format": "binary",
+            "title": "Geojson"
+          }
+        },
+        "type": "object",
+        "required": [
+          "imagery_type",
+          "geojson"
+        ],
+        "title": "Body_post_scene_list_export_api_v1_scene_list_export_post"
       },
       "Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post": {
         "properties": {
@@ -7499,13 +7556,6 @@
           "type": {
             "type": "string",
             "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
           }
         },
         "type": "object",

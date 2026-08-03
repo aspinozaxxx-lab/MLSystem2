@@ -9,6 +9,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  FileText,
   Layers3,
   ListChecks,
   LogOut,
@@ -267,6 +268,7 @@ function RoutedPage(props: {
   if (head === "automation") return <AutomationPage {...props} />;
   if (head === "classes") return <ClassEditorPage {...props} />;
   if (head === "model-export") return <ModelExportPage {...props} />;
+  if (head === "scene-list-export") return <SceneListExportPage {...props} />;
   if (head === "test-markups" && second === "create") {
     return <TestMarkupCreatePage {...props} />;
   }
@@ -292,7 +294,8 @@ function Shell({
   children: ReactNode;
 }) {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const exportRouteActive = route[0] === "model-export" || route[0] === "test-markups";
+  const exportRouteActive =
+    route[0] === "model-export" || route[0] === "scene-list-export" || route[0] === "test-markups";
   const navItems = [
     { href: "#/start", key: "start", label: "Запуск", icon: Play },
     { href: "#/queue", key: "queue", label: "Очередь", icon: ListChecks },
@@ -345,6 +348,15 @@ function Shell({
               >
                 <Archive size={16} />
                 Экспорт моделей
+              </a>
+              <a
+                className={route[0] === "scene-list-export" ? "active" : ""}
+                href="#/scene-list-export"
+                role="menuitem"
+                onClick={() => setExportMenuOpen(false)}
+              >
+                <FileText size={16} />
+                Создать список сцен
               </a>
               <a
                 className={route[0] === "test-markups" && route[1] === "create" ? "active" : ""}
@@ -678,6 +690,90 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
             <Play size={16} />
             Запустить обучение
           </button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+function SceneListExportPage({ run, showModal }: RoutedPageProps) {
+  const [imageryType, setImageryType] = useState<ImageryType>("kanopus");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const geojson = formData.get("geojson");
+    if (!(geojson instanceof File) || !geojson.name) {
+      showModal({ title: "Ошибка", body: <p>Выберите GeoJSON с разметкой.</p> });
+      return;
+    }
+    if (!geojson.name.toLocaleLowerCase("ru").endsWith(".geojson")) {
+      showModal({ title: "Ошибка", body: <p>Файл разметки должен иметь расширение .geojson.</p> });
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Поиск подходящих сцен...");
+    try {
+      const response = await run(() => apiDownload("/scene-list-export", formData));
+      if (!response) {
+        setStatus("");
+        return;
+      }
+      const fallbackName = geojson.name.replace(/\.geojson$/i, ".txt");
+      const filename = response.filename || fallbackName;
+      downloadBlob(response.blob, filename);
+      setStatus(`Скачан файл ${filename}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Создать список сцен"
+        subtitle="Найти подготовленные снимки, на которых есть объекты из GeoJSON"
+      />
+      <form className="form-stack" onSubmit={submit}>
+        <section className="panel">
+          <PanelHeader
+            title="Исходные данные"
+            subtitle="Поиск выполняется во всех подпапках выбранного типа снимков"
+          />
+          <div className="form-grid">
+            <label className="field">
+              <span>Тип снимков</span>
+              <select
+                name="imagery_type"
+                value={imageryType}
+                disabled={busy}
+                onChange={(event) => setImageryType(event.target.value as ImageryType)}
+              >
+                <option value="kanopus">Канопус</option>
+                <option value="ortho">Ортофото</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>GeoJSON с разметкой</span>
+              <input
+                name="geojson"
+                type="file"
+                accept=".geojson,application/geo+json"
+                disabled={busy}
+                required
+              />
+            </label>
+          </div>
+        </section>
+        <div className="inline-row">
+          <button className="primary" type="submit" disabled={busy}>
+            <FileText size={16} />
+            {busy ? "Создание списка..." : "Создать и скачать TXT"}
+          </button>
+          {status ? <span className="info-box">{status}</span> : null}
         </div>
       </form>
     </>

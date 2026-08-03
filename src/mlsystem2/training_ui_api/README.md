@@ -77,6 +77,7 @@
 - `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup`
 - `POST /api/v1/results/datasets/{dataset_key}/test-f1`
 - `POST /api/v1/results/training/{result_id}/triton-zip`
+- `POST /api/v1/scene-list-export`
 - `POST /api/v1/markup-export`
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
 - `GET /api/v1/markup-export/{export_id}/download`
@@ -113,6 +114,12 @@ mtime как fallback. `version` равен `git:{commit_sha}` или `fs:{mtime
 для дедупликации jobs по конкретной версии датасета. `image_count` считается по txt-списку сцен через
 индекс снимков внутри корня типа класса: строки-папки разворачиваются в фактические TIFF, повторы
 удаляются.
+
+`POST /api/v1/scene-list-export` принимает multipart-поля `imagery_type=kanopus|ortho` и `geojson`.
+Сервис рекурсивно читает TIFF только из `prepared_images/kanopus` или `prepared_images/orto`, преобразует
+полигональную разметку в CRS каждого снимка и включает сцену при пересечении с положительной площадью. Ответ —
+UTF-8 TXT с отсортированными именами файлов без `.tif/.tiff`; пустой список допустим. Совпадающие имена
+подходящих TIFF считаются ошибкой. Имя скачивания повторяет имя GeoJSON с расширением `.txt` и сохраняет кириллицу.
 
 `POST /api/v1/markup-export` формирует самостоятельный набор тестовой разметки и не создает job или запись в БД.
 Доступны только однозначные датасеты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и

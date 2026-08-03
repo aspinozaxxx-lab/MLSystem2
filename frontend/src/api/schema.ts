@@ -328,6 +328,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scene-list-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Scene List Export */
+        post: operations["post_scene_list_export_api_v1_scene_list_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markup-export": {
         parameters: {
             query?: never;
@@ -1217,14 +1234,23 @@ export interface components {
         };
         /** Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post */
         Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post: {
-            /** Dataset Key */
-            dataset_key?: string | null;
+            /** Source Dataset Key */
+            source_dataset_key?: string | null;
             /** Image Folder Key */
             image_folder_key?: string | null;
             /** Training Result Id */
             training_result_id?: string | null;
             /** Scenes Txt */
             scenes_txt?: string | null;
+        };
+        /** Body_post_scene_list_export_api_v1_scene_list_export_post */
+        Body_post_scene_list_export_api_v1_scene_list_export_post: {
+            imagery_type: components["schemas"]["ImageryType"];
+            /**
+             * Geojson
+             * Format: binary
+             */
+            geojson: string;
         };
         /** Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post */
         Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post: {
@@ -2690,10 +2716,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -3209,6 +3231,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomDatasetInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_scene_list_export_api_v1_scene_list_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_post_scene_list_export_api_v1_scene_list_export_post"];
+            };
+        };
+        responses: {
+            /** @description TXT со списком имён сцен без расширений. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */

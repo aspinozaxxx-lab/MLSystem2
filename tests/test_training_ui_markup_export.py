@@ -59,6 +59,7 @@ from mlsystem2.training_ui_api._test_samples import (
 )
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import (
+    ImageryType,
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
@@ -812,6 +813,239 @@ def test_candidate_selection_prioritizes_territories_then_sources_deterministica
     assert source_first is not None
     assert 2 in source_first
     assert sum(same_territory[index].object_count for index in source_first) == 6
+
+
+def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "kanopus" / "регион_а" / "Яблоня.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "регион_б" / "Берёза.TIFF",
+        left=100,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "регион_в" / "Только_касание.tif",
+        left=200,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    _write_cog(
+        config.images_root / "orto" / "регион" / "Ортофото.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    geojson = _geojson_bytes(
+        [
+            transform_geometry(to_wgs84.transform, box(10, 10, 20, 20)),
+            transform_geometry(to_wgs84.transform, box(110, 10, 120, 20)),
+        ],
+        crs=None,
+    )
+
+    artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.KANOPUS,
+        geojson_filename=r"C:\fakepath\Разметка рек.geojson",
+        geojson_bytes=geojson,
+        config=config,
+    )
+
+    assert artifact.filename == "Разметка рек.txt"
+    assert artifact.scene_count == 2
+    assert artifact.content.decode("utf-8") == "Берёза\nЯблоня\n"
+
+    touching_artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.KANOPUS,
+        geojson_filename="Касание.geojson",
+        geojson_bytes=_geojson_bytes([box(190, 10, 200, 20)]),
+        config=config,
+    )
+    assert touching_artifact.content == b""
+
+
+def test_scene_list_export_returns_empty_txt_without_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "orto" / "область" / "Орто сцена.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+
+    artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.ORTHO,
+        geojson_filename="Пустая выборка.geojson",
+        geojson_bytes=_geojson_bytes([box(500, 500, 510, 510)]),
+        config=config,
+    )
+
+    assert artifact.filename == "Пустая выборка.txt"
+    assert artifact.scene_count == 0
+    assert artifact.content == b""
+
+
+def test_scene_list_export_rejects_duplicate_matching_stems(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "kanopus" / "первая" / "Одинаковая.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "вторая" / "одинаковая.tiff",
+        left=100,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+
+    with pytest.raises(TrainingUIAPIError, match="совпадают имена без расширения"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.geojson",
+            geojson_bytes=_geojson_bytes([box(10, 10, 120, 20)]),
+            config=config,
+        )
+
+
+def test_scene_list_export_validates_input_root_and_rasters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    valid_geojson = _geojson_bytes([box(10, 10, 20, 20)])
+
+    with pytest.raises(TrainingUIAPIError, match="Папка снимков"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.geojson",
+            geojson_bytes=valid_geojson,
+            config=config,
+        )
+
+    images_root = config.images_root / "kanopus"
+    images_root.mkdir(parents=True)
+    damaged_path = images_root / "повреждённый.tif"
+    damaged_path.write_bytes(b"not-a-raster")
+    with pytest.raises(TrainingUIAPIError, match="Не удалось прочитать снимок"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.geojson",
+            geojson_bytes=valid_geojson,
+            config=config,
+        )
+
+    damaged_path.unlink()
+    without_crs_path = images_root / "без_crs.tif"
+    with rasterio.open(
+        without_crs_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="uint8",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((1, 8, 8), dtype=np.uint8))
+    with pytest.raises(TrainingUIAPIError, match="отсутствует CRS"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.geojson",
+            geojson_bytes=valid_geojson,
+            config=config,
+        )
+
+    with pytest.raises(TrainingUIAPIError, match="загруженный GeoJSON"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.geojson",
+            geojson_bytes=b"not-json",
+            config=config,
+        )
+    with pytest.raises(TrainingUIAPIError, match="расширением .geojson"):
+        _markup_export.build_scene_list_export(
+            imagery_type=ImageryType.KANOPUS,
+            geojson_filename="разметка.json",
+            geojson_bytes=valid_geojson,
+            config=config,
+        )
+
+
+def test_scene_list_export_http_downloads_unicode_filename(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "kanopus" / "регион" / "Сцена один.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    matching_geojson = _geojson_bytes([box(10, 10, 20, 20)])
+    empty_geojson = _geojson_bytes([box(500, 500, 510, 510)])
+
+    with TestClient(create_app()) as client:
+        assert client.post(
+            "/api/v1/scene-list-export",
+            data={"imagery_type": "kanopus"},
+            files={"geojson": ("Разметка рек.geojson", matching_geojson)},
+        ).status_code == 401
+        _login(client)
+        openapi = client.get("/openapi.json").json()
+        response_content = openapi["paths"]["/api/v1/scene-list-export"]["post"][
+            "responses"
+        ]["200"]["content"]
+        assert "text/plain" in response_content
+
+        response = client.post(
+            "/api/v1/scene-list-export",
+            data={"imagery_type": "kanopus"},
+            files={
+                "geojson": (
+                    "Разметка рек.geojson",
+                    matching_geojson,
+                    "application/geo+json",
+                )
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/plain; charset=utf-8"
+        assert response.content.decode("utf-8") == "Сцена один\n"
+        assert "Разметка рек.txt" in unquote(response.headers["content-disposition"])
+
+        empty_response = client.post(
+            "/api/v1/scene-list-export",
+            data={"imagery_type": "kanopus"},
+            files={"geojson": ("Пусто.geojson", empty_geojson)},
+        )
+        assert empty_response.status_code == 200
+        assert empty_response.content == b""
+        assert "Пусто.txt" in unquote(empty_response.headers["content-disposition"])
+
+        invalid_response = client.post(
+            "/api/v1/scene-list-export",
+            data={"imagery_type": "kanopus"},
+            files={"geojson": ("ошибка.geojson", b"not-json")},
+        )
+        assert invalid_response.status_code == 400
 
 
 def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None:
@@ -2230,6 +2464,23 @@ def _write_geojson(path: Path, features: list[tuple[int, object, str]]) -> None:
         ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _geojson_bytes(geometries: list[object], *, crs: str | None = "EPSG:3857") -> bytes:
+    payload = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": mapping(geometry),
+            }
+            for geometry in geometries
+        ],
+    }
+    if crs is not None:
+        payload["crs"] = {"type": "name", "properties": {"name": crs}}
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 def _write_cog(

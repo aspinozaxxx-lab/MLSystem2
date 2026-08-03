@@ -1315,10 +1315,12 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert not Path("frontend/src/app.js").exists()
     assert not Path("frontend/src/assets/app.css").exists()
     assert 'head === "model-export"' in app_tsx
+    assert 'head === "scene-list-export"' in app_tsx
     assert 'head === "test-markups" && second === "create"' in app_tsx
     assert 'head === "markup-export"' not in app_tsx
     assert "/bootstrap" in app_tsx
     assert "Экспорт моделей" in app_tsx
+    assert "Создать список сцен" in app_tsx
     assert "Каталог тестовых разметок" in app_tsx
     assert "Создание тестовых разметок" in app_tsx
     assert "Пересчитать F1" in app_tsx
@@ -1341,6 +1343,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx
+    assert '"/scene-list-export"' in app_tsx
     assert "/results/training/" in app_tsx
     assert "/triton-zip" in app_tsx
     assert "metadata.sample_size" in app_tsx

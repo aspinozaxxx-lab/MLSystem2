@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import uuid
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from mlsystem2.training_ui_api._markup_export import (
     MarkupExportUnavailable,
     build_markup_export,
+    build_scene_list_export,
     load_markup_export,
 )
 from mlsystem2.training_ui_api._model_export import build_triton_model_export_zip
 from mlsystem2.training_ui_api._service import export_training_result_triton_zip, export_training_results_triton_zip
 from mlsystem2.training_ui_api.contracts import (
+    ImageryType,
     MarkupExportInfo,
     MarkupExportRequest,
     TrainingResultBatchExportRequest,
@@ -27,6 +31,41 @@ from .common import RouteContext
 
 
 def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.post(
+        "/api/v1/scene-list-export",
+        response_class=Response,
+        responses={
+            200: {
+                "description": "TXT со списком имён сцен без расширений.",
+                "content": {
+                    "text/plain": {"schema": {"type": "string", "format": "binary"}}
+                },
+            }
+        },
+    )
+    async def post_scene_list_export(
+        _: str = Depends(ctx.authenticated),
+        imagery_type: ImageryType = Form(...),
+        geojson: UploadFile = File(...),
+    ) -> Response:
+        artifact = await run_in_threadpool(
+            build_scene_list_export,
+            imagery_type=imagery_type,
+            geojson_filename=geojson.filename or "",
+            geojson_bytes=await geojson.read(),
+            config=ctx.config,
+        )
+        return Response(
+            content=artifact.content,
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename=\"scene-list.txt\"; "
+                    f"filename*=UTF-8''{quote(artifact.filename, safe='')}"
+                )
+            },
+        )
+
     @app.post("/api/v1/markup-export", response_model=MarkupExportInfo)
     def post_markup_export(
         request: MarkupExportRequest,
