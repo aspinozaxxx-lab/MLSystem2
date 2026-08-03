@@ -7,14 +7,16 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from qgis.PyQt.QtCore import QCoreApplication, QEventLoop, QTimer
-from qgis.PyQt.QtWidgets import QMainWindow
+from qgis.PyQt.QtWidgets import QMainWindow, QPushButton
 from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
     QgsField,
     QgsGeometry,
+    QgsPointXY,
     QgsProject,
     QgsRuleBasedRenderer,
     QgsVectorLayer,
@@ -119,7 +121,13 @@ class QGISPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.dock)
         self.assertEqual(SERVER_URL, "https://grovika.ru")
         self.assertEqual(SERVER_USERNAME, "mlsystem")
-        self.assertEqual(plugin.dock.check_connection.text(), "Подключиться")
+        button_texts = {button.text() for button in plugin.dock.findChildren(QPushButton)}
+        self.assertNotIn("Подключиться", button_texts)
+        self.assertNotIn("Текущий охват", button_texts)
+        self.assertNotIn("Из выделения", button_texts)
+        self.assertNotIn("Открыть сохранённую сессию…", button_texts)
+        self.assertFalse(hasattr(plugin.dock, "check_connection"))
+        self.assertFalse(hasattr(plugin.dock, "aoi_layer_combo"))
         self.assertFalse(hasattr(plugin.dock, "server_url"))
         self.assertFalse(hasattr(plugin.dock, "username"))
         self.assertFalse(hasattr(plugin.dock, "password"))
@@ -129,6 +137,44 @@ class QGISPluginTests(unittest.TestCase):
         iface.mapCanvas().setFocus()
         self.assertTrue(all(shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(False)
+        plugin.unload()
+
+    # Проверяет автоматический вход без отдельной кнопки подключения.
+    def test_plugin_connects_automatically_with_configured_account(self) -> None:
+        iface = _FakeIface()
+        with (
+            patch("mlsystem_plugin.dock_widget.load_connection_password", return_value="secret"),
+            patch("mlsystem_plugin.dock_widget.APIClient.login") as login,
+        ):
+            plugin = MLSystemPlugin(iface)
+            plugin.initGui()
+            iface.mainWindow().show()
+            QCoreApplication.processEvents()
+            QCoreApplication.processEvents()
+
+        login.assert_called_once_with("mlsystem", "secret")
+        self.assertTrue(plugin.dock._connecting)
+        plugin.unload()
+
+    # Первый завершённый контур сразу становится действующей областью интереса.
+    def test_first_draw_capture_sets_aoi(self) -> None:
+        iface = _FakeIface()
+        iface.mapCanvas().setDestinationCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+        plugin.dock._draw_aoi()
+        plugin.dock._aoi_tool._points = [
+            QgsPointXY(0, 0),
+            QgsPointXY(1_000, 0),
+            QgsPointXY(1_000, 1_000),
+            QgsPointXY(0, 1_000),
+        ]
+
+        plugin.dock._aoi_tool._finish()
+
+        self.assertIsNotNone(plugin.dock._aoi_geometry)
+        self.assertIn("AOI задана; площадь:", plugin.dock.aoi_label.text())
+        self.assertIsNotNone(plugin.dock._aoi_tool.last_capture())
         plugin.unload()
 
     # Проверяет единые пороги очереди и фактически отображаемого слоя.

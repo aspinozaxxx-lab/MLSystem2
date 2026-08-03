@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 
 from qgis.PyQt.QtCore import QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor
@@ -15,7 +14,6 @@ from qgis.PyQt.QtWidgets import (
     QDialogButtonBox,
     QDockWidget,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -184,6 +182,7 @@ class MLSystemDockWidget(QDockWidget):
         self._aoi_crs = None
         self._job_id: str | None = None
         self._job_class_name: str | None = None
+        self._connecting = False
         self._poll_failures = 0
         self._removing_candidate_layer = False
         self._previous_map_tool = None
@@ -211,25 +210,13 @@ class MLSystemDockWidget(QDockWidget):
         root = QVBoxLayout(content)
         root.setContentsMargins(6, 6, 6, 6)
 
-        connection = QGroupBox("Подключение")
-        connection_layout = QVBoxLayout(connection)
-        self.check_connection = QPushButton("Подключиться")
-        self.check_connection.clicked.connect(self._request_classes)
-        connection_layout.addWidget(self.check_connection)
-        root.addWidget(connection)
-
         recognition = QGroupBox("Распознавание")
         recognition_layout = QGridLayout(recognition)
         self.class_combo = QComboBox()
         self.class_combo.currentIndexChanged.connect(self._class_changed)
         self.model_label = QLabel("Модель: —")
-        self.aoi_layer_combo = QComboBox()
         draw_aoi = QPushButton("Нарисовать")
-        extent_aoi = QPushButton("Текущий охват")
-        selection_aoi = QPushButton("Из выделения")
         draw_aoi.clicked.connect(self._draw_aoi)
-        extent_aoi.clicked.connect(self._extent_aoi)
-        selection_aoi.clicked.connect(self._selection_aoi)
         self.aoi_label = QLabel("AOI не задана")
         self.aoi_label.setWordWrap(True)
         self.start_button = QPushButton("Запустить распознавание")
@@ -246,17 +233,13 @@ class MLSystemDockWidget(QDockWidget):
         recognition_layout.addWidget(QLabel("Класс"), 0, 0)
         recognition_layout.addWidget(self.class_combo, 0, 1, 1, 2)
         recognition_layout.addWidget(self.model_label, 1, 0, 1, 3)
-        recognition_layout.addWidget(QLabel("Слой выделения"), 2, 0)
-        recognition_layout.addWidget(self.aoi_layer_combo, 2, 1, 1, 2)
-        recognition_layout.addWidget(draw_aoi, 3, 0)
-        recognition_layout.addWidget(extent_aoi, 3, 1)
-        recognition_layout.addWidget(selection_aoi, 3, 2)
-        recognition_layout.addWidget(self.aoi_label, 4, 0, 1, 3)
-        recognition_layout.addWidget(self.start_button, 5, 0, 1, 2)
-        recognition_layout.addWidget(self.cancel_button, 5, 2)
-        recognition_layout.addWidget(self.status_label, 6, 0, 1, 3)
-        recognition_layout.addWidget(self.progress, 7, 0, 1, 3)
-        recognition_layout.addWidget(self.warning_label, 8, 0, 1, 3)
+        recognition_layout.addWidget(draw_aoi, 2, 0, 1, 3)
+        recognition_layout.addWidget(self.aoi_label, 3, 0, 1, 3)
+        recognition_layout.addWidget(self.start_button, 4, 0, 1, 2)
+        recognition_layout.addWidget(self.cancel_button, 4, 2)
+        recognition_layout.addWidget(self.status_label, 5, 0, 1, 3)
+        recognition_layout.addWidget(self.progress, 6, 0, 1, 3)
+        recognition_layout.addWidget(self.warning_label, 7, 0, 1, 3)
         root.addWidget(recognition)
 
         layers_group = QGroupBox("Рабочие слои")
@@ -336,8 +319,6 @@ class MLSystemDockWidget(QDockWidget):
         self.apply_button.clicked.connect(self._apply_results)
         self.session_path_label = QLabel("Сессия: —")
         self.session_path_label.setWordWrap(True)
-        open_session = QPushButton("Открыть сохранённую сессию…")
-        open_session.clicked.connect(self._open_session)
         review_layout.addWidget(QLabel("Фильтр"), 0, 0)
         review_layout.addWidget(self.filter_combo, 0, 1, 1, 2)
         review_layout.addWidget(QLabel("Сортировка"), 1, 0)
@@ -362,7 +343,6 @@ class MLSystemDockWidget(QDockWidget):
         review_layout.addWidget(self.auto_split, 10, 0, 1, 3)
         review_layout.addWidget(self.apply_button, 11, 0, 1, 3)
         review_layout.addWidget(self.session_path_label, 12, 0, 1, 3)
-        review_layout.addWidget(open_session, 13, 0, 1, 3)
         root.addWidget(review)
         root.addStretch(1)
 
@@ -395,13 +375,11 @@ class MLSystemDockWidget(QDockWidget):
         """Obnovit spiski, ne menyaya aktivnyi sloi QGIS."""
 
         previous = {
-            "aoi": self.aoi_layer_combo.currentData(),
             "annotation": self.annotation_layer_combo.currentData(),
             "hard": self.hard_layer_combo.currentData(),
         }
         layers = [layer for layer in polygon_layers() if self.session is None or layer.id() != self.session.layer.id()]
         for combo, key in (
-            (self.aoi_layer_combo, "aoi"),
             (self.annotation_layer_combo, "annotation"),
             (self.hard_layer_combo, "hard"),
         ):
@@ -423,14 +401,22 @@ class MLSystemDockWidget(QDockWidget):
 
     # Выполняет вход и после него загружает доступные классы.
     def _request_classes(self) -> None:
+        if self._connecting:
+            return
         self.save_current_settings()
         password = load_connection_password()
         if not password:
             self._show_error("В локальном профиле QGIS не настроен пароль MLSystem.")
             return
-        self.check_connection.setEnabled(False)
+        self._connecting = True
         self.status_label.setText("Статус: вход…")
         self.api.login(SERVER_USERNAME, password)
+
+    def _ensure_connected(self) -> None:
+        """Автоматически подключиться, если список классов ещё не загружен."""
+
+        if not self._connecting and self.class_combo.count() == 0:
+            self._request_classes()
 
     # Pokazyvaet versiyu modeli vybrannogo klassa.
     def _class_changed(self) -> None:
@@ -443,35 +429,23 @@ class MLSystemDockWidget(QDockWidget):
 
     # Aktiviruet instrument risovaniya bez smeny aktivnogo sloya.
     def _draw_aoi(self) -> None:
-        self._previous_map_tool = self.canvas.mapTool()
+        current_tool = self.canvas.mapTool()
+        if current_tool is not self._aoi_tool:
+            self._previous_map_tool = current_tool
+        self._aoi_tool.reset()
         self.canvas.setMapTool(self._aoi_tool)
         self.status_label.setText("Статус: рисуйте левой кнопкой, завершите правой")
 
-    # Ispolzuet tekushchii ohvat map canvas kak AOI.
-    def _extent_aoi(self) -> None:
-        self._set_aoi(
-            QgsGeometry.fromRect(self.canvas.extent()),
-            self.canvas.mapSettings().destinationCrs(),
-        )
-
-    # Obedinyaet vydelennye poligony yavno vybrannogo sloya.
-    def _selection_aoi(self) -> None:
-        layer = self._layer_from_combo(self.aoi_layer_combo)
-        if layer is None:
-            self._show_error("Сначала явно выберите слой с выделением.")
-            return
-        geometries = [feature.geometry() for feature in layer.selectedFeatures()]
-        if not geometries:
-            self._show_error("В выбранном слое нет выделенных объектов.")
-            return
-        self._set_aoi(QgsGeometry.unaryUnion(geometries), layer.crs())
-
     # Prinimaet rezultat map tool i vosstanavlivaet prezhnii instrument.
     def _aoi_captured(self, geometry: QgsGeometry, crs) -> None:
-        self._set_aoi(geometry, crs)
-        if self._previous_map_tool is not None:
-            self.canvas.setMapTool(self._previous_map_tool)
-            self._previous_map_tool = None
+        self._set_aoi(QgsGeometry(geometry), crs)
+        QTimer.singleShot(0, self._restore_previous_map_tool)
+
+    def _restore_previous_map_tool(self) -> None:
+        previous_tool = self._previous_map_tool
+        self._previous_map_tool = None
+        if previous_tool is not None and self.canvas.mapTool() is self._aoi_tool:
+            self.canvas.setMapTool(previous_tool)
 
     # Proveriaet i sohranyaet itogovuyu geometriyu AOI.
     def _set_aoi(self, geometry: QgsGeometry, crs) -> None:
@@ -505,6 +479,10 @@ class MLSystemDockWidget(QDockWidget):
         if not isinstance(class_info, dict):
             self._show_error("Выберите класс распознавания.")
             return
+        if self._aoi_geometry is None or self._aoi_crs is None:
+            last_capture = self._aoi_tool.last_capture()
+            if last_capture is not None:
+                self._set_aoi(*last_capture)
         if self._aoi_geometry is None or self._aoi_crs is None:
             self._show_error("Сначала задайте AOI.")
             return
@@ -549,7 +527,7 @@ class MLSystemDockWidget(QDockWidget):
             self.status_label.setText("Статус: вход выполнен; загрузка классов…")
             self.api.get_classes()
         elif operation == "classes":
-            self.check_connection.setEnabled(True)
+            self._connecting = False
             self.class_combo.clear()
             classes = payload.get("classes", []) if isinstance(payload, dict) else []
             for item in classes:
@@ -638,7 +616,11 @@ class MLSystemDockWidget(QDockWidget):
             return
         self._show_error(f"{message} [{code}]")
         if operation in {"login", "classes"}:
-            self.check_connection.setEnabled(True)
+            self._connecting = False
+        if code == "SESSION_EXPIRED":
+            self.class_combo.clear()
+            self._connecting = False
+            QTimer.singleShot(0, self._ensure_connected)
         if operation in {"create_job", "job_result", "cancel_job"}:
             self._job_finished()
 
@@ -719,21 +701,6 @@ class MLSystemDockWidget(QDockWidget):
         self.session_active_changed.emit(False)
         self._update_review_ui()
         self._show_error("Слой кандидатов удалён во время сессии.")
-
-    # Otkryvaet vybrannyi polzovatelem GeoPackage sessii.
-    def _open_session(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Открыть сессию MLSystem2",
-            str(session_directory()),
-            "GeoPackage (*.gpkg)",
-        )
-        if not path:
-            return
-        try:
-            self._set_session(ReviewSession.open_existing(Path(path)))
-        except ReviewSessionError as exc:
-            self._show_error(str(exc))
 
     # Peredaet filtr v model sessii.
     def _review_filter_changed(self) -> None:
@@ -924,6 +891,7 @@ class MLSystemDockWidget(QDockWidget):
     # Vklyuchaet hotkeys tolko pri vidimoi aktivnoi sessii.
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        QTimer.singleShot(0, self._ensure_connected)
         if self.session is not None:
             self._highlight_current_candidate(self.session.current_feature())
         self.session_active_changed.emit(self.session is not None)

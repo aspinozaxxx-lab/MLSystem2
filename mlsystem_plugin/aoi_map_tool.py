@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
-from qgis.core import Qgis, QgsGeometry, QgsPointXY
+from qgis.core import Qgis, QgsCoordinateReferenceSystem, QgsGeometry, QgsPointXY
 from qgis.gui import QgsMapTool, QgsRubberBand
 
 
@@ -31,6 +31,8 @@ class AOIPolygonMapTool(QgsMapTool):
         super().__init__(canvas)
         self._canvas = canvas
         self._points: list[QgsPointXY] = []
+        self._last_geometry: QgsGeometry | None = None
+        self._last_crs: QgsCoordinateReferenceSystem | None = None
         self._rubber_band = QgsRubberBand(canvas, Qgis.GeometryType.Polygon)
         self._rubber_band.setColor(QColor(255, 170, 0, 180))
         self._rubber_band.setFillColor(QColor(255, 170, 0, 45))
@@ -63,6 +65,15 @@ class AOIPolygonMapTool(QgsMapTool):
         self._points.clear()
         self._rubber_band.reset(Qgis.GeometryType.Polygon)
 
+    def last_capture(
+        self,
+    ) -> tuple[QgsGeometry, QgsCoordinateReferenceSystem] | None:
+        """Вернуть копию последнего завершённого контура."""
+
+        if self._last_geometry is None or self._last_crs is None:
+            return None
+        return QgsGeometry(self._last_geometry), QgsCoordinateReferenceSystem(self._last_crs)
+
     # Pererisovyvaet tekushchii kontur AOI.
     def _redraw(self) -> None:
         self._rubber_band.reset(Qgis.GeometryType.Polygon)
@@ -78,8 +89,10 @@ class AOIPolygonMapTool(QgsMapTool):
         ring = [*self._points, self._points[0]]
         geometry = QgsGeometry.fromPolygonXY([ring])
         crs = self._canvas.mapSettings().destinationCrs()
-        self.captured.emit(geometry, crs)
+        self._last_geometry = QgsGeometry(geometry)
+        self._last_crs = QgsCoordinateReferenceSystem(crs)
         self.reset()
+        self.captured.emit(QgsGeometry(geometry), QgsCoordinateReferenceSystem(crs))
 
 
 __all__ = ["AOIPolygonMapTool"]
