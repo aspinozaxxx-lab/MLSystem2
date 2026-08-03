@@ -32,3 +32,14 @@ def test_feature_collection_rejects_duplicate_candidate_ids() -> None:
         validate_feature_collection(
             {"type": "FeatureCollection", "features": [feature, dict(feature)]}
         )
+
+
+def test_feature_collection_rejects_confidence_outside_probability_range() -> None:
+    feature = {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": []},
+        "properties": {"candidate_id": "candidate-1", "confidence": 1.1},
+    }
+
+    with pytest.raises(PluginContractError, match="от 0 до 1"):
+        validate_feature_collection({"type": "FeatureCollection", "features": [feature]})

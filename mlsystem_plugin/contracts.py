@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -42,6 +43,18 @@ def validate_feature_collection(payload: object) -> dict[str, Any]:
         if candidate_id in candidate_ids:
             raise PluginContractError(f"candidate_id повторяется: {candidate_id}.")
         candidate_ids.add(candidate_id)
+        confidence = properties.get("confidence")
+        if confidence is not None:
+            try:
+                confidence_value = float(confidence)
+            except (TypeError, ValueError) as exc:
+                raise PluginContractError(
+                    f"У объекта {index} некорректная уверенность модели."
+                ) from exc
+            if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
+                raise PluginContractError(
+                    f"У объекта {index} уверенность модели должна быть от 0 до 1."
+                )
         if not isinstance(feature.get("geometry"), dict):
             raise PluginContractError(f"У объекта {index} отсутствует геометрия.")
     return payload

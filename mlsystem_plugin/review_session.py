@@ -22,13 +22,12 @@ try:
 except ImportError:
     from qgis.PyQt.QtWidgets import QUndoStack
 from qgis.core import (
-    QgsCategorizedSymbolRenderer,
     QgsFeature,
     QgsField,
     QgsFields,
     QgsJsonUtils,
     QgsProject,
-    QgsRendererCategory,
+    QgsRuleBasedRenderer,
     QgsSymbol,
     QgsVectorFileWriter,
     QgsVectorLayer,
@@ -79,7 +78,10 @@ class ReviewSession(QObject):
         self.undo_stack = QUndoStack(self)
         self._filter = "new"
         self._sort = "original"
+        self._min_area_m2 = 0.0
+        self._min_confidence = 0.0
         self._current_feature_id: int | None = None
+        self._apply_view_style()
         self._refresh_current()
 
     @classmethod
@@ -106,7 +108,6 @@ class ReviewSession(QObject):
             layer = _create_candidate_layer(validated, job_id, path)
         if project.mapLayer(layer.id()) is None:
             project.addMapLayer(layer)
-        _apply_status_style(layer)
         return cls(layer, path)
 
     @classmethod
@@ -126,7 +127,6 @@ class ReviewSession(QObject):
         if not layer.isValid() or any(layer.fields().indexOf(name) < 0 for name in _FIELD_NAMES):
             raise ReviewSessionError("Файл не является совместимой сессией MLSystem2.")
         project.addMapLayer(layer)
-        _apply_status_style(layer)
         return cls(layer, path)
 
     def close(self, *, remove_layer: bool = False) -> None:
@@ -140,11 +140,20 @@ class ReviewSession(QObject):
     # Menyaet vidimuyu kategoriyu ocheredi.
     def set_filter(self, value: str) -> None:
         self._filter = value
+        self._apply_view_style()
         self._refresh_current()
 
     # Menyaet stabilnyi poryadok ocheredi.
     def set_sort(self, value: str) -> None:
         self._sort = value
+        self._refresh_current(keep_current=True)
+
+    def set_thresholds(self, min_area_m2: float, min_confidence: float) -> None:
+        """Синхронно отфильтровать очередь и отображаемые кандидаты."""
+
+        self._min_area_m2 = max(0.0, float(min_area_m2))
+        self._min_confidence = min(1.0, max(0.0, float(min_confidence)))
+        self._apply_view_style()
         self._refresh_current(keep_current=True)
 
     def feature_ids(self) -> list[int]:
@@ -177,10 +186,15 @@ class ReviewSession(QObject):
 
     # Schitaet obshchee i ostavsheesya chislo kandidatov.
     def counts(self) -> dict[str, int]:
-        statuses = [str(feature["review_status"] or "new") for feature in self.layer.getFeatures()]
+        features = list(self.layer.getFeatures())
         return {
-            "total": len(statuses),
-            "new": statuses.count("new"),
+            "total": len(features),
+            "new": sum(
+                1
+                for feature in features
+                if str(feature["review_status"] or "new") == "new"
+                and self._passes_thresholds(feature)
+            ),
             "visible": len(self.feature_ids()),
         }
 
@@ -337,7 +351,26 @@ class ReviewSession(QObject):
     # Proveriaet sootvetstvie tekushchemu filtru.
     def _matches(self, feature: QgsFeature) -> bool:
         status = str(feature["review_status"] or "new")
-        return self._filter == "all" or status == self._filter
+        return (self._filter == "all" or status == self._filter) and self._passes_thresholds(
+            feature
+        )
+
+    def _passes_thresholds(self, feature: QgsFeature) -> bool:
+        area = _numeric_attribute(feature["area_m2"])
+        if area is None or area < self._min_area_m2:
+            return False
+        if self._min_confidence <= 0.0:
+            return True
+        confidence = _numeric_attribute(feature["confidence"])
+        return confidence is not None and confidence >= self._min_confidence
+
+    def _apply_view_style(self) -> None:
+        _apply_status_style(
+            self.layer,
+            status_filter=self._filter,
+            min_area_m2=self._min_area_m2,
+            min_confidence=self._min_confidence,
+        )
 
     # Ciklicheski sdvigaet ukazatel ocheredi.
     def _move(self, offset: int) -> None:
@@ -465,8 +498,14 @@ def _field_type(qmeta_name: str, qvariant_name: str):
     raise ReviewSessionError("Среда Qt не предоставляет типы полей.")
 
 
-# Naznachaet kategorizovannyi stil statusov review.
-def _apply_status_style(layer: QgsVectorLayer) -> None:
+# Назначает стиль статусов и скрывает объекты вне активного фильтра.
+def _apply_status_style(
+    layer: QgsVectorLayer,
+    *,
+    status_filter: str = "new",
+    min_area_m2: float = 0.0,
+    min_confidence: float = 0.0,
+) -> None:
     styles = {
         "new": ("Новый", (255, 215, 0)),
         "annotation": ("В разметку", (55, 180, 75)),
@@ -475,13 +514,34 @@ def _apply_status_style(layer: QgsVectorLayer) -> None:
         "split": ("Разбит", (90, 90, 200)),
         "exported": ("Выгружен", (30, 150, 170)),
     }
-    categories = []
+    root_rule = QgsRuleBasedRenderer.Rule(None)
     for status, (label, rgb) in styles.items():
+        if status_filter != "all" and status != status_filter:
+            continue
         symbol = QgsSymbol.defaultSymbol(layer.geometryType())
         symbol.setColor(QColor(*rgb, 110))
-        categories.append(QgsRendererCategory(status, symbol, label))
-    layer.setRenderer(QgsCategorizedSymbolRenderer("review_status", categories))
+        expression = (
+            f'"review_status" = \'{status}\' '
+            f'AND coalesce("area_m2", 0) >= {min_area_m2:.12g}'
+        )
+        if min_confidence > 0.0:
+            expression += (
+                ' AND "confidence" IS NOT NULL '
+                f'AND "confidence" >= {min_confidence:.12g}'
+            )
+        rule = QgsRuleBasedRenderer.Rule(symbol)
+        rule.setLabel(label)
+        rule.setFilterExpression(expression)
+        root_rule.appendChild(rule)
+    layer.setRenderer(QgsRuleBasedRenderer(root_rule))
     layer.triggerRepaint()
+
+
+def _numeric_attribute(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # Formiruet UTC-vremya audita v ISO 8601.

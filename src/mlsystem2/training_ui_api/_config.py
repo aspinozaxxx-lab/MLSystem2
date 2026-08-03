@@ -98,7 +98,7 @@ def get_config() -> TrainingUIAPIConfig:
         ).rstrip("/"),
         frontend_username=os.getenv(
             "MLSYSTEM2_TRAINING_UI_USER",
-            os.getenv("MLSYSTEM_FRONTEND_USER", "mluser"),
+            os.getenv("MLSYSTEM_FRONTEND_USER", "mlsystem"),
         ),
         frontend_password=os.getenv(
             "MLSYSTEM2_TRAINING_UI_PASSWORD",

@@ -734,6 +734,7 @@ def _infer_scene(
             )
             mask_window = Window(min_col, min_row, max_col - min_col, max_row - min_row)
         mask = np.zeros((int(mask_window.height), int(mask_window.width)), dtype=np.uint8)
+        confidence_map = np.zeros(mask.shape, dtype=np.float32)
         for window in selected_windows:
             image = dataset.read(
                 indexes=input_indexes,
@@ -745,7 +746,7 @@ def _infer_scene(
             )
             if np.all(_nodata_pixels(image, nodata)):
                 continue
-            tile_mask = _predict_tile(
+            tile_mask, tile_confidence = _predict_tile(
                 torch,
                 model,
                 image.astype(np.float32, copy=False),
@@ -760,6 +761,10 @@ def _infer_scene(
                 mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
                 tile_mask[:crop_h, :crop_w],
             )
+            confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
+                confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w],
+                tile_confidence[:crop_h, :crop_w],
+            )
         mask = _postprocess_mask(mask, postprocess_profile)
         return _features_from_mask(
             mask,
@@ -769,6 +774,7 @@ def _infer_scene(
             scene,
             config,
             postprocess_profile=postprocess_profile,
+            confidence_map=confidence_map,
         )
 
 
@@ -799,7 +805,7 @@ def _infer_test_tile_mask(
             )
             if np.all(_nodata_pixels(image, nodata)):
                 continue
-            predicted = _predict_tile(
+            predicted, _ = _predict_tile(
                 torch,
                 model,
                 image.astype(np.float32, copy=False),
@@ -855,7 +861,14 @@ def _infer_test_tile_mask(
         )
 
 
-def _predict_tile(torch, model, image: np.ndarray, *, threshold: float, device: str) -> np.ndarray:
+def _predict_tile(
+    torch,
+    model,
+    image: np.ndarray,
+    *,
+    threshold: float,
+    device: str,
+) -> tuple[np.ndarray, np.ndarray]:
     tensor = torch.as_tensor(image[None, :, :, :], dtype=torch.float32, device=torch.device(device))
     with torch.no_grad():
         output = model(tensor)
@@ -867,9 +880,10 @@ def _predict_tile(torch, model, image: np.ndarray, *, threshold: float, device: 
                 mode="bilinear",
                 align_corners=False,
             )
-        probs = torch.sigmoid(logits[:, :1, :, :])
-        predicted = probs[0, 0].detach().cpu().numpy() >= threshold
-    return predicted.astype(np.uint8)
+        probabilities = torch.sigmoid(logits[:, :1, :, :])
+        probabilities = probabilities[0, 0].detach().cpu().numpy().astype(np.float32)
+        predicted = probabilities >= threshold
+    return predicted.astype(np.uint8), probabilities
 
 
 def _features_from_mask(
@@ -880,11 +894,32 @@ def _features_from_mask(
     scene: str,
     config: dict[str, Any],
     postprocess_profile: _PostprocessProfile = _POSTPROCESS_NONE,
+    confidence_map: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     source_crs = str(crs) if crs is not None else None
-    for geometry, value in rasterio_features.shapes(mask, mask=mask > 0, transform=transform):
-        if int(value) != 1:
+    if confidence_map is not None and confidence_map.shape != mask.shape:
+        raise RuntimeError("Размер карты уверенности не совпадает с маской результата.")
+    labels, component_count = label_components(mask > 0, structure=_label_structure())
+    component_confidence: dict[int, float] = {}
+    if confidence_map is not None and component_count:
+        means = ndimage.mean(
+            confidence_map,
+            labels=labels,
+            index=np.arange(1, component_count + 1),
+        )
+        component_confidence = {
+            index: min(1.0, max(0.0, float(value)))
+            for index, value in enumerate(np.atleast_1d(means), start=1)
+            if np.isfinite(value)
+        }
+    for geometry, value in rasterio_features.shapes(
+        labels.astype(np.int32, copy=False),
+        mask=labels > 0,
+        transform=transform,
+    ):
+        component_id = int(value)
+        if component_id <= 0:
             continue
         if _has_vector_postprocess(postprocess_profile):
             if crs is None:
@@ -915,6 +950,7 @@ def _features_from_mask(
                     "source_threshold": config.get("threshold"),
                     "source_f1_score": config.get("checkpoint_f1_score"),
                     "source_epoch": config.get("checkpoint_epoch"),
+                    "confidence": component_confidence.get(component_id),
                     "postprocess_profile": postprocess_profile.name,
                     "postprocess_level": postprocess_profile.level,
                 },
@@ -1037,7 +1073,7 @@ def _finalize_aoi_features(
 ) -> list[dict[str, Any]]:
     """Obrezat kandidaty, razdelit Polygon i prisvoit stabilnye ID."""
 
-    clipped: list[tuple[Polygon, list[str]]] = []
+    clipped: list[tuple[Polygon, list[str], float | None]] = []
     for feature in features:
         geometry_data = feature.get("geometry")
         if geometry_data is None:
@@ -1052,13 +1088,14 @@ def _finalize_aoi_features(
             for source_id in feature_sources
             if source_id is not None and str(source_id) in source_image_ids
         ]
+        confidence = _normalized_confidence(properties.get("confidence"))
         for polygon in _iter_polygons(geometry):
             if not polygon.is_empty and polygon.area > 0:
-                clipped.append((polygon, normalized_sources))
+                clipped.append((polygon, normalized_sources, confidence))
     clipped.sort(key=lambda item: item[0].wkb_hex)
     output: list[dict[str, Any]] = []
     job_id = str(config.get("job_id") or "")
-    for polygon, feature_sources in clipped:
+    for polygon, feature_sources, confidence in clipped:
         candidate_id = uuid.uuid5(
             uuid.NAMESPACE_URL,
             f"mlsystem2:pseudolabel:{job_id}:{polygon.wkb_hex}",
@@ -1075,6 +1112,7 @@ def _finalize_aoi_features(
                     "job_id": job_id,
                     "source_image_ids": feature_sources,
                     "area_m2": round(_geodesic_area_m2(polygon), 3),
+                    "confidence": confidence,
                 },
             }
         )
@@ -1181,7 +1219,25 @@ def _merged_feature_properties(features: list[dict[str, Any]]) -> dict[str, Any]
         properties["scene_id"] = source_scene_ids[0]
     properties["source_scene_ids"] = source_scene_ids
     properties["merged_feature_count"] = len(features)
+    confidences: list[float] = []
+    for feature in features:
+        confidence = _normalized_confidence(
+            (feature.get("properties") or {}).get("confidence")
+        )
+        if confidence is not None:
+            confidences.append(confidence)
+    properties["confidence"] = max(confidences) if confidences else None
     return properties
+
+
+def _normalized_confidence(value: object) -> float | None:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence):
+        return None
+    return round(min(1.0, max(0.0, confidence)), 6)
 
 
 def _append_unique_string(values: list[str], value: object) -> None:

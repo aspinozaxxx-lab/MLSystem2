@@ -20,20 +20,20 @@ _FIELD_ALIASES = {
     "candidate_id": ("candidateid", "candidateuuid"),
     "model_version": ("modelversion", "version", "версиямодели"),
 }
-_DEFAULT_SERVER_URL = "https://grovika.ru"
-_LEGACY_SERVER_URL = "http://127.0.0.1:8091"
+SERVER_URL = "https://grovika.ru"
+SERVER_USERNAME = "mlsystem"
+_PASSWORD_KEY = f"{_ROOT}/password"
 
 
 @dataclass(frozen=True)
 class PluginSettings:
     """Minimalnye sohranyaemye nastroiki plagina."""
 
-    server_url: str = _DEFAULT_SERVER_URL
-    username: str = "mluser"
     request_timeout_ms: int = 30_000
     poll_interval_ms: int = 2_000
     max_part_area_m2: float = 1_000_000.0
     min_part_area_m2: float = 100.0
+    min_confidence: float = 0.0
     auto_split: bool = False
 
 
@@ -45,19 +45,23 @@ def load_settings() -> PluginSettings:
     if mapping_version < _MAPPING_VERSION:
         settings.remove(f"{_ROOT}/mapping")
         settings.setValue(f"{_ROOT}/mapping_version", _MAPPING_VERSION)
-    server_url = str(settings.value(f"{_ROOT}/server_url", _DEFAULT_SERVER_URL)).strip()
-    if not server_url or server_url == _LEGACY_SERVER_URL:
-        server_url = _DEFAULT_SERVER_URL
     settings.remove(f"{_ROOT}/token")
+    settings.remove(f"{_ROOT}/server_url")
+    settings.remove(f"{_ROOT}/username")
     return PluginSettings(
-        server_url=server_url,
-        username=str(settings.value(f"{_ROOT}/username", "mluser")).strip() or "mluser",
         request_timeout_ms=int(settings.value(f"{_ROOT}/request_timeout_ms", 30_000)),
         poll_interval_ms=int(settings.value(f"{_ROOT}/poll_interval_ms", 2_000)),
         max_part_area_m2=float(settings.value(f"{_ROOT}/max_part_area_m2", 1_000_000.0)),
         min_part_area_m2=float(settings.value(f"{_ROOT}/min_part_area_m2", 100.0)),
+        min_confidence=float(settings.value(f"{_ROOT}/min_confidence", 0.0)),
         auto_split=str(settings.value(f"{_ROOT}/auto_split", "false")).lower() == "true",
     )
+
+
+def load_connection_password() -> str:
+    """Загрузить пароль, подготовленный локально для профиля QGIS."""
+
+    return str(QgsSettings().value(_PASSWORD_KEY, ""))
 
 
 def save_settings(value: PluginSettings) -> None:
@@ -135,7 +139,10 @@ def session_directory(project: QgsProject | None = None) -> Path:
 
 __all__ = [
     "PluginSettings",
+    "SERVER_URL",
+    "SERVER_USERNAME",
     "automatic_field_mapping",
+    "load_connection_password",
     "load_field_mapping",
     "load_settings",
     "save_field_mapping",

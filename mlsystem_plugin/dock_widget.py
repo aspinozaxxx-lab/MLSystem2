@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QTimer, pyqtSignal
+from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,7 +21,6 @@ from qgis.PyQt.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -38,6 +38,7 @@ from qgis.core import (
     QgsProject,
     QgsVectorLayer,
 )
+from qgis.gui import QgsRubberBand
 
 from .aoi_map_tool import AOIPolygonMapTool
 from .api_client import APIClient
@@ -49,6 +50,9 @@ from .layer_utils import (
 )
 from .review_session import ReviewSession, ReviewSessionError
 from .settings import (
+    SERVER_URL,
+    SERVER_USERNAME,
+    load_connection_password,
     load_field_mapping,
     load_settings,
     save_field_mapping,
@@ -174,6 +178,7 @@ class MLSystemDockWidget(QDockWidget):
         self.canvas = iface.mapCanvas()
         self.api = APIClient(self)
         self.settings = load_settings()
+        self.api.configure(SERVER_URL, self.settings.request_timeout_ms)
         self.session: ReviewSession | None = None
         self._aoi_geometry: QgsGeometry | None = None
         self._aoi_crs = None
@@ -184,6 +189,11 @@ class MLSystemDockWidget(QDockWidget):
         self._previous_map_tool = None
         self._aoi_tool = AOIPolygonMapTool(self.canvas)
         self._aoi_tool.captured.connect(self._aoi_captured)
+        self._candidate_highlight = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
+        self._candidate_highlight.setStrokeColor(QColor(220, 0, 255, 255))
+        self._candidate_highlight.setFillColor(QColor(255, 235, 0, 80))
+        self._candidate_highlight.setWidth(3)
+        self._candidate_highlight.hide()
         self._poll_timer = QTimer(self)
         self._poll_timer.setSingleShot(True)
         self._poll_timer.timeout.connect(self._poll_job)
@@ -202,18 +212,10 @@ class MLSystemDockWidget(QDockWidget):
         root.setContentsMargins(6, 6, 6, 6)
 
         connection = QGroupBox("Подключение")
-        connection_form = QFormLayout(connection)
-        self.server_url = QLineEdit()
-        self.username = QLineEdit()
-        self.password = QLineEdit()
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.returnPressed.connect(self._request_classes)
-        self.check_connection = QPushButton("Войти и загрузить классы")
+        connection_layout = QVBoxLayout(connection)
+        self.check_connection = QPushButton("Подключиться")
         self.check_connection.clicked.connect(self._request_classes)
-        connection_form.addRow("URL сервера", self.server_url)
-        connection_form.addRow("Пользователь", self.username)
-        connection_form.addRow("Пароль", self.password)
-        connection_form.addRow(self.check_connection)
+        connection_layout.addWidget(self.check_connection)
         root.addWidget(connection)
 
         recognition = QGroupBox("Распознавание")
@@ -323,6 +325,12 @@ class MLSystemDockWidget(QDockWidget):
         self.min_area.setRange(0.0, 1_000_000_000.0)
         self.min_area.setDecimals(1)
         self.min_area.setSuffix(" м²")
+        self.min_confidence = QDoubleSpinBox()
+        self.min_confidence.setRange(0.0, 1.0)
+        self.min_confidence.setDecimals(3)
+        self.min_confidence.setSingleStep(0.05)
+        self.min_area.valueChanged.connect(self._review_thresholds_changed)
+        self.min_confidence.valueChanged.connect(self._review_thresholds_changed)
         self.auto_split = QCheckBox("Автоматически разбивать после загрузки")
         self.apply_button = QPushButton("Применить результаты в рабочие слои")
         self.apply_button.clicked.connect(self._apply_results)
@@ -347,12 +355,14 @@ class MLSystemDockWidget(QDockWidget):
         review_layout.addWidget(redo_button, 6, 2)
         review_layout.addWidget(QLabel("Макс. часть"), 7, 0)
         review_layout.addWidget(self.max_area, 7, 1, 1, 2)
-        review_layout.addWidget(QLabel("Мин. часть"), 8, 0)
+        review_layout.addWidget(QLabel("Мин. площадь/часть"), 8, 0)
         review_layout.addWidget(self.min_area, 8, 1, 1, 2)
-        review_layout.addWidget(self.auto_split, 9, 0, 1, 3)
-        review_layout.addWidget(self.apply_button, 10, 0, 1, 3)
-        review_layout.addWidget(self.session_path_label, 11, 0, 1, 3)
-        review_layout.addWidget(open_session, 12, 0, 1, 3)
+        review_layout.addWidget(QLabel("Мин. уверенность"), 9, 0)
+        review_layout.addWidget(self.min_confidence, 9, 1, 1, 2)
+        review_layout.addWidget(self.auto_split, 10, 0, 1, 3)
+        review_layout.addWidget(self.apply_button, 11, 0, 1, 3)
+        review_layout.addWidget(self.session_path_label, 12, 0, 1, 3)
+        review_layout.addWidget(open_session, 13, 0, 1, 3)
         root.addWidget(review)
         root.addStretch(1)
 
@@ -364,27 +374,22 @@ class MLSystemDockWidget(QDockWidget):
 
     # Perenosit sohranennye nastroiki v kontroly.
     def _load_settings_to_ui(self) -> None:
-        self.server_url.setText(self.settings.server_url)
-        self.username.setText(self.settings.username)
         self.max_area.setValue(self.settings.max_part_area_m2)
         self.min_area.setValue(self.settings.min_part_area_m2)
+        self.min_confidence.setValue(self.settings.min_confidence)
         self.auto_split.setChecked(self.settings.auto_split)
 
     # Sohranyaet tekushchie kontroly i konfiguriruet API-klient.
     def save_current_settings(self) -> None:
         self.settings = replace(
             self.settings,
-            server_url=self.server_url.text().strip(),
-            username=self.username.text().strip(),
             max_part_area_m2=self.max_area.value(),
             min_part_area_m2=self.min_area.value(),
+            min_confidence=self.min_confidence.value(),
             auto_split=self.auto_split.isChecked(),
         )
         save_settings(self.settings)
-        self.api.configure(
-            self.settings.server_url,
-            self.settings.request_timeout_ms,
-        )
+        self.api.configure(SERVER_URL, self.settings.request_timeout_ms)
 
     def refresh_layers(self) -> None:
         """Obnovit spiski, ne menyaya aktivnyi sloi QGIS."""
@@ -419,14 +424,13 @@ class MLSystemDockWidget(QDockWidget):
     # Выполняет вход и после него загружает доступные классы.
     def _request_classes(self) -> None:
         self.save_current_settings()
-        username = self.username.text().strip()
-        password = self.password.text()
-        if not username or not password:
-            self._show_error("Введите имя пользователя и пароль MLSystem.")
+        password = load_connection_password()
+        if not password:
+            self._show_error("В локальном профиле QGIS не настроен пароль MLSystem.")
             return
         self.check_connection.setEnabled(False)
         self.status_label.setText("Статус: вход…")
-        self.api.login(username, password)
+        self.api.login(SERVER_USERNAME, password)
 
     # Pokazyvaet versiyu modeli vybrannogo klassa.
     def _class_changed(self) -> None:
@@ -537,7 +541,6 @@ class MLSystemDockWidget(QDockWidget):
     # Marshrutiziruet uspeshnyi asinkhronnyi otvet.
     def _api_succeeded(self, operation: str, payload: object) -> None:
         if operation == "login":
-            self.password.clear()
             self.status_label.setText("Статус: вход выполнен; загрузка классов…")
             self.api.get_classes()
         elif operation == "classes":
@@ -647,9 +650,14 @@ class MLSystemDockWidget(QDockWidget):
             self.close_session(remove_layer=True)
         self.session = session
         session.changed.connect(self._update_review_ui)
+        session.current_changed.connect(self._highlight_current_candidate)
+        session.set_filter(str(self.filter_combo.currentData()))
+        session.set_sort(str(self.sort_combo.currentData()))
+        session.set_thresholds(self.min_area.value(), self.min_confidence.value())
         self.session_path_label.setText(f"Сессия: {session.path}")
         self.refresh_layers()
         self._update_review_ui()
+        self._highlight_current_candidate(session.current_feature())
         self.session_active_changed.emit(self.isVisible())
 
     # Zakryvaet tekushchuyu sessiyu bez poteri GeoPackage.
@@ -663,6 +671,7 @@ class MLSystemDockWidget(QDockWidget):
             session.close(remove_layer=remove_layer)
         finally:
             self._removing_candidate_layer = False
+        self._highlight_current_candidate(None)
         self.session_active_changed.emit(False)
         self._update_review_ui()
 
@@ -676,6 +685,7 @@ class MLSystemDockWidget(QDockWidget):
             return
         self.session.undo_stack.clear()
         self.session = None
+        self._highlight_current_candidate(None)
         self.session_active_changed.emit(False)
         self._update_review_ui()
         self._show_error("Слой кандидатов удалён во время сессии.")
@@ -704,6 +714,22 @@ class MLSystemDockWidget(QDockWidget):
     def _review_sort_changed(self) -> None:
         if self.session:
             self.session.set_sort(str(self.sort_combo.currentData()))
+
+    def _review_thresholds_changed(self) -> None:
+        """Немедленно применить пороги к очереди и слою кандидатов."""
+
+        if self.session:
+            self.session.set_thresholds(self.min_area.value(), self.min_confidence.value())
+
+    def _highlight_current_candidate(self, feature) -> None:
+        """Подсветить текущий кандидат поверх карты независимо от масштаба."""
+
+        self._candidate_highlight.reset(Qgis.GeometryType.Polygon)
+        if self.session is None or feature is None or not feature.isValid():
+            self._candidate_highlight.hide()
+            return
+        self._candidate_highlight.setToGeometry(feature.geometry(), self.session.layer)
+        self._candidate_highlight.show()
 
     # Obnovlyaet schetchiki i atributy tekushchego kandidata.
     def _update_review_ui(self) -> None:
@@ -852,11 +878,14 @@ class MLSystemDockWidget(QDockWidget):
     # Vklyuchaet hotkeys tolko pri vidimoi aktivnoi sessii.
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        if self.session is not None:
+            self._highlight_current_candidate(self.session.current_feature())
         self.session_active_changed.emit(self.session is not None)
 
     # Vozvrashchaet globalnye hotkeys shtatnomu QGIS.
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
+        self._candidate_highlight.hide()
         self.session_active_changed.emit(False)
 
     # Sohranyaet nastroiki i ostanavlivaet fonovye zaprosy.

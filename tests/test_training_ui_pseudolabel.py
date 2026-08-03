@@ -247,7 +247,7 @@ def test_pseudolabel_spatial_selection_clipping_and_stable_ids(tmp_path: Path) -
         {
             "type": "Feature",
             "geometry": box(29.9, 59.9, 30.03, 60.1).__geo_interface__,
-            "properties": {"scene_id": "inside"},
+            "properties": {"scene_id": "inside", "confidence": 0.87654321},
         }
     ]
     first = _pseudo_runner._finalize_aoi_features(features, aoi, config, ["inside"])
@@ -259,6 +259,7 @@ def test_pseudolabel_spatial_selection_clipping_and_stable_ids(tmp_path: Path) -
     assert first[0]["properties"]["candidate_id"]
     assert first[0]["properties"]["source_image_ids"] == ["inside"]
     assert first[0]["properties"]["area_m2"] > 0
+    assert first[0]["properties"]["confidence"] == 0.876543
     partial = _markup_export.find_intersecting_images(
         box(30.01, 59.95, 30.08, 59.99),
         images_root,

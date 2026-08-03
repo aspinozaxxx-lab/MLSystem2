@@ -16,6 +16,7 @@ from qgis.core import (
     QgsField,
     QgsGeometry,
     QgsProject,
+    QgsRuleBasedRenderer,
     QgsVectorLayer,
 )
 from qgis.gui import QgsMapCanvas, QgsMessageBar
@@ -23,7 +24,7 @@ from qgis.gui import QgsMapCanvas, QgsMessageBar
 from mlsystem_plugin.api_client import APIClient
 from mlsystem_plugin.geometry_splitter import split_geometry
 from mlsystem_plugin.layer_utils import LayerOperationError, apply_reviewed_candidates
-from mlsystem_plugin.settings import automatic_field_mapping
+from mlsystem_plugin.settings import SERVER_URL, SERVER_USERNAME, automatic_field_mapping
 from mlsystem_plugin.plugin import MLSystemPlugin
 from mlsystem_plugin.review_session import ReviewSession, ReviewSessionError
 
@@ -116,14 +117,58 @@ class QGISPluginTests(unittest.TestCase):
         plugin.initGui()
 
         self.assertIsNotNone(plugin.dock)
-        self.assertEqual(plugin.dock.server_url.text(), "https://grovika.ru")
-        self.assertEqual(plugin.dock.username.text(), "mluser")
+        self.assertEqual(SERVER_URL, "https://grovika.ru")
+        self.assertEqual(SERVER_USERNAME, "mlsystem")
+        self.assertEqual(plugin.dock.check_connection.text(), "Подключиться")
+        self.assertFalse(hasattr(plugin.dock, "server_url"))
+        self.assertFalse(hasattr(plugin.dock, "username"))
+        self.assertFalse(hasattr(plugin.dock, "password"))
         self.assertEqual(len(plugin._shortcuts), 9)
         self.assertTrue(all(not shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(True)
         iface.mapCanvas().setFocus()
         self.assertTrue(all(shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(False)
+        plugin.unload()
+
+    # Проверяет единые пороги очереди и фактически отображаемого слоя.
+    def test_review_thresholds_filter_queue_and_layer_renderer(self) -> None:
+        session = self._session()
+        first_id, second_id = session.feature_ids()
+        confidence_index = session.layer.fields().indexOf("confidence")
+        area_index = session.layer.fields().indexOf("area_m2")
+        self.assertTrue(
+            session.layer.dataProvider().changeAttributeValues(
+                {second_id: {confidence_index: 0.9, area_index: 100.0}}
+            )
+        )
+
+        session.set_thresholds(500.0, 0.7)
+
+        self.assertEqual(session.feature_ids(), [first_id])
+        self.assertEqual(session.counts()["new"], 1)
+        renderer = session.layer.renderer()
+        self.assertIsInstance(renderer, QgsRuleBasedRenderer)
+        expressions = [rule.filterExpression() for rule in renderer.rootRule().children()]
+        self.assertTrue(any('"area_m2"' in expression for expression in expressions))
+        self.assertTrue(any('"confidence"' in expression for expression in expressions))
+
+        session.set_thresholds(0.0, 0.8)
+        self.assertEqual(session.feature_ids(), [second_id])
+
+    # Проверяет цветную подсветку текущего кандидата и её снятие фильтром.
+    def test_plugin_highlights_current_candidate(self) -> None:
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+        plugin.dock.min_area.setValue(0.0)
+        session = self._session(single=True)
+
+        plugin.dock._set_session(session)
+
+        self.assertTrue(plugin.dock._candidate_highlight.isVisible())
+        plugin.dock.min_area.setValue(2_000_000.0)
+        self.assertFalse(plugin.dock._candidate_highlight.isVisible())
         plugin.unload()
 
     # Проверяет площадь AOI и автоматический выбор двух очевидных рабочих слоёв.

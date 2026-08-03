@@ -11,11 +11,13 @@ QGIS-плагин выполняет штатный вход:
 POST /api/v1/auth/login
 Content-Type: application/json
 
-{"username": "mluser", "password": "<пароль учётной записи>"}
+{"username": "mlsystem", "password": "<пароль локального профиля QGIS>"}
 ```
 
 Сервер возвращает HttpOnly cookie-сессии, которую Qt Network автоматически использует для
-последующих запросов. Пароль и cookie не сохраняются плагином в `QgsSettings` и не попадают в лог.
+последующих запросов. URL и имя пользователя зафиксированы в плагине, пароль подготавливается
+локально в профиле QGIS при развёртывании и не попадает в репозиторий или лог. В интерфейсе остаётся
+только кнопка подключения.
 
 Для отдельного неинтерактивного клиента также оставлена необязательная авторизация заголовком:
 
@@ -72,9 +74,10 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 ### `GET /api/v1/pseudolabel/jobs/{job_id}/result`
 
 Для завершённого задания возвращает GeoJSON `FeatureCollection` в `EPSG:4326`. Каждый объект
-содержит `candidate_id`, `class_id`, `model_id`, `model_version`, `job_id`, `source_image_ids` и
-`area_m2`. `confidence` отсутствует, поскольку действующий бинарный runner после пороговой обработки
-не сохраняет достоверную вероятность объекта.
+содержит `candidate_id`, `class_id`, `model_id`, `model_version`, `job_id`, `source_image_ids`,
+`area_m2` и `confidence` в диапазоне `0..1`. Для одного снимка confidence равен средней пиксельной
+вероятности модели внутри связной компоненты итоговой маски. При объединении одного объекта из
+перекрывающихся снимков сохраняется максимальная уверенность наблюдения.
 
 В `metadata` находятся `job_id`, `class_id`, `model_id`, `model_version`, `generated_at`,
 `output_crs`, `object_count`, `aoi_area_m2`, `source_image_ids`, `coverage_percent` и `warnings`.

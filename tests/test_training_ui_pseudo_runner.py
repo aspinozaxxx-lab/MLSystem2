@@ -35,6 +35,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
 def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     mask = np.zeros((2, 2), dtype=np.uint8)
     mask[0, 0] = 1
+    confidence_map = np.asarray([[0.83, 0.1], [0.2, 0.3]], dtype=np.float32)
     transform = from_origin(11469928.363425, 6873318.079527, 3.4240042653603187, 3.4240042653603293)
 
     features = _features_from_mask(
@@ -44,6 +45,7 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
         (3.4240042653603187, 3.4240042653603293),
         "scene-1",
         {"class_key": "deforestation", "class_name": "Вырубки"},
+        confidence_map=confidence_map,
     )
 
     assert len(features) == 1
@@ -55,6 +57,7 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     assert features[0]["properties"]["_x_res"] == 3.4240042653603187
     assert features[0]["properties"]["postprocess_profile"] == "none"
     assert features[0]["properties"]["postprocess_level"] == 1
+    assert features[0]["properties"]["confidence"] == pytest.approx(0.83)
 
 
 def test_pseudo_runner_accepts_only_rgb_or_rgba_for_three_channel_checkpoint(tmp_path: Path) -> None:
@@ -140,7 +143,10 @@ def test_pseudo_runner_reads_first_three_rgba_channels_for_rgb_checkpoint(
     def fake_predict_tile(_torch, _model, tile, *, threshold, device):
         del threshold, device
         received_images.append(tile.copy())
-        return np.zeros((8, 8), dtype=np.uint8)
+        return (
+            np.zeros((8, 8), dtype=np.uint8),
+            np.zeros((8, 8), dtype=np.float32),
+        )
 
     monkeypatch.setattr(_pseudo_runner, "_predict_tile", fake_predict_tile)
     result = _infer_test_tile_mask(
@@ -385,6 +391,8 @@ def test_merge_overlapping_features_dissolves_intersections() -> None:
         _geojson_feature(box(0, 0, 2, 2), "scene-1"),
         _geojson_feature(box(1, 1, 3, 3), "scene-2"),
     ]
+    features[0]["properties"]["confidence"] = 0.72
+    features[1]["properties"]["confidence"] = 0.91
 
     merged = _merge_overlapping_features(features)
 
@@ -394,6 +402,7 @@ def test_merge_overlapping_features_dissolves_intersections() -> None:
     assert merged[0]["properties"]["scene_id"] == "scene-1"
     assert merged[0]["properties"]["source_scene_ids"] == ["scene-1", "scene-2"]
     assert merged[0]["properties"]["merged_feature_count"] == 2
+    assert merged[0]["properties"]["confidence"] == 0.91
 
 
 def test_merge_overlapping_features_dissolves_touching_polygons() -> None:
@@ -535,7 +544,11 @@ def _infer_fixed_test_prediction(tmp_path, monkeypatch, prediction, profile) -> 
         transform=from_origin(0, 32, 1, 1),
     ) as dataset:
         dataset.write(np.ones((4, 32, 32), dtype=np.uint8))
-    monkeypatch.setattr(_pseudo_runner, "_predict_tile", lambda *args, **kwargs: prediction)
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "_predict_tile",
+        lambda *args, **kwargs: (prediction, prediction.astype(np.float32)),
+    )
     return _infer_test_tile_mask(
         torch=object(),
         model=object(),
