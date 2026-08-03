@@ -349,7 +349,16 @@ def _ensure_pseudo_markup_for_rule(
     )
     scenes_row = _store_existing_file(session, kind=StoredFileKind.SCENES_TXT, path=Path(dataset.scenes_file))
     images_root = Path(dataset.images_dir or config.images_root)
-    image_count = count_scenes_file_images(Path(scenes_row.path), images_root)
+    annotation_files = [
+        path
+        for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+        if path
+    ]
+    image_count = count_scenes_file_images(
+        Path(scenes_row.path),
+        images_root,
+        annotation_files=annotation_files,
+    )
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.AUTOMATION.value,
@@ -370,6 +379,7 @@ def _ensure_pseudo_markup_for_rule(
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
             "images_root": str(images_root),
+            "annotation_files": annotation_files,
             "imagery_type": (
                 dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
             ),

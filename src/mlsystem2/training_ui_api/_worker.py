@@ -464,6 +464,19 @@ def _build_pseudo_markup_config(
         )
     if threshold is None:
         threshold = _float_value(flat, "train.threshold", 0.5)
+    annotation_files = [
+        str(value)
+        for value in (row.config.get("annotation_files") or [])
+        if value
+    ]
+    if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
+        dataset = find_managed_dataset(session, config, result.dataset_key)
+        if dataset is not None:
+            annotation_files = [
+                path
+                for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+                if path
+            ]
     return {
         "run_root": str(run_dir / "scratch"),
         "inference_backend": "pytorch_one_off",
@@ -471,6 +484,7 @@ def _build_pseudo_markup_config(
         "report_path": str(run_dir / "scratch" / "report.json"),
         "scenes_file": result.scenes_file.path,
         "images_root": str(row.config.get("images_root") or config.images_root),
+        "annotation_files": annotation_files,
         "class_key": result.class_key,
         "class_name": training_result.class_display_name if training_result is not None else result.class_key,
         "source_model": training_result.model_name if training_result is not None else row.model_name,

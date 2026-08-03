@@ -897,7 +897,7 @@ def test_scene_list_export_returns_empty_txt_without_matches(
     assert artifact.content == b""
 
 
-def test_scene_list_export_rejects_duplicate_matching_stems(
+def test_scene_list_export_rejects_duplicate_stem_outside_markup(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -915,11 +915,11 @@ def test_scene_list_export_rejects_duplicate_matching_stems(
         valid_slice=(slice(0, 64), slice(0, 64)),
     )
 
-    with pytest.raises(TrainingUIAPIError, match="совпадают имена без расширения"):
+    with pytest.raises(TrainingUIAPIError, match="совпадают имена снимков без расширения"):
         _markup_export.build_scene_list_export(
             imagery_type=ImageryType.KANOPUS,
             geojson_filename="разметка.geojson",
-            geojson_bytes=_geojson_bytes([box(10, 10, 120, 20)]),
+            geojson_bytes=_geojson_bytes([box(10, 10, 20, 20)]),
             config=config,
         )
 

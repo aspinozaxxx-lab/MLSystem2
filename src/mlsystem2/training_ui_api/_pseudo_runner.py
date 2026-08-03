@@ -9,7 +9,7 @@ import math
 import shutil
 import time
 import warnings
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -30,6 +30,8 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid as shapely_make_valid
 import yaml
 
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
 from mlsystem2.mlflow_adapter.api import download_run_artifact
@@ -317,9 +319,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=True)
     output_geojson = Path(config["output_geojson"])
 
-    scenes = _read_scenes(Path(config["scenes_file"]))
-    image_index = _image_index(Path(config["images_root"]))
-    scene_inputs, missing = _collect_scene_inputs(scenes, image_index)
+    scene_inputs, missing, input_scene_count = _resolve_scene_inputs(config)
     progress_total = len(scene_inputs) + len(missing)
     postprocess_profile = _postprocess_profile_from_config(
         _select_postprocess_profile(len(scene_inputs)),
@@ -374,7 +374,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         _write_feature_collection(output_geojson, [])
         return _summary(
             config,
-            scenes=scenes,
+            input_scene_count=input_scene_count,
             status="error",
             output_geojson=output_geojson,
             started=started,
@@ -476,7 +476,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         status = _final_status(scene_reports, failures, missing)
         return _summary(
             config,
-            scenes=scenes,
+            input_scene_count=input_scene_count,
             status=status,
             output_geojson=output_geojson,
             started=started,
@@ -847,31 +847,40 @@ def _append_unique_string(values: list[str], value: object) -> None:
         values.append(text)
 
 
-def _collect_scene_inputs(
-    scenes: list[str],
-    image_index: dict[str, list[Path]],
-) -> tuple[list[_SceneInput], list[str]]:
-    by_path: dict[Path, dict[str, int]] = {}
-    missing: list[str] = []
-    for scene in scenes:
-        image_paths = _find_images(scene, image_index)
-        if not image_paths:
-            missing.append(scene)
-            continue
-        for image_path in image_paths:
-            request_scene_counts = by_path.setdefault(image_path, {})
-            request_scene_counts[scene] = request_scene_counts.get(scene, 0) + 1
+def _resolve_scene_inputs(
+    config: dict[str, Any],
+) -> tuple[list[_SceneInput], list[str], int]:
+    raw_annotation_files = config.get("annotation_files") or []
+    if isinstance(raw_annotation_files, str):
+        raw_annotation_files = [raw_annotation_files]
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(config["images_root"]),
+            scenes_file=str(config["scenes_file"]),
+            annotation_files=[str(value) for value in raw_annotation_files if value],
+        )
+    )
+    if resolution.ambiguous_scenes:
+        details = "; ".join(
+            f"{scene}: {', '.join(paths)}"
+            for scene, paths in resolution.ambiguous_scenes.items()
+        )
+        raise RuntimeError(
+            "Сцены неоднозначно сопоставлены со снимками. "
+            f"Укажите относительные пути или разметку для выбора: {details}"
+        )
     return (
         [
             _SceneInput(
-                image_path=image_path,
-                scene_id=image_path.stem,
-                request_scenes=tuple(request_scene_counts.keys()),
-                request_scene_count=sum(request_scene_counts.values()),
+                image_path=Path(item.image_path),
+                scene_id=item.scene_id,
+                request_scenes=tuple(dict.fromkeys(item.request_scenes)),
+                request_scene_count=len(item.request_scenes),
             )
-            for image_path, request_scene_counts in by_path.items()
+            for item in resolution.images
         ],
-        missing,
+        resolution.missing_scenes,
+        resolution.input_scene_count,
     )
 
 
@@ -1266,123 +1275,6 @@ def _windows(width: int, height: int, tile_size: int, stride: int):
             yield Window(x, y, tile_size, tile_size)
 
 
-def _read_scenes(path: Path) -> list[str]:
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
-def _image_index(images_root: Path) -> dict[str, list[Path]]:
-    files = [*images_root.rglob("*.tif"), *images_root.rglob("*.tiff")]
-    index: dict[str, list[Path]] = {}
-    for path in sorted(files):
-        try:
-            relative_path = path.relative_to(images_root).as_posix()
-        except ValueError:
-            relative_path = path.name
-        for key in _scene_lookup_keys(relative_path):
-            _add_index_path(index, key, path)
-        for key in _scene_lookup_keys(path.name):
-            _add_index_path(index, key, path)
-        for key in _scene_lookup_keys(path.stem):
-            _add_index_path(index, key, path)
-        for parent in path.parents:
-            if parent == images_root:
-                break
-            for key in _scene_lookup_keys(parent.name):
-                _add_index_path(index, key, path)
-            try:
-                relative_parent = parent.relative_to(images_root).as_posix()
-            except ValueError:
-                continue
-            for key in _scene_lookup_keys(relative_parent):
-                _add_index_path(index, key, path)
-    return index
-
-
-def _add_index_path(index: dict[str, list[Path]], key: str, path: Path) -> None:
-    paths = index.setdefault(key, [])
-    if path not in paths:
-        paths.append(path)
-
-
-def _find_images(scene: str, index: dict[str, list[Path]]) -> list[Path]:
-    normalized = _normalized_scene(scene)
-    if "/" in normalized:
-        exact = _paths_for_keys(_exact_scene_lookup_keys(normalized), index)
-        if exact:
-            return exact
-    return _paths_for_keys(_scene_lookup_keys(normalized), index)
-
-
-def _paths_for_keys(
-    keys: set[str],
-    index: dict[str, list[Path]],
-) -> list[Path]:
-    found: list[Path] = []
-    for key in keys:
-        for path in index.get(key, []):
-            if path not in found:
-                found.append(path)
-    return sorted(found)
-
-
-def _find_image(scene: str, index: dict[str, list[Path]]) -> Path | None:
-    paths = _find_images(scene, index)
-    if paths:
-        return paths[0]
-    return None
-
-
-def _scene_lookup_keys(value: str) -> set[str]:
-    raw = _normalized_scene(value)
-    if not raw:
-        return set()
-
-    path = PurePosixPath(raw)
-    variants = {raw, path.name, path.stem, _strip_raster_suffix(raw), _strip_raster_suffix(path.name)}
-    keys: set[str] = set()
-    for variant in variants:
-        if not variant:
-            continue
-        keys.add(variant.lower())
-        if variant.endswith("_cog"):
-            keys.add(variant[:-4].lower())
-        else:
-            keys.add(f"{variant}_cog".lower())
-    return keys
-
-
-def _exact_scene_lookup_keys(value: str) -> set[str]:
-    raw = _normalized_scene(value)
-    if not raw:
-        return set()
-    variants = {raw, _strip_raster_suffix(raw)}
-    keys: set[str] = set()
-    for variant in variants:
-        if not variant:
-            continue
-        keys.add(variant.lower())
-        if variant.endswith("_cog"):
-            keys.add(variant[:-4].lower())
-        else:
-            keys.add(f"{variant}_cog".lower())
-    return keys
-
-
-def _normalized_scene(value: str) -> str:
-    raw = value.strip().replace("\\", "/")
-    while raw.startswith("./"):
-        raw = raw[2:]
-    return raw.strip("/")
-
-
-def _strip_raster_suffix(value: str) -> str:
-    lowered = value.lower()
-    for suffix in (".tiff", ".tif"):
-        if lowered.endswith(suffix):
-            return value[: -len(suffix)]
-    return value
-
-
 def _safe_dir_name(value: str) -> str:
     return value.replace("\\", "_").replace("/", "_").replace(":", "_")
 
@@ -1485,7 +1377,7 @@ def _completed_image_count(scene_reports: list[dict[str, Any]]) -> int:
 def _summary(
     config: dict[str, Any],
     *,
-    scenes: list[str],
+    input_scene_count: int,
     status: str,
     output_geojson: Path,
     started: float,
@@ -1503,7 +1395,7 @@ def _summary(
         "triton_model": None,
         "class_key": config.get("class_key"),
         "class_name": config.get("class_name"),
-        "input_scene_count": len(scenes),
+        "input_scene_count": input_scene_count,
         "unique_image_count": unique_image_count,
         "scene_count": len(scene_reports),
         "processed": sum(1 for item in scene_reports if item.get("status") == "ok"),

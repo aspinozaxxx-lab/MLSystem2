@@ -118,8 +118,9 @@ mtime как fallback. `version` равен `git:{commit_sha}` или `fs:{mtime
 `POST /api/v1/scene-list-export` принимает multipart-поля `imagery_type=kanopus|ortho` и `geojson`.
 Сервис рекурсивно читает TIFF только из `prepared_images/kanopus` или `prepared_images/orto`, преобразует
 полигональную разметку в CRS каждого снимка и включает сцену при пересечении с положительной площадью. Ответ —
-UTF-8 TXT с отсортированными именами файлов без `.tif/.tiff`; пустой список допустим. Совпадающие имена
-подходящих TIFF считаются ошибкой. Имя скачивания повторяет имя GeoJSON с расширением `.txt` и сохраняет кириллицу.
+UTF-8 TXT с отсортированными именами файлов без `.tif/.tiff`; пустой список допустим. Если имя выбранной сцены
+повторяется где-либо в корне снимков выбранного типа, операция завершается ошибкой: TXT без пути был бы
+неоднозначным. Имя скачивания повторяет имя GeoJSON с расширением `.txt` и сохраняет кириллицу.
 
 `POST /api/v1/markup-export` формирует самостоятельный набор тестовой разметки и не создает job или запись в БД.
 Доступны только однозначные датасеты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и
@@ -307,7 +308,10 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
 загруженного файла, пишет в `pseudo_config.yaml` `inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
-строит GeoJSON псевдоразметки в `EPSG:4326` и сохраняет его в `stored_files` для скачивания через
+разрешает точные имена сцен через `dataset_preparing.api.resolve_scene_images` и строит GeoJSON псевдоразметки
+в `EPSG:4326`. Для датасета в runner передаются его positive и optional hard-negative GeoJSON, поэтому одинаковые
+имена в подпапках выбираются тем же геометрическим алгоритмом, что при обучении; `.SCNxx` не считается расширением
+и не приводит к обработке соседних сцен. Результат сохраняется в `stored_files` для скачивания через
 `/api/v1/files/{file_id}/download`. Этот путь не создает Triton model archive, Geoalert pipeline YAML или запись в
 Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. Трёхканальный
 checkpoint принимает RGB и RGBA GeoTIFF: у RGBA читаются только первые три канала. Все остальные несовпадения

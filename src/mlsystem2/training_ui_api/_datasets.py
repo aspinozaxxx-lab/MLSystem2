@@ -5,6 +5,10 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from collections.abc import Sequence
+
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from .contracts import ClassInfo, DatasetInfo, ImageFolderInfo
 
@@ -153,7 +157,23 @@ def count_scenes_file_images(
     scenes_file: Path | None,
     images_root: Path,
     image_index: dict[str, list[Path]] | None = None,
+    *,
+    annotation_files: Sequence[str | Path] = (),
 ) -> int | None:
+    if scenes_file is None:
+        return None
+    if annotation_files:
+        try:
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=str(images_root),
+                    scenes_file=str(scenes_file),
+                    annotation_files=[str(path) for path in annotation_files],
+                )
+            )
+        except (OSError, ValueError):
+            return None
+        return len(resolution.images)
     return _dataset_image_count(scenes_file, image_index if image_index is not None else _image_index(images_root))
 
 
@@ -372,13 +392,13 @@ def _scene_lookup_keys(value: str) -> set[str]:
         return set()
 
     path = PurePosixPath(raw)
-    variants = {raw, path.name, path.stem, _strip_raster_suffix(raw), _strip_raster_suffix(path.name)}
+    variants = {raw, path.name, _strip_raster_suffix(raw), _strip_raster_suffix(path.name)}
     keys: set[str] = set()
     for variant in variants:
         if not variant:
             continue
         keys.add(variant.lower())
-        if variant.endswith("_cog"):
+        if variant.casefold().endswith("_cog"):
             keys.add(variant[:-4].lower())
         else:
             keys.add(f"{variant}_cog".lower())
@@ -395,7 +415,7 @@ def _exact_scene_lookup_keys(value: str) -> set[str]:
         if not variant:
             continue
         keys.add(variant.lower())
-        if variant.endswith("_cog"):
+        if variant.casefold().endswith("_cog"):
             keys.add(variant[:-4].lower())
         else:
             keys.add(f"{variant}_cog".lower())

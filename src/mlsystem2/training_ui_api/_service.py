@@ -1261,6 +1261,7 @@ def create_pseudo_markup_job(
     dataset_name = CUSTOM_NAME
     inference_dataset_version: str | None = None
     inference_images_root = str(imagery_images_dir(config.images_root, imagery_type))
+    inference_annotation_files: list[str] = []
     if has_uploaded_scenes:
         _validate_upload_name(scenes_name, ".txt")
         scenes_row = _store_file(
@@ -1282,6 +1283,11 @@ def create_pseudo_markup_job(
         dataset_name = dataset.name
         inference_dataset_version = dataset.version
         inference_images_root = dataset.images_dir or str(config.images_root)
+        inference_annotation_files = [
+            path
+            for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+            if path
+        ]
         if dataset.scenes_file:
             scenes_row = _store_existing_file(
                 session,
@@ -1331,6 +1337,7 @@ def create_pseudo_markup_job(
             "dataset_key": dataset_key or CUSTOM_KEY,
             "image_folder_key": image_folder_key,
             "images_root": inference_images_root,
+            "annotation_files": inference_annotation_files,
             "imagery_type": imagery_type,
             "input_channels": input_channels,
             "training_result_id": str(training_result_id) if training_result_id else None,
@@ -1342,7 +1349,11 @@ def create_pseudo_markup_job(
     session.add(row)
     session.flush()
     image_count = (
-        count_scenes_file_images(Path(scenes_row.path), Path(inference_images_root))
+        count_scenes_file_images(
+            Path(scenes_row.path),
+            Path(inference_images_root),
+            annotation_files=inference_annotation_files,
+        )
         if scenes_file_id is not None
         else None
     )

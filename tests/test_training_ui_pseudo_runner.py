@@ -16,16 +16,14 @@ from mlsystem2.training_ui_api import _pseudo_runner
 from mlsystem2.training_ui_api._pseudo_runner import (
     PSEUDO_INFERENCE_BACKEND,
     _completed_image_count,
-    _collect_scene_inputs,
     _final_status,
     _features_from_mask,
-    _find_images,
     _filter_compact_features,
-    _image_index,
     _infer_test_tile_mask,
     _merge_overlapping_features,
     _postprocess_mask,
     _postprocess_profile_from_config,
+    _resolve_scene_inputs,
     _select_postprocess_profile,
     _summary,
     _write_pseudo_progress,
@@ -200,11 +198,27 @@ def test_find_images_accepts_txt_scene_forms_and_dataset_folders(tmp_path) -> No
     first.touch()
     second.touch()
 
-    index = _image_index(tmp_path)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text(
+        "./KV3_100.L2.PMS.SCN01_cog.tif\n"
+        "KV3_100.L2.PMS.SCN01.tif\n"
+        "irkutsk\n",
+        encoding="utf-8",
+    )
 
-    assert _find_images("./KV3_100.L2.PMS.SCN01_cog.tif", index) == [first]
-    assert _find_images("KV3_100.L2.PMS.SCN01.tif", index) == [first]
-    assert _find_images("irkutsk", index) == [first, second]
+    inputs, missing, input_scene_count = _resolve_scene_inputs(
+        {"images_root": str(tmp_path), "scenes_file": str(scenes_file)}
+    )
+
+    assert [item.image_path for item in inputs] == [first, second]
+    assert inputs[0].request_scenes == (
+        "./KV3_100.L2.PMS.SCN01_cog.tif",
+        "KV3_100.L2.PMS.SCN01.tif",
+        "irkutsk",
+    )
+    assert inputs[1].request_scenes == ("irkutsk",)
+    assert missing == []
+    assert input_scene_count == 3
 
 
 def test_find_images_prefers_exact_relative_path_for_duplicate_filename(
@@ -218,9 +232,16 @@ def test_find_images_prefers_exact_relative_path_for_duplicate_filename(
     first.touch()
     second.touch()
 
-    index = _image_index(images_root)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("first/shared.tif\n", encoding="utf-8")
 
-    assert _find_images("first/shared.tif", index) == [first]
+    inputs, missing, input_scene_count = _resolve_scene_inputs(
+        {"images_root": str(images_root), "scenes_file": str(scenes_file)}
+    )
+
+    assert [item.image_path for item in inputs] == [first]
+    assert missing == []
+    assert input_scene_count == 1
 
 
 def test_collect_scene_inputs_deduplicates_found_rasters(tmp_path) -> None:
@@ -230,11 +251,14 @@ def test_collect_scene_inputs_deduplicates_found_rasters(tmp_path) -> None:
     second = scene_dir / "KV3_101.L2.PMS.SCN02.tif"
     first.touch()
     second.touch()
-    index = _image_index(tmp_path)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text(
+        "irkutsk\nKV3_100.L2.PMS.SCN01.tif\nlost\n",
+        encoding="utf-8",
+    )
 
-    inputs, missing = _collect_scene_inputs(
-        ["irkutsk", "KV3_100.L2.PMS.SCN01.tif", "lost"],
-        index,
+    inputs, missing, _input_scene_count = _resolve_scene_inputs(
+        {"images_root": str(tmp_path), "scenes_file": str(scenes_file)}
     )
 
     assert [item.image_path for item in inputs] == [first, second]
@@ -285,11 +309,13 @@ def test_pseudo_progress_counts_unique_found_images_plus_missing(tmp_path) -> No
     second = scene_dir / "KV3_101.L2.PMS.SCN02.tif"
     first.touch()
     second.touch()
-    index = _image_index(tmp_path)
-
-    inputs, missing = _collect_scene_inputs(
-        ["irkutsk", "KV3_100.L2.PMS.SCN01.tif", "lost"],
-        index,
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text(
+        "irkutsk\nKV3_100.L2.PMS.SCN01.tif\nlost\n",
+        encoding="utf-8",
+    )
+    inputs, missing, _input_scene_count = _resolve_scene_inputs(
+        {"images_root": str(tmp_path), "scenes_file": str(scenes_file)}
     )
     progress_path = tmp_path / "progress.json"
 
@@ -527,7 +553,7 @@ def test_summary_reports_unique_image_count_and_postprocess_profile(tmp_path) ->
 
     summary = _summary(
         {},
-        scenes=["a", "b"],
+        input_scene_count=2,
         status="ok",
         output_geojson=tmp_path / "pseudo_markup.geojson",
         started=0.0,

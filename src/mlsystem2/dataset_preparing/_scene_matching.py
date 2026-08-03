@@ -131,6 +131,7 @@ def filter_existing_scenes(scene_names: list[str], image_index: dict[str, Any]) 
                 ("stem_casefold", image_index.get("by_stem_casefold", {}).get(stem.casefold(), [])),
                 ("normalized_scene", image_index.get("by_normalized", {}).get(_normalized_scene_key(scene), [])),
             ]
+            candidates = [next((item for item in candidates if item[1]), ("", []))]
 
         ordered_matches: list[tuple[str, Path]] = []
         seen_paths: set[Path] = set()

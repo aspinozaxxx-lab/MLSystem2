@@ -113,6 +113,31 @@ class DatasetPreparationResult(BaseModel):
     report: DatasetPreparationReport
 
 
+class SceneImageResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    images_dir: str
+    scenes_file: str
+    annotation_files: list[str] = Field(default_factory=list)
+
+
+class ResolvedSceneImage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    image_path: str
+    request_scenes: list[str] = Field(default_factory=list)
+
+
+class SceneImageResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_scene_count: int = Field(ge=0)
+    images: list[ResolvedSceneImage] = Field(default_factory=list)
+    missing_scenes: list[str] = Field(default_factory=list)
+    ambiguous_scenes: dict[str, list[str]] = Field(default_factory=dict)
+
+
 def _validate_unique_values(values: list[str], field_name: str) -> None:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -134,4 +159,7 @@ __all__ = [
     "DatasetSceneReport",
     "DatasetPreparationReport",
     "DatasetPreparationResult",
+    "ResolvedSceneImage",
+    "SceneImageResolution",
+    "SceneImageResolutionRequest",
 ]

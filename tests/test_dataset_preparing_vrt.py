@@ -8,8 +8,12 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from mlsystem2.dataset_preparing.api import prepare_dataset
-from mlsystem2.dataset_preparing.contracts import DatasetClassRequest, DatasetPreparationRequest
+from mlsystem2.dataset_preparing.api import prepare_dataset, resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import (
+    DatasetClassRequest,
+    DatasetPreparationRequest,
+    SceneImageResolutionRequest,
+)
 
 
 def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
@@ -356,6 +360,77 @@ def test_prepare_dataset_resolves_ambiguous_scene_by_annotation_geometry(tmp_pat
     assert result.dataset is not None
     assert result.report.scenes[0].image_path is not None
     assert result.report.scenes[0].image_path.endswith("/near/scene_a.tif")
+
+
+def test_resolve_scene_images_keeps_extensionless_dotted_scene_exact(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    requested = images / "Канопус.PMS.SCN02.tif"
+    (images / "Канопус.PMS.SCN01.tif").touch()
+    requested.touch()
+    (images / "Канопус.PMS.SCN03.tif").touch()
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("Канопус.PMS.SCN02\n", encoding="utf-8")
+
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+        )
+    )
+
+    assert [Path(item.image_path) for item in resolution.images] == [requested]
+    assert resolution.missing_scenes == []
+    assert resolution.ambiguous_scenes == {}
+
+
+def test_resolve_scene_images_uses_annotation_for_duplicate_stem(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    far = images / "far" / "scene_a.tif"
+    near = images / "near" / "scene_a.tif"
+    far.parent.mkdir(parents=True)
+    near.parent.mkdir(parents=True)
+    _write_raster(far, 1, 1_000_000)
+    _write_raster(near, 2, 0)
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\n", encoding="utf-8")
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation(annotation_file, ["scene_a.tif"])
+
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+            annotation_files=[str(annotation_file)],
+        )
+    )
+
+    assert [Path(item.image_path) for item in resolution.images] == [near]
+    assert resolution.ambiguous_scenes == {}
+
+
+def test_resolve_scene_images_reports_duplicate_stem_without_annotation(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    first = images / "first" / "scene_a.tif"
+    second = images / "second" / "scene_a.tif"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.touch()
+    second.touch()
+    scenes_file = tmp_path / "scenes.txt"
+    scenes_file.write_text("scene_a\n", encoding="utf-8")
+
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(images),
+            scenes_file=str(scenes_file),
+        )
+    )
+
+    assert resolution.images == []
+    assert resolution.ambiguous_scenes == {
+        "scene_a": [first.resolve().as_posix(), second.resolve().as_posix()]
+    }
 
 
 def test_prepare_dataset_resolves_ambiguous_scene_by_hard_negative_geometry(tmp_path: Path) -> None:

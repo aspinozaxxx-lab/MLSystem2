@@ -178,6 +178,11 @@ def build_scene_list_export(
         ),
         key=lambda path: path.relative_to(root).as_posix().casefold(),
     )
+    paths_by_stem: dict[str, list[tuple[str, Path]]] = {}
+    for source_path in source_paths:
+        paths_by_stem.setdefault(source_path.stem.casefold(), []).append(
+            (source_path.stem, source_path.relative_to(root))
+        )
     transformed_cache: dict[str, _TransformedAnnotations] = {}
     matches: list[tuple[str, Path]] = []
     for source_path in source_paths:
@@ -222,19 +227,19 @@ def build_scene_list_export(
         if has_objects:
             matches.append((resolved_path.stem, relative_path))
 
-    duplicate_groups: dict[str, list[tuple[str, Path]]] = {}
-    for scene_name, relative_path in matches:
-        duplicate_groups.setdefault(scene_name.casefold(), []).append(
-            (scene_name, relative_path)
-        )
-    ambiguous = [items for items in duplicate_groups.values() if len(items) > 1]
+    matched_stems = {scene_name.casefold() for scene_name, _ in matches}
+    ambiguous = [
+        paths_by_stem[stem]
+        for stem in sorted(matched_stems)
+        if len(paths_by_stem[stem]) > 1
+    ]
     if ambiguous:
         details = "; ".join(
             ", ".join(path.as_posix() for _, path in items)
             for items in ambiguous
         )
         raise TrainingUIAPIError(
-            "У подходящих снимков совпадают имена без расширения. "
+            "У выбранных сцен совпадают имена снимков без расширения. "
             f"Список сцен был бы неоднозначным: {details}"
         )
 

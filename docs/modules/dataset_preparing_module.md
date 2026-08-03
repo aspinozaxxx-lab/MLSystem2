@@ -7,6 +7,7 @@
 ## Публичный интерфейс
 
 - `prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult` — выполняет подготовку датасета по локальным путям, binary или multiclass разметке и доле `val_fraction`.
+- `resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageResolution` — однозначно сопоставляет TXT со сценами и подготовленные TIFF; optional GeoJSON разрешают одинаковые имена по геометрии.
 
 ## Публичные контракты
 
@@ -18,6 +19,9 @@
 - `DatasetSceneReport` — поля `scene_id`, `image_path`, `positive_objects`, `hard_negative_objects`, `object_count`; `object_count = positive_objects + hard_negative_objects`.
 - `DatasetPreparationReport` — поля `status`, `scenes_total`, `scenes_found`, `positive_objects`, `hard_negative_objects`, `objects_total`, `band_count`, `dtypes`, `scenes`, `missing_files`, `errors`; `objects_total = positive_objects + hard_negative_objects`.
 - `DatasetPreparationResult` — поля `dataset`, `report`.
+- `SceneImageResolutionRequest` — поля `images_dir`, `scenes_file`, `annotation_files`.
+- `ResolvedSceneImage` — поля `scene_id`, `image_path`, `request_scenes`.
+- `SceneImageResolution` — поля `input_scene_count`, `images`, `missing_scenes`, `ambiguous_scenes`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -25,7 +29,7 @@
 
 ## Алгоритм работы и его особенности
 
-В binary режиме модуль читает один `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, разворачивает записи-папки в относительные пути всех снимков внутри найденной папки, сопоставляет сцены по относительному пути, имени, stem, casefold и нормализованному ключу, считает positive objects по `annotation_file`, hard-negative objects по optional `hard_negative_annotation_file` и возвращает resolved пути в `PreparedDataset`. Если scene id неоднозначно найден в нескольких подпапках, модуль выбирает снимок по пересечению с геометрией обоих GeoJSON, а при отсутствии пересечения — ближайший к области разметки.
+В binary режиме модуль читает один `scenes_file`, индексирует `.tif/.tiff` в `images_dir`, разворачивает записи-папки в относительные пути всех снимков внутри найденной папки, сопоставляет сцены по относительному пути, имени, stem, casefold и нормализованному ключу, считает positive objects по `annotation_file`, hard-negative objects по optional `hard_negative_annotation_file` и возвращает resolved пути в `PreparedDataset`. У имени без расширения удаляются только известные `.tif/.tiff`, поэтому `.SCNxx` остаётся частью scene id. Если scene id неоднозначно найден в нескольких подпапках, модуль выбирает снимок по пересечению с геометрией GeoJSON, а при отсутствии пересечения — ближайший к области разметки; без GeoJSON неоднозначность возвращается вызывающему коду.
 
 В multiclass режиме модуль читает `scenes_file` каждого класса, разворачивает записи-папки и использует результат только для сборки единого пула scene id с сохранением порядка первого появления. После этого снимки ищутся один раз по общему пулу. Positive objects считаются по каждому class `annotation_file` на всем общем пуле сцен, hard-negative objects считаются по optional class `hard_negative_annotation_file`. `PreparedDataset.class_annotations` возвращает список positive-разметок с `class_id` по порядку config: `1..N`, переносит `priority` без изменения и добавляет class-level hard-negative путь при наличии.
 

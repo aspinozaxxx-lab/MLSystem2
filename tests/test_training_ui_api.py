@@ -2085,6 +2085,7 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
     assert pseudo.config["inference_template_config"]["postprocess.simplify_m"] == 0.5
     assert pseudo_scenes == "ryazan/ortho.tif\n"
     assert pseudo_payload["images_root"] == str(tmp_path / "images" / "orto")
+    assert pseudo_payload["annotation_files"] == []
     assert pseudo_payload["imagery_type"] == "ortho"
     assert pseudo_payload["input_channels"] == 3
 
@@ -2646,6 +2647,9 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_job.config["checkpoint_f1_score"] == 0.8123
         assert pseudo_job.config["checkpoint_epoch"] == 7
         assert pseudo_job.config["checkpoint_threshold"] == 0.7
+        assert pseudo_job.config["annotation_files"] == [
+            str(class_dir / "annotation.geojson")
+        ]
         legacy_pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
         assert legacy_pseudo_result is not None
         assert legacy_pseudo_result.image_count == 1
@@ -2666,6 +2670,9 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert "checkpoint_artifact_path: checkpoints/best.pt" in pseudo_config
         assert pseudo_config_payload["inference_backend"] == "pytorch_one_off"
         assert pseudo_config_payload["input_channels"] == 4
+        assert pseudo_config_payload["annotation_files"] == [
+            str(class_dir / "annotation.geojson")
+        ]
         for forbidden_key in ("triton_model", "pipeline", "model_repository", "model_archive"):
             assert forbidden_key not in pseudo_config_payload
 
