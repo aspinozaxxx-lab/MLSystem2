@@ -221,6 +221,61 @@ def test_pseudo_runner_reads_first_three_rgba_channels_for_rgb_checkpoint(
     assert [np.unique(channel).item() for channel in received_images[0]] == [11.0, 22.0, 33.0]
 
 
+def test_parallel_prefetch_closes_rasterio_handles_in_owner_threads(tmp_path: Path) -> None:
+    image_path = tmp_path / "rgb.tif"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=16,
+        height=16,
+        count=3,
+        dtype="uint8",
+        nodata=0,
+        crs="EPSG:3857",
+        transform=from_origin(0, 16, 1, 1),
+    ) as output:
+        output.write(np.ones((3, 16, 16), dtype=np.uint8))
+
+    metrics: dict[str, object] = {}
+    with _pseudo_runner._InferenceRasterReader(
+        image_path,
+        input_channels=3,
+        channel_mapping="rgb",
+        source_imagery_type="ortho",
+        target_resolution_m=1.0,
+        metrics=metrics,
+    ) as reader:
+        assert reader.dataset is not None
+        tiles = list(
+            _pseudo_runner._prefetched_tiles(
+                [
+                    rasterio.windows.Window(0, 0, 8, 8),
+                    rasterio.windows.Window(8, 0, 8, 8),
+                    rasterio.windows.Window(0, 8, 8, 8),
+                    rasterio.windows.Window(8, 8, 8, 8),
+                ],
+                dataset=reader.dataset,
+                input_indexes=(1, 2, 3),
+                nodata=0,
+                tile_size=8,
+                raster_reader=reader,
+                read_workers=4,
+                prefetch_batches=2,
+                batch_size=2,
+            )
+        )
+
+    assert [window for window, _ in tiles] == [
+        rasterio.windows.Window(0, 0, 8, 8),
+        rasterio.windows.Window(8, 0, 8, 8),
+        rasterio.windows.Window(0, 8, 8, 8),
+        rasterio.windows.Window(8, 8, 8, 8),
+    ]
+    assert all(tile is not None and tile.shape == (3, 8, 8) for _, tile in tiles)
+    assert float(metrics["resampling_sec"]) >= 0.0
+
+
 def test_select_postprocess_profile_uses_unique_image_count_boundaries() -> None:
     assert _select_postprocess_profile(0).name == "none"
     assert _select_postprocess_profile(5).name == "none"

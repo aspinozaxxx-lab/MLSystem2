@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 import math
+from queue import Queue
 import shutil
 import threading
 import time
@@ -97,8 +96,7 @@ class _InferenceRasterReader:
         self.metrics = metrics
         self._main_stack = ExitStack()
         self._thread_local = threading.local()
-        self._thread_stacks: list[ExitStack] = []
-        self._thread_stacks_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
         self.dataset = None
 
     def __enter__(self) -> "_InferenceRasterReader":
@@ -116,9 +114,7 @@ class _InferenceRasterReader:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        for stack in self._thread_stacks:
-            stack.close()
-        self._thread_stacks.clear()
+        self.close_current_thread()
         self._main_stack.close()
 
     def read(self, window: Window, tile_size: int) -> np.ndarray | None:
@@ -144,8 +140,7 @@ class _InferenceRasterReader:
             )
             self._thread_local.dataset = dataset
             self._thread_local.mask_dataset = mask_dataset
-            with self._thread_stacks_lock:
-                self._thread_stacks.append(stack)
+            self._thread_local.stack = stack
         started = time.perf_counter()
         image = _read_inference_window(
             dataset,
@@ -159,9 +154,22 @@ class _InferenceRasterReader:
         )
         elapsed = time.perf_counter() - started
         metric = "resampling_sec" if self.target_resolution_m is not None else "reading_sec"
-        with self._thread_stacks_lock:
+        with self._metrics_lock:
             self.metrics[metric] = float(self.metrics.get(metric, 0.0)) + elapsed
         return image
+
+    def close_current_thread(self) -> None:
+        """Закрыть Rasterio handles в том же потоке, где они были открыты."""
+
+        stack = getattr(self._thread_local, "stack", None)
+        if stack is None:
+            return
+        try:
+            stack.close()
+        finally:
+            for attribute in ("stack", "dataset", "mask_dataset"):
+                if hasattr(self._thread_local, attribute):
+                    delattr(self._thread_local, attribute)
 
 
 _POSTPROCESS_NONE = _PostprocessProfile(level=1, name="none")
@@ -1369,29 +1377,78 @@ def _prefetched_tiles(
             yield window, None if np.all(_nodata_pixels(image, nodata)) else image
         return
 
-    queue_limit = max(1, batch_size * max(1, prefetch_batches))
-    executor = ThreadPoolExecutor(
-        max_workers=max(1, read_workers),
-        thread_name_prefix="pseudolabel-raster",
-    )
-    pending: deque[tuple[Window, Future[np.ndarray | None]]] = deque()
-    iterator = iter(windows)
-    try:
-        for _ in range(min(queue_limit, len(windows))):
-            window = next(iterator)
-            pending.append((window, executor.submit(raster_reader.read, window, tile_size)))
-        while pending:
-            window, future = pending.popleft()
-            yield window, future.result()
+    worker_count = max(1, min(int(read_workers), len(windows)))
+    queue_limit = max(worker_count, batch_size * max(1, prefetch_batches))
+    task_queue: Queue[object] = Queue(maxsize=queue_limit)
+    result_queue: Queue[
+        tuple[int, Window, np.ndarray | None, BaseException | None]
+    ] = Queue()
+    stop_marker = object()
+    stop_event = threading.Event()
+    close_errors: list[BaseException] = []
+    close_errors_lock = threading.Lock()
+
+    def read_worker() -> None:
+        try:
+            while True:
+                task = task_queue.get()
+                if task is stop_marker:
+                    return
+                index, window = task
+                if stop_event.is_set():
+                    continue
+                try:
+                    image = raster_reader.read(window, tile_size)
+                except BaseException as exc:  # noqa: BLE001
+                    stop_event.set()
+                    result_queue.put((index, window, None, exc))
+                    return
+                result_queue.put((index, window, image, None))
+        finally:
             try:
-                next_window = next(iterator)
-            except StopIteration:
-                continue
-            pending.append(
-                (next_window, executor.submit(raster_reader.read, next_window, tile_size))
-            )
+                raster_reader.close_current_thread()
+            except BaseException as exc:  # noqa: BLE001
+                with close_errors_lock:
+                    close_errors.append(exc)
+
+    workers = [
+        threading.Thread(
+            target=read_worker,
+            name=f"pseudolabel-raster-{number + 1}",
+            daemon=True,
+        )
+        for number in range(worker_count)
+    ]
+    for worker in workers:
+        worker.start()
+
+    scheduled = min(queue_limit, len(windows))
+    for index in range(scheduled):
+        task_queue.put((index, windows[index]))
+    received = 0
+    next_to_yield = 0
+    completed: dict[int, tuple[Window, np.ndarray | None]] = {}
+    try:
+        while received < len(windows):
+            index, window, image, error = result_queue.get()
+            received += 1
+            if scheduled < len(windows):
+                task_queue.put((scheduled, windows[scheduled]))
+                scheduled += 1
+            if error is not None:
+                raise error
+            completed[index] = (window, image)
+            while next_to_yield in completed:
+                yield completed.pop(next_to_yield)
+                next_to_yield += 1
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        stop_event.set()
+        for _ in workers:
+            task_queue.put(stop_marker)
+        for worker in workers:
+            worker.join()
+    if close_errors:
+        raise close_errors[0]
 
 
 def _merge_tile_prediction(
