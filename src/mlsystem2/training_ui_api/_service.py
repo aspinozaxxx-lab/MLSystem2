@@ -921,6 +921,15 @@ def job_log(
                 truncated=truncated,
                 size_bytes=size_bytes,
             )
+    if row.error:
+        content, truncated, size_bytes = _trim_text_bytes(row.error, JOB_LOG_MAX_BYTES)
+        return JobLogInfo(
+            job_id=row.id,
+            source_name="сохранённая ошибка",
+            content=content,
+            truncated=truncated,
+            size_bytes=size_bytes,
+        )
     journal = _journal_job_log(row, config)
     if journal is not None:
         return journal
@@ -2324,6 +2333,7 @@ def _training_result_info(
         mlflow_run_url=row.mlflow_run_url,
         sample_size_hint=job.tile_size if job is not None else None,
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
+        error=job.error if job is not None else None,
         progress=_training_result_progress(session, row, jobs_by_id),
         test_f1=training_result_test_f1_info(session, row, config),
         pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],

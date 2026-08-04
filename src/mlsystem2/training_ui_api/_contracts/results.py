@@ -102,6 +102,7 @@ class TrainingResultInfo(BaseModel):
     mlflow_run_url: str | None = None
     sample_size_hint: int | None = None
     status: Literal["queued", "running", "ok", "error", "cancelled"]
+    error: str | None = None
     progress: RuntimeProgress | None = None
     test_f1: TrainingResultTestF1Info | None = None
     pseudo_markup_results: list[PseudoMarkupResultInfo] = Field(default_factory=list)

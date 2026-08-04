@@ -2567,6 +2567,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "ok" | "error" | "cancelled";
+            /** Error */
+            error?: string | null;
             progress?: components["schemas"]["RuntimeProgress"] | null;
             test_f1?: components["schemas"]["TrainingResultTestF1Info"] | null;
             /** Pseudo Markup Results */

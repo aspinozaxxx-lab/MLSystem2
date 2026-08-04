@@ -235,6 +235,7 @@ def test_class_results_returns_failed_training_dates(
         job.started_at = started_at
         job.finished_at = started_at + timedelta(minutes=30)
         job.dataset_key = "class-key"
+        job.error = "RuntimeError: не удалось подготовить датасет рек"
         session.add(job)
         session.flush()
         session.add(
@@ -257,6 +258,7 @@ def test_class_results_returns_failed_training_dates(
     assert result.created_at.replace(tzinfo=timezone.utc) == created_at
     assert result.started_at == started_at
     assert result.trained_at is None
+    assert result.error == "RuntimeError: не удалось подготовить датасет рек"
 
 
 def test_training_ui_running_training_progress_falls_back_without_mlflow_history(
@@ -633,6 +635,55 @@ def test_training_ui_job_log_reports_missing_when_journal_has_no_job(
         )
         with pytest.raises(TrainingUIAPIError, match="Лог задания не найден"):
             _service.job_log(session, job_id, config)
+
+
+def test_training_ui_job_log_uses_persisted_error_when_runtime_is_gone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job.status = JobStatus.FAILED.value
+        job.error = "TrainPipelineError: процесс обучения был прерван"
+        session.add(job)
+        session.flush()
+
+        log = _service.job_log(session, job.id, config)
+
+    assert log.source_name == "сохранённая ошибка"
+    assert log.content == "TrainPipelineError: процесс обучения был прерван"
+    assert log.truncated is False
+
+
+def test_training_worker_reads_failed_training_log_for_persistence(tmp_path: Path) -> None:
+    job = _queue_test_job(
+        JobType.TRAINING,
+        JobSource.MANUAL,
+        1,
+        datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    run_dir = tmp_path / "job"
+    run_dir.mkdir()
+    (run_dir / "train.log").write_text(
+        "Traceback (most recent call last):\nRuntimeError: недостаточно памяти GPU\n",
+        encoding="utf-8",
+    )
+    job.tmp_path = str(run_dir)
+
+    assert _worker._training_job_error(job).endswith(
+        "RuntimeError: недостаточно памяти GPU"
+    )
 
 
 def test_training_ui_worker_dispatches_inference_before_training(

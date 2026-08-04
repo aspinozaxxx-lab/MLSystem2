@@ -3333,7 +3333,7 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
             >
               <td onClick={(event) => event.stopPropagation()}>
                 <span className="status-stack">
-                  {resultStatusBadge(item.status, item.type, undefined, item.job_id, showJobLog)}
+                  {resultStatusBadge(item.status, item.type, undefined, item.job_id, undefined, showJobLog)}
                   {sourceBadge(item.source)}
                 </span>
               </td>
@@ -3404,7 +3404,7 @@ function ResultsTable({
                   </td>
                   <td title="Статус">
                     <span className="status-stack">
-                      {resultStatusBadge(result.status, "training", result.progress, result.job_id, showJobLog)}
+                      {resultStatusBadge(result.status, "training", result.progress, result.job_id, result.error, showJobLog)}
                       {sourceBadge(result.source)}
                     </span>
                   </td>
@@ -3478,7 +3478,7 @@ function ResultsTable({
                       <td title="ИСТОЧНИК">{imageSourceLabel(item, datasets, imageFolders)}</td>
                       <td title="Статус">
                         <span className="status-stack">
-                          {resultStatusBadge(item.status, "inference", item.progress, item.job_id, showJobLog)}
+                          {resultStatusBadge(item.status, "inference", item.progress, item.job_id, undefined, showJobLog)}
                           {sourceBadge(item.source)}
                         </span>
                       </td>
@@ -3728,12 +3728,18 @@ function resultStatusBadge(
   type: string | null | undefined,
   progress: { current?: number | null; total?: number | null; elapsed_minutes?: number | null } | null | undefined,
   jobId: string | null | undefined,
+  error: string | null | undefined,
   showJobLog: (jobId: string) => Promise<void>,
 ) {
   const badge = statusBadge(status, type, progress);
   if ((status === "error" || status === "failed") && jobId) {
     return (
-      <button className="badge badge-button error" type="button" onClick={() => void showJobLog(jobId)}>
+      <button
+        className="badge badge-button error"
+        type="button"
+        title={error || "Нажмите, чтобы открыть журнал ошибки"}
+        onClick={() => void showJobLog(jobId)}
+      >
         {statusLabel(status)}
       </button>
     );

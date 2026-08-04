@@ -56,6 +56,7 @@ from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKi
 
 LOGGER = logging.getLogger(__name__)
 MLFLOW_RUN_ID_FILE = "mlflow_run_id"
+JOB_ERROR_MAX_BYTES = 8 * 1024
 
 
 class _StartedProcess(Protocol):
@@ -282,6 +283,8 @@ def _start_training_job(
     popen_factory: ProcessLauncher,
 ) -> None:
     run_dir = config.scratch_root / "jobs" / str(row.id)
+    row.error = None
+    row.tmp_path = str(run_dir)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "scratch").mkdir(parents=True, exist_ok=True)
@@ -312,7 +315,6 @@ def _start_training_job(
     row.started_at = _now()
     row.finished_at = None
     row.process_pid = process.pid
-    row.tmp_path = str(run_dir)
     training_results = _training_results(session, row)
     for result in training_results:
         result.status = ResultStatus.RUNNING.value
@@ -819,6 +821,7 @@ def _finish_training_job(
     succeeded: bool,
 ) -> None:
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    row.error = None if succeeded else _training_job_error(row)
     row.finished_at = _now()
     row.process_pid = None
     mlflow_run_id = _extract_mlflow_run_id(row)
@@ -1479,6 +1482,29 @@ def _write_worker_error(run_dir: Path, message: str) -> None:
         (run_dir / "worker_error.txt").write_text(message, encoding="utf-8")
     except OSError:
         pass
+
+
+def _training_job_error(row: JobRow) -> str:
+    run_dir = Path(row.tmp_path) if row.tmp_path else None
+    if run_dir is not None:
+        for path in (
+            run_dir / "worker_error.txt",
+            run_dir / "train.log",
+            run_dir / "logs" / "train.log",
+        ):
+            try:
+                if not path.is_file():
+                    continue
+                size_bytes = path.stat().st_size
+                with path.open("rb") as stream:
+                    if size_bytes > JOB_ERROR_MAX_BYTES:
+                        stream.seek(-JOB_ERROR_MAX_BYTES, 2)
+                    content = stream.read().decode("utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if content:
+                return content
+    return "Обучение завершилось с ошибкой, но журнал процесса недоступен."
 
 
 def _flat_value(flat: dict[str, Any], key: str, default: Any) -> Any:
