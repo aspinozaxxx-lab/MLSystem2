@@ -871,6 +871,30 @@ def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
         "регион_а/Яблоня\n"
         "регион_б/Берёза\n"
     )
+    assert artifact.footprints_filename == "Разметка рек_футпринты.geojson"
+    footprints = json.loads(artifact.footprints_content)
+    assert footprints["type"] == "FeatureCollection"
+    assert [
+        feature["properties"]["scene_id"] for feature in footprints["features"]
+    ] == ["регион_а/Яблоня", "регион_б/Берёза"]
+    assert all(
+        feature["properties"]["imagery_type"] == "kanopus"
+        for feature in footprints["features"]
+    )
+    expected_first = transform_geometry(to_wgs84.transform, box(0, 0, 64, 64))
+    assert shape(footprints["features"][0]["geometry"]).bounds == pytest.approx(
+        expected_first.bounds
+    )
+    with zipfile.ZipFile(BytesIO(artifact.archive_content)) as archive:
+        assert archive.namelist() == [
+            "Разметка рек.txt",
+            "Разметка рек_футпринты.geojson",
+        ]
+        assert archive.read("Разметка рек.txt") == artifact.content
+        assert (
+            archive.read("Разметка рек_футпринты.geojson")
+            == artifact.footprints_content
+        )
 
     touching_artifact = _markup_export.build_scene_list_export(
         imagery_type=ImageryType.KANOPUS,
@@ -903,6 +927,7 @@ def test_scene_list_export_returns_empty_txt_without_matches(
     assert artifact.filename == "Пустая выборка.txt"
     assert artifact.scene_count == 0
     assert artifact.content == b""
+    assert json.loads(artifact.footprints_content)["features"] == []
 
 
 def test_scene_list_export_disambiguates_duplicate_stems_with_relative_paths(
@@ -1113,6 +1138,7 @@ def test_scene_list_export_http_downloads_unicode_filename(
             "responses"
         ]["200"]["content"]
         assert "text/plain" in response_content
+        assert "application/zip" in response_content
 
         response = client.post(
             "/api/v1/scene-list-export",
@@ -1129,6 +1155,40 @@ def test_scene_list_export_http_downloads_unicode_filename(
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
         assert response.content.decode("utf-8") == "регион/Сцена один\n"
         assert "Разметка рек.txt" in unquote(response.headers["content-disposition"])
+
+        archive_response = client.post(
+            "/api/v1/scene-list-export",
+            data={"imagery_type": "kanopus", "include_footprints": "true"},
+            files={
+                "geojson": (
+                    "Разметка рек.geojson",
+                    matching_geojson,
+                    "application/geo+json",
+                )
+            },
+        )
+        assert archive_response.status_code == 200
+        assert archive_response.headers["content-type"] == "application/zip"
+        assert "Разметка рек.zip" in unquote(
+            archive_response.headers["content-disposition"]
+        )
+        with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
+            assert archive.namelist() == [
+                "Разметка рек.txt",
+                "Разметка рек_футпринты.geojson",
+            ]
+            assert archive.read("Разметка рек.txt").decode("utf-8") == (
+                "регион/Сцена один\n"
+            )
+            footprint_payload = json.loads(
+                archive.read("Разметка рек_футпринты.geojson")
+            )
+            assert footprint_payload["features"][0]["properties"] == {
+                "scene_id": "регион/Сцена один",
+                "relative_path": "регион/Сцена один.tif",
+                "filename": "Сцена один.tif",
+                "imagery_type": "kanopus",
+            }
 
         empty_response = client.post(
             "/api/v1/scene-list-export",

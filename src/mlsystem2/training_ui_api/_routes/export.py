@@ -37,11 +37,14 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": (
-                    "TXT с относительными путями сцен внутри выбранного типа снимков, "
-                    "без расширений."
+                    "TXT с относительными путями сцен либо ZIP с TXT и GeoJSON "
+                    "футпринтов выбранных снимков."
                 ),
                 "content": {
-                    "text/plain": {"schema": {"type": "string", "format": "binary"}}
+                    "text/plain": {"schema": {"type": "string", "format": "binary"}},
+                    "application/zip": {
+                        "schema": {"type": "string", "format": "binary"}
+                    },
                 },
             }
         },
@@ -49,6 +52,7 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
     async def post_scene_list_export(
         _: str = Depends(ctx.authenticated),
         imagery_type: ImageryType = Form(...),
+        include_footprints: bool = Form(default=False),
         geojson: UploadFile = File(...),
     ) -> Response:
         artifact = await run_in_threadpool(
@@ -58,6 +62,17 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
             geojson_bytes=await geojson.read(),
             config=ctx.config,
         )
+        if include_footprints:
+            return Response(
+                content=artifact.archive_content,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": (
+                        "attachment; filename=\"scene-list.zip\"; "
+                        f"filename*=UTF-8''{quote(artifact.archive_filename, safe='')}"
+                    )
+                },
+            )
         return Response(
             content=artifact.content,
             media_type="text/plain",

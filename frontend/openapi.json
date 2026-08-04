@@ -602,9 +602,15 @@
         },
         "responses": {
           "200": {
-            "description": "TXT с относительными путями сцен внутри выбранного типа снимков, без расширений.",
+            "description": "TXT с относительными путями сцен либо ZIP с TXT и GeoJSON футпринтов выбранных снимков.",
             "content": {
               "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/zip": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -3408,6 +3414,11 @@
         "properties": {
           "imagery_type": {
             "$ref": "#/components/schemas/ImageryType"
+          },
+          "include_footprints": {
+            "type": "boolean",
+            "title": "Include Footprints",
+            "default": false
           },
           "geojson": {
             "type": "string",

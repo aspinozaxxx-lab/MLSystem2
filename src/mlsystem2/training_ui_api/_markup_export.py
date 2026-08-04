@@ -10,6 +10,7 @@ import warnings
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -84,7 +85,18 @@ class MarkupExportArtifact:
 class SceneListExportArtifact:
     filename: str
     content: bytes
+    footprints_filename: str
+    footprints_content: bytes
+    archive_filename: str
+    archive_content: bytes
     scene_count: int
+
+
+@dataclass(frozen=True)
+class _SceneListMatch:
+    scene_id: str
+    relative_path: Path
+    footprint_wgs84: BaseGeometry
 
 
 @dataclass(frozen=True)
@@ -242,9 +254,12 @@ def build_scene_list_export(
     geojson_bytes: bytes,
     config: TrainingUIAPIConfig,
 ) -> SceneListExportArtifact:
-    """Сформировать TXT с именами сцен, пересекающихся с загруженной разметкой."""
+    """Сформировать TXT и GeoJSON футпринтов пересекающихся сцен."""
 
     download_filename = _scene_list_download_filename(geojson_filename)
+    download_stem = PurePosixPath(download_filename).stem
+    footprints_filename = f"{download_stem}_футпринты.geojson"
+    archive_filename = f"{download_stem}.zip"
     annotations = _load_uploaded_annotations(geojson_bytes)
     images_root = imagery_images_dir(config.images_root, imagery_type.value)
     if not images_root.is_dir():
@@ -263,7 +278,8 @@ def build_scene_list_export(
     )
     paths_by_scene_id: dict[str, list[tuple[str, Path]]] = {}
     transformed_cache: dict[str, _TransformedAnnotations] = {}
-    matches: list[tuple[str, Path]] = []
+    matches: list[_SceneListMatch] = []
+    wgs84 = PyprojCRS.from_epsg(4326)
     for source_path in source_paths:
         try:
             resolved_path = source_path.resolve(strict=True)
@@ -289,7 +305,22 @@ def build_scene_list_export(
                     transformed_cache,
                 )
                 image_footprint = box(*dataset.bounds)
-                if image_footprint.is_empty or not image_footprint.is_valid or image_footprint.area <= 0:
+                raster_footprint = Polygon(
+                    (
+                        dataset.transform * (0, 0),
+                        dataset.transform * (dataset.width, 0),
+                        dataset.transform * (dataset.width, dataset.height),
+                        dataset.transform * (0, dataset.height),
+                    )
+                )
+                if (
+                    image_footprint.is_empty
+                    or not image_footprint.is_valid
+                    or image_footprint.area <= 0
+                    or raster_footprint.is_empty
+                    or not raster_footprint.is_valid
+                    or raster_footprint.area <= 0
+                ):
                     raise TrainingUIAPIError(
                         f"У снимка некорректный географический контур: {relative_path.as_posix()}."
                     )
@@ -308,9 +339,24 @@ def build_scene_list_export(
                 f"Не удалось прочитать снимок {relative_path.as_posix()}: {exc}"
             ) from exc
         if has_objects:
-            matches.append((scene_id, relative_path))
+            footprint_wgs84 = _transform_between_crs(
+                raster_footprint,
+                raster_crs,
+                wgs84,
+            )
+            if footprint_wgs84.is_empty:
+                raise TrainingUIAPIError(
+                    f"Не удалось преобразовать контур снимка в WGS84: {relative_path.as_posix()}."
+                )
+            matches.append(
+                _SceneListMatch(
+                    scene_id=scene_id,
+                    relative_path=relative_path,
+                    footprint_wgs84=footprint_wgs84,
+                )
+            )
 
-    matched_scene_ids = {scene_name.casefold() for scene_name, _ in matches}
+    matched_scene_ids = {item.scene_id.casefold() for item in matches}
     ambiguous = [
         paths_by_scene_id[scene_id]
         for scene_id in sorted(matched_scene_ids)
@@ -326,16 +372,54 @@ def build_scene_list_export(
             f"Список сцен был бы неоднозначным: {details}"
         )
 
-    scene_names = sorted(
-        (scene_name for scene_name, _ in matches),
-        key=lambda value: (value.casefold(), value),
+    sorted_matches = sorted(
+        matches,
+        key=lambda item: (item.scene_id.casefold(), item.scene_id),
     )
+    scene_names = [item.scene_id for item in sorted_matches]
     text = "\n".join(scene_names)
     if text:
         text += "\n"
+    content = text.encode("utf-8")
+    footprints_content = (
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "id": item.scene_id,
+                        "properties": {
+                            "scene_id": item.scene_id,
+                            "relative_path": item.relative_path.as_posix(),
+                            "filename": item.relative_path.name,
+                            "imagery_type": imagery_type.value,
+                        },
+                        "geometry": mapping(item.footprint_wgs84),
+                    }
+                    for item in sorted_matches
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    ).encode("utf-8")
+    archive_buffer = BytesIO()
+    with zipfile.ZipFile(
+        archive_buffer,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr(download_filename, content)
+        archive.writestr(footprints_filename, footprints_content)
     return SceneListExportArtifact(
         filename=download_filename,
-        content=text.encode("utf-8"),
+        content=content,
+        footprints_filename=footprints_filename,
+        footprints_content=footprints_content,
+        archive_filename=archive_filename,
+        archive_content=archive_buffer.getvalue(),
         scene_count=len(scene_names),
     )
 

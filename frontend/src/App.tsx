@@ -727,6 +727,7 @@ function SceneListExportPage({ run, showModal }: RoutedPageProps) {
       return;
     }
 
+    formData.set("include_footprints", "true");
     setBusy(true);
     setStatus("Поиск подходящих сцен...");
     try {
@@ -735,10 +736,10 @@ function SceneListExportPage({ run, showModal }: RoutedPageProps) {
         setStatus("");
         return;
       }
-      const fallbackName = geojson.name.replace(/\.geojson$/i, ".txt");
+      const fallbackName = geojson.name.replace(/\.geojson$/i, ".zip");
       const filename = response.filename || fallbackName;
       downloadBlob(response.blob, filename);
-      setStatus(`Скачан файл ${filename}`);
+      setStatus(`Скачан архив ${filename} с TXT и GeoJSON футпринтов`);
     } finally {
       setBusy(false);
     }
@@ -748,13 +749,13 @@ function SceneListExportPage({ run, showModal }: RoutedPageProps) {
     <>
       <PageHeader
         title="Создать список сцен"
-        subtitle="Найти подготовленные снимки, на которых есть объекты из GeoJSON"
+        subtitle="Найти подготовленные снимки и показать их покрытие в QGIS"
       />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
           <PanelHeader
             title="Исходные данные"
-            subtitle="В TXT сохраняются относительные пути с папками, без расширений TIFF"
+            subtitle="ZIP содержит TXT с относительными путями и GeoJSON футпринтов снимков в WGS84"
           />
           <div className="form-grid">
             <label className="field">
@@ -784,7 +785,7 @@ function SceneListExportPage({ run, showModal }: RoutedPageProps) {
         <div className="inline-row">
           <button className="primary" type="submit" disabled={busy}>
             <FileText size={16} />
-            {busy ? "Создание списка..." : "Создать и скачать TXT"}
+            {busy ? "Создание списка..." : "Создать TXT и футпринты"}
           </button>
           {status ? <span className="info-box">{status}</span> : null}
         </div>

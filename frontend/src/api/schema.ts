@@ -1348,6 +1348,11 @@ export interface components {
         Body_post_scene_list_export_api_v1_scene_list_export_post: {
             imagery_type: components["schemas"]["ImageryType"];
             /**
+             * Include Footprints
+             * @default false
+             */
+            include_footprints: boolean;
+            /**
              * Geojson
              * Format: binary
              */
@@ -3549,13 +3554,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description TXT с относительными путями сцен внутри выбранного типа снимков, без расширений. */
+            /** @description TXT с относительными путями сцен либо ZIP с TXT и GeoJSON футпринтов выбранных снимков. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "text/plain": string;
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
