@@ -2,7 +2,6 @@ import {
   Activity,
   Archive,
   BarChart3,
-  BrainCircuit,
   Check,
   ChevronDown,
   ChevronUp,
@@ -99,6 +98,7 @@ import {
 
 const PROGRESS_REFRESH_MS = 10_000;
 const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
+const GROVIKA_LOGO_PATH = "/grovika/brand/grovika-lockup-horizontal-color.svg";
 
 type ModalState = {
   title: string;
@@ -114,6 +114,10 @@ type TestSampleBatchFormRow = {
   selected: boolean;
   minObjectCount: number;
 };
+
+function BrandLogo() {
+  return <img className="brand-logo" src={GROVIKA_LOGO_PATH} alt="GROVIKA" width="190" height="60" />;
+}
 
 export function App() {
   const [route, setRoute] = useState(currentRoute());
@@ -221,7 +225,7 @@ export function App() {
   );
 
   if (!authChecked) {
-    return <LoadingPage text="Проверка сессии" />;
+    return <LoadingPage text="Проверка сессии" branded />;
   }
 
   if (!user) {
@@ -306,9 +310,8 @@ function Shell({
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#/">
-          <BrainCircuit size={22} />
-          MLSystem2
+        <a className="brand" href="#/" aria-label="На главную">
+          <BrandLogo />
         </a>
         <nav className="nav">
           {navItems.map((item) => {
@@ -418,8 +421,7 @@ function LoginPage({ onLogin, run }: { onLogin: (user: string) => void; run: Run
     <main className="login-page">
       <section className="login-panel">
         <div className="login-mark">
-          <BrainCircuit size={24} />
-          MLSystem2
+          <BrandLogo />
         </div>
         <form className="form-stack" onSubmit={submit}>
           <label className="field">
@@ -441,15 +443,26 @@ function LoginPage({ onLogin, run }: { onLogin: (user: string) => void; run: Run
   );
 }
 
-function LoadingPage({ text }: { text: string }) {
-  return (
-    <section className="panel">
-      <div className="inline-row">
-        <RefreshCw size={16} />
-        <span>{text}</span>
-      </div>
-    </section>
+function LoadingPage({ text, branded = false }: { text: string; branded?: boolean }) {
+  const status = (
+    <div className="inline-row loading-status" role="status" aria-live="polite">
+      <RefreshCw className="status-spinner" size={18} />
+      <span>{text}</span>
+    </div>
   );
+  if (branded) {
+    return (
+      <main className="login-page loading-page">
+        <section className="login-panel loading-panel">
+          <div className="login-mark">
+            <BrandLogo />
+          </div>
+          {status}
+        </section>
+      </main>
+    );
+  }
+  return <section className="panel">{status}</section>;
 }
 
 function HomePage({ bootstrap, run, showJobLog }: RoutedPageProps) {
@@ -932,7 +945,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                       <td>
                         <span className="source-lines">
                           <strong>{row.dataset.name}</strong>
-                          {row.dataset.version ? <small className="muted">{shortVersion(row.dataset.version)}</small> : null}
+                          {row.dataset.version ? <small className="muted technical-value">{shortVersion(row.dataset.version)}</small> : null}
                         </span>
                       </td>
                       <td>
@@ -945,7 +958,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                           <span className="muted">Нет успешной модели</span>
                         )}
                       </td>
-                      <td>{row.result ? formatDateTime(row.result.trained_at || row.result.created_at) : "—"}</td>
+                      <td className="technical-value">{row.result ? formatDateTime(row.result.trained_at || row.result.created_at) : "—"}</td>
                       <td>
                         <input
                           value={row.modelName}
@@ -3241,12 +3254,12 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
         <tbody>
           {jobs.map((job) => (
             <tr className="clickable-row" key={job.id} onClick={() => navigate(`jobs/${job.id}`)}>
-              <td>{job.queue_position}</td>
+              <td className="technical-value">{job.queue_position}</td>
               <td>{statusBadge(job.status, job.type, job.progress)}</td>
               <td>{jobTypeBadge(job)}</td>
               <td>{queueDatasetCell(job)}</td>
               <td>{queueModelCell(job)}</td>
-              <td>{formatDateTime(job.created_at)}</td>
+              <td className="technical-value">{formatDateTime(job.created_at)}</td>
               <td>
                 <div className="inline-row" onClick={(event) => event.stopPropagation()}>
                   <button className="secondary icon-button" type="button" title="Выше" onClick={() => onAction(job, "move-up")}>
@@ -3328,7 +3341,7 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
               <td>{item.dataset_name}</td>
               <td>{item.model_name}</td>
               <td>{actionBadge(item.action, changeResultKind(item))}</td>
-              <td>{formatDateTime(item.changed_at)}</td>
+              <td className="technical-value">{formatDateTime(item.changed_at)}</td>
             </tr>
           ))}
         </tbody>
@@ -3396,13 +3409,13 @@ function ResultsTable({
                     </span>
                   </td>
                   <td title={`${qualityMetricShort(result.quality_metric)} (val)`}>
-                    <span className="source-lines"><small>{qualityMetricShort(result.quality_metric)} (val)</small><strong>{formatF1Score(result.f1_score)}</strong></span>
+                    <span className="source-lines"><small>{qualityMetricShort(result.quality_metric)} (val)</small><strong className="technical-value">{formatF1Score(result.f1_score)}</strong></span>
                   </td>
                   <td title={`${qualityMetricShort(result.quality_metric)} (test)`}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
                       <span className="source-lines">
                         <small>{qualityMetricShort(result.quality_metric)} (test)</small>
-                        <span className={`badge ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
+                        <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
                           {formatTestF1Percent(result.test_f1.f1)}
                         </span>
                       </span>
@@ -3410,8 +3423,8 @@ function ResultsTable({
                       <span className="badge neutral">расчёт</span>
                     ) : "—"}
                   </td>
-                  <td title="Epoch">{result.epoch ?? "—"}</td>
-                  <td title="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
+                  <td className="technical-value" title="Epoch">{result.epoch ?? "—"}</td>
+                  <td className="technical-value" title="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
                     {result.status === "ok" ? (
                       <>

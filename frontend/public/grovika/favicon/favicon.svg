@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="GROVIKA">
+
+<rect x="2" y="2" width="60" height="60" rx="14" fill="#000C2E"/>
+<g fill="#06C5EC">
+  <rect x="10" y="17" width="7" height="7" rx="1"/>
+  <rect x="10" y="28" width="7" height="7" rx="1"/>
+  <rect x="14" y="39" width="7" height="7" rx="1"/>
+  <path fill-rule="evenodd" d="M23 11h20l10 9v24l-10 9H23V42h19v-6H32V27h21v-3l-9-8H23V11Zm0 8h8v8h-8v-8Zm0 16h8v7h-8v-7Z"/>
+</g>
+<circle cx="45" cy="21" r="3.5" fill="#FF7359" stroke="white" stroke-width="1.5"/>
+
+</svg>

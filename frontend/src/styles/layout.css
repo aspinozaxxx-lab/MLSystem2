@@ -11,34 +11,35 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  min-height: 58px;
-  padding: 0 28px;
-  background: rgba(255, 255, 255, 0.96);
+  gap: var(--grovika-space-5);
+  min-height: 72px;
+  padding: 8px 32px;
+  background: color-mix(in srgb, var(--grovika-white) 96%, transparent);
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--grovika-ink) 4%, transparent);
   backdrop-filter: blur(12px);
 }
 
 .brand {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 9px;
   color: var(--text);
-  font-weight: 750;
-  font-size: 18px;
   text-decoration: none;
   white-space: nowrap;
 }
 
-.brand svg {
-  color: var(--accent);
+.brand-logo {
+  display: block;
+  width: 176px;
+  height: auto;
 }
 
 .nav {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: var(--grovika-space-1);
   flex-wrap: wrap;
 }
 
@@ -47,20 +48,30 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 36px;
-  padding: 0 10px;
+  min-height: 40px;
+  padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--grovika-radius-control);
   background: transparent;
   color: var(--text);
+  font-weight: 600;
   text-decoration: none;
+  transition:
+    background var(--grovika-motion-fast) var(--grovika-easing),
+    border-color var(--grovika-motion-fast) var(--grovika-easing),
+    color var(--grovika-motion-fast) var(--grovika-easing);
 }
 
 .nav a:hover,
-.nav button:hover,
-.nav .active {
+.nav button:hover {
   background: var(--surface-strong);
   border-color: var(--border);
+}
+
+.nav .active {
+  background: var(--grovika-ink);
+  border-color: var(--grovika-ink);
+  color: var(--grovika-white);
 }
 
 .nav-dropdown {
@@ -68,7 +79,7 @@
 }
 
 .nav-dropdown-chevron {
-  transition: transform 140ms ease;
+  transition: transform var(--grovika-motion-fast) var(--grovika-easing);
 }
 
 .nav-dropdown.open .nav-dropdown-chevron {
@@ -77,21 +88,21 @@
 
 .nav-dropdown-menu {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: 20;
   display: none;
-  min-width: 210px;
-  padding: 5px;
+  min-width: 228px;
+  padding: var(--grovika-space-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-overlay);
 }
 
 .nav-dropdown.open .nav-dropdown-menu {
   display: grid;
-  gap: 2px;
+  gap: var(--grovika-space-1);
 }
 
 .nav-dropdown-menu a {
@@ -102,45 +113,48 @@
 .page {
   width: min(1360px, 100%);
   margin: 0 auto;
-  padding: 24px 28px 42px;
+  padding: 32px 28px 48px;
 }
 
 .page-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
+  gap: var(--grovika-space-5);
+  margin-bottom: var(--grovika-space-5);
 }
 
 .page-title h1 {
-  margin: 0 0 6px;
-  font-size: 28px;
-  letter-spacing: 0;
+  margin: 0 0 var(--grovika-space-2);
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 48px;
 }
 
 .page-title p {
   margin: 0;
   color: var(--muted);
+  font-size: 16px;
+  line-height: 24px;
 }
 
 .content-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
+  gap: var(--grovika-space-4);
 }
 
 .two-column {
   display: grid;
   grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-  gap: 16px;
+  gap: var(--grovika-space-4);
   align-items: start;
 }
 
 .three-column {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: var(--grovika-space-4);
 }
 
 @media (max-width: 900px) {
@@ -150,7 +164,12 @@
     padding: 12px 18px;
   }
 
+  .brand-logo {
+    width: 160px;
+  }
+
   .nav {
+    width: 100%;
     justify-content: flex-start;
   }
 
@@ -160,12 +179,17 @@
   }
 
   .page {
-    padding: 18px;
+    padding: 24px 18px 40px;
   }
 
   .page-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .page-title h1 {
+    font-size: 32px;
+    line-height: 40px;
   }
 
   .two-column,

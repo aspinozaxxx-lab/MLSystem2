@@ -2,22 +2,43 @@
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 20px;
-  background: linear-gradient(180deg, #f6fafc, #e9f0f6);
+  padding: var(--grovika-space-5);
+  background: var(--gradient-data);
 }
 
 .login-panel {
   width: min(420px, 100%);
-  padding: 26px;
+  padding: 32px;
+  box-shadow: var(--shadow-overlay);
 }
 
 .login-mark {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  margin-bottom: 18px;
-  font-size: 20px;
-  font-weight: 800;
+  margin-bottom: var(--grovika-space-5);
+}
+
+.login-mark .brand-logo {
+  width: 220px;
+}
+
+.login-panel .primary {
+  width: 100%;
+}
+
+.loading-panel {
+  display: grid;
+  justify-items: start;
+  gap: var(--grovika-space-4);
+}
+
+.loading-panel .login-mark {
+  margin-bottom: 0;
+}
+
+.loading-status {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .metric-grid {
@@ -27,16 +48,17 @@
 }
 
 .metric {
-  padding: 12px;
+  padding: var(--grovika-space-4);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
 }
 
 .metric strong {
   display: block;
-  margin-bottom: 4px;
-  font-size: 20px;
+  margin-bottom: var(--grovika-space-1);
+  font: 600 20px/28px var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .template-tree {
@@ -51,13 +73,17 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
   color: var(--text);
+  font-weight: 600;
   text-align: left;
+  transition:
+    background var(--grovika-motion-fast) var(--grovika-easing),
+    border-color var(--grovika-motion-fast) var(--grovika-easing);
 }
 
 .tree-button.child {
@@ -67,7 +93,7 @@
 
 .tree-button.active {
   background: var(--accent-soft);
-  border-color: #9ed7e4;
+  border-color: var(--grovika-cyan-text);
 }
 
 .config-grid {
@@ -92,15 +118,16 @@
 }
 
 .automation-toggle {
-  min-height: 30px;
+  min-height: 40px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
+  font-weight: 600;
 }
 
 .automation-toggle.enabled {
   background: var(--ok-soft);
-  border-color: #9dd9b5;
+  border-color: var(--ok);
   color: var(--ok);
 }
 
@@ -228,7 +255,9 @@
   justify-content: space-between;
   gap: 12px;
   margin: 0 0 10px;
-  font-size: 17px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 28px;
 }
 
 .dataset-list {
@@ -243,17 +272,25 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 36px;
-  padding: 7px 9px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
   text-decoration: none;
+  transition:
+    background var(--grovika-motion-fast) var(--grovika-easing),
+    border-color var(--grovika-motion-fast) var(--grovika-easing);
+}
+
+.dataset-link:hover {
+  border-color: var(--grovika-cyan-text);
+  background: var(--accent-soft);
 }
 
 .dataset-link span {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .dataset-link small {
@@ -263,7 +300,8 @@
 
 .result-card-f1 {
   margin-left: auto;
-  font-size: 13px;
+  font: 600 13px/20px var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -283,7 +321,7 @@
   margin-bottom: 16px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
 }
 
 .status-banner > div {
@@ -293,13 +331,13 @@
 }
 
 .status-banner.ok {
-  border-color: #9fd2b5;
+  border-color: var(--ok);
   background: var(--ok-soft);
   color: var(--ok);
 }
 
 .status-banner.error {
-  border-color: #efb5af;
+  border-color: var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
 }
@@ -334,6 +372,11 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.source-lines small {
+  font-family: var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .test-sample-catalog {
@@ -379,9 +422,10 @@
   min-width: 0;
   align-items: center;
   gap: 7px;
-  padding: 5px 8px;
+  min-height: 40px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
   cursor: pointer;
 }
@@ -418,8 +462,8 @@
 
 .test-sample-download-created-at {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.2;
+  font: 400 11px/16px var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .download-mode-fieldset {
@@ -434,17 +478,18 @@
 .download-mode-fieldset legend {
   grid-column: 1 / -1;
   margin-bottom: 7px;
-  color: #334155;
-  font-weight: 650;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .download-mode-choice {
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  padding: 10px;
+  min-height: 40px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
   cursor: pointer;
 }
@@ -454,6 +499,7 @@
   width: 18px;
   min-height: 18px;
   margin: 2px 0 0;
+  accent-color: var(--grovika-cyan-text);
 }
 
 .download-mode-choice span {
@@ -485,7 +531,7 @@
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
 }
 
@@ -525,7 +571,7 @@
   gap: 5px 10px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .test-markup-creation-status span {
@@ -534,7 +580,7 @@
 
 .primary-star {
   flex: 0 0 auto;
-  color: #d39b00;
+  color: var(--warn);
 }
 
 .test-sample-batch-field {
@@ -543,15 +589,15 @@
   min-width: 0;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .test-sample-batch-field input,
 .test-sample-batch-field select {
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  padding: 6px 8px;
+  min-height: 40px;
+  padding: 8px 10px;
 }
 
 .test-sample-batch-progress {
@@ -570,13 +616,13 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
-  transition: width 200ms ease;
+  background: var(--grovika-cyan);
+  transition: width var(--grovika-motion-normal) var(--grovika-easing);
 }
 
 .error-text {
   color: var(--danger);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .test-sample-name-field {
@@ -595,8 +641,16 @@
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
+  transition:
+    border-color var(--grovika-motion-fast) var(--grovika-easing),
+    transform var(--grovika-motion-fast) var(--grovika-easing);
+}
+
+.test-markup-card:hover {
+  border-color: var(--grovika-cyan-text);
+  transform: translateY(-1px);
 }
 
 .test-markup-card-header,
@@ -642,12 +696,18 @@
   display: grid;
   gap: 3px;
   padding: 8px;
-  border-radius: 7px;
+  border-radius: var(--grovika-radius-control);
   background: var(--surface-strong);
 }
 
 .test-markup-card-body small {
   color: var(--muted);
+}
+
+.test-markup-card-body strong,
+.test-markup-card-footer .muted {
+  font-family: var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .test-markup-card-footer {
@@ -674,9 +734,11 @@
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
-  transition: opacity 160ms ease, filter 160ms ease;
+  transition:
+    opacity var(--grovika-motion-normal) var(--grovika-easing),
+    filter var(--grovika-motion-normal) var(--grovika-easing);
 }
 
 .markup-preview-card.disabled {
@@ -689,7 +751,7 @@
   width: 100%;
   aspect-ratio: 1;
   object-fit: contain;
-  background: #17212b;
+  background: var(--grovika-ink);
 }
 
 .markup-preview-meta {
@@ -724,7 +786,7 @@
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .test-sample-toggle input {
@@ -747,7 +809,7 @@
 .test-sample-metric-card {
   padding: 15px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
 }
 
@@ -760,7 +822,8 @@
   display: block;
   margin-bottom: 12px;
   color: var(--accent-strong);
-  font-size: 24px;
+  font: 600 24px/32px var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .test-sample-metric-card dl {
@@ -781,7 +844,8 @@
 
 .test-sample-metric-card dd {
   margin: 2px 0 0;
-  font-weight: 700;
+  font: 600 14px/20px var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .test-sample-evaluation-source {
@@ -811,8 +875,8 @@
 .class-editor-header > label {
   display: grid;
   gap: 6px;
-  color: #334155;
-  font-weight: 650;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .class-editor-datasets {
@@ -825,7 +889,7 @@
   gap: 10px;
   padding: 13px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--grovika-radius-card);
   background: var(--surface-soft);
 }
 
