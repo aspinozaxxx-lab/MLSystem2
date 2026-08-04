@@ -50,6 +50,7 @@ MLSYSTEM2_MLFLOW_UI_URL=/mlflow/
 MLSYSTEM2_GRAFANA_URL=/grafana/
 MLSYSTEM2_MINIO_UI_URL=/minio/browser/mlsystems/images/
 MLSYSTEM2_TRAINING_UI_USER=mlsystem
+MLSYSTEM2_TRAINING_UI_USER_ALIASES=mluser
 MLSYSTEM2_TRAINING_UI_PASSWORD=<тот же пароль, что в старом MLSystem>
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
 MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=true
@@ -60,9 +61,11 @@ MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES=10000
 MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS=3600
 ```
 
+`MLSYSTEM2_TRAINING_UI_USER_ALIASES` задаёт через запятую дополнительные логины с тем же паролем:
+это сохраняет вход `mluser` в веб-интерфейс, пока QGIS-плагин использует основной логин `mlsystem`.
 `MLSYSTEM2_PSEUDOLABEL_API_TOKEN` нужен только отдельным неинтерактивным клиентам. QGIS-плагин
-входит по `MLSYSTEM2_TRAINING_UI_USER` и `MLSYSTEM2_TRAINING_UI_PASSWORD`, поэтому для него токен
-оставляют пустым. Нулевой `MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2` разрешает AOI любой площади;
+входит по логину и паролю, поэтому для него токен оставляют пустым. Нулевой
+`MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2` разрешает AOI любой площади;
 положительное значение включает операторский лимит в квадратных метрах.
 
 Секреты не коммитить.

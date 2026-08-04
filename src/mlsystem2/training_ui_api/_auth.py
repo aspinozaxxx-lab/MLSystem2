@@ -17,10 +17,15 @@ from ._config import TrainingUIAPIConfig
 def verify_credentials(username: str, password: str, config: TrainingUIAPIConfig) -> bool:
     if not config.frontend_password:
         return False
-    return hmac.compare_digest(username, config.frontend_username) and hmac.compare_digest(
-        password,
-        config.frontend_password,
+    username_matches = any(
+        hmac.compare_digest(username, allowed_username)
+        for allowed_username in (
+            config.frontend_username,
+            *config.frontend_username_aliases,
+        )
     )
+    password_matches = hmac.compare_digest(password, config.frontend_password)
+    return username_matches and password_matches
 
 
 def login_response(response: Response, username: str, config: TrainingUIAPIConfig) -> None:

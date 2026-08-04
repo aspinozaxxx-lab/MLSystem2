@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment, MLflowTrainingProgress
 from mlsystem2.models.contracts import ModelsError
-from mlsystem2.training_ui_api import _automation, _model_export, _service, _worker
+from mlsystem2.training_ui_api import _auth, _automation, _model_export, _service, _worker
 from mlsystem2.training_ui_api._routes import export as _export_routes
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
@@ -45,6 +45,18 @@ from mlsystem2.training_ui_api.contracts import (
     TrainingTemplateUpdate,
     TrainingUIAPIError,
 )
+
+
+def test_frontend_credentials_accept_configured_username_and_legacy_alias(monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER", "mlsystem")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USER_ALIASES", "mluser")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_PASSWORD", "secret")
+    config = get_config()
+
+    assert _auth.verify_credentials("mlsystem", "secret", config) is True
+    assert _auth.verify_credentials("mluser", "secret", config) is True
+    assert _auth.verify_credentials("other", "secret", config) is False
+    assert _auth.verify_credentials("mluser", "wrong", config) is False
 
 
 def test_pseudo_report_success_requires_processed_scene() -> None:

@@ -22,12 +22,21 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _float_env(name: str, default: float) -> float:
-    """Prochitat float iz okruzheniya s ponyatnoi oshibkoi."""
+    """Прочитать число с плавающей точкой из окружения."""
 
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
     return float(value)
+
+
+def _string_tuple_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Прочитать непустые уникальные значения через запятую."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,7 @@ class TrainingUIAPIConfig:
     frontend_dist: Path
     mlflow_tracking_uri: str
     frontend_username: str
+    frontend_username_aliases: tuple[str, ...]
     frontend_password: str
     session_secret: str
     session_cookie_name: str
@@ -99,6 +109,10 @@ def get_config() -> TrainingUIAPIConfig:
         frontend_username=os.getenv(
             "MLSYSTEM2_TRAINING_UI_USER",
             os.getenv("MLSYSTEM_FRONTEND_USER", "mlsystem"),
+        ),
+        frontend_username_aliases=_string_tuple_env(
+            "MLSYSTEM2_TRAINING_UI_USER_ALIASES",
+            ("mluser",),
         ),
         frontend_password=os.getenv(
             "MLSYSTEM2_TRAINING_UI_PASSWORD",
