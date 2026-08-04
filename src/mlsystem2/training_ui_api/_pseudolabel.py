@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import math
+import statistics
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import rasterio
+from rasterio.warp import transform_bounds
 from pyproj import CRS as PyprojCRS
 from pyproj import Geod, Transformer
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
@@ -22,8 +25,14 @@ from mlsystem2.mlflow_adapter.api import get_usable_training_checkpoint
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
 
 from ._config import TrainingUIAPIConfig
-from ._dataset_catalog import find_managed_class, find_managed_dataset, list_managed_classes
-from ._datasets import CUSTOM_KEY, imagery_images_dir
+from ._dataset_catalog import (
+    find_managed_class,
+    find_managed_dataset,
+    dataset_class_row,
+    list_managed_classes,
+)
+from ._datasets import CUSTOM_KEY, imagery_images_dir, resolve_scenes_file_images
+from ._imagery_sources import find_imagery_source, list_imagery_sources
 from ._models import JobRow, StoredFileRow, TrainingResultRow
 from ._queueing import next_queue_position
 from ._service import delete_job, inference_template_row_for_dataset
@@ -38,6 +47,7 @@ from .contracts import (
     PseudolabelErrorInfo,
     PseudolabelJobCreate,
     PseudolabelJobInfo,
+    PseudolabelSourceInfo,
     ResultStatus,
     StoredFileKind,
 )
@@ -45,6 +55,7 @@ from .contracts import (
 
 PSEUDOLABEL_AOI_OPERATION = "pseudolabel_aoi"
 LOGGER = logging.getLogger(__name__)
+_RESOLUTION_CACHE: dict[tuple[str, int, str], float | None] = {}
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,7 @@ class _SelectedModel:
     dataset_version: str | None
     imagery_type: str
     input_channels: int
+    target_resolution_m: float | None
     result: TrainingResultRow
     checkpoint: MLflowBestCheckpoint
     inference_template_id: uuid.UUID | None
@@ -77,7 +89,21 @@ def pseudolabel_classes(
             continue
         items.append(_class_info(selected))
     items.sort(key=lambda item: (item.display_name.casefold(), item.class_id))
-    return PseudolabelClassListResponse(classes=items)
+    sources = [
+        PseudolabelSourceInfo(
+            source_id=item.source_id,
+            display_name=item.display_name,
+            kind=item.kind,
+            protocol=item.protocol,
+            native_channels=item.native_channels,
+            imagery_type=item.imagery_type,
+            attribution=item.attribution,
+            license_url=item.license_url,
+            available=item.available,
+        )
+        for item in list_imagery_sources(config)
+    ]
+    return PseudolabelClassListResponse(classes=items, sources=sources)
 
 
 def create_pseudolabel_job(
@@ -90,6 +116,35 @@ def create_pseudolabel_job(
     aoi_wgs84, area_m2, vertex_count = _validated_aoi(request, config)
     selected = _select_model(session, config, request.class_id, required=True)
     assert selected is not None
+    source_id = request.source_id or selected.imagery_type
+    source = find_imagery_source(config, source_id)
+    if source is None:
+        raise PseudolabelAPIError(
+            "SOURCE_NOT_FOUND",
+            "Источник снимков не найден.",
+            status_code=404,
+        )
+    if not source.available:
+        raise PseudolabelAPIError(
+            "SOURCE_UNAVAILABLE",
+            "Источник снимков сейчас недоступен.",
+            status_code=409,
+        )
+    source_imagery_type = source.imagery_type or "external_rgb"
+    cross_source = source_imagery_type != selected.imagery_type
+    is_external = source.kind != "local"
+    if (cross_source or is_external) and selected.target_resolution_m is None:
+        raise PseudolabelAPIError(
+            "MODEL_RESOLUTION_UNAVAILABLE",
+            "Не удалось определить размер пикселя обучающих снимков модели.",
+            status_code=409,
+        )
+    channel_mapping = _channel_mapping(selected.input_channels, source_imagery_type)
+    source_images_root = (
+        str(imagery_images_dir(config.images_root, source_imagery_type))
+        if source.kind == "local"
+        else ""
+    )
     source_job = (
         session.get(JobRow, selected.result.job_id)
         if selected.result.job_id is not None
@@ -109,7 +164,7 @@ def create_pseudolabel_job(
         dataset_version=selected.dataset_version,
         dataset_name=selected.dataset_name,
         training_dataset_name=selected.dataset_name,
-        inference_dataset_name="AOI",
+        inference_dataset_name=f"AOI: {source.display_name}",
         model_name=selected.result.model_name,
         architecture=selected.result.architecture,
         tile_size=tile_size,
@@ -134,8 +189,24 @@ def create_pseudolabel_job(
                 "checkpoint_f1_score": selected.checkpoint.f1_score,
                 "checkpoint_epoch": selected.checkpoint.epoch,
                 "imagery_type": selected.imagery_type,
+                "model_imagery_type": selected.imagery_type,
                 "input_channels": selected.input_channels,
-                "images_root": str(imagery_images_dir(config.images_root, selected.imagery_type)),
+                "target_resolution_m": selected.target_resolution_m,
+                "resample_to_resolution_m": (
+                    selected.target_resolution_m if cross_source or is_external else None
+                ),
+                "source_id": source.source_id,
+                "source_name": source.display_name,
+                "source_kind": source.kind,
+                "source_protocol": source.protocol,
+                "source_imagery_type": source_imagery_type,
+                "source_native_channels": source.native_channels,
+                "source_attribution": source.attribution,
+                "source_attributions": [source.attribution] if source.attribution else [],
+                "source_license_url": source.license_url,
+                "source_settings": source.settings,
+                "channel_mapping": channel_mapping,
+                "images_root": source_images_root,
                 "inference_template_id": (
                     str(selected.inference_template_id)
                     if selected.inference_template_id is not None
@@ -284,25 +355,51 @@ def _select_model(
                 status_code=409,
             )
         return None
-    rows = session.scalars(
-        select(TrainingResultRow)
-        .where(
-            TrainingResultRow.class_key == dataset.key,
-            TrainingResultRow.status == ResultStatus.OK.value,
-            TrainingResultRow.trained_at.is_not(None),
-            TrainingResultRow.mlflow_run_id.is_not(None),
-        )
-        .order_by(
-            TrainingResultRow.trained_at.desc(),
-            TrainingResultRow.created_at.desc(),
-            TrainingResultRow.id.desc(),
-        )
-    ).all()
+    class_row = dataset_class_row(session, class_info.key)
+    if class_row is not None and class_row.primary_training_result_id is not None:
+        primary_result = session.get(TrainingResultRow, class_row.primary_training_result_id)
+        rows = [primary_result] if primary_result is not None else []
+    else:
+        rows = session.scalars(
+            select(TrainingResultRow)
+            .where(
+                TrainingResultRow.class_key == dataset.key,
+                TrainingResultRow.status == ResultStatus.OK.value,
+                TrainingResultRow.trained_at.is_not(None),
+                TrainingResultRow.mlflow_run_id.is_not(None),
+            )
+            .order_by(
+                TrainingResultRow.trained_at.desc(),
+                TrainingResultRow.created_at.desc(),
+                TrainingResultRow.id.desc(),
+            )
+        ).all()
     for row in rows:
+        if (
+            row.status != ResultStatus.OK.value
+            or row.trained_at is None
+            or not row.mlflow_run_id
+        ):
+            continue
         source_job = session.get(JobRow, row.job_id) if row.job_id is not None else None
         if source_job is not None and source_job.status != JobStatus.COMPLETED.value:
             continue
-        if _training_input_channels(source_job, dataset.input_channels) != dataset.input_channels:
+        model_dataset = (
+            find_managed_dataset(session, config, row.dataset_key)
+            if row.dataset_key
+            else dataset
+        )
+        if (
+            model_dataset is None
+            or model_dataset.images_dir is None
+            or model_dataset.imagery_type is None
+            or model_dataset.input_channels is None
+        ):
+            continue
+        if (
+            _training_input_channels(source_job, model_dataset.input_channels)
+            != model_dataset.input_channels
+        ):
             continue
         try:
             checkpoint = get_usable_training_checkpoint(config.mlflow_tracking_uri, row.mlflow_run_id or "")
@@ -310,7 +407,11 @@ def _select_model(
             continue
         if checkpoint is None:
             continue
-        template = inference_template_row_for_dataset(session, row.architecture, dataset.key)
+        template = inference_template_row_for_dataset(
+            session,
+            row.architecture,
+            model_dataset.key,
+        )
         template_config = (
             sanitize_inference_template_config(template.default_config)
             if template is not None
@@ -319,11 +420,12 @@ def _select_model(
         return _SelectedModel(
             class_id=class_info.key,
             class_name=class_info.name,
-            dataset_key=dataset.key,
-            dataset_name=dataset.name,
-            dataset_version=dataset.version,
-            imagery_type=dataset.imagery_type.value,
-            input_channels=dataset.input_channels,
+            dataset_key=model_dataset.key,
+            dataset_name=model_dataset.name,
+            dataset_version=model_dataset.version,
+            imagery_type=model_dataset.imagery_type.value,
+            input_channels=model_dataset.input_channels,
+            target_resolution_m=_dataset_target_resolution_m(model_dataset),
             result=row,
             checkpoint=checkpoint,
             inference_template_id=template.id if template is not None else None,
@@ -440,6 +542,9 @@ def _class_info(selected: _SelectedModel) -> PseudolabelClassInfo:
         model_version=selected.result.mlflow_run_id,
         model_name=selected.result.model_name,
         trained_at=selected.result.trained_at,
+        model_imagery_type=selected.imagery_type,
+        input_channels=selected.input_channels,
+        target_resolution_m=selected.target_resolution_m,
     )
 
 
@@ -483,6 +588,20 @@ def _job_info(row: JobRow) -> PseudolabelJobInfo:
         warnings=_string_list(state.get("warnings")),
         source_image_ids=source_ids,
         coverage_percent=coverage_percent,
+        source_id=str(state.get("source_id") or state.get("imagery_type") or ""),
+        source_name=str(state.get("source_name") or state.get("source_id") or ""),
+        model_imagery_type=str(
+            state.get("model_imagery_type") or state.get("imagery_type") or "kanopus"
+        ),
+        source_imagery_type=str(
+            state.get("source_imagery_type") or state.get("imagery_type") or "kanopus"
+        ),
+        channel_mapping=str(state.get("channel_mapping") or "rgb_nir"),
+        target_resolution_m=_optional_positive_number(state.get("target_resolution_m")),
+        source_attributions=_string_list(state.get("source_attributions"))
+        or _string_list([state.get("source_attribution")]),
+        source_license_url=str(state.get("source_license_url") or ""),
+        performance=(state.get("performance") if isinstance(state.get("performance"), dict) else {}),
     )
 
 
@@ -551,6 +670,70 @@ def _training_input_channels(row: JobRow | None, fallback: int) -> int:
     return _positive_int((row.config or {}).get("train.input_channels"), fallback)
 
 
+def _channel_mapping(model_channels: int, source_imagery_type: str) -> str:
+    if model_channels not in {3, 4}:
+        raise PseudolabelAPIError(
+            "UNSUPPORTED_MODEL_CHANNELS",
+            "AOI-инференс поддерживает модели с тремя или четырьмя входными каналами.",
+            status_code=409,
+        )
+    if model_channels == 3:
+        return "rgb"
+    return "rgb_nir" if source_imagery_type == "kanopus" else "rgb_zero_nir"
+
+
+def _dataset_target_resolution_m(dataset: Any) -> float | None:
+    scenes_file = Path(dataset.scenes_file) if dataset.scenes_file else None
+    images_dir = Path(dataset.images_dir) if dataset.images_dir else None
+    if images_dir is None or not images_dir.is_dir():
+        return None
+    try:
+        marker = scenes_file.stat().st_mtime_ns if scenes_file and scenes_file.is_file() else 0
+    except OSError:
+        marker = 0
+    key = (str(scenes_file or ""), int(marker), str(images_dir.resolve()))
+    if key in _RESOLUTION_CACHE:
+        return _RESOLUTION_CACHE[key]
+    paths = (
+        resolve_scenes_file_images(scenes_file, images_dir)
+        if scenes_file is not None and scenes_file.is_file()
+        else sorted(
+            (
+                path
+                for path in images_dir.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
+            ),
+            key=lambda path: path.as_posix().casefold(),
+        )
+    )
+    resolutions: list[float] = []
+    for path in paths:
+        try:
+            with rasterio.open(path) as source:
+                if source.crs is None or source.width <= 0 or source.height <= 0:
+                    continue
+                if PyprojCRS.from_user_input(source.crs).to_epsg() == 3857:
+                    x_resolution = abs(float(source.res[0]))
+                    y_resolution = abs(float(source.res[1]))
+                else:
+                    left, bottom, right, top = transform_bounds(
+                        source.crs,
+                        "EPSG:3857",
+                        *source.bounds,
+                        densify_pts=21,
+                    )
+                    x_resolution = abs(right - left) / source.width
+                    y_resolution = abs(top - bottom) / source.height
+                value = math.sqrt(x_resolution * y_resolution)
+                if math.isfinite(value) and value > 0:
+                    resolutions.append(value)
+        except (OSError, ValueError, rasterio.errors.RasterioError):
+            continue
+    result = float(statistics.median(resolutions)) if resolutions else None
+    _RESOLUTION_CACHE[key] = result
+    return result
+
+
 def _positive_int(value: object, fallback: int) -> int:
     """Normalizovat polozhitelnoe celoe znachenie."""
 
@@ -575,7 +758,15 @@ def _string_list(value: object) -> list[str]:
 
     if not isinstance(value, list):
         return []
-    return [str(item) for item in value if str(item).strip()]
+    return [str(item) for item in value if item is not None and str(item).strip()]
+
+
+def _optional_positive_number(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
 def _vertex_count(geometry: BaseGeometry) -> int:

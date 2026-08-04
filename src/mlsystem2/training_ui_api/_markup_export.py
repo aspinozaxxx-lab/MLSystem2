@@ -21,7 +21,6 @@ from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import rasterize
 from rasterio.shutil import copy as raster_copy
 from rasterio.windows import Window, bounds as window_bounds
-from rasterio.warp import transform_bounds
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import coo_matrix
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
@@ -35,6 +34,7 @@ from sqlalchemy.orm import Session
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
 from ._datasets import find_dataset, imagery_images_dir, resolve_scenes_file_images
+from ._raster_index import load_raster_index
 from .contracts import (
     DatasetInfo,
     ImageryType,
@@ -173,6 +173,9 @@ class _Candidate:
 def find_intersecting_images(
     aoi_wgs84: BaseGeometry,
     images_root: Path,
+    *,
+    index_path: Path | None = None,
+    index_workers: int = 8,
 ) -> IntersectingImages:
     """Naiti originalnye TIFF, peresekayushchie AOI."""
 
@@ -183,49 +186,28 @@ def find_intersecting_images(
             coverage_percent=0.0,
             warnings=("Папка исходных снимков недоступна.",),
         )
-    source_paths = sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
-        ),
-        key=lambda path: path.relative_to(root).as_posix().casefold(),
-    )
+    index = load_raster_index(root, cache_path=index_path, workers=index_workers)
     matches: list[IntersectingImage] = []
     coverage_parts: list[BaseGeometry] = []
-    warnings_list: list[str] = []
-    for source_path in source_paths:
+    warnings_list: list[str] = list(index.warnings)
+    for entry in index.entries:
+        source_id = PurePosixPath(entry.relative_path).with_suffix("").as_posix()
+        resolved_path = root.joinpath(*PurePosixPath(entry.relative_path).parts)
         try:
-            resolved_path = source_path.resolve(strict=True)
-            relative_path = resolved_path.relative_to(root)
-            source_id = relative_path.with_suffix("").as_posix()
-        except (OSError, ValueError):
-            warnings_list.append(f"Пропущен снимок вне разрешённой папки: {source_path.name}.")
-            continue
-        try:
-            with rasterio.open(resolved_path) as dataset:
-                if dataset.crs is None:
-                    raise ValueError("CRS не задана")
-                raster_crs = PyprojCRS.from_user_input(dataset.crs)
-                to_raster = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
-                raster_aoi = transform_geometry(to_raster.transform, aoi_wgs84)
-                raster_footprint = box(*dataset.bounds)
-                if (
-                    raster_footprint.is_empty
-                    or not raster_footprint.is_valid
-                    or raster_footprint.area <= 0
-                ):
-                    raise ValueError("некорректный географический контур")
-                if raster_aoi.intersection(raster_footprint).area <= 0:
-                    continue
-                wgs84_bounds = transform_bounds(
-                    dataset.crs,
-                    "EPSG:4326",
-                    *dataset.bounds,
-                    densify_pts=21,
-                )
-                coverage_parts.append(box(*wgs84_bounds).intersection(aoi_wgs84))
-                matches.append(IntersectingImage(source_id=source_id, path=resolved_path))
+            raster_crs = PyprojCRS.from_user_input(entry.crs)
+            to_raster = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+            raster_aoi = transform_geometry(to_raster.transform, aoi_wgs84)
+            raster_footprint = box(*entry.bounds)
+            if (
+                raster_footprint.is_empty
+                or not raster_footprint.is_valid
+                or raster_footprint.area <= 0
+            ):
+                raise ValueError("некорректный географический контур")
+            if raster_aoi.intersection(raster_footprint).area <= 0:
+                continue
+            coverage_parts.append(box(*entry.wgs84_bounds).intersection(aoi_wgs84))
+            matches.append(IntersectingImage(source_id=source_id, path=resolved_path))
         except Exception as exc:  # noqa: BLE001
             warnings_list.append(f"Пропущен нечитаемый снимок {source_id}: {exc}.")
     aoi_area = _geodesic_geometry_area(aoi_wgs84)

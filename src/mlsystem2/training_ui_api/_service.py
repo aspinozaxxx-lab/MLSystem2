@@ -42,10 +42,12 @@ from ._config import TrainingUIAPIConfig, get_config
 from ._dataset_catalog import (
     create_dataset_class as _create_dataset_class,
     create_managed_dataset as _create_managed_dataset,
+    dataset_class_row,
     find_managed_dataset,
     list_managed_classes,
     list_managed_datasets,
     managed_dataset_catalog,
+    primary_training_result,
     set_primary_dataset as _set_primary_dataset,
     synchronize_dataset_catalog,
     update_dataset_class as _update_dataset_class,
@@ -250,29 +252,18 @@ def result_classes(
     catalog = list_managed_classes(session, config)
     output: list[ResultClassInfo] = []
     for class_info in catalog:
+        primary_model = primary_training_result(session, class_info.key)
         result_datasets: list[ResultDatasetInfo] = []
         for dataset in class_info.datasets:
             test_f1 = None
             test_f1_status = None
             test_f1_training_result_id = None
             if primary_test_sample(session, dataset.key) is not None:
-                result = session.scalar(
-                    select(TrainingResultRow)
-                    .join(
-                        TrainingResultTestMetricRow,
-                        TrainingResultTestMetricRow.training_result_id
-                        == TrainingResultRow.id,
-                    )
-                    .where(
-                        TrainingResultRow.class_key == dataset.key,
-                        TrainingResultRow.status == ResultStatus.OK.value,
-                        TrainingResultTestMetricRow.f1.is_not(None),
-                    )
-                    .order_by(
-                        TrainingResultRow.created_at.desc(),
-                        TrainingResultRow.id.desc(),
-                    )
-                    .limit(1)
+                result = (
+                    primary_model
+                    if primary_model is not None
+                    and dataset.key in {primary_model.dataset_key, primary_model.class_key}
+                    else None
                 )
                 if result is not None:
                     info = training_result_test_f1_info(session, result, config)
@@ -1028,15 +1019,13 @@ def dataset_results(
     successful_test_statuses = [
         info.test_f1.status
         for row, info in zip(rows, result_infos, strict=True)
-        if row.status == ResultStatus.OK.value and info.test_f1 is not None
+        if row.status == ResultStatus.OK.value and info.is_primary and info.test_f1 is not None
     ]
     if primary is None:
         test_f1_status = "unavailable"
     elif successful_test_statuses and all(
         item == "current" for item in successful_test_statuses
-    ) and len(successful_test_statuses) == sum(
-        row.status == ResultStatus.OK.value for row in rows
-    ):
+    ) and len(successful_test_statuses) == 1:
         test_f1_status = "current"
     elif any(item in {"queued", "running"} for item in successful_test_statuses):
         test_f1_status = "running"
@@ -1075,6 +1064,34 @@ def recalculate_dataset_test_f1(
     queue_class_test_f1(session, dataset_key, config)
     session.flush()
     return dataset_results(session, dataset_key, config)
+
+
+def set_primary_training_result(
+    session: Session,
+    result_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+) -> TrainingResultInfo:
+    """Назначить успешный результат основной сетью его класса."""
+
+    row = session.get(TrainingResultRow, result_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
+    if row.status != ResultStatus.OK.value:
+        raise TrainingUIAPIError("Основной можно назначить только успешно обученную сеть.")
+    class_row = dataset_class_row(session, row.dataset_key or row.class_key)
+    if class_row is None:
+        synchronize_dataset_catalog(session, config)
+        class_row = dataset_class_row(session, row.dataset_key or row.class_key)
+    if class_row is None:
+        raise TrainingUIAPIError(f"Класс результата не найден: {row.class_key}")
+    class_row.primary_training_result_id = row.id
+    class_row.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    try:
+        queue_class_test_f1(session, row.class_key, config)
+    except TrainingUIAPIError:
+        pass
+    return _training_result_info(session, row, config=config)
 
 
 def result_changes(
@@ -2315,6 +2332,7 @@ def _training_result_info(
             .order_by(PseudoMarkupResultRow.created_at.desc())
         ).all()
     job = _job_from_map(session, row.job_id, jobs_by_id)
+    is_primary = _is_primary_training_result(session, row)
     return TrainingResultInfo(
         id=row.id,
         job_id=row.job_id,
@@ -2323,6 +2341,7 @@ def _training_result_info(
         dataset_version=row.dataset_version,
         model_name=row.model_name,
         architecture=row.architecture,
+        is_primary=is_primary,
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         f1_score=row.f1_score,
@@ -2335,9 +2354,14 @@ def _training_result_info(
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         error=job.error if job is not None else None,
         progress=_training_result_progress(session, row, jobs_by_id),
-        test_f1=training_result_test_f1_info(session, row, config),
+        test_f1=training_result_test_f1_info(session, row, config) if is_primary else None,
         pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],
     )
+
+
+def _is_primary_training_result(session: Session, row: TrainingResultRow) -> bool:
+    selected = primary_training_result(session, row.dataset_key or row.class_key)
+    return selected is not None and selected.id == row.id
 
 
 def _pseudo_markup_info(

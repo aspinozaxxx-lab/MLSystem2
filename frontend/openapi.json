@@ -2599,6 +2599,202 @@
         }
       }
     },
+    "/api/v1/pseudolabel/classes": {
+      "get": {
+        "tags": [
+          "pseudolabel"
+        ],
+        "summary": "List Classes",
+        "description": "Vernut dostupnye klassy tekushchemu polzovatelyu.",
+        "operationId": "list_classes_api_v1_pseudolabel_classes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudolabelClassListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pseudolabel/jobs": {
+      "post": {
+        "tags": [
+          "pseudolabel"
+        ],
+        "summary": "Create Job",
+        "description": "Sozdat zafiksirovannoe AOI-zadanie.",
+        "operationId": "create_job_api_v1_pseudolabel_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PseudolabelJobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudolabelJobInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pseudolabel/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "pseudolabel"
+        ],
+        "summary": "Get Job",
+        "description": "Vernut publichnoe sostoyanie zadaniya.",
+        "operationId": "get_job_api_v1_pseudolabel_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudolabelJobInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pseudolabel"
+        ],
+        "summary": "Cancel Job",
+        "description": "Ostanovit aktivnoe zadanie.",
+        "operationId": "cancel_job_api_v1_pseudolabel_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudolabelJobInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pseudolabel/jobs/{job_id}/result": {
+      "get": {
+        "tags": [
+          "pseudolabel"
+        ],
+        "summary": "Get Result",
+        "description": "Vernut gotovyi GeoJSON bez servernyh putei.",
+        "operationId": "get_result_api_v1_pseudolabel_jobs__job_id__result_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Result Api V1 Pseudolabel Jobs  Job Id  Result Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/classes": {
       "get": {
         "summary": "Get Result Classes",
@@ -2744,6 +2940,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DatasetResultsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/primary": {
+      "post": {
+        "summary": "Post Primary Training Result",
+        "operationId": "post_primary_training_result_api_v1_results_training__result_id__primary_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingResultInfo"
                 }
               }
             }
@@ -5099,6 +5335,440 @@
         ],
         "title": "PseudoMarkupResultInfo"
       },
+      "PseudolabelClassInfo": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "title": "Class Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "model_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Model Id"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          },
+          "trained_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Trained At"
+          },
+          "model_imagery_type": {
+            "type": "string",
+            "enum": [
+              "kanopus",
+              "ortho"
+            ],
+            "title": "Model Imagery Type"
+          },
+          "input_channels": {
+            "type": "integer",
+            "enum": [
+              3,
+              4
+            ],
+            "title": "Input Channels"
+          },
+          "target_resolution_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Resolution M"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "class_id",
+          "display_name",
+          "model_id",
+          "model_version",
+          "model_name",
+          "trained_at",
+          "model_imagery_type",
+          "input_channels"
+        ],
+        "title": "PseudolabelClassInfo",
+        "description": "Klass i poslednyaya prigodnaya model."
+      },
+      "PseudolabelClassListResponse": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/PseudolabelClassInfo"
+            },
+            "type": "array",
+            "title": "Classes"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/PseudolabelSourceInfo"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PseudolabelClassListResponse",
+        "description": "Spisok dostupnyh klassov."
+      },
+      "PseudolabelErrorInfo": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PseudolabelErrorInfo",
+        "description": "Strukturirovannaya oshibka job."
+      },
+      "PseudolabelGeometry": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "Polygon",
+              "MultiPolygon"
+            ],
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {},
+            "type": "array",
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "PseudolabelGeometry",
+        "description": "Poligonalnaya geometriya AOI."
+      },
+      "PseudolabelJobCreate": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Class Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 180,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "aoi": {
+            "$ref": "#/components/schemas/PseudolabelGeometry"
+          },
+          "aoi_crs": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Aoi Crs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "class_id",
+          "aoi",
+          "aoi_crs"
+        ],
+        "title": "PseudolabelJobCreate",
+        "description": "Minimalnyi zapros na servernoe raspoznavanie."
+      },
+      "PseudolabelJobInfo": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "class_id": {
+            "type": "string",
+            "title": "Class Id"
+          },
+          "model_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Model Id"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "current_stage": {
+            "type": "string",
+            "title": "Current Stage"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PseudolabelErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "source_image_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Image Ids"
+          },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "model_imagery_type": {
+            "type": "string",
+            "enum": [
+              "kanopus",
+              "ortho"
+            ],
+            "title": "Model Imagery Type"
+          },
+          "source_imagery_type": {
+            "type": "string",
+            "title": "Source Imagery Type"
+          },
+          "channel_mapping": {
+            "type": "string",
+            "title": "Channel Mapping"
+          },
+          "target_resolution_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Resolution M"
+          },
+          "source_attributions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Attributions"
+          },
+          "source_license_url": {
+            "type": "string",
+            "title": "Source License Url",
+            "default": ""
+          },
+          "performance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Performance"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "class_id",
+          "model_id",
+          "model_version",
+          "model_name",
+          "created_at",
+          "current_stage",
+          "source_id",
+          "source_name",
+          "model_imagery_type",
+          "source_imagery_type",
+          "channel_mapping"
+        ],
+        "title": "PseudolabelJobInfo",
+        "description": "Publichnoe sostoyanie AOI job."
+      },
+      "PseudolabelSourceInfo": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "local",
+              "catalog",
+              "xyz",
+              "tms",
+              "wmts"
+            ],
+            "title": "Kind"
+          },
+          "protocol": {
+            "type": "string",
+            "title": "Protocol"
+          },
+          "native_channels": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Native Channels"
+          },
+          "imagery_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imagery Type"
+          },
+          "attribution": {
+            "type": "string",
+            "title": "Attribution"
+          },
+          "license_url": {
+            "type": "string",
+            "title": "License Url"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "display_name",
+          "kind",
+          "protocol",
+          "native_channels",
+          "attribution",
+          "license_url",
+          "available"
+        ],
+        "title": "PseudolabelSourceInfo",
+        "description": "Доступный серверу источник снимков."
+      },
       "QualityMetric": {
         "type": "string",
         "enum": [
@@ -5585,7 +6255,8 @@
         "enum": [
           "scenes_txt",
           "annotation_geojson",
-          "pseudo_markup_geojson"
+          "pseudo_markup_geojson",
+          "pseudolabel_geojson"
         ],
         "title": "StoredFileKind"
       },
@@ -6863,6 +7534,11 @@
           "architecture": {
             "type": "string",
             "title": "Architecture"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
           },
           "input_channels": {
             "type": "integer",

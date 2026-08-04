@@ -10,7 +10,12 @@ class PluginContractError(ValueError):
     """Oshibka proverki otveta servera."""
 
 
-def build_job_payload(class_id: str, aoi: dict[str, Any], aoi_crs: str) -> dict[str, Any]:
+def build_job_payload(
+    class_id: str,
+    aoi: dict[str, Any],
+    aoi_crs: str,
+    source_id: str | None = None,
+) -> dict[str, Any]:
     """Sobrat minimalnyi zapros bez rasterov i klientskih putei."""
 
     if aoi.get("type") not in {"Polygon", "MultiPolygon"}:
@@ -19,7 +24,12 @@ def build_job_payload(class_id: str, aoi: dict[str, Any], aoi_crs: str) -> dict[
         raise PluginContractError("Класс распознавания не выбран.")
     if not aoi_crs.strip():
         raise PluginContractError("CRS зоны интереса не задана.")
-    return {"class_id": class_id, "aoi": aoi, "aoi_crs": aoi_crs}
+    payload = {"class_id": class_id, "aoi": aoi, "aoi_crs": aoi_crs}
+    if source_id is not None:
+        if not source_id.strip():
+            raise PluginContractError("Источник снимков не выбран.")
+        payload["source_id"] = source_id
+    return payload
 
 
 def validate_feature_collection(payload: object) -> dict[str, Any]:

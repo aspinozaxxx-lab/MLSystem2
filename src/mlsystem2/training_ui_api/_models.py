@@ -52,6 +52,11 @@ class DatasetClassRow(Base):
         nullable=True,
     )
     primary_dataset_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    primary_training_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_results.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

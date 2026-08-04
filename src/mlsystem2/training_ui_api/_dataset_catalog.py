@@ -70,6 +70,56 @@ def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -
         session.flush()
 
 
+def primary_training_result(
+    session: Session,
+    class_or_dataset_key: str,
+) -> TrainingResultRow | None:
+    """Вернуть явно выбранную основную сеть или совместимый последний результат."""
+
+    class_row = dataset_class_row(session, class_or_dataset_key)
+    if class_row is not None and class_row.primary_training_result_id is not None:
+        return session.get(TrainingResultRow, class_row.primary_training_result_id)
+    dataset_keys = (
+        session.scalars(select(DatasetRow.key).where(DatasetRow.class_id == class_row.id)).all()
+        if class_row is not None
+        else [class_or_dataset_key]
+    )
+    return session.scalar(
+        select(TrainingResultRow)
+        .where(
+            (
+                TrainingResultRow.dataset_key.in_(dataset_keys)
+                | TrainingResultRow.class_key.in_(dataset_keys)
+                | (TrainingResultRow.class_key == class_or_dataset_key)
+            ),
+            TrainingResultRow.status == "ok",
+        )
+        .order_by(
+            TrainingResultRow.trained_at.desc().nullslast(),
+            TrainingResultRow.created_at.desc(),
+            TrainingResultRow.id.desc(),
+        )
+        .limit(1)
+    )
+
+
+def dataset_class_row(
+    session: Session,
+    class_or_dataset_key: str,
+) -> DatasetClassRow | None:
+    class_row = session.scalar(
+        select(DatasetClassRow).where(DatasetClassRow.key == class_or_dataset_key)
+    )
+    if class_row is not None:
+        return class_row
+    return session.scalar(
+        select(DatasetClassRow)
+        .join(DatasetRow, DatasetRow.class_id == DatasetClassRow.id)
+        .where(DatasetRow.key == class_or_dataset_key)
+        .limit(1)
+    )
+
+
 def list_managed_datasets(
     session: Session,
     config: TrainingUIAPIConfig,

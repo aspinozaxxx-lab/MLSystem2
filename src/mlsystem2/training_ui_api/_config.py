@@ -72,6 +72,11 @@ class TrainingUIAPIConfig:
     pseudolabel_max_aoi_area_m2: float | None
     pseudolabel_max_vertices: int
     pseudolabel_job_timeout_seconds: int
+    pseudolabel_imagery_providers_path: Path | None = None
+    pseudolabel_image_scan_workers: int = 8
+    pseudolabel_tile_read_workers: int = 4
+    pseudolabel_prefetch_batches: int = 2
+    pseudolabel_external_http_workers: int = 8
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -154,6 +159,25 @@ def get_config() -> TrainingUIAPIConfig:
             1,
             _int_env("MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS", 3600),
         ),
+        pseudolabel_imagery_providers_path=_optional_path_env(
+            "MLSYSTEM2_PSEUDOLABEL_IMAGERY_PROVIDERS_PATH"
+        ),
+        pseudolabel_image_scan_workers=max(
+            1,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_IMAGE_SCAN_WORKERS", 8),
+        ),
+        pseudolabel_tile_read_workers=max(
+            1,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_TILE_READ_WORKERS", 4),
+        ),
+        pseudolabel_prefetch_batches=max(
+            1,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_PREFETCH_BATCHES", 2),
+        ),
+        pseudolabel_external_http_workers=max(
+            1,
+            _int_env("MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS", 8),
+        ),
     )
 
 
@@ -162,3 +186,8 @@ def _optional_positive_float_env(name: str) -> float | None:
 
     value = _float_env(name, 0.0)
     return value if value > 0 else None
+
+
+def _optional_path_env(name: str) -> Path | None:
+    value = os.getenv(name, "").strip()
+    return Path(value) if value else None

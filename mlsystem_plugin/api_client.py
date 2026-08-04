@@ -54,12 +54,18 @@ class APIClient(QObject):
         self._request(operation, "GET", "/api/v1/pseudolabel/classes")
 
     # Sozdaet zadanie s minimalnym telom.
-    def create_job(self, class_id: str, aoi: dict[str, Any], aoi_crs: str) -> None:
+    def create_job(
+        self,
+        class_id: str,
+        aoi: dict[str, Any],
+        aoi_crs: str,
+        source_id: str | None = None,
+    ) -> None:
         self._request(
             "create_job",
             "POST",
             "/api/v1/pseudolabel/jobs",
-            build_job_payload(class_id, aoi, aoi_crs),
+            build_job_payload(class_id, aoi, aoi_crs, source_id),
         )
 
     # Zaprashivaet sostoyanie zadaniya.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
-from ._dataset_catalog import find_managed_dataset, list_managed_datasets
+from ._dataset_catalog import dataset_class_row, find_managed_dataset, list_managed_datasets
 from ._datasets import CUSTOM_KEY, count_scenes_file_images, imagery_images_dir
 from ._models import (
     AutomationControlRow,
@@ -553,6 +554,8 @@ def _build_pseudolabel_aoi_config(
     threshold = state.get("checkpoint_threshold")
     if threshold is None:
         raise RuntimeError("У зафиксированной модели отсутствует порог распознавания.")
+    images_root = str(state.get("images_root") or "")
+    index_key = hashlib.sha256(images_root.encode("utf-8")).hexdigest()[:20] if images_root else ""
     return {
         "operation": PSEUDOLABEL_AOI_OPERATION,
         "job_id": str(row.id),
@@ -560,7 +563,12 @@ def _build_pseudolabel_aoi_config(
         "inference_backend": "pytorch_one_off",
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
-        "images_root": str(state.get("images_root") or ""),
+        "images_root": images_root,
+        "raster_index_path": (
+            str(config.stored_files_root / "cache" / "pseudolabel-image-index" / f"{index_key}.json")
+            if index_key
+            else None
+        ),
         "aoi": state.get("aoi"),
         "aoi_crs": "EPSG:4326",
         "aoi_area_m2": state.get("aoi_area_m2"),
@@ -576,12 +584,29 @@ def _build_pseudolabel_aoi_config(
         "checkpoint_f1_score": state.get("checkpoint_f1_score"),
         "checkpoint_epoch": state.get("checkpoint_epoch"),
         "imagery_type": state.get("imagery_type"),
+        "model_imagery_type": state.get("model_imagery_type") or state.get("imagery_type"),
+        "target_resolution_m": state.get("target_resolution_m"),
+        "resample_to_resolution_m": state.get("resample_to_resolution_m"),
+        "source_id": state.get("source_id"),
+        "source_name": state.get("source_name"),
+        "source_kind": state.get("source_kind"),
+        "source_protocol": state.get("source_protocol"),
+        "source_imagery_type": state.get("source_imagery_type"),
+        "source_native_channels": state.get("source_native_channels"),
+        "source_attribution": state.get("source_attribution"),
+        "source_license_url": state.get("source_license_url"),
+        "source_settings": state.get("source_settings") or {},
+        "channel_mapping": state.get("channel_mapping"),
         "input_channels": _int_value(state, "input_channels", 4),
         "postprocess_config": state.get("inference_template_config") or {},
         "threshold": float(threshold),
         "tile_size": _int_value(state, "tile_size", 768),
         "stride": _int_value(state, "stride", 768),
         "batch_size": _int_value(state, "batch_size", 1),
+        "image_scan_workers": config.pseudolabel_image_scan_workers,
+        "tile_read_workers": config.pseudolabel_tile_read_workers,
+        "prefetch_batches": config.pseudolabel_prefetch_batches,
+        "external_http_workers": config.pseudolabel_external_http_workers,
         "device": "cuda",
     }
 
@@ -852,6 +877,11 @@ def _finish_training_job(
     session.flush()
     if succeeded:
         for result in training_results:
+            class_row = dataset_class_row(session, result.dataset_key or result.class_key)
+            if class_row is not None and class_row.primary_training_result_id is None:
+                class_row.primary_training_result_id = result.id
+                class_row.updated_at = _now()
+                session.flush()
             try:
                 queue_training_result_test_f1(
                     session,
@@ -1000,6 +1030,11 @@ def _finish_pseudolabel_aoi_job(
         state["source_image_ids"] = _string_values(report.get("source_image_ids"))
         state["coverage_percent"] = _optional_number(report.get("coverage_percent"))
         state["warnings"] = _string_values(report.get("warnings"))
+        state["source_attributions"] = _string_values(
+            report.get("source_attributions")
+        ) or state.get("source_attributions", [])
+        if isinstance(report.get("performance"), dict):
+            state["performance"] = report["performance"]
     state["result_file_id"] = str(file_row.id) if file_row is not None else None
     if succeeded:
         state["error"] = None

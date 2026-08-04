@@ -63,6 +63,8 @@ def _stage_text(value: str) -> str:
         "queued": "ожидание",
         "running": "выполнение",
         "selecting_images": "подбор снимков",
+        "downloading_imagery": "загрузка внешних снимков",
+        "preparing_resolution": "подготовка разрешения",
         "loading_model": "загрузка модели",
         "inference": "инференс",
         "vectorization": "векторизация",
@@ -135,6 +137,8 @@ class MLSystemDockWidget(QDockWidget):
         recognition_layout = QGridLayout(recognition)
         self.class_combo = QComboBox()
         self.class_combo.currentIndexChanged.connect(self._class_changed)
+        self.source_combo = QComboBox()
+        self.source_combo.currentIndexChanged.connect(self._source_changed)
         self.model_label = QLabel("Модель: —")
         self.draw_aoi_button = QPushButton("Нарисовать AOI")
         self.use_aoi_button = QPushButton("Использовать эту AOI")
@@ -156,15 +160,17 @@ class MLSystemDockWidget(QDockWidget):
         self.warning_label.setWordWrap(True)
         recognition_layout.addWidget(QLabel("Класс"), 0, 0)
         recognition_layout.addWidget(self.class_combo, 0, 1, 1, 2)
-        recognition_layout.addWidget(self.model_label, 1, 0, 1, 3)
-        recognition_layout.addWidget(self.draw_aoi_button, 2, 0)
-        recognition_layout.addWidget(self.use_aoi_button, 2, 1, 1, 2)
-        recognition_layout.addWidget(self.aoi_label, 3, 0, 1, 3)
-        recognition_layout.addWidget(self.start_button, 4, 0, 1, 2)
-        recognition_layout.addWidget(self.cancel_button, 4, 2)
-        recognition_layout.addWidget(self.status_label, 5, 0, 1, 3)
-        recognition_layout.addWidget(self.progress, 6, 0, 1, 3)
-        recognition_layout.addWidget(self.warning_label, 7, 0, 1, 3)
+        recognition_layout.addWidget(QLabel("Источник снимков"), 1, 0)
+        recognition_layout.addWidget(self.source_combo, 1, 1, 1, 2)
+        recognition_layout.addWidget(self.model_label, 2, 0, 1, 3)
+        recognition_layout.addWidget(self.draw_aoi_button, 3, 0)
+        recognition_layout.addWidget(self.use_aoi_button, 3, 1, 1, 2)
+        recognition_layout.addWidget(self.aoi_label, 4, 0, 1, 3)
+        recognition_layout.addWidget(self.start_button, 5, 0, 1, 2)
+        recognition_layout.addWidget(self.cancel_button, 5, 2)
+        recognition_layout.addWidget(self.status_label, 6, 0, 1, 3)
+        recognition_layout.addWidget(self.progress, 7, 0, 1, 3)
+        recognition_layout.addWidget(self.warning_label, 8, 0, 1, 3)
         root.addWidget(recognition)
 
         review = QGroupBox("Результаты распознавания")
@@ -270,11 +276,47 @@ class MLSystemDockWidget(QDockWidget):
     # Pokazyvaet versiyu modeli vybrannogo klassa.
     def _class_changed(self) -> None:
         item = self.class_combo.currentData()
+        if isinstance(item, dict):
+            default_source = str(item.get("model_imagery_type") or "")
+            source_index = next(
+                (
+                    index
+                    for index in range(self.source_combo.count())
+                    if isinstance(self.source_combo.itemData(index), dict)
+                    and str(self.source_combo.itemData(index).get("source_id") or "")
+                    == default_source
+                ),
+                -1,
+            )
+            if source_index >= 0:
+                self.source_combo.setCurrentIndex(source_index)
+        self._update_model_description()
+
+    def _source_changed(self) -> None:
+        self._update_model_description()
+
+    def _update_model_description(self) -> None:
+        item = self.class_combo.currentData()
+        source = self.source_combo.currentData()
+        if not isinstance(item, dict):
+            self.model_label.setText("Модель: —")
+            return
+        imagery_type = str(item.get("model_imagery_type") or "—")
+        channels = item.get("input_channels") or "—"
+        resolution = item.get("target_resolution_m")
+        resolution_text = f"{float(resolution):g} м/пикс." if resolution is not None else "не определено"
         self.model_label.setText(
-            f"Модель: {item.get('model_name')} / {item.get('model_version')}"
-            if isinstance(item, dict)
-            else "Модель: —"
+            f"Модель: {item.get('model_name')} / {item.get('model_version')}; "
+            f"{imagery_type}, {channels} кан., {resolution_text}"
         )
+        messages = []
+        if isinstance(source, dict):
+            source_type = str(source.get("imagery_type") or "external_rgb")
+            if source_type != imagery_type:
+                messages.append("Перекрёстное применение: снимки будут приведены к разрешению модели.")
+            if channels == 4 and source_type != "kanopus":
+                messages.append("NIR отсутствует: четвёртый канал будет заполнен нулями.")
+        self.warning_label.setText("\n".join(messages))
 
     # Aktiviruet instrument risovaniya bez smeny aktivnogo sloya.
     def _draw_aoi(self) -> None:
@@ -350,8 +392,12 @@ class MLSystemDockWidget(QDockWidget):
     def _start_job(self) -> None:
         self.save_current_settings()
         class_info = self.class_combo.currentData()
+        source_info = self.source_combo.currentData()
         if not isinstance(class_info, dict):
             self._show_error("Выберите класс распознавания.")
+            return
+        if not isinstance(source_info, dict):
+            self._show_error("Выберите источник снимков.")
             return
         if self._aoi_geometry is None or self._aoi_crs is None:
             self._show_error("Нарисуйте область и нажмите «Использовать эту AOI».")
@@ -376,6 +422,7 @@ class MLSystemDockWidget(QDockWidget):
             str(class_info["class_id"]),
             aoi,
             self._aoi_crs.authid() or self._aoi_crs.toWkt(),
+            str(source_info["source_id"]),
         )
 
     # Ostanavlivaet polling i zaprashivaet servernuyu otmenu.
@@ -400,10 +447,22 @@ class MLSystemDockWidget(QDockWidget):
         elif operation == "classes":
             self._connecting = False
             self.class_combo.clear()
+            self.source_combo.clear()
             classes = payload.get("classes", []) if isinstance(payload, dict) else []
+            sources = payload.get("sources", []) if isinstance(payload, dict) else []
+            for item in sources:
+                if not item.get("available", True):
+                    continue
+                self.source_combo.addItem(
+                    str(item.get("display_name") or item.get("source_id")),
+                    item,
+                )
             for item in classes:
                 self.class_combo.addItem(str(item.get("display_name") or item.get("class_id")), item)
-            self.status_label.setText(f"Статус: подключено; классов: {len(classes)}")
+            self._class_changed()
+            self.status_label.setText(
+                f"Статус: подключено; классов: {len(classes)}; источников: {self.source_combo.count()}"
+            )
         elif operation == "create_job" and isinstance(payload, dict):
             self._job_id = str(payload["job_id"])
             self.status_label.setText("Статус: в очереди")

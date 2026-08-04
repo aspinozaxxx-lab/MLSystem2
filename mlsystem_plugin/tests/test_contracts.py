@@ -20,6 +20,17 @@ def test_job_payload_contains_only_minimal_fields() -> None:
     assert set(payload) == {"class_id", "aoi", "aoi_crs"}
 
 
+def test_job_payload_includes_selected_imagery_source() -> None:
+    payload = build_job_payload(
+        "class-1",
+        {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+        "EPSG:4326",
+        "ortho",
+    )
+
+    assert payload["source_id"] == "ortho"
+
+
 # Proveriaet unikalnost stabilnyh ID pri zagruzke.
 def test_feature_collection_rejects_duplicate_candidate_ids() -> None:
     feature = {

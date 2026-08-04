@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
-from ._dataset_catalog import find_managed_dataset
+from ._dataset_catalog import find_managed_dataset, primary_training_result
 from ._markup_export import (
     _mask_edge,
     _run_milp,
@@ -2104,14 +2104,18 @@ def _latest_pseudo_markup(
     session: Session,
     dataset_key: str,
 ) -> PseudoMarkupResultRow | None:
-    return session.scalar(
-        select(PseudoMarkupResultRow)
-        .where(
+    primary = primary_training_result(session, dataset_key)
+    conditions = [
             PseudoMarkupResultRow.status == "ok",
             PseudoMarkupResultRow.class_key == dataset_key,
             PseudoMarkupResultRow.dataset_key == dataset_key,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
-        )
+    ]
+    if primary is not None:
+        conditions.append(PseudoMarkupResultRow.training_result_id == primary.id)
+    return session.scalar(
+        select(PseudoMarkupResultRow)
+        .where(*conditions)
         .options(
             selectinload(PseudoMarkupResultRow.geojson_file),
             selectinload(PseudoMarkupResultRow.training_result),

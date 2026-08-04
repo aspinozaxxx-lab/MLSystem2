@@ -41,14 +41,22 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
   пустое значение отключает ограничение, что является поведением по умолчанию.
 - `MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES` — максимальное число вершин, по умолчанию `10000`.
 - `MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS` — тайм-аут исполнения, по умолчанию `3600` секунд.
+- `MLSYSTEM2_PSEUDOLABEL_IMAGERY_PROVIDERS_PATH` — путь к YAML-каталогу разрешённых XYZ, TMS и
+  WMTS-провайдеров; пример находится в `configs/imagery-providers.example.yaml`.
+- `MLSYSTEM2_PSEUDOLABEL_IMAGE_SCAN_WORKERS` — число потоков обновления TIFF-индекса, по умолчанию `8`.
+- `MLSYSTEM2_PSEUDOLABEL_TILE_READ_WORKERS` — число независимых Rasterio handles, по умолчанию `4`.
+- `MLSYSTEM2_PSEUDOLABEL_PREFETCH_BATCHES` — число заранее читаемых CUDA batch, по умолчанию `2`.
+- `MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS` — размер очереди загрузки внешних тайлов, по умолчанию `8`.
 
 ## Контракт
 
 ### `GET /api/v1/pseudolabel/classes`
 
-Возвращает только классы, у основного датасета которых есть последний успешный `TrainingResultRow`
+Возвращает только классы, у которых есть основная успешная сеть
 с завершённым MLflow run, метрикой порога и доступным `checkpoints/best.pt`. В ответе есть
-`class_id`, `display_name`, `model_id`, `model_version`, `model_name`, `trained_at`.
+`class_id`, `display_name`, `model_id`, `model_version`, `model_name`, `trained_at`,
+`model_imagery_type`, `input_channels`, `target_resolution_m` и массив `sources`. Для старой БД без
+ручного выбора временно используется последняя пригодная сеть, а миграция назначает её основной.
 
 ### `POST /api/v1/pseudolabel/jobs`
 
@@ -57,6 +65,7 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 ```json
 {
   "class_id": "идентификатор-класса",
+  "source_id": "ortho",
   "aoi": {
     "type": "Polygon",
     "coordinates": [[[30.0, 60.0], [30.1, 60.0], [30.1, 59.9], [30.0, 60.0]]]
@@ -65,16 +74,19 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 }
 ```
 
+`source_id` необязателен для старого клиента: в этом случае выбирается тип обучающих снимков модели.
 Поддерживаются `Polygon` и `MultiPolygon`. Лишние поля запрещены, поэтому API не принимает
-растр, WMS URL, клиентские пути, путь модели или команду инференса. При создании фиксируются
+растр, произвольный URL, клиентские пути, путь модели или команду инференса. При создании фиксируются
 `model_id`, MLflow run id как `model_version`, checkpoint, threshold, inference-шаблон и параметры
-тайлинга. Более новая модель не изменяет уже созданное задание.
+тайлинга, источник, схема каналов и целевое разрешение. Более новая модель или изменение каталога
+источников не изменяет уже созданное задание.
 
 ### `GET /api/v1/pseudolabel/jobs/{job_id}`
 
 Возвращает `queued`, `running`, `succeeded`, `failed` или `cancelled`, процент прогресса,
 текущий этап, структурированную ошибку, предупреждения, стабильные `source_image_ids` и процент
-покрытия AOI.
+покрытия AOI, attribution, лицензию и метрики времени поиска, загрузки, ресемплинга, чтения,
+GPU и постобработки.
 
 ### `GET /api/v1/pseudolabel/jobs/{job_id}/result`
 
@@ -85,7 +97,9 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 перекрывающихся снимков сохраняется максимальная уверенность наблюдения.
 
 В `metadata` находятся `job_id`, `class_id`, `model_id`, `model_version`, `generated_at`,
-`output_crs`, `object_count`, `aoi_area_m2`, `source_image_ids`, `coverage_percent` и `warnings`.
+`output_crs`, `object_count`, `aoi_area_m2`, `source_image_ids`, `coverage_percent`, `warnings`,
+`source_id`, `model_imagery_type`, `source_imagery_type`, `channel_mapping`, `target_resolution_m`,
+`attributions` и `license_url`.
 
 ### `DELETE /api/v1/pseudolabel/jobs/{job_id}`
 
@@ -94,8 +108,10 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 
 ## Исполнение
 
-Сервер рекурсивно и детерминированно просматривает TIFF только в корне типа снимков основного
-датасета. Все пересекающие AOI снимки участвуют в обработке. Нулевое покрытие завершает задание
+Локальные источники `kanopus` и `ortho` читаются соответственно из `prepared_images/kanopus` и
+`prepared_images/orto`. Постоянный индекс TIFF обновляется по path, size и mtime восемью потоками;
+тёплый запрос не открывает каждый TIFF заново. Все пересекающие AOI снимки участвуют в обработке.
+Нулевое покрытие завершает задание
 ошибкой `SOURCE_IMAGES_NOT_FOUND`; частичное покрытие допустимо и возвращается как предупреждение.
 Runner читает только тайловые окна, пересекающие AOI, вызывает существующие загрузку checkpoint,
 и при необходимости добавляет соседние окна, пока связный объект, входящий в AOI, не перестанет
@@ -104,6 +120,22 @@ Runner читает только тайловые окна, пересекающ
 AOI сохраняются целиком без обрезания рамкой и получают детерминированные UUID. Результат публикуется
 только после успешной обработки всех выбранных TIFF; сбой любого снимка завершает задание ошибкой
 `SOURCE_IMAGE_PROCESSING_FAILED` со списком необработанных снимков.
+
+Модель и источник независимы. Канопус даёт RGB+NIR четырёхканальной модели либо первые три RGB
+трёхканальной. Ортофото и внешний RGB дают RGB трёхканальной модели либо RGB с полностью нулевым
+NIR четырёхканальной. Альфа-канал используется только как маска валидности. При совпадении типов
+сохраняется нативное разрешение, иначе источник приводится bilinear к медианному размеру пикселя
+обучающих TIFF, а маска — nearest. Неопределимое разрешение отклоняется кодом
+`MODEL_RESOLUTION_UNAVAILABLE`.
+
+Встроенный OpenAerialMap ищет покрытие по AOI, выбирает ближайшее к разрешению модели и затем самое
+новое изображение. Внешний каталог разрешает XYZ, TMS с обратной осью Y и WMTS 1.0 с
+GetCapabilities. Провайдер обязан указать attribution, license URL и
+`machine_analysis_permitted: true`. Авторизация поддерживает API key в query/header, bearer и
+OAuth2 client credentials; в YAML допустимы только имена переменных окружения, но не секреты.
+Стандартные Google Maps endpoints отклоняются. Число тайлов искусственно не ограничивается:
+сервер заранее проверяет свободное место, ограничивает только параллельную очередь, обрабатывает
+404, 429 `Retry-After`, тайм-ауты и временные ошибки и удаляет scratch после завершения или отмены.
 
 Ошибка имеет единый вид. `AOI_TOO_LARGE` возможна только тогда, когда администратор явно задал
 положительный `MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2`:

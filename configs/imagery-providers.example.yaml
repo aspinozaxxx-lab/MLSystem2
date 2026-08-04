@@ -1,0 +1,18 @@
+providers:
+  - id: copernicus_sentinel2
+    name: Copernicus Sentinel-2 RGB
+    protocol: wmts
+    capabilities_url: https://sh.dataspace.copernicus.eu/ogc/wmts/${COPERNICUS_INSTANCE_ID}
+    layer: TRUE_COLOR
+    matrix_set: PopularWebMercator256
+    style: default
+    format: image/png
+    attribution: Copernicus Sentinel data
+    license_url: https://dataspace.copernicus.eu/terms-and-conditions
+    machine_analysis_permitted: true
+    request_timeout_seconds: 60
+    auth:
+      type: oauth2_client_credentials
+      token_url: https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token
+      client_id_env: COPERNICUS_CLIENT_ID
+      client_secret_env: COPERNICUS_CLIENT_SECRET

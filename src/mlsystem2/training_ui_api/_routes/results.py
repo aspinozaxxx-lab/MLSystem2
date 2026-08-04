@@ -14,6 +14,7 @@ from mlsystem2.training_ui_api._service import (
     recalculate_dataset_test_f1,
     result_changes,
     result_classes,
+    set_primary_training_result,
 )
 from mlsystem2.training_ui_api.contracts import (
     DatasetResultsResponse,
@@ -21,6 +22,7 @@ from mlsystem2.training_ui_api.contracts import (
     PseudoMarkupResultInfo,
     ResultClassListResponse,
     ResultChangesResponse,
+    TrainingResultInfo,
 )
 
 from .common import RouteContext
@@ -84,6 +86,17 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> DatasetResultsResponse:
         return recalculate_dataset_test_f1(db, dataset_key, ctx.config)
+
+    @app.post(
+        "/api/v1/results/training/{result_id}/primary",
+        response_model=TrainingResultInfo,
+    )
+    def post_primary_training_result(
+        result_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TrainingResultInfo:
+        return set_primary_training_result(db, result_id, ctx.config)
 
     @app.delete("/api/v1/results/pseudo-markup/{result_id}", response_model=PseudoMarkupResultInfo)
     def delete_pseudo_markup(

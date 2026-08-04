@@ -895,7 +895,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
 
   return (
     <>
-      <PageHeader title="Экспорт моделей" subtitle="Последние успешные модели по датасетам MLMarkup" />
+      <PageHeader title="Экспорт моделей" subtitle="Основные сети классов" />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
           <PanelHeader
@@ -2104,6 +2104,8 @@ function formatTestF1Percent(value: number): string {
 }
 
 function latestSuccessfulTrainingResult(results: TrainingResultInfo[]): TrainingResultInfo | null {
+  const primary = results.find((item) => item.status === "ok" && item.is_primary);
+  if (primary) return primary;
   return (
     [...results]
       .filter((item) => item.status === "ok")
@@ -2861,6 +2863,14 @@ function DatasetResultsPage({
     showTrainingResultZipModal(result, bootstrap.datasets, run, showModal, closeModal);
   };
 
+  const setPrimaryResult = async (result: TrainingResultInfo) => {
+    if (result.is_primary) return;
+    const updated = await run(() =>
+      apiJson<TrainingResultInfo>(`/results/training/${result.id}/primary`, { method: "POST" }),
+    );
+    if (updated) await load();
+  };
+
   const deletePseudo = (item: PseudoMarkupResultInfo) => {
     showModal({
       title: "Удалить pseudo-markup",
@@ -2928,6 +2938,7 @@ function DatasetResultsPage({
           imageFolders={bootstrap.image_folders}
           onPseudo={showPseudo}
           onZip={showZip}
+          onPrimary={(result) => void setPrimaryResult(result)}
           onDeletePseudo={deletePseudo}
           showJobLog={showJobLog}
         />
@@ -3356,6 +3367,7 @@ function ResultsTable({
   imageFolders,
   onPseudo,
   onZip,
+  onPrimary,
   onDeletePseudo,
   showJobLog,
 }: {
@@ -3364,6 +3376,7 @@ function ResultsTable({
   imageFolders: ImageFolderInfo[];
   onPseudo: (result: TrainingResultInfo) => void;
   onZip: (result: TrainingResultInfo) => void;
+  onPrimary: (result: TrainingResultInfo) => void;
   onDeletePseudo: (item: PseudoMarkupResultInfo) => void;
   showJobLog: (jobId: string) => Promise<void>;
 }) {
@@ -3398,7 +3411,20 @@ function ResultsTable({
                 <tr className="training-result-row">
                   <td title="МОДЕЛЬ">
                     <span className="source-lines">
-                      <strong>{result.model_name}</strong>
+                      <strong className="inline-row">
+                        {result.status === "ok" ? (
+                          <button
+                            className="icon-button primary-result-star"
+                            type="button"
+                            title={result.is_primary ? "Основная сеть класса" : "Сделать основной сетью класса"}
+                            aria-label={result.is_primary ? "Основная сеть класса" : "Сделать основной сетью класса"}
+                            onClick={() => onPrimary(result)}
+                          >
+                            <Star className={result.is_primary ? "primary-star" : undefined} size={17} fill={result.is_primary ? "currentColor" : "none"} />
+                          </button>
+                        ) : null}
+                        {result.model_name}
+                      </strong>
                       <small className="muted">{result.architecture}</small>
                     </span>
                   </td>

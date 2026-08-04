@@ -1,12 +1,12 @@
 [general]
 name=MLSystem2 — распознавание объектов
 description=Распознавание, фильтрация и разбиение объектов в зоне интереса
-version=0.5.1
+version=0.6.0
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 author=MLSystem2
 email=
-about=Плагин отправляет на сервер только геометрию AOI, CRS и идентификатор класса.
+about=Плагин отправляет на сервер геометрию AOI, CRS, класс и выбранный источник снимков.
 category=Vector
 experimental=False
 deprecated=False

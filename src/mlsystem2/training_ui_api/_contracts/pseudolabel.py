@@ -43,6 +43,7 @@ class PseudolabelJobCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     class_id: str = Field(min_length=1, max_length=180)
+    source_id: str | None = Field(default=None, min_length=1, max_length=180)
     aoi: PseudolabelGeometry
     aoi_crs: str = Field(min_length=1, max_length=128)
 
@@ -58,6 +59,25 @@ class PseudolabelClassInfo(BaseModel):
     model_version: str
     model_name: str
     trained_at: datetime
+    model_imagery_type: Literal["kanopus", "ortho"]
+    input_channels: Literal[3, 4]
+    target_resolution_m: float | None = Field(default=None, gt=0)
+
+
+class PseudolabelSourceInfo(BaseModel):
+    """Доступный серверу источник снимков."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    display_name: str
+    kind: Literal["local", "catalog", "xyz", "tms", "wmts"]
+    protocol: str
+    native_channels: int = Field(gt=0)
+    imagery_type: str | None = None
+    attribution: str
+    license_url: str
+    available: bool
 
 
 class PseudolabelClassListResponse(BaseModel):
@@ -66,6 +86,7 @@ class PseudolabelClassListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     classes: list[PseudolabelClassInfo] = Field(default_factory=list)
+    sources: list[PseudolabelSourceInfo] = Field(default_factory=list)
 
 
 class PseudolabelErrorInfo(BaseModel):
@@ -97,6 +118,15 @@ class PseudolabelJobInfo(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     source_image_ids: list[str] = Field(default_factory=list)
     coverage_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    source_id: str
+    source_name: str
+    model_imagery_type: Literal["kanopus", "ortho"]
+    source_imagery_type: str
+    channel_mapping: str
+    target_resolution_m: float | None = Field(default=None, gt=0)
+    source_attributions: list[str] = Field(default_factory=list)
+    source_license_url: str = ""
+    performance: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [
@@ -107,4 +137,5 @@ __all__ = [
     "PseudolabelGeometry",
     "PseudolabelJobCreate",
     "PseudolabelJobInfo",
+    "PseudolabelSourceInfo",
 ]

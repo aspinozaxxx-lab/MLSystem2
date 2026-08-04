@@ -1019,6 +1019,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pseudolabel/classes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Classes
+         * @description Vernut dostupnye klassy tekushchemu polzovatelyu.
+         */
+        get: operations["list_classes_api_v1_pseudolabel_classes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pseudolabel/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Job
+         * @description Sozdat zafiksirovannoe AOI-zadanie.
+         */
+        post: operations["create_job_api_v1_pseudolabel_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pseudolabel/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job
+         * @description Vernut publichnoe sostoyanie zadaniya.
+         */
+        get: operations["get_job_api_v1_pseudolabel_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Job
+         * @description Ostanovit aktivnoe zadanie.
+         */
+        delete: operations["cancel_job_api_v1_pseudolabel_jobs__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pseudolabel/jobs/{job_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Result
+         * @description Vernut gotovyi GeoJSON bez servernyh putei.
+         */
+        get: operations["get_result_api_v1_pseudolabel_jobs__job_id__result_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/classes": {
         parameters: {
             query?: never;
@@ -1098,6 +1182,23 @@ export interface paths {
         put?: never;
         /** Post Test F1 */
         post: operations["post_test_f1_api_v1_results_datasets__dataset_key__test_f1_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/training/{result_id}/primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Primary Training Result */
+        post: operations["post_primary_training_result_api_v1_results_training__result_id__primary_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1890,6 +1991,190 @@ export interface components {
             progress?: components["schemas"]["RuntimeProgress"] | null;
         };
         /**
+         * PseudolabelClassInfo
+         * @description Klass i poslednyaya prigodnaya model.
+         */
+        PseudolabelClassInfo: {
+            /** Class Id */
+            class_id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Model Id
+             * Format: uuid
+             */
+            model_id: string;
+            /** Model Version */
+            model_version: string;
+            /** Model Name */
+            model_name: string;
+            /**
+             * Trained At
+             * Format: date-time
+             */
+            trained_at: string;
+            /**
+             * Model Imagery Type
+             * @enum {string}
+             */
+            model_imagery_type: "kanopus" | "ortho";
+            /**
+             * Input Channels
+             * @enum {integer}
+             */
+            input_channels: 3 | 4;
+            /** Target Resolution M */
+            target_resolution_m?: number | null;
+        };
+        /**
+         * PseudolabelClassListResponse
+         * @description Spisok dostupnyh klassov.
+         */
+        PseudolabelClassListResponse: {
+            /** Classes */
+            classes?: components["schemas"]["PseudolabelClassInfo"][];
+            /** Sources */
+            sources?: components["schemas"]["PseudolabelSourceInfo"][];
+        };
+        /**
+         * PseudolabelErrorInfo
+         * @description Strukturirovannaya oshibka job.
+         */
+        PseudolabelErrorInfo: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PseudolabelGeometry
+         * @description Poligonalnaya geometriya AOI.
+         */
+        PseudolabelGeometry: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "Polygon" | "MultiPolygon";
+            /** Coordinates */
+            coordinates: unknown[];
+        };
+        /**
+         * PseudolabelJobCreate
+         * @description Minimalnyi zapros na servernoe raspoznavanie.
+         */
+        PseudolabelJobCreate: {
+            /** Class Id */
+            class_id: string;
+            /** Source Id */
+            source_id?: string | null;
+            aoi: components["schemas"]["PseudolabelGeometry"];
+            /** Aoi Crs */
+            aoi_crs: string;
+        };
+        /**
+         * PseudolabelJobInfo
+         * @description Publichnoe sostoyanie AOI job.
+         */
+        PseudolabelJobInfo: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+            /** Class Id */
+            class_id: string;
+            /**
+             * Model Id
+             * Format: uuid
+             */
+            model_id: string;
+            /** Model Version */
+            model_version: string;
+            /** Model Name */
+            model_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Progress */
+            progress?: number | null;
+            /** Current Stage */
+            current_stage: string;
+            error?: components["schemas"]["PseudolabelErrorInfo"] | null;
+            /** Warnings */
+            warnings?: string[];
+            /** Source Image Ids */
+            source_image_ids?: string[];
+            /** Coverage Percent */
+            coverage_percent?: number | null;
+            /** Source Id */
+            source_id: string;
+            /** Source Name */
+            source_name: string;
+            /**
+             * Model Imagery Type
+             * @enum {string}
+             */
+            model_imagery_type: "kanopus" | "ortho";
+            /** Source Imagery Type */
+            source_imagery_type: string;
+            /** Channel Mapping */
+            channel_mapping: string;
+            /** Target Resolution M */
+            target_resolution_m?: number | null;
+            /** Source Attributions */
+            source_attributions?: string[];
+            /**
+             * Source License Url
+             * @default
+             */
+            source_license_url: string;
+            /** Performance */
+            performance?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PseudolabelSourceInfo
+         * @description Доступный серверу источник снимков.
+         */
+        PseudolabelSourceInfo: {
+            /** Source Id */
+            source_id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "local" | "catalog" | "xyz" | "tms" | "wmts";
+            /** Protocol */
+            protocol: string;
+            /** Native Channels */
+            native_channels: number;
+            /** Imagery Type */
+            imagery_type?: string | null;
+            /** Attribution */
+            attribution: string;
+            /** License Url */
+            license_url: string;
+            /** Available */
+            available: boolean;
+        };
+        /**
          * QualityMetric
          * @enum {string}
          */
@@ -2059,7 +2344,7 @@ export interface components {
          * StoredFileKind
          * @enum {string}
          */
-        StoredFileKind: "scenes_txt" | "annotation_geojson" | "pseudo_markup_geojson";
+        StoredFileKind: "scenes_txt" | "annotation_geojson" | "pseudo_markup_geojson" | "pseudolabel_geojson";
         /**
          * TemplateSource
          * @enum {string}
@@ -2534,6 +2819,11 @@ export interface components {
             model_name: string;
             /** Architecture */
             architecture: string;
+            /**
+             * Is Primary
+             * @default false
+             */
+            is_primary: boolean;
             /**
              * Input Channels
              * @default 4
@@ -4846,6 +5136,154 @@ export interface operations {
             };
         };
     };
+    list_classes_api_v1_pseudolabel_classes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudolabelClassListResponse"];
+                };
+            };
+        };
+    };
+    create_job_api_v1_pseudolabel_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PseudolabelJobCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudolabelJobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_v1_pseudolabel_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudolabelJobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_job_api_v1_pseudolabel_jobs__job_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudolabelJobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_result_api_v1_pseudolabel_jobs__job_id__result_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_result_classes_api_v1_results_classes_get: {
         parameters: {
             query?: never;
@@ -4970,6 +5408,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetResultsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_primary_training_result_api_v1_results_training__result_id__primary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingResultInfo"];
                 };
             };
             /** @description Validation Error */

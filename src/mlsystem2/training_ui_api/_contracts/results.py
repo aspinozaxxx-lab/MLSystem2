@@ -92,6 +92,7 @@ class TrainingResultInfo(BaseModel):
     dataset_version: str | None = None
     model_name: str
     architecture: str
+    is_primary: bool = False
     input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     f1_score: float | None = None

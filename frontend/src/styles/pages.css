@@ -583,6 +583,18 @@
   color: var(--warn);
 }
 
+.primary-result-star {
+  min-height: 28px;
+  width: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.primary-result-star:hover {
+  color: var(--warn);
+}
+
 .test-sample-batch-field {
   display: grid;
   gap: 3px;

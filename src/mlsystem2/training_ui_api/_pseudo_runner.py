@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 import math
 import shutil
+import threading
 import time
 import uuid
 import warnings
@@ -19,7 +23,10 @@ import rasterio
 from pyproj import CRS as PyprojCRS
 from pyproj import Geod, Transformer
 from rasterio import features as rasterio_features
+from rasterio.enums import Resampling
 from rasterio.errors import NotGeoreferencedWarning
+from rasterio.vrt import WarpedVRT
+from rasterio.warp import calculate_default_transform
 from scipy.ndimage import label as label_components
 from rasterio.warp import transform_geom
 from rasterio.windows import Window, bounds as window_bounds
@@ -41,6 +48,7 @@ from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
 
 from ._markup_export import find_intersecting_images
+from ._external_imagery import ExternalImageryError, prepare_external_imagery
 
 
 PSEUDO_INFERENCE_BACKEND = "pytorch_one_off"
@@ -66,6 +74,94 @@ class _SceneInput:
     scene_id: str
     request_scenes: tuple[str, ...]
     request_scene_count: int
+
+
+class _InferenceRasterReader:
+    """Открывает независимый Rasterio handle для каждого потока чтения."""
+
+    def __init__(
+        self,
+        image_path: Path,
+        *,
+        input_channels: int,
+        channel_mapping: str,
+        source_imagery_type: str,
+        target_resolution_m: float | None,
+        metrics: dict[str, Any],
+    ) -> None:
+        self.image_path = image_path
+        self.input_channels = input_channels
+        self.channel_mapping = channel_mapping
+        self.source_imagery_type = source_imagery_type
+        self.target_resolution_m = target_resolution_m
+        self.metrics = metrics
+        self._main_stack = ExitStack()
+        self._thread_local = threading.local()
+        self._thread_stacks: list[ExitStack] = []
+        self._thread_stacks_lock = threading.Lock()
+        self.dataset = None
+
+    def __enter__(self) -> "_InferenceRasterReader":
+        self.dataset = _open_inference_dataset(
+            self._main_stack,
+            self.image_path,
+            self.target_resolution_m,
+        )
+        _validate_raster_input_channels(
+            self.dataset,
+            self.image_path,
+            self.input_channels,
+            channel_mapping=self.channel_mapping,
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        for stack in self._thread_stacks:
+            stack.close()
+        self._thread_stacks.clear()
+        self._main_stack.close()
+
+    def read(self, window: Window, tile_size: int) -> np.ndarray | None:
+        dataset = getattr(self._thread_local, "dataset", None)
+        if dataset is None:
+            stack = ExitStack()
+            dataset = _open_inference_dataset(stack, self.image_path, self.target_resolution_m)
+            mask_dataset = (
+                _open_inference_dataset(
+                    stack,
+                    self.image_path,
+                    self.target_resolution_m,
+                    resampling=Resampling.nearest,
+                )
+                if self.target_resolution_m is not None
+                else dataset
+            )
+            _validate_raster_input_channels(
+                dataset,
+                self.image_path,
+                self.input_channels,
+                channel_mapping=self.channel_mapping,
+            )
+            self._thread_local.dataset = dataset
+            self._thread_local.mask_dataset = mask_dataset
+            with self._thread_stacks_lock:
+                self._thread_stacks.append(stack)
+        started = time.perf_counter()
+        image = _read_inference_window(
+            dataset,
+            self.image_path,
+            window,
+            tile_size,
+            input_channels=self.input_channels,
+            channel_mapping=self.channel_mapping,
+            source_imagery_type=self.source_imagery_type,
+            mask_dataset=getattr(self._thread_local, "mask_dataset", dataset),
+        )
+        elapsed = time.perf_counter() - started
+        metric = "resampling_sec" if self.target_resolution_m is not None else "reading_sec"
+        with self._thread_stacks_lock:
+            self.metrics[metric] = float(self.metrics.get(metric, 0.0)) + elapsed
+        return image
 
 
 _POSTPROCESS_NONE = _PostprocessProfile(level=1, name="none")
@@ -317,6 +413,14 @@ def _payload_crs(payload: dict[str, Any]) -> PyprojCRS:
 
 def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
+    performance: dict[str, Any] = {
+        "image_search_sec": 0.0,
+        "download_sec": 0.0,
+        "resampling_sec": 0.0,
+        "reading_sec": 0.0,
+        "gpu_sec": 0.0,
+        "postprocessing_sec": 0.0,
+    }
     run_root = Path(config["run_root"])
     if run_root.exists():
         shutil.rmtree(run_root)
@@ -327,6 +431,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     aoi_wgs84: BaseGeometry | None = None
     source_image_ids: list[str] = []
     coverage_percent: float | None = None
+    external_coverage_percent: float | None = None
     api_warnings: list[str] = []
     if is_aoi:
         _write_pseudo_progress(
@@ -338,10 +443,80 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             stage="selecting_images",
         )
         aoi_wgs84 = _aoi_geometry(config)
-        selected = find_intersecting_images(aoi_wgs84, Path(str(config["images_root"])))
+        if str(config.get("source_kind") or "local") != "local":
+            def external_progress(stage: str) -> None:
+                _write_pseudo_progress(
+                    progress_path,
+                    total=0,
+                    started=started,
+                    scene_reports=[],
+                    failures=[],
+                    stage=stage,
+                )
+
+            try:
+                external = prepare_external_imagery(
+                    config,
+                    aoi_wgs84,
+                    run_root,
+                    progress=external_progress,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error_code = (
+                    exc.code if isinstance(exc, ExternalImageryError) else "EXTERNAL_IMAGERY_FAILED"
+                )
+                metadata = _aoi_metadata(config, [], 0.0, [str(exc)])
+                _write_feature_collection(output_geojson, [], metadata=metadata)
+                summary = _summary(
+                    config,
+                    input_scene_count=0,
+                    status="error",
+                    output_geojson=output_geojson,
+                    started=started,
+                    scene_reports=[],
+                    failures=[{"stage": "external_imagery", "error": str(exc)}],
+                    missing=[],
+                    feature_count=0,
+                    feature_count_before_merge=0,
+                    unique_image_count=0,
+                    postprocess_profile=_POSTPROCESS_NONE,
+                )
+                return _with_aoi_report(
+                    summary,
+                    [],
+                    0.0,
+                    [str(exc)],
+                    error={"code": error_code, "message": str(exc), "details": {}},
+                    performance=performance,
+                )
+            config = {
+                **config,
+                "images_root": str(external.images_root),
+                "source_attribution": external.attribution,
+                "source_license_url": external.license_url,
+            }
+            performance["download_sec"] = external.download_sec
+            external_coverage_percent = external.coverage_percent
+            api_warnings.extend(external.warnings)
+        search_started = time.perf_counter()
+        selected = find_intersecting_images(
+            aoi_wgs84,
+            Path(str(config["images_root"])),
+            index_path=(
+                Path(str(config["raster_index_path"]))
+                if config.get("raster_index_path")
+                else None
+            ),
+            index_workers=int(config.get("image_scan_workers") or 8),
+        )
+        performance["image_search_sec"] = time.perf_counter() - search_started
         source_image_ids = [item.source_id for item in selected.images]
-        coverage_percent = selected.coverage_percent
-        api_warnings = list(selected.warnings)
+        coverage_percent = (
+            min(selected.coverage_percent, external_coverage_percent)
+            if external_coverage_percent is not None
+            else selected.coverage_percent
+        )
+        api_warnings.extend(selected.warnings)
         scene_inputs = [
             _SceneInput(
                 image_path=item.path,
@@ -513,6 +688,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=postprocess_profile,
                     aoi_wgs84=aoi_wgs84,
+                    metrics=performance,
                 )
                 all_features.extend(scene_features)
                 _write_feature_collection(
@@ -645,6 +821,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             coverage_percent,
             api_warnings,
             error=error,
+            performance=performance,
         )
     finally:
         try:
@@ -692,7 +869,30 @@ def _validate_raster_input_channels(
     dataset: rasterio.io.DatasetReader,
     image_path: Path,
     expected: int,
+    *,
+    channel_mapping: str | None = None,
 ) -> tuple[int, ...]:
+    if channel_mapping == "rgb_zero_nir":
+        if expected != 4 or dataset.count < 3:
+            raise RuntimeError(
+                f"Для схемы RGB + нулевой NIR нужен трёхканальный RGB-снимок и "
+                f"четырёхканальная модель: {image_path}"
+            )
+        return (1, 2, 3)
+    if channel_mapping == "rgb":
+        if expected != 3 or dataset.count < 3:
+            raise RuntimeError(
+                f"Для схемы RGB нужны первые три канала снимка и трёхканальная модель: "
+                f"{image_path}"
+            )
+        return (1, 2, 3)
+    if channel_mapping == "rgb_nir":
+        if expected != 4 or dataset.count < 4:
+            raise RuntimeError(
+                f"Для схемы RGB+NIR нужны четыре канала снимка и четырёхканальная модель: "
+                f"{image_path}"
+            )
+        return (1, 2, 3, 4)
     if dataset.count == expected:
         return tuple(range(1, expected + 1))
     if expected == 3 and dataset.count == 4:
@@ -701,6 +901,121 @@ def _validate_raster_input_channels(
         f"Снимок должен содержать {expected} каналов, "
         f"получено {dataset.count}: {image_path}"
     )
+
+
+def _open_inference_dataset(
+    stack: ExitStack,
+    image_path: Path,
+    target_resolution_m: float | None,
+    *,
+    resampling: Resampling = Resampling.bilinear,
+):
+    source = stack.enter_context(rasterio.open(image_path))
+    if target_resolution_m is None:
+        return source
+    if source.crs is None:
+        raise RuntimeError(f"Нельзя привести разрешение снимка без CRS: {image_path}")
+    target_crs = _metric_target_crs(source)
+    transform, width, height = calculate_default_transform(
+        source.crs,
+        target_crs,
+        source.width,
+        source.height,
+        *source.bounds,
+        resolution=float(target_resolution_m),
+    )
+    return stack.enter_context(
+        WarpedVRT(
+            source,
+            crs=target_crs,
+            transform=transform,
+            width=max(1, width),
+            height=max(1, height),
+            resampling=resampling,
+        )
+    )
+
+
+def _metric_target_crs(dataset) -> object:
+    source_crs = PyprojCRS.from_user_input(dataset.crs)
+    if source_crs.is_projected and source_crs.axis_info:
+        factor = source_crs.axis_info[0].unit_conversion_factor
+        if factor is not None and math.isclose(float(factor), 1.0, rel_tol=1e-6):
+            return dataset.crs
+    center_x = (dataset.bounds.left + dataset.bounds.right) / 2.0
+    center_y = (dataset.bounds.bottom + dataset.bounds.top) / 2.0
+    lon, lat = Transformer.from_crs(dataset.crs, "EPSG:4326", always_xy=True).transform(
+        center_x,
+        center_y,
+    )
+    return _utm_crs_for_lonlat(float(lon), float(lat))
+
+
+def _read_inference_window(
+    dataset,
+    image_path: Path,
+    window: Window,
+    tile_size: int,
+    *,
+    input_channels: int,
+    channel_mapping: str,
+    source_imagery_type: str,
+    mask_dataset=None,
+) -> np.ndarray | None:
+    indexes = _validate_raster_input_channels(
+        dataset,
+        image_path,
+        input_channels,
+        channel_mapping=channel_mapping,
+    )
+    raster_window = Window(0, 0, dataset.width, dataset.height)
+    try:
+        clipped = window.intersection(raster_window)
+    except rasterio.errors.WindowError:
+        return None
+    if clipped.width <= 0 or clipped.height <= 0:
+        return None
+    height = int(clipped.height)
+    width = int(clipped.width)
+    source = dataset.read(
+        indexes=indexes,
+        window=clipped,
+        out_dtype="float32",
+        masked=False,
+    )
+    validity_dataset = mask_dataset if mask_dataset is not None else dataset
+    if source_imagery_type != "kanopus" and validity_dataset.count >= 4:
+        source_mask = validity_dataset.read(
+            4,
+            window=clipped,
+            out_shape=(height, width),
+            resampling=Resampling.nearest,
+        )
+    else:
+        source_mask = validity_dataset.dataset_mask(
+            window=clipped,
+            out_shape=(height, width),
+            resampling=Resampling.nearest,
+        )
+    valid = source_mask > 0
+    nodata = _resolve_nodata(dataset)
+    valid &= ~_nodata_pixels(source, nodata)
+    if not np.any(valid):
+        return None
+    image = np.zeros((len(indexes), tile_size, tile_size), dtype=np.float32)
+    source[:, ~valid] = 0
+    image[:, :height, :width] = source
+    if channel_mapping == "rgb_zero_nir":
+        image = np.concatenate(
+            (image, np.zeros((1, tile_size, tile_size), dtype=np.float32)),
+            axis=0,
+        )
+    if image.shape[0] != input_channels:
+        raise RuntimeError(
+            f"После преобразования снимок {image_path} содержит {image.shape[0]} каналов, "
+            f"модель ожидает {input_channels}."
+        )
+    return image
 
 
 def _infer_scene(
@@ -718,10 +1033,31 @@ def _infer_scene(
     device: str,
     postprocess_profile: _PostprocessProfile,
     aoi_wgs84: BaseGeometry | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    del batch_size
-    with rasterio.open(image_path) as dataset:
-        input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
+    performance = metrics if metrics is not None else {}
+    channel_mapping = str(config.get("channel_mapping") or "")
+    if channel_mapping not in {"rgb", "rgb_nir", "rgb_zero_nir"}:
+        channel_mapping = "rgb_nir" if input_channels == 4 else "rgb"
+    raw_resolution = config.get("resample_to_resolution_m")
+    target_resolution_m = float(raw_resolution) if raw_resolution is not None else None
+    source_imagery_type = str(config.get("source_imagery_type") or config.get("imagery_type") or "kanopus")
+    with _InferenceRasterReader(
+        image_path,
+        input_channels=input_channels,
+        channel_mapping=channel_mapping,
+        source_imagery_type=source_imagery_type,
+        target_resolution_m=target_resolution_m,
+        metrics=performance,
+    ) as raster_reader:
+        dataset = raster_reader.dataset
+        assert dataset is not None
+        input_indexes = _validate_raster_input_channels(
+            dataset,
+            image_path,
+            input_channels,
+            channel_mapping=channel_mapping,
+        )
         nodata = _resolve_nodata(dataset)
         if aoi_wgs84 is not None:
             if dataset.crs is None:
@@ -739,6 +1075,11 @@ def _infer_scene(
                 model=model,
                 threshold=threshold,
                 device=device,
+                batch_size=batch_size,
+                raster_reader=raster_reader,
+                read_workers=int(config.get("tile_read_workers") or 1),
+                prefetch_batches=int(config.get("prefetch_batches") or 1),
+                metrics=performance,
             )
             if prediction is None:
                 return []
@@ -760,9 +1101,15 @@ def _infer_scene(
                 model=model,
                 threshold=threshold,
                 device=device,
+                batch_size=batch_size,
+                raster_reader=raster_reader,
+                read_workers=int(config.get("tile_read_workers") or 1),
+                prefetch_batches=int(config.get("prefetch_batches") or 1),
+                metrics=performance,
             )
+        postprocess_started = time.perf_counter()
         mask = _postprocess_mask(mask, postprocess_profile)
-        return _features_from_mask(
+        features = _features_from_mask(
             mask,
             dataset.window_transform(mask_window),
             dataset.crs,
@@ -772,6 +1119,10 @@ def _infer_scene(
             postprocess_profile=postprocess_profile,
             confidence_map=confidence_map,
         )
+        performance["postprocessing_sec"] = float(
+            performance.get("postprocessing_sec", 0.0)
+        ) + (time.perf_counter() - postprocess_started)
+        return features
 
 
 def _infer_aoi_scene_mask(
@@ -786,6 +1137,11 @@ def _infer_aoi_scene_mask(
     model,
     threshold: float,
     device: str,
+    batch_size: int = 1,
+    raster_reader: _InferenceRasterReader | None = None,
+    read_workers: int = 1,
+    prefetch_batches: int = 1,
+    metrics: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, Window] | None:
     """Распознать AOI и расширить контекст до окончания связных объектов."""
 
@@ -859,6 +1215,11 @@ def _infer_aoi_scene_mask(
             model=model,
             threshold=threshold,
             device=device,
+            batch_size=batch_size,
+            raster_reader=raster_reader,
+            read_workers=read_workers,
+            prefetch_batches=prefetch_batches,
+            metrics=metrics,
         )
         processed_keys.update(pending_keys)
         coverage_mask = _window_keys_coverage_mask(
@@ -903,27 +1264,147 @@ def _infer_windows_into_mask(
     model,
     threshold: float,
     device: str,
+    batch_size: int = 1,
+    raster_reader: _InferenceRasterReader | None = None,
+    read_workers: int = 1,
+    prefetch_batches: int = 1,
+    metrics: dict[str, Any] | None = None,
 ) -> None:
     """Добавить предсказания окон в общую маску без повторной обработки."""
 
-    for window in windows:
-        image = dataset.read(
-            indexes=input_indexes,
-            window=window,
-            boundless=True,
-            fill_value=nodata,
-            out_shape=(len(input_indexes), tile_size, tile_size),
-            masked=False,
-        )
-        if np.all(_nodata_pixels(image, nodata)):
+    performance = metrics if metrics is not None else {}
+    configured_batch_size = max(1, int(batch_size))
+    performance.setdefault("configured_batch_size", configured_batch_size)
+    performance.setdefault("effective_batch_size", configured_batch_size)
+    pending: list[tuple[Window, np.ndarray]] = []
+
+    def apply_pending() -> None:
+        if not pending:
+            return
+        images = np.stack([image for _, image in pending], axis=0)
+        if images.shape[0] == 1:
+            tile_mask, tile_confidence = _predict_tile(
+                torch,
+                model,
+                images[0],
+                threshold=threshold,
+                device=device,
+            )
+            tile_masks = tile_mask[None, :, :]
+            tile_confidences = tile_confidence[None, :, :]
+        else:
+            tile_masks, tile_confidences = _predict_tiles(
+                torch,
+                model,
+                images,
+                threshold=threshold,
+                device=device,
+                metrics=performance,
+            )
+        for (window, _), tile_mask, tile_confidence in zip(
+            pending,
+            tile_masks,
+            tile_confidences,
+            strict=True,
+        ):
+            _merge_tile_prediction(
+                dataset=dataset,
+                window=window,
+                mask_window=mask_window,
+                mask=mask,
+                confidence_map=confidence_map,
+                tile_size=tile_size,
+                tile_mask=tile_mask,
+                tile_confidence=tile_confidence,
+            )
+        performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
+        pending.clear()
+
+    tile_stream = _prefetched_tiles(
+        windows,
+        dataset=dataset,
+        input_indexes=input_indexes,
+        nodata=nodata,
+        tile_size=tile_size,
+        raster_reader=raster_reader,
+        read_workers=read_workers,
+        prefetch_batches=prefetch_batches,
+        batch_size=configured_batch_size,
+    )
+    for window, image in tile_stream:
+        if image is None:
             continue
-        tile_mask, tile_confidence = _predict_tile(
-            torch,
-            model,
-            image.astype(np.float32, copy=False),
-            threshold=threshold,
-            device=device,
-        )
+        pending.append((window, image.astype(np.float32, copy=False)))
+        effective_batch_size = max(1, int(performance.get("effective_batch_size", 1)))
+        if len(pending) >= effective_batch_size:
+            apply_pending()
+    apply_pending()
+
+
+def _prefetched_tiles(
+    windows: list[Window],
+    *,
+    dataset,
+    input_indexes: tuple[int, ...],
+    nodata: object,
+    tile_size: int,
+    raster_reader: _InferenceRasterReader | None,
+    read_workers: int,
+    prefetch_batches: int,
+    batch_size: int,
+):
+    if raster_reader is None or read_workers <= 1:
+        for window in windows:
+            if raster_reader is not None:
+                yield window, raster_reader.read(window, tile_size)
+                continue
+            image = dataset.read(
+                indexes=input_indexes,
+                window=window,
+                boundless=True,
+                fill_value=nodata,
+                out_shape=(len(input_indexes), tile_size, tile_size),
+                masked=False,
+            )
+            yield window, None if np.all(_nodata_pixels(image, nodata)) else image
+        return
+
+    queue_limit = max(1, batch_size * max(1, prefetch_batches))
+    executor = ThreadPoolExecutor(
+        max_workers=max(1, read_workers),
+        thread_name_prefix="pseudolabel-raster",
+    )
+    pending: deque[tuple[Window, Future[np.ndarray | None]]] = deque()
+    iterator = iter(windows)
+    try:
+        for _ in range(min(queue_limit, len(windows))):
+            window = next(iterator)
+            pending.append((window, executor.submit(raster_reader.read, window, tile_size)))
+        while pending:
+            window, future = pending.popleft()
+            yield window, future.result()
+            try:
+                next_window = next(iterator)
+            except StopIteration:
+                continue
+            pending.append(
+                (next_window, executor.submit(raster_reader.read, next_window, tile_size))
+            )
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _merge_tile_prediction(
+    *,
+    dataset,
+    window: Window,
+    mask_window: Window,
+    mask: np.ndarray,
+    confidence_map: np.ndarray,
+    tile_size: int,
+    tile_mask: np.ndarray,
+    tile_confidence: np.ndarray,
+) -> None:
         crop_h = min(tile_size, dataset.height - int(window.row_off))
         crop_w = min(tile_size, dataset.width - int(window.col_off))
         y0 = int(window.row_off - mask_window.row_off)
@@ -1122,21 +1603,93 @@ def _predict_tile(
     threshold: float,
     device: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    tensor = torch.as_tensor(image[None, :, :, :], dtype=torch.float32, device=torch.device(device))
+    predicted, probabilities = _predict_tiles(
+        torch,
+        model,
+        image[None, :, :, :],
+        threshold=threshold,
+        device=device,
+    )
+    return predicted[0], probabilities[0]
+
+
+def _predict_tiles(
+    torch,
+    model,
+    images: np.ndarray,
+    *,
+    threshold: float,
+    device: str,
+    metrics: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    performance = metrics if metrics is not None else {}
+    started = time.perf_counter()
+    tensor = torch.as_tensor(images, dtype=torch.float32, device=torch.device(device))
     with torch.no_grad():
-        output = model(tensor)
-        logits = output.logits if hasattr(output, "logits") else output
-        if logits.shape[-2:] != tensor.shape[-2:]:
-            logits = torch.nn.functional.interpolate(
-                logits,
-                size=tensor.shape[-2:],
-                mode="bilinear",
-                align_corners=False,
+        try:
+            output = model(tensor)
+            logits = output.logits if hasattr(output, "logits") else output
+            if logits.shape[-2:] != tensor.shape[-2:]:
+                logits = torch.nn.functional.interpolate(
+                    logits,
+                    size=tensor.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            probabilities_tensor = torch.sigmoid(logits[:, :1, :, :])
+            probabilities = (
+                probabilities_tensor[:, 0]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=False)
             )
-        probabilities = torch.sigmoid(logits[:, :1, :, :])
-        probabilities = probabilities[0, 0].detach().cpu().numpy().astype(np.float32)
-        predicted = probabilities >= threshold
-    return predicted.astype(np.uint8), probabilities
+        except Exception as exc:  # noqa: BLE001
+            if not _is_cuda_oom(torch, exc, device) or images.shape[0] <= 1:
+                raise
+            del tensor
+            _release_cuda_cache(torch, device)
+            split = max(1, images.shape[0] // 2)
+            performance["cuda_oom_reductions"] = int(
+                performance.get("cuda_oom_reductions", 0)
+            ) + 1
+            performance["effective_batch_size"] = min(
+                int(performance.get("effective_batch_size", images.shape[0])),
+                split,
+            )
+            left_mask, left_confidence = _predict_tiles(
+                torch,
+                model,
+                images[:split],
+                threshold=threshold,
+                device=device,
+                metrics=performance,
+            )
+            right_mask, right_confidence = _predict_tiles(
+                torch,
+                model,
+                images[split:],
+                threshold=threshold,
+                device=device,
+                metrics=performance,
+            )
+            return (
+                np.concatenate((left_mask, right_mask), axis=0),
+                np.concatenate((left_confidence, right_confidence), axis=0),
+            )
+    performance["gpu_sec"] = float(performance.get("gpu_sec", 0.0)) + (
+        time.perf_counter() - started
+    )
+    return (probabilities >= threshold).astype(np.uint8), probabilities
+
+
+def _is_cuda_oom(torch, exc: BaseException, device: str) -> bool:
+    if not device.startswith("cuda"):
+        return False
+    oom_type = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", None)
+    if oom_type is not None and isinstance(exc, oom_type):
+        return True
+    return "out of memory" in str(exc).casefold()
 
 
 def _features_from_mask(
@@ -1370,6 +1923,13 @@ def _finalize_aoi_features(
                     "source_image_ids": feature_sources,
                     "area_m2": round(_geodesic_area_m2(polygon), 3),
                     "confidence": confidence,
+                    "source_id": str(config.get("source_id") or ""),
+                    "source_name": str(config.get("source_name") or ""),
+                    "source_imagery_type": str(config.get("source_imagery_type") or ""),
+                    "channel_mapping": str(config.get("channel_mapping") or ""),
+                    "target_resolution_m": config.get("target_resolution_m"),
+                    "attribution": config.get("source_attribution"),
+                    "license_url": config.get("source_license_url"),
                 },
             }
         )
@@ -1412,6 +1972,16 @@ def _aoi_metadata(
         "output_crs": "EPSG:4326",
         "object_count": object_count,
         "aoi_area_m2": config.get("aoi_area_m2"),
+        "source_id": str(config.get("source_id") or ""),
+        "source_name": str(config.get("source_name") or ""),
+        "model_imagery_type": str(config.get("model_imagery_type") or ""),
+        "source_imagery_type": str(config.get("source_imagery_type") or ""),
+        "channel_mapping": str(config.get("channel_mapping") or ""),
+        "target_resolution_m": config.get("target_resolution_m"),
+        "attributions": [
+            str(config.get("source_attribution"))
+        ] if config.get("source_attribution") else [],
+        "license_url": config.get("source_license_url"),
     }
 
 
@@ -1422,6 +1992,7 @@ def _with_aoi_report(
     api_warnings: list[str],
     *,
     error: dict[str, Any] | None,
+    performance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dobavit publichnoe pokrytie i oshibku v otchet worker."""
 
@@ -1431,6 +2002,16 @@ def _with_aoi_report(
         "coverage_percent": coverage_percent,
         "warnings": api_warnings,
         "error": error,
+        "source_id": str(summary.get("source_id") or ""),
+        "source_attributions": summary.get("source_attributions") or [],
+        "performance": _rounded_performance(performance or {}),
+    }
+
+
+def _rounded_performance(performance: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: round(float(value), 3) if isinstance(value, (float, np.floating)) else value
+        for key, value in performance.items()
     }
 
 
@@ -2094,6 +2675,16 @@ def _summary(
         "postprocess_params": _postprocess_profile_params(postprocess_profile),
         "postprocess_merge_overlaps": True,
         "postprocess_merge_policy": _POSTPROCESS_MERGE_POLICY,
+        "source_id": str(config.get("source_id") or ""),
+        "source_name": str(config.get("source_name") or ""),
+        "source_imagery_type": str(config.get("source_imagery_type") or ""),
+        "model_imagery_type": str(config.get("model_imagery_type") or ""),
+        "channel_mapping": str(config.get("channel_mapping") or ""),
+        "target_resolution_m": config.get("target_resolution_m"),
+        "source_attributions": [
+            str(config.get("source_attribution"))
+        ] if config.get("source_attribution") else [],
+        "source_license_url": config.get("source_license_url"),
         "source": {
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),

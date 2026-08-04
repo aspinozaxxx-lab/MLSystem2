@@ -59,6 +59,11 @@ MLSYSTEM2_PSEUDOLABEL_API_TOKEN=
 MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2=0
 MLSYSTEM2_PSEUDOLABEL_MAX_VERTICES=10000
 MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS=3600
+MLSYSTEM2_PSEUDOLABEL_IMAGERY_PROVIDERS_PATH=/etc/mlsystem2/imagery-providers.yaml
+MLSYSTEM2_PSEUDOLABEL_IMAGE_SCAN_WORKERS=8
+MLSYSTEM2_PSEUDOLABEL_TILE_READ_WORKERS=4
+MLSYSTEM2_PSEUDOLABEL_PREFETCH_BATCHES=2
+MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS=8
 ```
 
 `MLSYSTEM2_TRAINING_UI_USER_ALIASES` задаёт через запятую дополнительные логины с тем же паролем:
@@ -67,6 +72,9 @@ MLSYSTEM2_PSEUDOLABEL_JOB_TIMEOUT_SECONDS=3600
 входит по логину и паролю, поэтому для него токен оставляют пустым. Нулевой
 `MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2` разрешает AOI любой площади;
 положительное значение включает операторский лимит в квадратных метрах.
+Каталог внешних источников необязателен: без него доступны локальные Канопус, ортофото и встроенный
+OpenAerialMap. За основу файла можно взять `configs/imagery-providers.example.yaml`; секреты в нём
+не хранятся, указываются только имена переменных окружения.
 
 Секреты не коммитить.
 

@@ -22,7 +22,14 @@ from mlsystem2.training_ui_api._routes import export as _export_routes
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
-from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import (
+    DatasetClassRow,
+    DatasetRow,
+    JobRow,
+    PseudoMarkupResultRow,
+    StoredFileRow,
+    TrainingResultRow,
+)
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
 from mlsystem2.training_ui_api._templates import sanitize_template_config
 from mlsystem2.training_ui_api._worker import (
@@ -107,6 +114,61 @@ def test_pseudo_geojson_download_name_uses_display_name_for_uuid_key() -> None:
     )
 
     assert name == "Разрушки_main_segformer_b2_11_54_21_07.geojson"
+
+
+def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "mlmarkup"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        class_row = DatasetClassRow(key="forest", name="Лес")
+        session.add(class_row)
+        session.flush()
+        dataset = DatasetRow(
+            key="forest-main",
+            class_id=class_row.id,
+            name="main",
+            source_type="mlmarkup",
+            source_path="Лес/main",
+        )
+        first = TrainingResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name="Лес\\main",
+            architecture="segformer_b2",
+            model_name="первая",
+            status="ok",
+        )
+        second = TrainingResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name="Лес\\main",
+            architecture="segformer_b2",
+            model_name="вторая",
+            status="ok",
+        )
+        session.add_all([dataset, first, second])
+        session.flush()
+        class_row.primary_training_result_id = first.id
+        session.flush()
+
+        before = _service.dataset_results(session, dataset.key, config)
+        assert next(item for item in before.results if item.id == first.id).is_primary is True
+        assert next(item for item in before.results if item.id == second.id).is_primary is False
+
+        selected = _service.set_primary_training_result(session, second.id, config)
+        after = _service.dataset_results(session, dataset.key, config)
+
+        assert selected.is_primary is True
+        assert next(item for item in after.results if item.id == first.id).is_primary is False
+        assert next(item for item in after.results if item.id == second.id).is_primary is True
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(

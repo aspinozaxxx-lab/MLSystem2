@@ -282,6 +282,10 @@ class QGISPluginTests(unittest.TestCase):
         plugin = MLSystemPlugin(iface)
         plugin.initGui()
         plugin.dock.class_combo.addItem("Реки", {"class_id": "rivers", "display_name": "Реки"})
+        plugin.dock.source_combo.addItem(
+            "Канопус",
+            {"source_id": "kanopus", "display_name": "Канопус", "imagery_type": "kanopus"},
+        )
         plugin.dock._set_aoi(
             QgsGeometry.fromWkt("POLYGON((0 0, 1000 0, 1000 1000, 0 1000, 0 0))"),
             QgsCoordinateReferenceSystem("EPSG:3857"),
