@@ -1,0 +1,7 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="GROVIKA favicon concept">
+  <rect x="2" y="2" width="60" height="60" rx="13" fill="#000C2E"/>
+  <path fill="#06C5EC" fill-rule="evenodd" d="M18 8H42L56 21V43L43 56H18V51H13V46H8V18H13V13H18ZM23 20H38L44 26V39L39 44H23L19 40V24Z"/>
+<path fill="#000C2E" d="M39 15H58V29H35V22H39Z"/>
+<path fill="#06C5EC" d="M31 29H56V39H43V36H31Z"/>
+</svg>
