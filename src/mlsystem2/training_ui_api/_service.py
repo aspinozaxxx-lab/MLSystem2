@@ -1019,13 +1019,15 @@ def dataset_results(
     successful_test_statuses = [
         info.test_f1.status
         for row, info in zip(rows, result_infos, strict=True)
-        if row.status == ResultStatus.OK.value and info.is_primary and info.test_f1 is not None
+        if row.status == ResultStatus.OK.value and info.test_f1 is not None
     ]
     if primary is None:
         test_f1_status = "unavailable"
     elif successful_test_statuses and all(
         item == "current" for item in successful_test_statuses
-    ) and len(successful_test_statuses) == 1:
+    ) and len(successful_test_statuses) == sum(
+        row.status == ResultStatus.OK.value for row in rows
+    ):
         test_f1_status = "current"
     elif any(item in {"queued", "running"} for item in successful_test_statuses):
         test_f1_status = "running"
@@ -2354,7 +2356,7 @@ def _training_result_info(
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         error=job.error if job is not None else None,
         progress=_training_result_progress(session, row, jobs_by_id),
-        test_f1=training_result_test_f1_info(session, row, config) if is_primary else None,
+        test_f1=training_result_test_f1_info(session, row, config),
         pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],
     )
 

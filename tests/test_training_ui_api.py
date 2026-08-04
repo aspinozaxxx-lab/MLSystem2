@@ -28,6 +28,8 @@ from mlsystem2.training_ui_api._models import (
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
+    TestSampleRow as _TestSampleRow,
+    TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
 )
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
@@ -143,6 +145,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             class_display_name="Лес\\main",
             architecture="segformer_b2",
             model_name="первая",
+            mlflow_run_id="first-run",
             status="ok",
         )
         second = TrainingResultRow(
@@ -152,23 +155,57 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             class_display_name="Лес\\main",
             architecture="segformer_b2",
             model_name="вторая",
+            mlflow_run_id="second-run",
             status="ok",
         )
-        session.add_all([dataset, first, second])
+        sample = _TestSampleRow(
+            name="Основная разметка",
+            dataset_key=dataset.key,
+            dataset_name="Лес\\main",
+            class_key=dataset.key,
+            class_name="Лес",
+            dataset_short_name="main",
+            tile_width=768,
+            tile_height=768,
+            image_count=1,
+            requested_object_count=1,
+            actual_object_count=1,
+            territory_count=1,
+            is_primary=True,
+            tiles=[
+                _TestSampleTileRow(
+                    tile_index=1,
+                    source_name="tile001.tif",
+                    territory="Лес",
+                    object_count=1,
+                    enabled=True,
+                )
+            ],
+        )
+        session.add_all([dataset, first, second, sample])
         session.flush()
         class_row.primary_training_result_id = first.id
         session.flush()
 
-        before = _service.dataset_results(session, dataset.key, config)
-        assert next(item for item in before.results if item.id == first.id).is_primary is True
-        assert next(item for item in before.results if item.id == second.id).is_primary is False
+        before = _service.recalculate_dataset_test_f1(session, dataset.key, config)
+        before_by_id = {item.id: item for item in before.results}
+        assert before.test_f1_status == "running"
+        assert before_by_id[first.id].is_primary is True
+        assert before_by_id[second.id].is_primary is False
+        assert before_by_id[first.id].test_f1 is not None
+        assert before_by_id[first.id].test_f1.status == "queued"
+        assert before_by_id[second.id].test_f1 is not None
+        assert before_by_id[second.id].test_f1.status == "queued"
 
         selected = _service.set_primary_training_result(session, second.id, config)
         after = _service.dataset_results(session, dataset.key, config)
+        after_by_id = {item.id: item for item in after.results}
 
         assert selected.is_primary is True
-        assert next(item for item in after.results if item.id == first.id).is_primary is False
-        assert next(item for item in after.results if item.id == second.id).is_primary is True
+        assert selected.test_f1 is not None
+        assert after_by_id[first.id].is_primary is False
+        assert after_by_id[second.id].is_primary is True
+        assert after_by_id[first.id].test_f1 is not None
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(
