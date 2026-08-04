@@ -213,6 +213,26 @@ class QGISPluginTests(unittest.TestCase):
         self.assertIn("Покрытие AOI: 100.00%", plugin.dock.warning_label.text())
         plugin.unload()
 
+    # После любого финала прогресс становится определённым и перестаёт анимироваться.
+    def test_finished_job_stops_indeterminate_progress(self) -> None:
+        iface = _FakeIface()
+        plugin = MLSystemPlugin(iface)
+        plugin.initGui()
+        plugin.dock.progress.setRange(0, 0)
+        plugin.dock._last_job_progress = 43
+
+        plugin.dock._job_finished()
+
+        self.assertEqual(plugin.dock.progress.minimum(), 0)
+        self.assertEqual(plugin.dock.progress.maximum(), 100)
+        self.assertEqual(plugin.dock.progress.value(), 43)
+
+        plugin.dock.progress.setRange(0, 0)
+        plugin.dock._job_finished(succeeded=True)
+        self.assertEqual(plugin.dock.progress.maximum(), 100)
+        self.assertEqual(plugin.dock.progress.value(), 100)
+        plugin.unload()
+
     # Проверяет единые пороги очереди и фактически отображаемого слоя.
     def test_review_thresholds_filter_queue_and_layer_renderer(self) -> None:
         session = self._session()

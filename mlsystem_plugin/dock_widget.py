@@ -104,6 +104,7 @@ class MLSystemDockWidget(QDockWidget):
         self._job_class_name: str | None = None
         self._connecting = False
         self._poll_failures = 0
+        self._last_job_progress = 0
         self._removing_candidate_layer = False
         self._previous_map_tool = None
         self._aoi_tool = AOIPolygonMapTool(self.canvas)
@@ -366,6 +367,8 @@ class MLSystemDockWidget(QDockWidget):
         self._job_id = None
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._last_job_progress = 0
+        self.progress.setRange(0, 0)
         self._job_class_name = str(class_info.get("display_name") or "").strip() or None
         self.status_label.setText("Статус: создание задания…")
         self.warning_label.clear()
@@ -416,8 +419,9 @@ class MLSystemDockWidget(QDockWidget):
             if progress is None:
                 self.progress.setRange(0, 0)
             else:
+                self._last_job_progress = min(100, max(0, int(float(progress))))
                 self.progress.setRange(0, 100)
-                self.progress.setValue(int(float(progress)))
+                self.progress.setValue(self._last_job_progress)
             warnings = payload.get("warnings") or []
             coverage = payload.get("coverage_percent")
             messages = [str(item) for item in warnings]
@@ -469,8 +473,9 @@ class MLSystemDockWidget(QDockWidget):
                     self.warning_label.setText("Сервер не нашёл объектов в AOI.")
             except (PluginContractError, ReviewSessionError) as exc:
                 self._show_error(str(exc))
-            finally:
                 self._job_finished()
+            else:
+                self._job_finished(succeeded=True)
         elif operation == "cancel_job":
             self.status_label.setText("Статус: отменено")
             self._job_finished()
@@ -502,7 +507,7 @@ class MLSystemDockWidget(QDockWidget):
             self.class_combo.clear()
             self._connecting = False
             QTimer.singleShot(0, self._ensure_connected)
-        if operation in {"create_job", "job_result", "cancel_job"}:
+        if operation in {"create_job", "job_status", "job_result", "cancel_job"}:
             self._job_finished()
 
     # Planiruet sleduyushchii polling cherez event loop.
@@ -510,8 +515,10 @@ class MLSystemDockWidget(QDockWidget):
         self._poll_timer.start(max(0, delay_ms))
 
     # Vozvrashchaet knopki v sostoyanie bez aktivnogo job.
-    def _job_finished(self) -> None:
+    def _job_finished(self, *, succeeded: bool = False) -> None:
         self._poll_timer.stop()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100 if succeeded else self._last_job_progress)
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
 
