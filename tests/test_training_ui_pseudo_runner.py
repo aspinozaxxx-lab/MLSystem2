@@ -90,6 +90,7 @@ def test_aoi_inference_expands_windows_until_internal_object_is_complete(
         ),
     )
 
+    performance: dict[str, object] = {}
     features = _pseudo_runner._infer_scene(
         torch=object(),
         model=object(),
@@ -103,10 +104,12 @@ def test_aoi_inference_expands_windows_until_internal_object_is_complete(
         device="cpu",
         postprocess_profile=_select_postprocess_profile(1),
         aoi_wgs84=box(20, 10, 24, 22),
+        metrics=performance,
     )
 
     assert len(features) == 1
     assert shape(features[0]["geometry"]).bounds == pytest.approx((4.0, 8.0, 45.0, 24.0))
+    assert float(performance["gpu_sec"]) >= 0.0
 
 
 def test_window_grid_rejects_stride_that_would_leave_internal_gaps() -> None:

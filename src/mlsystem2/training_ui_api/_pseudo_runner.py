@@ -1291,12 +1291,16 @@ def _infer_windows_into_mask(
             return
         images = np.stack([image for _, image in pending], axis=0)
         if images.shape[0] == 1:
+            gpu_started = time.perf_counter()
             tile_mask, tile_confidence = _predict_tile(
                 torch,
                 model,
                 images[0],
                 threshold=threshold,
                 device=device,
+            )
+            performance["gpu_sec"] = float(performance.get("gpu_sec", 0.0)) + (
+                time.perf_counter() - gpu_started
             )
             tile_masks = tile_mask[None, :, :]
             tile_confidences = tile_confidence[None, :, :]
