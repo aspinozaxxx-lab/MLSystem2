@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +16,11 @@ try:
     from qgis.PyQt.QtCore import QVariant
 except ImportError:
     QVariant = None
-try:
-    from qgis.PyQt.QtGui import QUndoStack
-except ImportError:
-    from qgis.PyQt.QtWidgets import QUndoStack
 from qgis.core import (
     QgsFeature,
     QgsField,
     QgsFields,
+    QgsGeometry,
     QgsJsonUtils,
     QgsProject,
     QgsRuleBasedRenderer,
@@ -35,7 +31,20 @@ from qgis.core import (
 
 from .contracts import validate_feature_collection
 from .geometry_splitter import GeometrySplitError, SplitPart, split_geometry
-from .undo_commands import ReviewStatusCommand, SplitCandidateCommand
+
+
+_OUTPUT_FIELD_NAMES = (
+    "candidate_id",
+    "parent_candidate_id",
+    "job_id",
+    "class_id",
+    "class_name",
+    "confidence",
+    "model_id",
+    "model_version",
+    "source_image_ids",
+    "area_m2",
+)
 
 
 _FIELD_NAMES = (
@@ -43,20 +52,15 @@ _FIELD_NAMES = (
     "parent_candidate_id",
     "job_id",
     "class_id",
+    "class_name",
     "confidence",
     "model_id",
     "model_version",
     "source_image_ids",
     "area_m2",
     "review_status",
-    "reviewed_at",
-    "exported",
-    "target_layer_id",
-    "target_feature_id",
     "original_order",
 )
-# Otdelyaet avtomaticheskoe vremya ot yavnogo vosstanovleniya NULL pri undo.
-_AUTO_REVIEWED_AT = object()
 _SESSION_LAYER_PROPERTY = "mlsystem2/review_session"
 
 
@@ -65,20 +69,18 @@ class ReviewSessionError(RuntimeError):
 
 
 class ReviewSession(QObject):
-    """Upravlyaet GeoPackage, ocheredyu i edinoi istoriei undo."""
+    """Управляет локальным GeoPackage, фильтрацией и разбиением."""
 
     changed = pyqtSignal()
     current_changed = pyqtSignal(object)
 
-    # Privyazyvaet ochered i undo stack k postoyannomu sloyu.
+    # Привязывает очередь кандидатов к постоянному локальному слою.
     def __init__(self, layer: QgsVectorLayer, path: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.layer = layer
         self.layer_id = layer.id()
         self.path = path
         self.layer.setCustomProperty(_SESSION_LAYER_PROPERTY, True)
-        self.undo_stack = QUndoStack(self)
-        self._filter = "new"
         self._sort = "original"
         self._min_area_m2 = 0.0
         self._min_confidence = 0.0
@@ -112,38 +114,12 @@ class ReviewSession(QObject):
             project.addMapLayer(layer)
         return cls(layer, path)
 
-    @classmethod
-    def open_existing(
-        cls,
-        path: Path,
-        project: QgsProject | None = None,
-    ) -> ReviewSession:
-        """Otkryt nezavershennuyu sessiyu posle perezapuska."""
-
-        project = project or QgsProject.instance()
-        layer = QgsVectorLayer(
-            f"{path}|layername=candidates",
-            f"Кандидаты MLSystem2 — {path.stem}",
-            "ogr",
-        )
-        if not layer.isValid() or any(layer.fields().indexOf(name) < 0 for name in _FIELD_NAMES):
-            raise ReviewSessionError("Файл не является совместимой сессией MLSystem2.")
-        project.addMapLayer(layer)
-        return cls(layer, path)
-
     def close(self, *, remove_layer: bool = False) -> None:
         """Deaktivirovat istoriyu i pri neobhodimosti ubrat sloi iz proekta."""
 
-        self.undo_stack.clear()
         self._current_feature_id = None
         if remove_layer and QgsProject.instance().mapLayer(self.layer_id) is not None:
             QgsProject.instance().removeMapLayer(self.layer_id)
-
-    # Menyaet vidimuyu kategoriyu ocheredi.
-    def set_filter(self, value: str) -> None:
-        self._filter = value
-        self._apply_view_style()
-        self._refresh_current()
 
     # Menyaet stabilnyi poryadok ocheredi.
     def set_sort(self, value: str) -> None:
@@ -186,17 +162,15 @@ class ReviewSession(QObject):
             raise ReviewSessionError("Кандидат удалён из слоя во время сессии.")
         return feature
 
-    # Schitaet obshchee i ostavsheesya chislo kandidatov.
+    # Считает активное и отображаемое число кандидатов.
     def counts(self) -> dict[str, int]:
-        features = list(self.layer.getFeatures())
+        active = [
+            feature
+            for feature in self.layer.getFeatures()
+            if str(feature["review_status"] or "new") == "new"
+        ]
         return {
-            "total": len(features),
-            "new": sum(
-                1
-                for feature in features
-                if str(feature["review_status"] or "new") == "new"
-                and self._passes_thresholds(feature)
-            ),
+            "total": len(active),
             "visible": len(self.feature_ids()),
         }
 
@@ -223,23 +197,8 @@ class ReviewSession(QObject):
         self.current_changed.emit(self.current_feature())
         self.changed.emit()
 
-    def classify(self, status: str) -> None:
-        """Postavit atomarnuyu komandu klassifikacii v QUndoStack."""
-
-        titles = {
-            "annotation": "В разметку",
-            "hard_negative": "В hard_negative",
-            "discarded": "Выкинуть",
-        }
-        if status not in titles:
-            raise ReviewSessionError("Неизвестный статус проверки.")
-        feature = self.current_feature()
-        if feature is None:
-            raise ReviewSessionError("Нет текущего кандидата.")
-        self.undo_stack.push(ReviewStatusCommand(self, int(feature.id()), status, titles[status]))
-
-    def split_current(self, max_area_m2: float, min_area_m2: float) -> None:
-        """Postavit razbienie tekushchego kandidata odnoi komandoi."""
+    def split_current(self, max_area_m2: float) -> None:
+        """Поставить разбиение текущего кандидата одной командой."""
 
         feature = self.current_feature()
         if feature is None:
@@ -250,54 +209,73 @@ class ReviewSession(QObject):
                 self.layer.crs(),
                 str(feature["candidate_id"]),
                 max_area_m2,
-                min_area_m2,
+                0.0,
             )
         except GeometrySplitError as exc:
             raise ReviewSessionError(str(exc)) from exc
         if len(parts) < 2:
             raise ReviewSessionError("Объект не требует разбиения при заданном пороге.")
-        self.undo_stack.push(SplitCandidateCommand(self, int(feature.id()), parts))
+        child_feature_ids = self._apply_split(int(feature.id()), parts)
+        if child_feature_ids:
+            self.select_feature(child_feature_ids[0])
 
-    def split_large_candidates(self, max_area_m2: float, min_area_m2: float) -> int:
-        """Razbit vse novye krupnye obekty pri yavno vklyuchennoi nastroike."""
+    def split_large_candidates(self, max_area_m2: float) -> int:
+        """Разбить все отфильтрованные объекты крупнее заданного порога."""
 
         feature_ids = [
-            int(feature.id())
-            for feature in self.layer.getFeatures()
-            if str(feature["review_status"] or "new") == "new"
-            and float(feature["area_m2"] or 0.0) > max_area_m2
+            feature_id
+            for feature_id in self.feature_ids()
+            if float(self.feature(feature_id)["area_m2"] or 0.0) > max_area_m2
         ]
         count = 0
         for feature_id in feature_ids:
             self.select_feature(feature_id)
-            self.split_current(max_area_m2, min_area_m2)
+            self.split_current(max_area_m2)
             count += 1
         return count
 
-    # Vybirayet sleduyushchii obekt posle redo klassifikacii.
-    def advance_after_action(self, feature_id: int) -> None:
-        ids = self.feature_ids()
-        if feature_id in ids:
-            index = ids.index(feature_id)
-            self._current_feature_id = ids[min(index + 1, len(ids) - 1)] if ids else None
-        else:
-            self._current_feature_id = ids[0] if ids else None
-        self.current_changed.emit(self.current_feature())
-        self.changed.emit()
+    def export_filtered_layer(self, name: str | None = None) -> QgsVectorLayer:
+        """Создать временный слой только из объектов, прошедших текущие фильтры."""
+
+        feature_ids = self.feature_ids()
+        if not feature_ids:
+            raise ReviewSessionError("Нет объектов, прошедших фильтры площади и уверенности.")
+        crs = self.layer.crs().authid() or "EPSG:4326"
+        base_name = name or "Отфильтрованные объекты MLSystem2"
+        layer_name = _unique_layer_name(base_name)
+        output = QgsVectorLayer(f"MultiPolygon?crs={crs}", layer_name, "memory")
+        output_fields = QgsFields()
+        for field_name in _OUTPUT_FIELD_NAMES:
+            field_index = self.layer.fields().indexOf(field_name)
+            if field_index >= 0:
+                output_fields.append(QgsField(self.layer.fields()[field_index]))
+        if not output.dataProvider().addAttributes(output_fields):
+            raise ReviewSessionError("Не удалось создать поля нового слоя.")
+        output.updateFields()
+        features: list[QgsFeature] = []
+        for feature_id in feature_ids:
+            source = self.feature(feature_id)
+            target = QgsFeature(output.fields())
+            target.setGeometry(QgsGeometry(source.geometry()))
+            for field in output.fields():
+                target[field.name()] = source[field.name()]
+            features.append(target)
+        result = output.dataProvider().addFeatures(features)
+        success = result[0] if isinstance(result, tuple) else bool(result)
+        if not success:
+            raise ReviewSessionError("Не удалось добавить объекты в новый слой.")
+        output.updateExtents()
+        QgsProject.instance().addMapLayer(output)
+        return output
 
     # Postoyanno menyaet dva polya audita odnim provider batch.
     def _set_review_status(
         self,
         feature_id: int,
         status: str,
-        *,
-        reviewed_at: object = _AUTO_REVIEWED_AT,
     ) -> None:
-        if reviewed_at is _AUTO_REVIEWED_AT:
-            reviewed_at = _now_text()
         updates = {
             self.layer.fields().indexOf("review_status"): status,
-            self.layer.fields().indexOf("reviewed_at"): reviewed_at,
         }
         if not self.layer.dataProvider().changeAttributeValues({feature_id: updates}):
             raise ReviewSessionError("Не удалось сохранить статус кандидата.")
@@ -317,10 +295,6 @@ class ReviewSession(QObject):
             child["parent_candidate_id"] = part.parent_candidate_id
             child["area_m2"] = part.area_m2
             child["review_status"] = "new"
-            child["reviewed_at"] = None
-            child["exported"] = False
-            child["target_layer_id"] = None
-            child["target_feature_id"] = None
             child["original_order"] = int(parent["original_order"] or 0) * 10_000 + offset
             children.append(child)
         result = self.layer.dataProvider().addFeatures(children)
@@ -336,26 +310,10 @@ class ReviewSession(QObject):
         self.changed.emit()
         return [int(item.id()) for item in added]
 
-    # Udalyayet detei i vosstanavlivaet roditelya pri undo.
-    def _undo_split(
-        self,
-        feature_id: int,
-        child_feature_ids: list[int],
-        old_status: str,
-        old_reviewed_at: object,
-    ) -> None:
-        if child_feature_ids and not self.layer.dataProvider().deleteFeatures(child_feature_ids):
-            raise ReviewSessionError("Не удалось отменить добавление частей.")
-        self._set_review_status(feature_id, old_status, reviewed_at=old_reviewed_at)
-        self.layer.updateExtents()
-        self.changed.emit()
-
     # Proveriaet sootvetstvie tekushchemu filtru.
     def _matches(self, feature: QgsFeature) -> bool:
         status = str(feature["review_status"] or "new")
-        return (self._filter == "all" or status == self._filter) and self._passes_thresholds(
-            feature
-        )
+        return status == "new" and self._passes_thresholds(feature)
 
     def _passes_thresholds(self, feature: QgsFeature) -> bool:
         area = _numeric_attribute(feature["area_m2"])
@@ -369,7 +327,6 @@ class ReviewSession(QObject):
     def _apply_view_style(self) -> None:
         _apply_status_style(
             self.layer,
-            status_filter=self._filter,
             min_area_m2=self._min_area_m2,
             min_confidence=self._min_confidence,
         )
@@ -402,7 +359,6 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
     fields = QgsFields()
     string_type = _field_type("QString", "String")
     double_type = _field_type("Double", "Double")
-    bool_type = _field_type("Bool", "Bool")
     int_type = _field_type("Int", "Int")
     for name in (
         "candidate_id",
@@ -414,14 +370,10 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
         "model_version",
         "source_image_ids",
         "review_status",
-        "reviewed_at",
-        "target_layer_id",
-        "target_feature_id",
     ):
         fields.append(QgsField(name, string_type))
     fields.append(QgsField("confidence", double_type))
     fields.append(QgsField("area_m2", double_type))
-    fields.append(QgsField("exported", bool_type))
     fields.append(QgsField("original_order", int_type))
     memory.dataProvider().addAttributes(fields)
     memory.updateFields()
@@ -453,10 +405,6 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
             ),
             "area_m2": properties.get("area_m2"),
             "review_status": "new",
-            "reviewed_at": None,
-            "exported": False,
-            "target_layer_id": None,
-            "target_feature_id": None,
             "original_order": order,
         }
         for name, value in values.items():
@@ -500,41 +448,29 @@ def _field_type(qmeta_name: str, qvariant_name: str):
     raise ReviewSessionError("Среда Qt не предоставляет типы полей.")
 
 
-# Назначает стиль статусов и скрывает объекты вне активного фильтра.
+# Назначает стиль и скрывает объекты вне фильтров.
 def _apply_status_style(
     layer: QgsVectorLayer,
     *,
-    status_filter: str = "new",
     min_area_m2: float = 0.0,
     min_confidence: float = 0.0,
 ) -> None:
-    styles = {
-        "new": ("Новый", (255, 215, 0)),
-        "annotation": ("В разметку", (55, 180, 75)),
-        "hard_negative": ("Хард-негатив", (230, 120, 30)),
-        "discarded": ("Отклонён", (130, 130, 130)),
-        "split": ("Разбит", (90, 90, 200)),
-        "exported": ("Выгружен", (30, 150, 170)),
-    }
     root_rule = QgsRuleBasedRenderer.Rule(None)
-    for status, (label, rgb) in styles.items():
-        if status_filter != "all" and status != status_filter:
-            continue
-        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-        symbol.setColor(QColor(*rgb, 110))
-        expression = (
-            f'"review_status" = \'{status}\' '
-            f'AND coalesce("area_m2", 0) >= {min_area_m2:.12g}'
+    symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+    symbol.setColor(QColor(255, 215, 0, 110))
+    expression = (
+        '"review_status" = \'new\' '
+        f'AND coalesce("area_m2", 0) >= {min_area_m2:.12g}'
+    )
+    if min_confidence > 0.0:
+        expression += (
+            ' AND "confidence" IS NOT NULL '
+            f'AND "confidence" >= {min_confidence:.12g}'
         )
-        if min_confidence > 0.0:
-            expression += (
-                ' AND "confidence" IS NOT NULL '
-                f'AND "confidence" >= {min_confidence:.12g}'
-            )
-        rule = QgsRuleBasedRenderer.Rule(symbol)
-        rule.setLabel(label)
-        rule.setFilterExpression(expression)
-        root_rule.appendChild(rule)
+    rule = QgsRuleBasedRenderer.Rule(symbol)
+    rule.setLabel("Прошёл фильтры")
+    rule.setFilterExpression(expression)
+    root_rule.appendChild(rule)
     layer.setRenderer(QgsRuleBasedRenderer(root_rule))
     layer.triggerRepaint()
 
@@ -544,6 +480,18 @@ def _numeric_attribute(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _unique_layer_name(base_name: str) -> str:
+    """Подобрать свободное имя нового слоя в текущем проекте."""
+
+    project = QgsProject.instance()
+    if not project.mapLayersByName(base_name):
+        return base_name
+    suffix = 2
+    while project.mapLayersByName(f"{base_name} ({suffix})"):
+        suffix += 1
+    return f"{base_name} ({suffix})"
 
 
 def is_review_session_layer(layer: object) -> bool:
@@ -561,11 +509,5 @@ def is_review_session_layer(layer: object) -> bool:
         and "|layername=candidates" in source
         and all(layer.fields().indexOf(name) >= 0 for name in _FIELD_NAMES)
     )
-
-
-# Formiruet UTC-vremya audita v ISO 8601.
-def _now_text() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 
 __all__ = ["ReviewSession", "ReviewSessionError", "is_review_session_layer"]

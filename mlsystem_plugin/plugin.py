@@ -40,7 +40,7 @@ class MLSystemPlugin:
     def initGui(self) -> None:  # noqa: N802
         self.dock = MLSystemDockWidget(self.iface, self.iface.mainWindow())
         self.iface.addDockWidget(_dock_area("RightDockWidgetArea"), self.dock)
-        self.action = QAction("Проверка псевдоразметки MLSystem2", self.iface.mainWindow())
+        self.action = QAction("Распознавание объектов MLSystem2", self.iface.mainWindow())
         self.action.setCheckable(True)
         self.action.setChecked(True)
         self.action.triggered.connect(self._toggle_dock)
@@ -78,15 +78,10 @@ class MLSystemPlugin:
     def _create_shortcuts(self) -> None:
         assert self.dock is not None
         bindings = (
-            ("1", lambda: self.dock.classify("annotation")),
-            ("2", lambda: self.dock.classify("hard_negative")),
-            ("3", lambda: self.dock.classify("discarded")),
             ("N", self.dock.next_candidate),
             ("Space", self.dock.next_candidate),
             ("P", self.dock.previous_candidate),
             ("S", self.dock.split_candidate),
-            ("Ctrl+Z", self.dock.undo),
-            ("Ctrl+Shift+Z", self.dock.redo),
         )
         for sequence, callback in bindings:
             shortcut = QShortcut(QKeySequence(sequence), self.iface.mainWindow())

@@ -8,16 +8,11 @@ from dataclasses import replace
 from qgis.PyQt.QtCore import QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
-    QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDockWidget,
     QDoubleSpinBox,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -34,35 +29,21 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsProject,
-    QgsVectorLayer,
 )
 from qgis.gui import QgsRubberBand
 
 from .aoi_map_tool import AOIPolygonMapTool
 from .api_client import APIClient
 from .contracts import PluginContractError, validate_feature_collection
-from .layer_utils import (
-    LayerOperationError,
-    apply_reviewed_candidates,
-    polygon_layers,
-)
 from .review_session import ReviewSession, ReviewSessionError, is_review_session_layer
 from .settings import (
     SERVER_URL,
     SERVER_USERNAME,
     load_connection_password,
-    load_field_mapping,
     load_settings,
-    save_field_mapping,
     save_settings,
     session_directory,
 )
-
-
-# Vozvrashchaet sovmestimyi kod prinyatiya dialoga Qt5/Qt6.
-def _accepted_dialog_code():
-    enum = getattr(QDialog, "DialogCode", QDialog)
-    return enum.Accepted
 
 
 # Perevodit mashinnyi status v korotkii russkii tekst.
@@ -101,67 +82,6 @@ def _format_area(area_m2: float) -> str:
     return f"{value} м²"
 
 
-def _is_hard_negative_layer(layer: QgsVectorLayer) -> bool:
-    name = "".join(character for character in layer.name().casefold() if character.isalnum())
-    return "hardnegative" in name or "негатив" in name
-
-
-class FieldMappingDialog(QDialog):
-    """Nastroika sopostavleniya bez izmeneniya skhemy sloya."""
-
-    _LABELS = {
-        "class_id": "Класс",
-        "source": "Источник",
-        "confidence": "Confidence",
-        "candidate_id": "Candidate ID",
-        "model_version": "Версия модели",
-    }
-
-    # Stroit dve nezavisimye formy po realnym polyam sloev.
-    def __init__(
-        self,
-        annotation_layer: QgsVectorLayer,
-        hard_negative_layer: QgsVectorLayer,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Сопоставление полей")
-        layout = QVBoxLayout(self)
-        self._combos: dict[tuple[str, str], QComboBox] = {}
-        for role, title, layer in (
-            ("annotation", "Слой разметки", annotation_layer),
-            ("hard_negative", "Слой hard_negative", hard_negative_layer),
-        ):
-            group = QGroupBox(title)
-            form = QFormLayout(group)
-            current = load_field_mapping(role, layer)
-            names = [field.name() for field in layer.fields()]
-            for key, label in self._LABELS.items():
-                combo = QComboBox()
-                combo.addItem("— не копировать —", "")
-                for name in names:
-                    combo.addItem(name, name)
-                index = combo.findData(current.get(key, ""))
-                combo.setCurrentIndex(max(0, index))
-                form.addRow(label, combo)
-                self._combos[(role, key)] = combo
-            layout.addWidget(group)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    # Vozvrashchaet vybrannye sopostavleniya obeih rolei.
-    def mappings(self) -> dict[str, dict[str, str]]:
-        return {
-            role: {
-                key: str(self._combos[(role, key)].currentData() or "")
-                for key in self._LABELS
-            }
-            for role in ("annotation", "hard_negative")
-        }
 
 
 class MLSystemDockWidget(QDockWidget):
@@ -171,7 +91,7 @@ class MLSystemDockWidget(QDockWidget):
 
     # Inicializiruet sostoyanie bez setevyh ili proektnyh mutacii.
     def __init__(self, iface, parent: QWidget | None = None) -> None:
-        super().__init__("MLSystem2 — псевдоразметка", parent)
+        super().__init__("MLSystem2 — распознавание объектов", parent)
         self.iface = iface
         self.canvas = iface.mapCanvas()
         self.api = APIClient(self)
@@ -188,6 +108,7 @@ class MLSystemDockWidget(QDockWidget):
         self._previous_map_tool = None
         self._aoi_tool = AOIPolygonMapTool(self.canvas)
         self._aoi_tool.captured.connect(self._aoi_captured)
+        self._aoi_tool.cancelled.connect(self._aoi_cancelled)
         self._candidate_highlight = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
         self._candidate_highlight.setStrokeColor(QColor(220, 0, 255, 255))
         self._candidate_highlight.setFillColor(QColor(255, 235, 0, 80))
@@ -201,7 +122,6 @@ class MLSystemDockWidget(QDockWidget):
         QgsProject.instance().layersRemoved.connect(self._layers_removed)
         self._build_ui()
         self._load_settings_to_ui()
-        self.refresh_layers()
         self._update_review_ui()
 
     # Stroit kompaktnyi UI programmnymi sredstvami Qt.
@@ -215,8 +135,11 @@ class MLSystemDockWidget(QDockWidget):
         self.class_combo = QComboBox()
         self.class_combo.currentIndexChanged.connect(self._class_changed)
         self.model_label = QLabel("Модель: —")
-        draw_aoi = QPushButton("Нарисовать")
-        draw_aoi.clicked.connect(self._draw_aoi)
+        self.draw_aoi_button = QPushButton("Нарисовать AOI")
+        self.use_aoi_button = QPushButton("Использовать эту AOI")
+        self.use_aoi_button.setEnabled(False)
+        self.draw_aoi_button.clicked.connect(self._draw_aoi)
+        self.use_aoi_button.clicked.connect(self._use_aoi)
         self.aoi_label = QLabel("AOI не задана")
         self.aoi_label.setWordWrap(True)
         self.start_button = QPushButton("Запустить распознавание")
@@ -233,7 +156,8 @@ class MLSystemDockWidget(QDockWidget):
         recognition_layout.addWidget(QLabel("Класс"), 0, 0)
         recognition_layout.addWidget(self.class_combo, 0, 1, 1, 2)
         recognition_layout.addWidget(self.model_label, 1, 0, 1, 3)
-        recognition_layout.addWidget(draw_aoi, 2, 0, 1, 3)
+        recognition_layout.addWidget(self.draw_aoi_button, 2, 0)
+        recognition_layout.addWidget(self.use_aoi_button, 2, 1, 1, 2)
         recognition_layout.addWidget(self.aoi_label, 3, 0, 1, 3)
         recognition_layout.addWidget(self.start_button, 4, 0, 1, 2)
         recognition_layout.addWidget(self.cancel_button, 4, 2)
@@ -242,34 +166,8 @@ class MLSystemDockWidget(QDockWidget):
         recognition_layout.addWidget(self.warning_label, 7, 0, 1, 3)
         root.addWidget(recognition)
 
-        layers_group = QGroupBox("Рабочие слои")
-        layers_form = QFormLayout(layers_group)
-        self.annotation_layer_combo = QComboBox()
-        self.hard_layer_combo = QComboBox()
-        layer_buttons = QHBoxLayout()
-        refresh_layers = QPushButton("Обновить")
-        map_fields = QPushButton("Сопоставить поля")
-        refresh_layers.clicked.connect(self.refresh_layers)
-        map_fields.clicked.connect(self._map_fields)
-        layer_buttons.addWidget(refresh_layers)
-        layer_buttons.addWidget(map_fields)
-        layers_form.addRow("Разметка", self.annotation_layer_combo)
-        layers_form.addRow("Hard negative", self.hard_layer_combo)
-        layers_form.addRow(layer_buttons)
-        root.addWidget(layers_group)
-
-        review = QGroupBox("Проверка кандидатов")
+        review = QGroupBox("Результаты распознавания")
         review_layout = QGridLayout(review)
-        self.filter_combo = QComboBox()
-        for text, value in (
-            ("Только непроверенные", "new"),
-            ("Все", "all"),
-            ("Принятые", "annotation"),
-            ("Hard negative", "hard_negative"),
-            ("Отклонённые", "discarded"),
-            ("Выгруженные", "exported"),
-        ):
-            self.filter_combo.addItem(text, value)
         self.sort_combo = QComboBox()
         for text, value in (
             ("Исходный порядок", "original"),
@@ -277,9 +175,8 @@ class MLSystemDockWidget(QDockWidget):
             ("Площадь ↓", "area_desc"),
         ):
             self.sort_combo.addItem(text, value)
-        self.filter_combo.currentIndexChanged.connect(self._review_filter_changed)
         self.sort_combo.currentIndexChanged.connect(self._review_sort_changed)
-        self.counter_label = QLabel("0 из 0; осталось 0")
+        self.counter_label = QLabel("0 из 0")
         self.candidate_label = QLabel("Текущий объект: —")
         self.candidate_label.setWordWrap(True)
         previous_button = QPushButton("Предыдущий")
@@ -288,18 +185,10 @@ class MLSystemDockWidget(QDockWidget):
         previous_button.clicked.connect(self.previous_candidate)
         next_button.clicked.connect(self.next_candidate)
         zoom_button.clicked.connect(self.zoom_candidate)
-        annotation_button = QPushButton("1 — В разметку")
-        hard_button = QPushButton("2 — Hard negative")
-        discard_button = QPushButton("3 — Выкинуть")
-        split_button = QPushButton("S — Разбить")
-        annotation_button.clicked.connect(lambda: self.classify("annotation"))
-        hard_button.clicked.connect(lambda: self.classify("hard_negative"))
-        discard_button.clicked.connect(lambda: self.classify("discarded"))
+        split_button = QPushButton("Разбить текущий")
+        split_all_button = QPushButton("Разбить все крупные")
         split_button.clicked.connect(self.split_candidate)
-        undo_button = QPushButton("Отменить")
-        redo_button = QPushButton("Повторить")
-        undo_button.clicked.connect(self.undo)
-        redo_button.clicked.connect(self.redo)
+        split_all_button.clicked.connect(self.split_all_candidates)
         self.max_area = QDoubleSpinBox()
         self.max_area.setRange(1.0, 1_000_000_000_000.0)
         self.max_area.setDecimals(1)
@@ -314,35 +203,24 @@ class MLSystemDockWidget(QDockWidget):
         self.min_confidence.setSingleStep(0.05)
         self.min_area.valueChanged.connect(self._review_thresholds_changed)
         self.min_confidence.valueChanged.connect(self._review_thresholds_changed)
-        self.auto_split = QCheckBox("Автоматически разбивать после загрузки")
-        self.apply_button = QPushButton("Применить результаты в рабочие слои")
-        self.apply_button.clicked.connect(self._apply_results)
-        self.session_path_label = QLabel("Сессия: —")
-        self.session_path_label.setWordWrap(True)
-        review_layout.addWidget(QLabel("Фильтр"), 0, 0)
-        review_layout.addWidget(self.filter_combo, 0, 1, 1, 2)
-        review_layout.addWidget(QLabel("Сортировка"), 1, 0)
-        review_layout.addWidget(self.sort_combo, 1, 1, 1, 2)
-        review_layout.addWidget(self.counter_label, 2, 0, 1, 3)
-        review_layout.addWidget(self.candidate_label, 3, 0, 1, 3)
-        review_layout.addWidget(previous_button, 4, 0)
-        review_layout.addWidget(next_button, 4, 1)
-        review_layout.addWidget(zoom_button, 4, 2)
-        review_layout.addWidget(annotation_button, 5, 0)
-        review_layout.addWidget(hard_button, 5, 1)
-        review_layout.addWidget(discard_button, 5, 2)
-        review_layout.addWidget(split_button, 6, 0)
-        review_layout.addWidget(undo_button, 6, 1)
-        review_layout.addWidget(redo_button, 6, 2)
-        review_layout.addWidget(QLabel("Макс. часть"), 7, 0)
-        review_layout.addWidget(self.max_area, 7, 1, 1, 2)
-        review_layout.addWidget(QLabel("Мин. площадь/часть"), 8, 0)
-        review_layout.addWidget(self.min_area, 8, 1, 1, 2)
-        review_layout.addWidget(QLabel("Мин. уверенность"), 9, 0)
-        review_layout.addWidget(self.min_confidence, 9, 1, 1, 2)
-        review_layout.addWidget(self.auto_split, 10, 0, 1, 3)
-        review_layout.addWidget(self.apply_button, 11, 0, 1, 3)
-        review_layout.addWidget(self.session_path_label, 12, 0, 1, 3)
+        self.export_button = QPushButton("Выгрузить на новый слой")
+        self.export_button.clicked.connect(self._export_filtered_layer)
+        review_layout.addWidget(QLabel("Сортировка"), 0, 0)
+        review_layout.addWidget(self.sort_combo, 0, 1, 1, 2)
+        review_layout.addWidget(self.counter_label, 1, 0, 1, 3)
+        review_layout.addWidget(self.candidate_label, 2, 0, 1, 3)
+        review_layout.addWidget(previous_button, 3, 0)
+        review_layout.addWidget(next_button, 3, 1)
+        review_layout.addWidget(zoom_button, 3, 2)
+        review_layout.addWidget(split_button, 4, 0, 1, 2)
+        review_layout.addWidget(split_all_button, 4, 2)
+        review_layout.addWidget(QLabel("Макс. площадь части"), 5, 0)
+        review_layout.addWidget(self.max_area, 5, 1, 1, 2)
+        review_layout.addWidget(QLabel("Мин. площадь"), 6, 0)
+        review_layout.addWidget(self.min_area, 6, 1, 1, 2)
+        review_layout.addWidget(QLabel("Мин. уверенность"), 7, 0)
+        review_layout.addWidget(self.min_confidence, 7, 1, 1, 2)
+        review_layout.addWidget(self.export_button, 8, 0, 1, 3)
         root.addWidget(review)
         root.addStretch(1)
 
@@ -355,49 +233,19 @@ class MLSystemDockWidget(QDockWidget):
     # Perenosit sohranennye nastroiki v kontroly.
     def _load_settings_to_ui(self) -> None:
         self.max_area.setValue(self.settings.max_part_area_m2)
-        self.min_area.setValue(self.settings.min_part_area_m2)
+        self.min_area.setValue(self.settings.min_area_m2)
         self.min_confidence.setValue(self.settings.min_confidence)
-        self.auto_split.setChecked(self.settings.auto_split)
 
     # Sohranyaet tekushchie kontroly i konfiguriruet API-klient.
     def save_current_settings(self) -> None:
         self.settings = replace(
             self.settings,
             max_part_area_m2=self.max_area.value(),
-            min_part_area_m2=self.min_area.value(),
+            min_area_m2=self.min_area.value(),
             min_confidence=self.min_confidence.value(),
-            auto_split=self.auto_split.isChecked(),
         )
         save_settings(self.settings)
         self.api.configure(SERVER_URL, self.settings.request_timeout_ms)
-
-    def refresh_layers(self) -> None:
-        """Obnovit spiski, ne menyaya aktivnyi sloi QGIS."""
-
-        previous = {
-            "annotation": self.annotation_layer_combo.currentData(),
-            "hard": self.hard_layer_combo.currentData(),
-        }
-        layers = [layer for layer in polygon_layers() if self.session is None or layer.id() != self.session.layer.id()]
-        for combo, key in (
-            (self.annotation_layer_combo, "annotation"),
-            (self.hard_layer_combo, "hard"),
-        ):
-            combo.clear()
-            combo.addItem("— не выбран —", "")
-            for layer in layers:
-                combo.addItem(layer.name(), layer.id())
-            index = combo.findData(previous[key]) if previous[key] else -1
-            if index >= 0:
-                combo.setCurrentIndex(index)
-            elif key == "hard":
-                matches = [layer for layer in layers if _is_hard_negative_layer(layer)]
-                if len(matches) == 1:
-                    combo.setCurrentIndex(combo.findData(matches[0].id()))
-            elif key == "annotation":
-                matches = [layer for layer in layers if not _is_hard_negative_layer(layer)]
-                if len(matches) == 1:
-                    combo.setCurrentIndex(combo.findData(matches[0].id()))
 
     # Выполняет вход и после него загружает доступные классы.
     def _request_classes(self) -> None:
@@ -433,13 +281,37 @@ class MLSystemDockWidget(QDockWidget):
         if current_tool is not self._aoi_tool:
             self._previous_map_tool = current_tool
         self._aoi_tool.reset()
+        self._aoi_geometry = None
+        self._aoi_crs = None
+        self.aoi_label.setText("AOI рисуется…")
+        self.use_aoi_button.setEnabled(True)
         self.canvas.setMapTool(self._aoi_tool)
-        self.status_label.setText("Статус: рисуйте левой кнопкой, завершите правой")
+        self.status_label.setText(
+            "Статус: добавляйте вершины левой кнопкой; правая кнопка сбрасывает контур"
+        )
+
+    def _use_aoi(self) -> None:
+        """Подтвердить нарисованный полигон отдельной кнопкой панели."""
+
+        if self.canvas.mapTool() is not self._aoi_tool:
+            self._show_error("Сначала нажмите «Нарисовать AOI».")
+            return
+        if not self._aoi_tool.capture_current():
+            self._show_error("Для AOI укажите не менее трёх вершин.")
+
+    def _aoi_cancelled(self) -> None:
+        """Сбросить AOI, не выключая инструмент рисования."""
+
+        self._aoi_geometry = None
+        self._aoi_crs = None
+        self.aoi_label.setText("AOI не задана; рисуйте заново")
+        self.status_label.setText("Статус: AOI сброшена; начните с первой вершины")
 
     # Prinimaet rezultat map tool i vosstanavlivaet prezhnii instrument.
     def _aoi_captured(self, geometry: QgsGeometry, crs) -> None:
-        self._set_aoi(QgsGeometry(geometry), crs)
-        QTimer.singleShot(0, self._restore_previous_map_tool)
+        if self._set_aoi(QgsGeometry(geometry), crs):
+            self.use_aoi_button.setEnabled(False)
+            QTimer.singleShot(0, self._restore_previous_map_tool)
 
     def _restore_previous_map_tool(self) -> None:
         previous_tool = self._previous_map_tool
@@ -448,14 +320,14 @@ class MLSystemDockWidget(QDockWidget):
             self.canvas.setMapTool(previous_tool)
 
     # Proveriaet i sohranyaet itogovuyu geometriyu AOI.
-    def _set_aoi(self, geometry: QgsGeometry, crs) -> None:
+    def _set_aoi(self, geometry: QgsGeometry, crs) -> bool:
         geometry = geometry.makeValid()
         if geometry.isNull() or geometry.isEmpty() or not crs.isValid():
             self._show_error("AOI или её CRS некорректна.")
-            return
+            return False
         if geometry.type() != Qgis.GeometryType.Polygon:
             self._show_error("AOI должна быть Polygon или MultiPolygon.")
-            return
+            return False
         calculator = QgsDistanceArea()
         calculator.setSourceCrs(crs, QgsProject.instance().transformContext())
         ellipsoid = QgsProject.instance().ellipsoid()
@@ -464,13 +336,14 @@ class MLSystemDockWidget(QDockWidget):
             area_m2 = abs(float(calculator.measureArea(geometry)))
         except QgsCsException as exc:
             self._show_error(f"Не удалось рассчитать площадь AOI: {exc}")
-            return
+            return False
         self._aoi_geometry = geometry
         self._aoi_crs = crs
         self.aoi_label.setText(
             f"AOI задана; площадь: {_format_area(area_m2)}; "
             f"CRS: {crs.authid() or crs.toWkt()[:40]}"
         )
+        return True
 
     # Otpravlyaet tolko class_id, AOI i ee CRS.
     def _start_job(self) -> None:
@@ -480,11 +353,7 @@ class MLSystemDockWidget(QDockWidget):
             self._show_error("Выберите класс распознавания.")
             return
         if self._aoi_geometry is None or self._aoi_crs is None:
-            last_capture = self._aoi_tool.last_capture()
-            if last_capture is not None:
-                self._set_aoi(*last_capture)
-        if self._aoi_geometry is None or self._aoi_crs is None:
-            self._show_error("Сначала задайте AOI.")
+            self._show_error("Нарисуйте область и нажмите «Использовать эту AOI».")
             return
         try:
             aoi = json.loads(self._aoi_geometry.asJson())
@@ -494,7 +363,6 @@ class MLSystemDockWidget(QDockWidget):
         if self.session is not None:
             self.close_session(remove_layer=True)
         self._remove_stale_candidate_layers()
-        self.refresh_layers()
         self._job_id = None
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -591,9 +459,7 @@ class MLSystemDockWidget(QDockWidget):
                     self._job_id or "unknown",
                     session_directory(),
                 )
-                self._set_session(session, reset_filter=True)
-                if self.auto_split.isChecked():
-                    session.split_large_candidates(self.max_area.value(), self.min_area.value())
+                self._set_session(session)
                 count = session.counts()["total"]
                 job_short_id = (self._job_id or "unknown")[:8]
                 self.status_label.setText(
@@ -650,22 +516,15 @@ class MLSystemDockWidget(QDockWidget):
         self.cancel_button.setEnabled(False)
 
     # Aktiviruet novuyu persistent review session.
-    def _set_session(self, session: ReviewSession, *, reset_filter: bool = False) -> None:
+    def _set_session(self, session: ReviewSession) -> None:
         if self.session is not None:
             self.close_session(remove_layer=True)
         self._remove_stale_candidate_layers(except_layer_id=session.layer_id)
-        if reset_filter:
-            new_filter_index = self.filter_combo.findData("new")
-            if new_filter_index >= 0:
-                self.filter_combo.setCurrentIndex(new_filter_index)
         self.session = session
         session.changed.connect(self._update_review_ui)
         session.current_changed.connect(self._highlight_current_candidate)
-        session.set_filter(str(self.filter_combo.currentData()))
         session.set_sort(str(self.sort_combo.currentData()))
         session.set_thresholds(self.min_area.value(), self.min_confidence.value())
-        self.session_path_label.setText(f"Сессия: {session.path}")
-        self.refresh_layers()
         self._update_review_ui()
         self._highlight_current_candidate(session.current_feature())
         self.session_active_changed.emit(self.isVisible())
@@ -710,17 +569,11 @@ class MLSystemDockWidget(QDockWidget):
             or self.session.layer_id not in layer_ids
         ):
             return
-        self.session.undo_stack.clear()
         self.session = None
         self._highlight_current_candidate(None)
         self.session_active_changed.emit(False)
         self._update_review_ui()
         self._show_error("Слой кандидатов удалён во время сессии.")
-
-    # Peredaet filtr v model sessii.
-    def _review_filter_changed(self) -> None:
-        if self.session:
-            self.session.set_filter(str(self.filter_combo.currentData()))
 
     # Peredaet sortirovku v model sessii.
     def _review_sort_changed(self) -> None:
@@ -746,27 +599,23 @@ class MLSystemDockWidget(QDockWidget):
     # Obnovlyaet schetchiki i atributy tekushchego kandidata.
     def _update_review_ui(self) -> None:
         if self.session is None:
-            self.counter_label.setText("0 из 0; осталось 0")
+            self.counter_label.setText("0 из 0")
             self.candidate_label.setText("Текущий объект: —")
             return
         position, visible = self.session.position()
         counts = self.session.counts()
         if visible == 0 and counts["total"] > 0:
             self.counter_label.setText(
-                f"0 отображается; скрыто фильтрами: {counts['total']}; "
-                f"осталось {counts['new']}; всего {counts['total']}"
+                f"0 отображается; скрыто фильтрами: {counts['total']}; всего: {counts['total']}"
             )
         else:
-            self.counter_label.setText(
-                f"{position} из {visible}; осталось {counts['new']}; всего {counts['total']}"
-            )
+            self.counter_label.setText(f"{position} из {visible}; всего: {counts['total']}")
         feature = self.session.current_feature()
         if feature is None:
             if counts["total"] > 0:
                 self.candidate_label.setText(
                     "Нет объектов при текущем отборе.\n"
-                    f"Статус: «{self.filter_combo.currentText()}»; "
-                    f"площадь ≥ {_format_area(self.min_area.value())}; "
+                    f"Площадь ≥ {_format_area(self.min_area.value())}; "
                     f"уверенность ≥ {self.min_confidence.value():.3f}."
                 )
             else:
@@ -779,10 +628,6 @@ class MLSystemDockWidget(QDockWidget):
             f"Класс: {feature['class_id']}; версия: {feature['model_version']}\n"
             f"Confidence: {confidence_text}; площадь: {float(feature['area_m2'] or 0):.1f} м²"
         )
-
-    # Klassificiruet tekushchii obekt cherez edinyi undo stack.
-    def classify(self, status: str) -> None:
-        self._session_call(lambda: self.session.classify(status))
 
     # Perehodit k sleduyushchemu kandidatu.
     def next_candidate(self) -> None:
@@ -813,76 +658,38 @@ class MLSystemDockWidget(QDockWidget):
 
     # Razbivaet tekushchii obekt po nastroyennym porogam.
     def split_candidate(self) -> None:
-        self._session_call(
-            lambda: self.session.split_current(self.max_area.value(), self.min_area.value())
-        )
+        self._session_call(lambda: self.session.split_current(self.max_area.value()))
 
-    # Otmenyaet odno logicheskoe review-deistvie.
-    def undo(self) -> None:
-        if self.session and self.session.undo_stack.canUndo():
-            self.session.undo_stack.undo()
+    def split_all_candidates(self) -> None:
+        """Разбить все прошедшие фильтры объекты крупнее максимума."""
 
-    # Povtoryaet odno otmenennoe review-deistvie.
-    def redo(self) -> None:
-        if self.session and self.session.undo_stack.canRedo():
-            self.session.undo_stack.redo()
-
-    # Otkryvaet nastroiku polei dlya yavno vybrannyh sloev.
-    def _map_fields(self) -> None:
-        annotation = self._layer_from_combo(self.annotation_layer_combo)
-        hard = self._layer_from_combo(self.hard_layer_combo)
-        if annotation is None or hard is None or annotation.id() == hard.id():
-            self._show_error("Явно выберите два разных рабочих слоя.")
-            return
-        dialog = FieldMappingDialog(annotation, hard, self)
-        if dialog.exec() == _accepted_dialog_code():
-            for role, mapping in dialog.mappings().items():
-                save_field_mapping(role, mapping)
-
-    # Atomarno perenosit raspredelennye obekty v edit buffers.
-    def _apply_results(self) -> None:
         if self.session is None:
-            self._show_error("Сначала загрузите сессию кандидатов.")
             return
-        candidate_layer = QgsProject.instance().mapLayer(self.session.layer_id)
-        if not isinstance(candidate_layer, QgsVectorLayer):
-            self._show_error("Слой кандидатов удалён во время сессии.")
-            return
-        annotation = self._layer_from_combo(self.annotation_layer_combo)
-        hard = self._layer_from_combo(self.hard_layer_combo)
         try:
-            result = apply_reviewed_candidates(
-                candidate_layer,
-                annotation,
-                hard,
-                load_field_mapping("annotation", annotation),
-                load_field_mapping("hard_negative", hard),
-            )
-        except LayerOperationError as exc:
+            count = self.session.split_large_candidates(self.max_area.value())
+        except ReviewSessionError as exc:
             self._show_error(str(exc))
             return
-        except Exception as exc:  # noqa: BLE001
-            QgsMessageLog.logMessage(
-                f"Непредвиденная ошибка применения: {exc!r}",
-                "MLSystem2",
-                Qgis.MessageLevel.Critical,
-            )
-            self._show_error("Не удалось применить результаты. Подробности записаны в журнал QGIS.")
+        self.status_label.setText(f"Статус: разбито крупных объектов: {count}")
+
+    def _export_filtered_layer(self) -> None:
+        """Выгрузить текущий отбор в отдельный временный слой QGIS."""
+
+        if self.session is None:
+            self._show_error("Сначала выполните распознавание.")
             return
-        self.session.undo_stack.clear()
-        self._update_review_ui()
+        class_name = self._job_class_name or "Результат распознавания"
+        try:
+            layer = self.session.export_filtered_layer(f"{class_name} — MLSystem2")
+        except ReviewSessionError as exc:
+            self._show_error(str(exc))
+            return
         QMessageBox.information(
             self,
             "MLSystem2",
-            f"Добавлено: {result.added}; уже существовало: {result.existing}.\n"
-            "Правки целевых слоёв не сохранены: проверьте их и сохраните штатной командой QGIS.",
+            f"Создан временный слой «{layer.name()}»: {layer.featureCount()} объектов.\n"
+            "Для постоянного хранения сохраните его штатной командой QGIS.",
         )
-
-    # Razreshaet ID combo tolko cherez QgsProject.
-    def _layer_from_combo(self, combo: QComboBox) -> QgsVectorLayer | None:
-        layer_id = str(combo.currentData() or "")
-        layer = QgsProject.instance().mapLayer(layer_id) if layer_id else None
-        return layer if isinstance(layer, QgsVectorLayer) else None
 
     # Edinoobrazno obrabatyvaet domennye oshibki sessii.
     def _session_call(self, action) -> None:

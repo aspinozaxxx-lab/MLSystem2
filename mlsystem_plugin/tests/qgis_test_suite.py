@@ -7,39 +7,26 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from qgis.PyQt.QtCore import QCoreApplication, QEventLoop, QTimer
+from qgis.PyQt.QtCore import QCoreApplication, QEventLoop, QTimer, Qt
 from qgis.PyQt.QtWidgets import QMainWindow, QPushButton
 from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
-    QgsField,
     QgsGeometry,
     QgsPointXY,
     QgsProject,
     QgsRuleBasedRenderer,
-    QgsVectorLayer,
 )
 from qgis.gui import QgsMapCanvas, QgsMessageBar
 
 from mlsystem_plugin.api_client import APIClient
 from mlsystem_plugin.geometry_splitter import split_geometry
-from mlsystem_plugin.layer_utils import LayerOperationError, apply_reviewed_candidates
-from mlsystem_plugin.settings import SERVER_URL, SERVER_USERNAME, automatic_field_mapping
 from mlsystem_plugin.plugin import MLSystemPlugin
 from mlsystem_plugin.review_session import ReviewSession, ReviewSessionError
-
-try:
-    from qgis.PyQt.QtCore import QMetaType
-
-    STRING_TYPE = QMetaType.Type.QString
-    INT_TYPE = QMetaType.Type.Int
-except (ImportError, AttributeError):
-    from qgis.PyQt.QtCore import QVariant
-
-    STRING_TYPE = QVariant.String
-    INT_TYPE = QVariant.Int
+from mlsystem_plugin.settings import SERVER_URL, SERVER_USERNAME
 
 
 class QGISPluginTests(unittest.TestCase):
@@ -126,12 +113,24 @@ class QGISPluginTests(unittest.TestCase):
         self.assertNotIn("Текущий охват", button_texts)
         self.assertNotIn("Из выделения", button_texts)
         self.assertNotIn("Открыть сохранённую сессию…", button_texts)
+        self.assertNotIn("Сопоставить поля", button_texts)
+        self.assertNotIn("Применить результаты в рабочие слои", button_texts)
+        self.assertNotIn("1 — В разметку", button_texts)
+        self.assertNotIn("2 — Hard negative", button_texts)
+        self.assertNotIn("3 — Выкинуть", button_texts)
+        self.assertIn("Использовать эту AOI", button_texts)
+        self.assertIn("Разбить текущий", button_texts)
+        self.assertIn("Разбить все крупные", button_texts)
+        self.assertIn("Выгрузить на новый слой", button_texts)
         self.assertFalse(hasattr(plugin.dock, "check_connection"))
         self.assertFalse(hasattr(plugin.dock, "aoi_layer_combo"))
+        self.assertFalse(hasattr(plugin.dock, "annotation_layer_combo"))
+        self.assertFalse(hasattr(plugin.dock, "hard_layer_combo"))
+        self.assertFalse(hasattr(plugin.dock, "filter_combo"))
         self.assertFalse(hasattr(plugin.dock, "server_url"))
         self.assertFalse(hasattr(plugin.dock, "username"))
         self.assertFalse(hasattr(plugin.dock, "password"))
-        self.assertEqual(len(plugin._shortcuts), 9)
+        self.assertEqual(len(plugin._shortcuts), 4)
         self.assertTrue(all(not shortcut.isEnabled() for shortcut in plugin._shortcuts))
         plugin._set_shortcuts_enabled(True)
         iface.mapCanvas().setFocus()
@@ -156,8 +155,8 @@ class QGISPluginTests(unittest.TestCase):
         self.assertTrue(plugin.dock._connecting)
         plugin.unload()
 
-    # Первый завершённый контур сразу становится действующей областью интереса.
-    def test_first_draw_capture_sets_aoi(self) -> None:
+    # AOI применяется отдельной кнопкой, а правая кнопка сбрасывает новый черновик.
+    def test_aoi_requires_explicit_use_and_right_click_resets_draft(self) -> None:
         iface = _FakeIface()
         iface.mapCanvas().setDestinationCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
         plugin = MLSystemPlugin(iface)
@@ -170,11 +169,26 @@ class QGISPluginTests(unittest.TestCase):
             QgsPointXY(0, 1_000),
         ]
 
-        plugin.dock._aoi_tool._finish()
+        self.assertIsNone(plugin.dock._aoi_geometry)
+        plugin.dock._use_aoi()
 
         self.assertIsNotNone(plugin.dock._aoi_geometry)
         self.assertIn("AOI задана; площадь:", plugin.dock.aoi_label.text())
         self.assertIsNotNone(plugin.dock._aoi_tool.last_capture())
+        self.assertGreater(len(plugin.dock._aoi_tool._points), 0)
+
+        QCoreApplication.processEvents()
+        plugin.dock._draw_aoi()
+        plugin.dock._aoi_tool._points = [QgsPointXY(0, 0), QgsPointXY(1, 0)]
+        mouse_buttons = getattr(Qt, "MouseButton", Qt)
+        plugin.dock._aoi_tool.canvasReleaseEvent(
+            SimpleNamespace(button=lambda: mouse_buttons.RightButton)
+        )
+
+        self.assertIsNone(plugin.dock._aoi_geometry)
+        self.assertEqual(plugin.dock._aoi_tool._points, [])
+        self.assertIs(iface.mapCanvas().mapTool(), plugin.dock._aoi_tool)
+        self.assertIn("рисуйте заново", plugin.dock.aoi_label.text())
         plugin.unload()
 
     # Показывает число реально выбранных сервером снимков для контроля покрытия AOI.
@@ -214,7 +228,7 @@ class QGISPluginTests(unittest.TestCase):
         session.set_thresholds(500.0, 0.7)
 
         self.assertEqual(session.feature_ids(), [first_id])
-        self.assertEqual(session.counts()["new"], 1)
+        self.assertEqual(session.counts()["visible"], 1)
         renderer = session.layer.renderer()
         self.assertIsInstance(renderer, QgsRuleBasedRenderer)
         expressions = [rule.filterExpression() for rule in renderer.rootRule().children()]
@@ -237,26 +251,6 @@ class QGISPluginTests(unittest.TestCase):
         self.assertTrue(plugin.dock._candidate_highlight.isVisible())
         plugin.dock.min_area.setValue(2_000_000.0)
         self.assertFalse(plugin.dock._candidate_highlight.isVisible())
-        plugin.unload()
-
-    # Новый результат всегда открывается на непроверенных, а пустой фильтр объясняется.
-    def test_new_result_resets_status_filter_and_empty_filter_is_explained(self) -> None:
-        iface = _FakeIface()
-        plugin = MLSystemPlugin(iface)
-        plugin.initGui()
-        plugin.dock.min_area.setValue(0.0)
-        plugin.dock.min_confidence.setValue(0.0)
-        accepted_index = plugin.dock.filter_combo.findData("annotation")
-        plugin.dock.filter_combo.setCurrentIndex(accepted_index)
-        session = self._session()
-
-        plugin.dock._set_session(session, reset_filter=True)
-
-        self.assertEqual(plugin.dock.filter_combo.currentData(), "new")
-        self.assertEqual(session.position(), (1, 2))
-        plugin.dock.filter_combo.setCurrentIndex(accepted_index)
-        self.assertIn("скрыто фильтрами: 2", plugin.dock.counter_label.text())
-        self.assertIn("Статус: «Принятые»", plugin.dock.candidate_label.text())
         plugin.unload()
 
     # Запуск нового распознавания убирает даже не привязанную после перезапуска старую сессию.
@@ -282,10 +276,8 @@ class QGISPluginTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         plugin.unload()
 
-    # Проверяет площадь AOI и автоматический выбор двух очевидных рабочих слоёв.
-    def test_plugin_shows_aoi_area_and_selects_example_layers(self) -> None:
-        annotation = self._example_target("wind_erosion")
-        hard = self._example_target("hard_negative")
+    # Проверяет площадь AOI без каких-либо рабочих целевых слоёв.
+    def test_plugin_shows_aoi_area_without_target_layer_controls(self) -> None:
         iface = _FakeIface()
         plugin = MLSystemPlugin(iface)
         plugin.initGui()
@@ -295,36 +287,11 @@ class QGISPluginTests(unittest.TestCase):
             QgsCoordinateReferenceSystem("EPSG:3857"),
         )
 
-        self.assertEqual(plugin.dock.annotation_layer_combo.currentData(), annotation.id())
-        self.assertEqual(plugin.dock.hard_layer_combo.currentData(), hard.id())
+        self.assertFalse(hasattr(plugin.dock, "annotation_layer_combo"))
+        self.assertFalse(hasattr(plugin.dock, "hard_layer_combo"))
         self.assertIn("площадь:", plugin.dock.aoi_label.text())
         self.assertIn("м²", plugin.dock.aoi_label.text())
         plugin.unload()
-
-    # Proveriaet tri kategorii, undo, redo i povtornoe otkrytie.
-    def test_review_actions_undo_redo_and_persistence(self) -> None:
-        session = self._session()
-        first_id = session.current_feature().id()
-
-        session.classify("annotation")
-        self.assertEqual(session.feature(first_id)["review_status"], "annotation")
-        session.undo_stack.undo()
-        self.assertEqual(session.feature(first_id)["review_status"], "new")
-        session.undo_stack.redo()
-        self.assertEqual(session.feature(first_id)["review_status"], "annotation")
-        session.set_filter("all")
-        session.select_feature(first_id)
-        session.classify("hard_negative")
-        session.undo_stack.undo()
-        self.assertEqual(session.feature(first_id)["review_status"], "annotation")
-        session.classify("discarded")
-        session.undo_stack.undo()
-        self.assertEqual(session.feature(first_id)["review_status"], "annotation")
-
-        reopened_path = session.path
-        session.close(remove_layer=True)
-        reopened = ReviewSession.open_existing(reopened_path)
-        self.assertEqual(reopened.feature(first_id)["review_status"], "annotation")
 
     # Proveriaet atomarnost, roditelya i balans ploshchadi split.
     def test_split_is_atomic_and_preserves_area_and_parent(self) -> None:
@@ -341,7 +308,7 @@ class QGISPluginTests(unittest.TestCase):
         )
         source_area = sum(part.area_m2 for part in source_parts)
 
-        session.split_current(4_000_000.0, 1.0)
+        session.split_current(4_000_000.0)
 
         self.assertEqual(session.feature(parent_id)["review_status"], "split")
         children = [
@@ -355,109 +322,39 @@ class QGISPluginTests(unittest.TestCase):
             abs(source_area - sum(float(feature["area_m2"]) for feature in children)) / source_area,
             0.01,
         )
-        session.undo_stack.undo()
-        self.assertEqual(session.feature(parent_id)["review_status"], "new")
-        self.assertFalse(
-            any(
-                feature["parent_candidate_id"] == parent_candidate_id
-                for feature in session.layer.getFeatures()
+
+    # Выгружает только прошедшие фильтры части и не переносит служебные поля.
+    def test_split_all_and_export_use_filtered_active_parts_only(self) -> None:
+        session = self._session(large=True)
+        first_id, second_id = session.feature_ids()
+        confidence_index = session.layer.fields().indexOf("confidence")
+        area_index = session.layer.fields().indexOf("area_m2")
+        self.assertTrue(
+            session.layer.dataProvider().changeAttributeValues(
+                {
+                    first_id: {area_index: 20_000_000.0},
+                    second_id: {area_index: 20_000_000.0, confidence_index: 0.4},
+                }
             )
         )
-        session.undo_stack.redo()
-        self.assertEqual(session.feature(parent_id)["review_status"], "split")
+        session.set_thresholds(0.0, 0.7)
 
-    # Proveriaet yavnye sloi, transformaciyu CRS i idempotentnost.
-    def test_apply_uses_explicit_layers_transforms_crs_and_is_idempotent(self) -> None:
-        session = self._session()
-        session.set_filter("all")
-        first_id, second_id = session.feature_ids()
-        session.select_feature(first_id)
-        session.classify("annotation")
-        session.select_feature(second_id)
-        session.classify("hard_negative")
-        annotation = self._target("Разметка", "EPSG:3857")
-        hard = self._target("Hard negative", "EPSG:4326")
-        mapping = {
-            "class_id": "",
-            "source": "",
-            "confidence": "",
-            "candidate_id": "candidate_id",
-            "model_version": "",
-        }
+        split_count = session.split_large_candidates(4_000_000.0)
+        output = session.export_filtered_layer("Реки MLSystem2")
 
-        first = apply_reviewed_candidates(session.layer, annotation, hard, mapping, mapping)
-        second = apply_reviewed_candidates(session.layer, annotation, hard, mapping, mapping)
-
-        self.assertEqual(first.added, 2)
-        self.assertEqual(second.added, 0)
-        self.assertEqual(second.existing, 2)
-        self.assertEqual(annotation.featureCount(), 1)
-        self.assertEqual(hard.featureCount(), 1)
-        self.assertGreater(annotation.extent().xMaximum(), 100_000)
-
-    # Проверяет схему примеров fid/Classname без создания служебных полей.
-    def test_example_schema_is_mapped_automatically_and_remains_idempotent(self) -> None:
-        session = self._session()
-        session.set_filter("all")
-        first_id, second_id = session.feature_ids()
-        session.select_feature(first_id)
-        session.classify("annotation")
-        session.select_feature(second_id)
-        session.classify("hard_negative")
-        annotation = self._example_target("wind_erosion")
-        hard = self._example_target("hard_negative")
-        annotation_mapping = automatic_field_mapping(annotation)
-        hard_mapping = automatic_field_mapping(hard)
-
-        self.assertEqual(annotation_mapping["class_id"], "Classname")
-        self.assertEqual(annotation_mapping["candidate_id"], "")
-        first = apply_reviewed_candidates(
-            session.layer,
-            annotation,
-            hard,
-            annotation_mapping,
-            hard_mapping,
+        self.assertEqual(split_count, 1)
+        self.assertGreater(output.featureCount(), 1)
+        self.assertIsNotNone(QgsProject.instance().mapLayer(output.id()))
+        self.assertEqual(output.fields().indexOf("review_status"), -1)
+        self.assertEqual(output.fields().indexOf("target_layer_id"), -1)
+        self.assertTrue(
+            all(feature["parent_candidate_id"] == "candidate-1" for feature in output.getFeatures())
         )
-        self.assertTrue(annotation.commitChanges())
-        self.assertTrue(hard.commitChanges())
-        second = apply_reviewed_candidates(
-            session.layer,
-            annotation,
-            hard,
-            annotation_mapping,
-            hard_mapping,
-        )
+        self.assertEqual(session.feature(second_id)["review_status"], "new")
 
-        self.assertEqual(first.added, 2)
-        self.assertEqual(second.added, 0)
-        self.assertEqual(second.existing, 2)
-        self.assertEqual(
-            {feature["Classname"] for feature in annotation.getFeatures()},
-            {"Опустынивание"},
-        )
-        self.assertEqual(
-            {feature["Classname"] for feature in hard.getFeatures()},
-            {"Опустынивание"},
-        )
-
-    # Proveriaet rollback validacii i udalenie sloya sessii.
-    def test_apply_validation_leaves_targets_unchanged_and_removed_session_fails(self) -> None:
+    # Проверяет ошибку доступа после внешнего удаления слоя результатов.
+    def test_removed_session_layer_fails_cleanly(self) -> None:
         session = self._session(single=True)
-        session.classify("annotation")
-        annotation = self._target("Разметка", "EPSG:4326")
-        hard = self._target("Hard negative", "EPSG:4326")
-        with self.assertRaises(LayerOperationError):
-            apply_reviewed_candidates(
-                session.layer,
-                annotation,
-                hard,
-                {"candidate_id": "missing"},
-                {"candidate_id": "missing"},
-            )
-        self.assertEqual(annotation.featureCount(), 0)
-        self.assertEqual(hard.featureCount(), 0)
-
-        session.set_filter("all")
         feature_id = session.feature_ids()[0]
         QgsProject.instance().removeMapLayer(session.layer.id())
         with self.assertRaises(ReviewSessionError):
@@ -497,27 +394,6 @@ class QGISPluginTests(unittest.TestCase):
                 "area_m2": 1_000_000.0,
             },
         }
-
-    # Sozdaet yavno ukazannyi redaktiruemyi celevoi sloi.
-    @staticmethod
-    def _target(name: str, crs: str) -> QgsVectorLayer:
-        layer = QgsVectorLayer(f"MultiPolygon?crs={crs}", name, "memory")
-        layer.dataProvider().addAttributes([QgsField("candidate_id", STRING_TYPE)])
-        layer.updateFields()
-        QgsProject.instance().addMapLayer(layer)
-        return layer
-
-    # Создаёт целевой слой с той же схемой, что у пользовательских GeoJSON.
-    @staticmethod
-    def _example_target(name: str) -> QgsVectorLayer:
-        layer = QgsVectorLayer("MultiPolygon?crs=EPSG:3857", name, "memory")
-        layer.dataProvider().addAttributes(
-            [QgsField("fid", INT_TYPE), QgsField("Classname", STRING_TYPE)]
-        )
-        layer.updateFields()
-        QgsProject.instance().addMapLayer(layer)
-        return layer
-
 
 class _FakeIface:
     """Minimalnyi QGIS iface dlya proverki zhiznennogo cikla UI."""
