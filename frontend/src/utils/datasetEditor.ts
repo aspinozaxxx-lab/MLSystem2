@@ -62,11 +62,19 @@ function canonicalJson(value: unknown): string {
 function sortObjectKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortObjectKeys);
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
+  const sorted = Object.fromEntries(
     Object.entries(value as JsonObject)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => [key, sortObjectKeys(item)]),
-  );
+  ) as JsonObject;
+  if (sorted.type === "FeatureCollection" && Array.isArray(sorted.features)) {
+    sorted.features = [...sorted.features].sort((left, right) => {
+      const leftJson = JSON.stringify(left);
+      const rightJson = JSON.stringify(right);
+      return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+    });
+  }
+  return sorted;
 }
 
 export function appendHistory(

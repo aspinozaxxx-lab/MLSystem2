@@ -47,17 +47,29 @@ describe("черновики редактора датасетов", () => {
   });
 
   it("не считает изменением только другой порядок полей GeoJSON", () => {
+    const positive = {
+      type: "Feature",
+      id: "positive",
+      properties: { _mlsystem2_role: "positive" },
+      geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 0]]] },
+    };
+    const negative = {
+      type: "Feature",
+      id: "negative",
+      properties: { _mlsystem2_role: "hard_negative" },
+      geometry: { type: "Polygon", coordinates: [[[2, 2], [3, 2], [2, 2]]] },
+    };
     const baseline: DraftSnapshot = {
       geojson: {
         type: "FeatureCollection",
         crs: { type: "name", properties: { name: "EPSG:32637" } },
-        features: [],
+        features: [positive, negative],
       },
       newFeatureIndexes: [],
     };
     const current: DraftSnapshot = {
       geojson: {
-        features: [],
+        features: [negative, positive],
         crs: { properties: { name: "EPSG:32637" }, type: "name" },
         type: "FeatureCollection",
       },
