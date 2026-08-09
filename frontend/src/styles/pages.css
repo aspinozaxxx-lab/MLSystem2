@@ -1139,6 +1139,10 @@
   background: #111827;
 }
 
+.dataset-editor-raster-layer {
+  image-rendering: pixelated;
+}
+
 .dataset-editor-map-controls {
   position: absolute;
   top: 10px;

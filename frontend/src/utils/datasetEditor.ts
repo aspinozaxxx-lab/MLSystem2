@@ -1,6 +1,9 @@
 export type JsonObject = Record<string, unknown>;
 export type SortDirection = "ascending" | "descending";
 
+export const RASTER_MAX_SCALE = 10;
+export const RASTER_CONTRAST = 0.15;
+
 export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];
@@ -28,6 +31,41 @@ export function cloneSnapshot(snapshot: DraftSnapshot): DraftSnapshot {
     geojson: JSON.parse(JSON.stringify(snapshot.geojson)) as JsonObject,
     newFeatureIndexes: [...snapshot.newFeatureIndexes],
   };
+}
+
+export function extendRasterResolutions(
+  viewResolutions: number[],
+  nativeResolution: number,
+  maximumScale = RASTER_MAX_SCALE,
+): number[] {
+  if (
+    !viewResolutions.length ||
+    !Number.isFinite(nativeResolution) ||
+    nativeResolution <= 0 ||
+    !Number.isFinite(maximumScale) ||
+    maximumScale <= 1
+  ) {
+    return [...viewResolutions];
+  }
+  const minimumResolution = nativeResolution / maximumScale;
+  const resolutionTolerance = nativeResolution * 1e-12;
+  const result = viewResolutions.filter(
+    (resolution) => resolution + resolutionTolerance >= minimumResolution,
+  );
+  const factors = [2, 4, 8, maximumScale]
+    .filter((factor) => factor <= maximumScale)
+    .sort((left, right) => left - right);
+  for (const factor of factors) {
+    const resolution = nativeResolution / factor;
+    if (
+      !result.some(
+        (existing) => Math.abs(existing - resolution) <= resolutionTolerance,
+      )
+    ) {
+      result.push(resolution);
+    }
+  }
+  return result.sort((left, right) => right - left);
 }
 
 export function featureCounts(geojson: JsonObject): {

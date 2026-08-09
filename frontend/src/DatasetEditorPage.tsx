@@ -3,6 +3,8 @@ import {
   ArrowUpNarrowWide,
   Blend,
   CloudUpload,
+  Eye,
+  EyeOff,
   Folder,
   FolderOpen,
   MousePointer2,
@@ -26,6 +28,7 @@ import OLMap from "ol/Map";
 import GeoTIFF from "ol/source/GeoTIFF";
 import VectorSource from "ol/source/Vector";
 import { Fill, Stroke, Style } from "ol/style";
+import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
@@ -35,7 +38,9 @@ import {
   appendHistory,
   cloneSnapshot,
   draftChanged,
+  extendRasterResolutions,
   publishScenes as buildPublishScenes,
+  RASTER_CONTRAST,
   sceneCounts,
   sortEditorScenes,
   undoDraft,
@@ -127,6 +132,7 @@ export function DatasetEditorPage({
   const [editMode, setEditMode] = useState<EditMode>("select");
   const [sortDirection, setSortDirection] = useState<SortDirection>("descending");
   const [fillEnabled, setFillEnabled] = useState(true);
+  const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [drawInProgress, setDrawInProgress] = useState(false);
@@ -147,6 +153,7 @@ export function DatasetEditorPage({
   const dirtyRef = useRef(false);
   const roleRef = useRef<Role>(role);
   const fillEnabledRef = useRef(fillEnabled);
+  const annotationsVisibleRef = useRef(annotationsVisible);
   const bandModeRef = useRef<BandMode>(bandMode);
   const activeAnnotationRef = useRef(annotationName);
   const drawInProgressRef = useRef(false);
@@ -406,6 +413,7 @@ export function DatasetEditorPage({
       transition: 0,
     });
     const rasterLayer = new WebGLTileLayer({
+      className: "dataset-editor-raster-layer",
       source: rasterSource,
       style: rasterBandStyle(
         selectedDataset?.imagery_type === "kanopus" ? bandModeRef.current : "RGB",
@@ -413,6 +421,7 @@ export function DatasetEditorPage({
     });
     const vectorLayer = new VectorLayer({
       source: vectorSource,
+      visible: annotationsVisibleRef.current,
       style: (feature) =>
         featureStyle(
           feature as Feature<Geometry>,
@@ -515,7 +524,7 @@ export function DatasetEditorPage({
       controls: defaultControls({ zoom: false }),
       layers: [rasterLayer, vectorLayer],
       interactions: undefined,
-      view: rasterSource.getView(),
+      view: rasterViewWithOverzoom(rasterSource),
     });
     map.addInteraction(select);
     map.addInteraction(modify);
@@ -552,12 +561,12 @@ export function DatasetEditorPage({
   ]);
 
   useEffect(() => {
-    const drawing = editMode === "draw";
+    const drawing = annotationsVisible && editMode === "draw";
     drawRef.current?.setActive(drawing);
-    selectRef.current?.setActive(!drawing);
-    modifyRef.current?.setActive(!drawing);
-    if (drawing) selectRef.current?.getFeatures().clear();
-  }, [editMode]);
+    selectRef.current?.setActive(annotationsVisible && !drawing);
+    modifyRef.current?.setActive(annotationsVisible && !drawing);
+    if (drawing || !annotationsVisible) selectRef.current?.getFeatures().clear();
+  }, [annotationsVisible, detail, editMode]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -664,6 +673,18 @@ export function DatasetEditorPage({
     fillEnabledRef.current = next;
     setFillEnabled(next);
     vectorLayerRef.current?.changed();
+    mapRef.current?.render();
+  };
+
+  const toggleAnnotations = () => {
+    const next = !annotationsVisibleRef.current;
+    if (!next) {
+      if (drawInProgressRef.current) drawRef.current?.abortDrawing();
+      selectRef.current?.getFeatures().clear();
+    }
+    annotationsVisibleRef.current = next;
+    setAnnotationsVisible(next);
+    vectorLayerRef.current?.setVisible(next);
     mapRef.current?.render();
   };
 
@@ -941,11 +962,21 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Клик — выбор, перетаскивание вершин — изменение, Ctrl+Z — отмена.
+                  <MousePointer2 size={14} /> Клик — выбор, колесо — масштаб до 1000%, Ctrl+Z — отмена.
                 </div>
                 <div className="dataset-editor-map-shell">
                   <div className="dataset-editor-map" ref={mapTargetRef} />
                   <div className="dataset-editor-map-controls">
+                    <button
+                      className={`${annotationsVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
+                      type="button"
+                      aria-label={annotationsVisible ? "Скрыть всю разметку" : "Показать всю разметку"}
+                      aria-pressed={annotationsVisible}
+                      title={annotationsVisible ? "Скрыть все полигоны и временно отключить их редактирование" : "Показать полигоны и снова включить их редактирование"}
+                      onClick={toggleAnnotations}
+                    >
+                      {annotationsVisible ? <Eye size={17} /> : <EyeOff size={17} />}
+                    </button>
                     <button
                       className={`${fillEnabled ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
@@ -1176,6 +1207,18 @@ function rasterBandStyle(mode: BandMode): WebGLTileStyle {
       ["*", ["band", green], 255],
       ["*", ["band", blue], 255],
     ],
+    contrast: RASTER_CONTRAST,
+  };
+}
+
+async function rasterViewWithOverzoom(source: GeoTIFF): Promise<ViewOptions> {
+  const view = await source.getView();
+  const viewResolutions = view.resolutions;
+  const nativeResolution = source.getTileGrid()?.getResolutions().at(-1);
+  if (!viewResolutions || nativeResolution === undefined) return view;
+  return {
+    ...view,
+    resolutions: extendRasterResolutions(viewResolutions, nativeResolution),
   };
 }
 

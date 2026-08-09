@@ -4,6 +4,7 @@ import {
   acceptPublishedDraft,
   appendHistory,
   draftChanged,
+  extendRasterResolutions,
   featureCounts,
   publishScenes,
   sortEditorScenes,
@@ -38,6 +39,30 @@ const draft = (name: string, baseline: DraftSnapshot, current: DraftSnapshot): P
 });
 
 describe("черновики редактора датасетов", () => {
+  it("расширяет нативную шкалу GeoTIFF до 1000%", () => {
+    expect(extendRasterResolutions([8, 4, 2, 1], 1)).toEqual([
+      8,
+      4,
+      2,
+      1,
+      0.5,
+      0.25,
+      0.125,
+      0.1,
+    ]);
+  });
+
+  it("сохраняет существующий overzoom и ограничивает его десятикратным масштабом", () => {
+    expect(extendRasterResolutions([2, 1, 0.5, 0.0625], 1)).toEqual([
+      2,
+      1,
+      0.5,
+      0.25,
+      0.125,
+      0.1,
+    ]);
+  });
+
   it("считает роли из текущей разметки", () => {
     expect(featureCounts(snapshot(["positive", "hard_negative", "positive"]).geojson)).toEqual({
       total: 3,
