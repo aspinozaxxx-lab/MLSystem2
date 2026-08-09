@@ -779,8 +779,11 @@ def _editor_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
             try:
                 yield
             finally:
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                try:
+                    _restore_editor_clone_ownership(config)
+                finally:
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             import fcntl
 
@@ -788,7 +791,47 @@ def _editor_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
             try:
                 yield
             finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                try:
+                    _restore_editor_clone_ownership(config)
+                finally:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def _restore_editor_clone_ownership(config: TrainingUIAPIConfig) -> None:
+    """Вернуть всему клону владельца его корневого каталога."""
+
+    if os.name == "nt" or not hasattr(os, "chown"):
+        return
+    root = config.mlmarkup_editor_root
+    try:
+        root_status = root.stat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise DatasetEditorGitError(
+            "Не удалось определить владельца editor-клона MLMarkup"
+        ) from exc
+
+    owner = (root_status.st_uid, root_status.st_gid)
+
+    def restore(path: Path) -> None:
+        try:
+            status = path.lstat()
+            if (status.st_uid, status.st_gid) != owner:
+                os.chown(path, *owner, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+
+    try:
+        restore(root)
+        for directory, directory_names, file_names in os.walk(root, followlinks=False):
+            base = Path(directory)
+            for name in (*directory_names, *file_names):
+                restore(base / name)
+    except OSError as exc:
+        raise DatasetEditorGitError(
+            "Не удалось восстановить владельца editor-клона MLMarkup"
+        ) from exc
 
 
 def _synchronize_editor_clone(config: TrainingUIAPIConfig) -> None:

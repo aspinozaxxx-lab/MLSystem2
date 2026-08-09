@@ -134,7 +134,9 @@ mtime как fallback. `version` равен `git:{commit_sha}` или `fs:{mtime
 перед мутацией выполняется fetch/fast-forward, blob revision защищает от потери конкурентных изменений и даёт
 `409` без автоматического слияния геометрий. Сервер проверяет CRS снимка, Polygon/MultiPolygon, валидность и
 полное попадание в footprint. Raster endpoint авторизован и поддерживает HTTP Range. Возвращённый commit имеет
-статус `publishing`; он становится `published`, когда является предком SHA в live release marker.
+статус `publishing`; он становится `published`, когда является предком SHA в live release marker. Если API
+работает от другого системного пользователя, после каждой заблокированной операции UID/GID содержимого клона
+восстанавливаются по владельцу его корневого каталога.
 
 `POST /api/v1/scene-list-export` принимает multipart-поля `imagery_type=kanopus|ortho` и `geojson`.
 Сервис рекурсивно читает TIFF только из `prepared_images/kanopus` или `prepared_images/orto`, преобразует
