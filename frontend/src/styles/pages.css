@@ -1139,7 +1139,7 @@
   background: #111827;
 }
 
-.dataset-editor-raster-layer {
+.dataset-editor-map canvas.dataset-editor-raster-layer {
   image-rendering: pixelated;
 }
 
