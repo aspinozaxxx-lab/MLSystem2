@@ -1,3 +1,5 @@
+import type Geometry from "ol/geom/Geometry";
+
 export type JsonObject = Record<string, unknown>;
 export type SortDirection = "ascending" | "descending";
 
@@ -66,6 +68,39 @@ export function extendRasterResolutions(
     }
   }
   return result.sort((left, right) => right - left);
+}
+
+export function geometryInsideFootprint(
+  geometry: Geometry | null | undefined,
+  footprint: Geometry | null,
+): boolean {
+  if (!geometry || !footprint) return Boolean(geometry);
+  const simpleGeometry = geometry as Geometry & {
+    getFlatCoordinates?: () => number[] | null;
+    getStride?: () => number;
+  };
+  const coordinates = simpleGeometry.getFlatCoordinates?.();
+  const stride = simpleGeometry.getStride?.() || 2;
+  if (!coordinates) return false;
+  const extent = footprint.getExtent();
+  const footprintScale = Math.max(1, ...extent.map((value) => Math.abs(value)));
+  for (let index = 0; index < coordinates.length; index += stride) {
+    const coordinate = [coordinates[index], coordinates[index + 1]];
+    if (!coordinate.every(Number.isFinite)) return false;
+    if (footprint.intersectsCoordinate(coordinate)) continue;
+    const closest = footprint.getClosestPoint(coordinate);
+    if (!closest.slice(0, 2).every(Number.isFinite)) return false;
+    const coordinateScale = Math.max(
+      footprintScale,
+      Math.abs(coordinate[0]),
+      Math.abs(coordinate[1]),
+    );
+    const tolerance = coordinateScale * Number.EPSILON * 64;
+    const deltaX = closest[0] - coordinate[0];
+    const deltaY = closest[1] - coordinate[1];
+    if (deltaX * deltaX + deltaY * deltaY > tolerance * tolerance) return false;
+  }
+  return true;
 }
 
 export function featureCounts(geojson: JsonObject): {

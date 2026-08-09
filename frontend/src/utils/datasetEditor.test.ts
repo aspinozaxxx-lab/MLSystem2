@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import Polygon from "ol/geom/Polygon";
 
 import {
   acceptPublishedDraft,
@@ -6,6 +7,7 @@ import {
   draftChanged,
   extendRasterResolutions,
   featureCounts,
+  geometryInsideFootprint,
   publishScenes,
   sortEditorScenes,
   undoDraft,
@@ -61,6 +63,38 @@ describe("черновики редактора датасетов", () => {
       0.125,
       0.1,
     ]);
+  });
+
+  it("принимает численную погрешность на границе footprint, но отклоняет реальный выход", () => {
+    const left = 11_478_026;
+    const bottom = 6_962_204;
+    const right = 11_522_108;
+    const top = 7_011_923;
+    const footprint = new Polygon([[
+      [left, bottom],
+      [right, bottom],
+      [right, top],
+      [left, top],
+      [left, bottom],
+    ]]);
+    const boundaryGeometry = new Polygon([[
+      [right - 10, bottom + 10],
+      [right + 1e-9, bottom + 10],
+      [right + 1e-9, bottom + 20],
+      [right - 10, bottom + 20],
+      [right - 10, bottom + 10],
+    ]]);
+    const outsideGeometry = new Polygon([[
+      [right - 10, bottom + 10],
+      [right + 0.001, bottom + 10],
+      [right + 0.001, bottom + 20],
+      [right - 10, bottom + 20],
+      [right - 10, bottom + 10],
+    ]]);
+
+    expect(footprint.intersectsCoordinate([right, bottom + 10])).toBe(false);
+    expect(geometryInsideFootprint(boundaryGeometry, footprint)).toBe(true);
+    expect(geometryInsideFootprint(outsideGeometry, footprint)).toBe(false);
   });
 
   it("считает роли из текущей разметки", () => {

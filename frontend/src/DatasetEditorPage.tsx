@@ -39,6 +39,7 @@ import {
   cloneSnapshot,
   draftChanged,
   extendRasterResolutions,
+  geometryInsideFootprint,
   publishScenes as buildPublishScenes,
   RASTER_CONTRAST,
   sceneCounts,
@@ -481,7 +482,7 @@ export function DatasetEditorPage({
     draw.on("drawend", (event) => {
       setDrawingState(false);
       event.feature.set(ROLE_PROPERTY, roleRef.current);
-      if (!insideRaster(event.feature, rasterFootprintRef.current)) {
+      if (!geometryInsideFootprint(event.feature.getGeometry(), rasterFootprintRef.current)) {
         drawBefore = null;
         window.setTimeout(() => vectorSource.removeFeature(event.feature), 0);
         window.alert("Полигон должен целиком находиться внутри снимка.");
@@ -506,7 +507,7 @@ export function DatasetEditorPage({
     });
     modify.on("modifyend", (event) => {
       const outside = event.features.getArray().some((feature) =>
-        !insideRaster(feature, rasterFootprintRef.current),
+        !geometryInsideFootprint(feature.getGeometry(), rasterFootprintRef.current),
       );
       if (outside) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
@@ -1113,24 +1114,6 @@ function geojsonCrs(payload: JsonObject): string {
     if (typeof name === "string" && name) return name;
   }
   return "EPSG:4326";
-}
-
-function insideRaster(feature: Feature<Geometry>, footprint: Geometry | null): boolean {
-  const geometry = feature.getGeometry();
-  if (!geometry || !footprint) return Boolean(geometry);
-  const simpleGeometry = geometry as Geometry & {
-    getFlatCoordinates?: () => number[] | null;
-    getStride?: () => number;
-  };
-  const coordinates = simpleGeometry.getFlatCoordinates?.();
-  const stride = simpleGeometry.getStride?.() || 2;
-  if (!coordinates) return false;
-  for (let index = 0; index < coordinates.length; index += stride) {
-    if (!footprint.intersectsCoordinate([coordinates[index], coordinates[index + 1]])) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function vectorSnapshot(
