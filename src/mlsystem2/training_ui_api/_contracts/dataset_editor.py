@@ -99,6 +99,27 @@ class DatasetEditorSaveSceneRequest(BaseModel):
     geojson: dict[str, Any]
 
 
+class DatasetEditorPublishSceneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_name: str = Field(min_length=1, max_length=512)
+    revision: str = Field(min_length=1, max_length=128)
+    geojson: dict[str, Any]
+
+
+class DatasetEditorPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenes: list[DatasetEditorPublishSceneRequest] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_scenes(self) -> Self:
+        names = [scene.annotation_name.casefold() for scene in self.scenes]
+        if len(names) != len(set(names)):
+            raise ValueError("scenes не должен содержать повторяющиеся annotation_name")
+        return self
+
+
 class DatasetEditorDeleteSceneRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,6 +148,8 @@ __all__ = [
     "DatasetEditorDatasetListResponse",
     "DatasetEditorDeleteSceneRequest",
     "DatasetEditorMutationResult",
+    "DatasetEditorPublishRequest",
+    "DatasetEditorPublishSceneRequest",
     "DatasetEditorPublicationInfo",
     "DatasetEditorRasterBrowserResponse",
     "DatasetEditorRasterFolderInfo",

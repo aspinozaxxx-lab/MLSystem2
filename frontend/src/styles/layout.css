@@ -116,6 +116,11 @@
   padding: 32px 28px 48px;
 }
 
+.page.page-wide {
+  width: 100%;
+  max-width: none;
+}
+
 .page-header {
   display: flex;
   align-items: flex-end;

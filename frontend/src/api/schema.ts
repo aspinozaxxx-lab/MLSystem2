@@ -354,7 +354,8 @@ export interface paths {
         };
         /** Scenes */
         get: operations["scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_get"];
-        put?: never;
+        /** Publish Scenes */
+        put: operations["publish_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_put"];
         /** Add Scenes */
         post: operations["add_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_post"];
         delete?: never;
@@ -1648,6 +1649,22 @@ export interface components {
              * @enum {string}
              */
             status: "publishing" | "published";
+        };
+        /** DatasetEditorPublishRequest */
+        DatasetEditorPublishRequest: {
+            /** Scenes */
+            scenes: components["schemas"]["DatasetEditorPublishSceneRequest"][];
+        };
+        /** DatasetEditorPublishSceneRequest */
+        DatasetEditorPublishSceneRequest: {
+            /** Annotation Name */
+            annotation_name: string;
+            /** Revision */
+            revision: string;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
         };
         /** DatasetEditorRasterBrowserResponse */
         DatasetEditorRasterBrowserResponse: {
@@ -3824,6 +3841,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorSceneListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
                 };
             };
             /** @description Validation Error */

@@ -413,7 +413,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className="page">{children}</main>
+      <main className={`page ${route[0] === "dataset-editor" ? "page-wide" : ""}`}>{children}</main>
     </div>
   );
 }

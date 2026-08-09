@@ -19,6 +19,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     editor_scene_detail,
     list_editor_datasets,
     list_editor_scenes,
+    publish_editor_scenes,
     resolve_editor_raster,
     save_editor_scene,
 )
@@ -27,6 +28,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorDatasetListResponse,
     DatasetEditorDeleteSceneRequest,
     DatasetEditorMutationResult,
+    DatasetEditorPublishRequest,
     DatasetEditorPublicationInfo,
     DatasetEditorRasterBrowserResponse,
     DatasetEditorSaveSceneRequest,
@@ -109,6 +111,28 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             dataset_key,
             image_paths=request.image_paths,
             folder_path=request.folder_path,
+            username=username,
+        )
+
+    @app.put(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes",
+        response_model=DatasetEditorMutationResult,
+    )
+    def publish_scenes(
+        dataset_key: str,
+        request: DatasetEditorPublishRequest,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorMutationResult:
+        return _git_call(
+            publish_editor_scenes,
+            db,
+            ctx.config,
+            dataset_key,
+            scenes=[
+                (scene.annotation_name, scene.revision, scene.geojson)
+                for scene in request.scenes
+            ],
             username=username,
         )
 

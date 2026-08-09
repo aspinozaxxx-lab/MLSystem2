@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import shutil
 import subprocess
@@ -243,6 +244,117 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     env.release_marker.write_text(commit + "\n", encoding="utf-8")
     published = env.client.get(f"/api/v1/dataset-editor/publication/{commit}")
     assert published.json()["status"] == "published"
+
+
+def test_dataset_editor_publishes_multiple_scenes_atomically(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    added = env.client.post(scenes_url, json={"image_paths": ["batch/SCN02.tif"]})
+    assert added.status_code == 200
+
+    scenes = env.client.get(scenes_url).json()["scenes"]
+    first = next(item for item in scenes if item["annotation_name"] == "Olskij_SCN01.geojson")
+    second = next(item for item in scenes if item["annotation_name"] == "batch_SCN02.geojson")
+
+    def detail(scene: dict[str, object]) -> dict[str, object]:
+        annotation = quote(str(scene["annotation_name"]), safe="")
+        return env.client.get(f"{scenes_url}/{annotation}").json()
+
+    first_detail = detail(first)
+    second_detail = detail(second)
+    first_geojson = deepcopy(first_detail["geojson"])
+    first_geojson["features"][0]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [[[1, 1], [3.5, 1], [3.5, 3.5], [1, 3.5], [1, 1]]],
+    }
+    second_geojson = deepcopy(second_detail["geojson"])
+    second_geojson["features"] = [
+        _feature(3, "positive", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]]),
+        _feature(4, "hard_negative", [[4, 4], [5, 4], [5, 5], [4, 5], [4, 4]]),
+    ]
+    request = {
+        "scenes": [
+            {
+                "annotation_name": first["annotation_name"],
+                "revision": first["revision"],
+                "geojson": first_geojson,
+            },
+            {
+                "annotation_name": second["annotation_name"],
+                "revision": second["revision"],
+                "geojson": second_geojson,
+            },
+        ]
+    }
+    commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
+    published = env.client.put(scenes_url, json=request)
+    assert published.status_code == 200
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (
+        commits_before + 1
+    )
+    assert [item["annotation_name"] for item in published.json()["scenes"]] == [
+        first["annotation_name"],
+        second["annotation_name"],
+    ]
+    assert published.json()["scenes"][1]["total_count"] == 2
+
+    current_first = detail(published.json()["scenes"][0])
+    current_second = detail(published.json()["scenes"][1])
+    first_path = env.editor_root / "Реки" / "test" / str(first["annotation_name"])
+    second_path = env.editor_root / "Реки" / "test" / str(second["annotation_name"])
+    files_before = (first_path.read_bytes(), second_path.read_bytes())
+    commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
+
+    stale_request = deepcopy(request)
+    stale_request["scenes"][1]["revision"] = current_second["scene"]["revision"]
+    stale_request["scenes"][1]["geojson"] = deepcopy(current_second["geojson"])
+    stale_request["scenes"][1]["geojson"]["features"][0]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [[[7, 7], [9, 7], [9, 9], [7, 9], [7, 7]]],
+    }
+    stale = env.client.put(scenes_url, json=stale_request)
+    assert stale.status_code == 409
+    assert (first_path.read_bytes(), second_path.read_bytes()) == files_before
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == commits_before
+
+    invalid_first = deepcopy(current_first["geojson"])
+    invalid_second = deepcopy(current_second["geojson"])
+    invalid_second["features"][0]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [[[7, 7], [9, 7], [9, 9], [7, 9], [7, 7]]],
+    }
+    invalid = env.client.put(
+        scenes_url,
+        json={
+            "scenes": [
+                {
+                    "annotation_name": first["annotation_name"],
+                    "revision": current_first["scene"]["revision"],
+                    "geojson": invalid_first,
+                },
+                {
+                    "annotation_name": second["annotation_name"],
+                    "revision": current_second["scene"]["revision"],
+                    "geojson": invalid_second,
+                },
+            ]
+        },
+    )
+    assert invalid.status_code == 400
+    assert (first_path.read_bytes(), second_path.read_bytes()) == files_before
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == commits_before
+
+    assert env.client.put(scenes_url, json={"scenes": []}).status_code == 422
+    duplicate = {"scenes": [request["scenes"][0], request["scenes"][0]]}
+    assert env.client.put(scenes_url, json=duplicate).status_code == 422
+    openapi = env.client.get("/openapi.json").json()
+    assert "put" in openapi["paths"][
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes"
+    ]
+    assert "DatasetEditorPublishRequest" in openapi["components"]["schemas"]
 
 
 def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(

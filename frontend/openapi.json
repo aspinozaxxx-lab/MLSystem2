@@ -688,6 +688,53 @@
             }
           }
         }
+      },
+      "put": {
+        "summary": "Publish Scenes",
+        "operationId": "publish_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_put",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorPublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
@@ -4414,6 +4461,53 @@
           "status"
         ],
         "title": "DatasetEditorPublicationInfo"
+      },
+      "DatasetEditorPublishRequest": {
+        "properties": {
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorPublishSceneRequest"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Scenes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scenes"
+        ],
+        "title": "DatasetEditorPublishRequest"
+      },
+      "DatasetEditorPublishSceneRequest": {
+        "properties": {
+          "annotation_name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Annotation Name"
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Revision"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "annotation_name",
+          "revision",
+          "geojson"
+        ],
+        "title": "DatasetEditorPublishSceneRequest"
       },
       "DatasetEditorRasterBrowserResponse": {
         "properties": {

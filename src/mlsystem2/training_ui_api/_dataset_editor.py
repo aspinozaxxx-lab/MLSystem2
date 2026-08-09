@@ -268,26 +268,76 @@ def save_editor_scene(
     geojson: dict[str, Any],
     username: str,
 ) -> DatasetEditorMutationResult:
+    return publish_editor_scenes(
+        session,
+        config,
+        dataset_key,
+        scenes=[(annotation_name, revision, geojson)],
+        username=username,
+    )
+
+
+def publish_editor_scenes(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    scenes: list[tuple[str, str, dict[str, Any]]],
+    username: str,
+) -> DatasetEditorMutationResult:
+    if not scenes:
+        raise TrainingUIAPIError("Для публикации нужен хотя бы один снимок")
+    normalized_names = [name.casefold() for name, _revision, _geojson in scenes]
+    if len(normalized_names) != len(set(normalized_names)):
+        raise TrainingUIAPIError("Список публикации содержит повторяющиеся снимки")
+
     with _editor_lock(config):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
-        _scene_by_annotation(config, dataset, source_dir, annotation_name)
-        annotation_path = _annotation_path(source_dir, annotation_name)
-        relative_path = _repo_relative(config, annotation_path)
-        current_revision = _blob_revision(config, "HEAD", relative_path)
-        if current_revision != revision:
-            raise DatasetEditorConflict("Разметка уже изменена другим пользователем")
-        image_path = _matched_image_path(dataset, source_dir, annotation_name)
-        _validate_editor_geojson(geojson, image_path)
-        previous_payload = _read_geojson(annotation_path)
-        _validate_preserved_properties(previous_payload, geojson)
+        resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
+        conflicts: list[str] = []
+        for annotation_name, revision, geojson in scenes:
+            scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+            annotation_path = _annotation_path(source_dir, scene.annotation_name)
+            relative_path = _repo_relative(config, annotation_path)
+            current_revision = _blob_revision(config, "HEAD", relative_path)
+            if current_revision != revision:
+                conflicts.append(scene.annotation_name)
+            resolved.append(
+                (scene.annotation_name, revision, geojson, annotation_path, relative_path)
+            )
+        if conflicts:
+            raise DatasetEditorConflict(
+                "Разметка уже изменена другим пользователем: " + ", ".join(conflicts)
+            )
+
+        prepared: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
+        for annotation_name, revision, geojson, annotation_path, relative_path in resolved:
+            image_path = _matched_image_path(dataset, source_dir, annotation_name)
+            _validate_editor_geojson(geojson, image_path)
+            previous_payload = _read_geojson(annotation_path)
+            _validate_preserved_properties(previous_payload, geojson)
+            prepared.append(
+                (annotation_name, revision, geojson, annotation_path, relative_path)
+            )
+
+        relative_paths = [item[4] for item in prepared]
         try:
-            _write_geojson_atomic(annotation_path, geojson)
-            _git(config, "add", "--", relative_path.as_posix())
-            commit = _commit(config, f"Обновить разметку {annotation_name}", username)
+            for _name, _revision, geojson, annotation_path, _relative_path in prepared:
+                _write_geojson_atomic(annotation_path, geojson)
+            _git(config, "add", "--", *(path.as_posix() for path in relative_paths))
+            subject = (
+                f"Обновить разметку {prepared[0][0]}"
+                if len(prepared) == 1
+                else (
+                    f"Обновить разметку датасета {dataset.dataset_name or dataset.name} "
+                    f"({len(prepared)} снимка)"
+                )
+            )
+            commit = _commit(config, subject, username)
             commit = _push_with_retry(
                 config,
-                expected_revisions={relative_path: revision},
+                expected_revisions={item[4]: item[1] for item in prepared},
             )
         except Exception:
             _git_optional(
@@ -296,14 +346,16 @@ def save_editor_scene(
                 "--staged",
                 "--worktree",
                 "--",
-                relative_path.as_posix(),
+                *(path.as_posix() for path in relative_paths),
             )
             raise
-        updated_scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+        updated_scenes = {
+            item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
+        }
         return DatasetEditorMutationResult(
             commit=commit,
             publication_status=_publication_status(config, commit),
-            scenes=[updated_scene],
+            scenes=[updated_scenes[item[0]] for item in prepared],
         )
 
 
@@ -995,6 +1047,7 @@ __all__ = [
     "editor_scene_detail",
     "list_editor_datasets",
     "list_editor_scenes",
+    "publish_editor_scenes",
     "resolve_editor_raster",
     "save_editor_scene",
 ]
