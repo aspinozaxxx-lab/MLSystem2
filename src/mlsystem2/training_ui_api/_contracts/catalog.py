@@ -14,6 +14,11 @@ class ImageryType(StrEnum):
     ORTHO = "ortho"
 
 
+class DatasetFormat(StrEnum):
+    LEGACY = "legacy"
+    PER_IMAGE = "per_image"
+
+
 class AppLink(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -54,6 +59,8 @@ class DatasetInfo(BaseModel):
     scenes_file: str | None = None
     annotation_file: str | None = None
     hard_negative_annotation_file: str | None = None
+    format: DatasetFormat | None = None
+    annotations_dir: str | None = None
     image_count: int | None = None
     version: str | None = None
     updated_at: datetime | None = None
@@ -209,6 +216,7 @@ __all__ = [
     "DatasetCatalogInfo",
     "DatasetClassCreate",
     "DatasetClassUpdate",
+    "DatasetFormat",
     "DatasetInfo",
     "DatasetListResponse",
     "DatasetPrimaryDatasetUpdate",

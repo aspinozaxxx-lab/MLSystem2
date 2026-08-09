@@ -2,14 +2,16 @@
 
 ## Назначение
 
-`cli` содержит точки входа командной строки для запуска модулей через `python -m` и консольные scripts.
+`cli` содержит точки входа командной строки и локальные диагностические скрипты MLSystem2.
 
 ## Публичный интерфейс
 
-- `python -m mlsystem2.cli.prepare_images_for_vrt` — одноразовая подготовка исходных GeoTIFF к построению VRT-мозаик.
-- `python -m mlsystem2.cli.tiling_test_for_black --config <path>` — диагностическая проверка, что `dataset_preparing` и `tile_preparation` не возвращают полностью черные tiles.
-- `mlsystem2-train` — запуск обучающего конвейера.
-- `mlsystem2-infer` — запуск инференса.
+- `python -m mlsystem2.cli.prepare_images [--mode local|server]` — одноразово подготовить COG GeoTIFF.
+- `python -m mlsystem2.cli.tiling_test_for_black --config <path>` — проверить train/val тайлы на чёрные и non-finite данные.
+- `mlsystem2-train` — запустить обучение.
+- `mlsystem2-infer` — запустить inference.
+
+Устаревшей команды `prepare_images_for_vrt` нет.
 
 ## Публичные контракты
 
@@ -17,37 +19,9 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — локальная диагностика модулей из `modules_test`.
-- `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — проверка всех train/val tiles на полностью черные данные из `tiling_test_for_black`.
-- `settings.api`, `train_pipeline.api`, `inference_pipeline.api` — существующие точки входа train и infer.
+- `dataset_preparing.api`, `tile_preparation.api`, `settings.api` — диагностика подготовки и тайлов.
+- `settings.api`, `train_pipeline.api`, `inference_pipeline.api` — точки входа train/infer.
 
 ## Алгоритм работы и его особенности
 
-CLI разбирает аргументы, вызывает публичный API нужного модуля и завершает процесс с кодом, соответствующим результату. `modules_test` — служебный локальный диагностический скрипт, не публичный API и не основной CLI приложения; он пишет `preparation_report.json`, `modules_test_timing_report.json`, `train.vrt`, `val.vrt` и до 100 batch в `tile_batches` при успешной подготовке датасета и DataLoader.
-
-`tiling_test_for_black` загружает YAML-настройки через `settings.api`, вызывает `dataset_preparing.api.prepare_dataset`, затем создает train и val loader через `tile_preparation.api.create_tile_dataloader`. Для scan-запуска скрипт пишет временный конфиг рядом с отчетом, где отключает аугментации, но сохраняет dataset, tile size, stride, seed, train weighted sampling и cached balanced val. В tile-режиме используется общий VRT и публичный `TileSplitRequest`, поэтому train/val subsets остаются теми же непересекающимися subsets. Проверка считает tile пустым, если во всем image tensor нет ни одного finite pixel со значением больше `eps` по модулю; non-finite pixels считаются отдельной ошибкой. Итог пишется в JSON-отчет и код завершения равен `1`, если найден хотя бы один пустой или non-finite tile.
-
-Подготовка снимков для VRT
-
-`src/mlsystem2/cli/prepare_images_for_vrt.py` — служебный CLI-скрипт для тяжелой одноразовой подготовки растров перед запуском `dataset_preparing`. Он не является публичным API модуля и не используется как библиотека.
-
-Скрипт читает исходные `.tif` и `.tiff`, перепроецирует их в `EPSG:3857` с `nearest` resampling и записывает подготовленные Cloud Optimized GeoTIFF. При этом он сохраняет количество каналов, порядок каналов, dtype, nodata, описания каналов и теги каналов. Alpha band и internal mask не создаются, `.msk` sidecar не создается. Если в исходном снимке alpha указан только как `ColorInterp`, он заменяется на `undefined` на той же позиции, а сам канал остается обычным спектральным каналом.
-
-Результат подготовки — набор COG GeoTIFF в целевой директории с сохранением относительной структуры папок и JSON-отчет со статусом по каждому файлу. Эти подготовленные снимки затем используются `dataset_preparing` для построения train/val VRT без повторного тяжелого warp исходных raw-снимков.
-
-Запуск локального режима:
-
-```bash
-python -m mlsystem2.cli.prepare_images_for_vrt
-python -m mlsystem2.cli.prepare_images_for_vrt --mode local
-```
-
-Локальный режим читает `D:\Projects\ImagesDeforestation`, пишет в `D:\Projects\ImagesDeforestationPrepared3857`, отчет пишет в `D:\Projects\test\prepare_images_for_vrt_report.json`.
-
-Запуск серверного режима:
-
-```bash
-python -m mlsystem2.cli.prepare_images_for_vrt --mode server
-```
-
-Серверный режим читает снимки из `s3://mlsystems/images/kanopus/`, пишет подготовленные COG в `/data/mlsystem2/prepared_images/kanopus/`, отчет пишет в `/data/mlsystem2/prepared_images/report/prepare_images_for_vrt_report.json`.
+`prepare_images` читает `.tif/.tiff`, перепроецирует в `EPSG:3857` с nearest resampling и сохраняет COG с исходными каналами, dtype, nodata, описаниями и тегами; alpha-интерпретация снимается без удаления канала. Относительная структура каталогов сохраняется, результат каждого файла попадает в JSON-отчёт. Локальный режим использует `D:\Projects\ImagesDeforestation` и отчёт `D:\Projects\test\prepare_images_report.json`; серверный — `s3://mlsystems/images/kanopus/`, `/data/mlsystem2/prepared_images/kanopus/` и `report/prepare_images_report.json`. `modules_test` пишет отчёты и до 100 batch, не создавая мозаик. `tiling_test_for_black` повторяет production split по независимым сценам и возвращает код `1` при пустом/non-finite тайле.

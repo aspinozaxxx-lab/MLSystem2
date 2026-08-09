@@ -10,32 +10,32 @@ from rasterio.enums import ColorInterp
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.transform import from_origin
 
-from mlsystem2.cli.prepare_images_for_vrt import (
+from mlsystem2.cli.prepare_images import (
     _config_for_mode,
     _output_path_for_s3_key,
     _parse_args,
     _parse_s3_uri,
-    prepare_images_for_vrt,
+    prepare_images,
 )
 
 
-def test_prepare_images_for_vrt_default_mode_is_local() -> None:
+def test_prepare_images_default_mode_is_local() -> None:
     args = _parse_args([])
 
     assert args.mode == "local"
 
 
-def test_prepare_images_for_vrt_local_config() -> None:
+def test_prepare_images_local_config() -> None:
     config = _config_for_mode("local")
 
     assert config.mode == "local"
     assert config.raw_images_dir == Path(r"D:\Projects\ImagesDeforestation")
     assert config.prepared_images_dir == Path(r"D:\Projects\ImagesDeforestationPrepared3857")
-    assert config.report_path == Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
+    assert config.report_path == Path(r"D:\Projects\test\prepare_images_report.json")
     assert config.workers == 8
 
 
-def test_prepare_images_for_vrt_server_config() -> None:
+def test_prepare_images_server_config() -> None:
     config = _config_for_mode("server")
 
     assert config.mode == "server"
@@ -43,24 +43,24 @@ def test_prepare_images_for_vrt_server_config() -> None:
     assert config.raw_images_dir is None
     assert config.prepared_images_dir == Path("/data/mlsystem2/prepared_images/kanopus")
     assert config.report_path == Path(
-        "/data/mlsystem2/prepared_images/report/prepare_images_for_vrt_report.json"
+        "/data/mlsystem2/prepared_images/report/prepare_images_report.json"
     )
     assert config.workers == 32
 
 
-def test_prepare_images_for_vrt_unknown_mode_exits() -> None:
+def test_prepare_images_unknown_mode_exits() -> None:
     with pytest.raises(SystemExit):
         _parse_args(["--mode", "unknown"])
 
 
-def test_prepare_images_for_vrt_parse_s3_uri() -> None:
+def test_prepare_images_parse_s3_uri() -> None:
     parsed = _parse_s3_uri("s3://mlsystems/images/kanopus/abc.tif")
 
     assert parsed.bucket == "mlsystems"
     assert parsed.key == "images/kanopus/abc.tif"
 
 
-def test_prepare_images_for_vrt_s3_output_path_preserves_relative_key() -> None:
+def test_prepare_images_s3_output_path_preserves_relative_key() -> None:
     output_path = _output_path_for_s3_key(
         Path("/data/mlsystem2/prepared_images/kanopus"),
         "s3://mlsystems/images/kanopus/",
@@ -70,13 +70,13 @@ def test_prepare_images_for_vrt_s3_output_path_preserves_relative_key() -> None:
     assert output_path == Path("/data/mlsystem2/prepared_images/kanopus/a/b.tif")
 
 
-def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
+def test_prepare_images_keeps_band_count(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
     _write_raw_raster_with_white_border(raw_dir / "scene.tif", count=3)
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
     item = report["files"][0]
@@ -94,14 +94,14 @@ def test_prepare_images_for_vrt_keeps_band_count(tmp_path: Path) -> None:
         assert ColorInterp.alpha not in dataset.colorinterp
 
 
-def test_prepare_images_for_vrt_processes_multiple_files_with_workers(tmp_path: Path) -> None:
+def test_prepare_images_processes_multiple_files_with_workers(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
     _write_raw_raster_with_white_border(raw_dir / "scene_a.tif", count=3)
     _write_raw_raster_with_white_border(raw_dir / "nested" / "scene_b.tiff", count=3)
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
 
     assert report["status"] == "ok"
     assert report["input_count"] == 2
@@ -117,13 +117,13 @@ def test_prepare_images_for_vrt_processes_multiple_files_with_workers(tmp_path: 
     assert all(item["has_sidecar_msk"] is False for item in report["files"])
 
 
-def test_prepare_images_for_vrt_writes_epsg3857_nodata_without_mask(tmp_path: Path) -> None:
+def test_prepare_images_writes_epsg3857_nodata_without_mask(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
     _write_raw_raster_with_white_border(raw_dir / "nested" / "scene.tif", count=1)
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     output_path = prepared_dir / "nested" / "scene.tif"
     assert report["status"] == "ok"
@@ -137,7 +137,7 @@ def test_prepare_images_for_vrt_writes_epsg3857_nodata_without_mask(tmp_path: Pa
         assert dataset.count == 1
 
 
-def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_path: Path) -> None:
+def test_prepare_images_preserves_source_colorinterp_without_alpha(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
@@ -152,7 +152,7 @@ def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_p
         ),
     )
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
     item = report["files"][0]
@@ -173,7 +173,7 @@ def test_prepare_images_for_vrt_preserves_source_colorinterp_without_alpha(tmp_p
         )
 
 
-def test_prepare_images_for_vrt_preserves_descriptions_and_band_tags(tmp_path: Path) -> None:
+def test_prepare_images_preserves_descriptions_and_band_tags(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
@@ -191,7 +191,7 @@ def test_prepare_images_for_vrt_preserves_descriptions_and_band_tags(tmp_path: P
         band_tags={4: {"name": "nir"}},
     )
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
     item = report["files"][0]
@@ -203,7 +203,7 @@ def test_prepare_images_for_vrt_preserves_descriptions_and_band_tags(tmp_path: P
         assert dataset.tags(4)["name"] == "nir"
 
 
-def test_prepare_images_for_vrt_replaces_source_alpha_colorinterp(tmp_path: Path) -> None:
+def test_prepare_images_replaces_source_alpha_colorinterp(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
@@ -218,7 +218,7 @@ def test_prepare_images_for_vrt_replaces_source_alpha_colorinterp(tmp_path: Path
         ),
     )
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "ok"
     item = report["files"][0]
@@ -233,13 +233,13 @@ def test_prepare_images_for_vrt_replaces_source_alpha_colorinterp(tmp_path: Path
         assert ColorInterp.alpha not in dataset.colorinterp
 
 
-def test_prepare_images_for_vrt_errors_without_source_nodata(tmp_path: Path) -> None:
+def test_prepare_images_errors_without_source_nodata(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     prepared_dir = tmp_path / "prepared"
     raw_dir.mkdir()
     _write_raw_raster_with_white_border(raw_dir / "scene.tif", count=4, nodata=None)
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json")
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json")
 
     assert report["status"] == "error"
     assert report["output_count"] == 0
@@ -249,7 +249,7 @@ def test_prepare_images_for_vrt_errors_without_source_nodata(tmp_path: Path) -> 
     assert not (prepared_dir / "scene.tif").exists()
 
 
-def test_prepare_images_for_vrt_logs_file_error_and_skips_bad_geotransform(
+def test_prepare_images_logs_file_error_and_skips_bad_geotransform(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -259,7 +259,7 @@ def test_prepare_images_for_vrt_logs_file_error_and_skips_bad_geotransform(
     _write_raw_raster_with_white_border(raw_dir / "good.tif", count=3)
     _write_raw_raster_without_transform(raw_dir / "bad.tif")
 
-    report = prepare_images_for_vrt(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
+    report = prepare_images(raw_dir, prepared_dir, tmp_path / "report.json", workers=2)
 
     captured = capsys.readouterr()
     assert report["status"] == "error"

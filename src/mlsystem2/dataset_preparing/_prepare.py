@@ -7,9 +7,11 @@ from pathlib import Path
 from ._object_counts import (
     ImageGeometryScore,
     SceneObjectCount,
+    count_per_image_annotation_roles,
     count_objects_per_scene,
     score_images_by_annotation_geometry,
 )
+from ._per_image import resolve_per_image_annotations
 from ._raster_validation import RasterValidationResult, validate_rasters
 from ._scene_matching import (
     expand_scene_entries,
@@ -17,7 +19,6 @@ from ._scene_matching import (
     index_image_files,
     read_scene_list,
 )
-from ._vrt import build_vrt_xml
 from .contracts import (
     DatasetClassAnnotation,
     DatasetClassRequest,
@@ -26,11 +27,14 @@ from .contracts import (
     DatasetPreparationResult,
     DatasetSceneReport,
     PreparedDataset,
+    PreparedScene,
 )
 
 def prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
     if request.classes:
         return _prepare_multiclass_dataset(request)
+    if request.annotations_dir is not None:
+        return _prepare_per_image_dataset(request)
     return _prepare_binary_dataset(request)
 
 
@@ -143,24 +147,22 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
     dataset: PreparedDataset | None = None
     if not errors and validation is not None:
         raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
-        try:
-            pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
-            train_vrt_xml = pool_vrt_xml
-            val_vrt_xml = pool_vrt_xml
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"Не удалось построить VRT: {exc}")
-        else:
-            dataset = PreparedDataset(
-                train_vrt_xml=train_vrt_xml,
-                val_vrt_xml=val_vrt_xml,
-                pool_vrt_xml=pool_vrt_xml,
-                annotation_file=annotation_file.resolve().as_posix(),
-                hard_negative_annotation_file=(
-                    hard_negative_file.resolve().as_posix()
-                    if hard_negative_file is not None
-                    else None
-                ),
-            )
+        dataset = PreparedDataset(
+            format="legacy_binary",
+            scenes=[
+                PreparedScene(
+                    scene_id=scene,
+                    image_path=raster_by_scene[scene].path.resolve().as_posix(),
+                )
+                for scene in pool_scene_ids
+            ],
+            annotation_file=annotation_file.resolve().as_posix(),
+            hard_negative_annotation_file=(
+                hard_negative_file.resolve().as_posix()
+                if hard_negative_file is not None
+                else None
+            ),
+        )
 
     report = _build_report(
         scenes=scenes,
@@ -173,6 +175,117 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
     )
     if errors:
         dataset = None
+    return DatasetPreparationResult(dataset=dataset, report=report)
+
+
+def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult:
+    images_dir = Path(request.images_dir)
+    if request.annotations_dir is None:
+        raise AssertionError("annotations_dir должен быть провалидирован до подготовки")
+    annotations_dir = Path(request.annotations_dir)
+    errors: list[str] = []
+    try:
+        resolution = resolve_per_image_annotations(images_dir, annotations_dir)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Не удалось сопоставить per-image разметку: {exc}")
+        report = _build_report(
+            scenes=[],
+            positive_rows=[],
+            hard_negative_rows=[],
+            scene_to_image={},
+            missing_files=[],
+            errors=errors,
+        )
+        return DatasetPreparationResult(dataset=None, report=report)
+
+    scenes = [
+        *(item.scene_id for item in resolution.matches),
+        *resolution.missing_annotations,
+        *resolution.ambiguous_annotations,
+        *resolution.annotation_collisions,
+    ]
+    missing_files = list(resolution.missing_annotations)
+    if missing_files:
+        errors.append(
+            "Не найдены снимки для файлов разметки: " + ", ".join(missing_files)
+        )
+    for annotation_name, paths in resolution.ambiguous_annotations.items():
+        joined = "; ".join(path.as_posix() for path in paths)
+        errors.append(
+            f"Файл разметки неоднозначно сопоставлен со снимками: "
+            f"{annotation_name}: {joined}"
+        )
+    for annotation_name, paths in resolution.annotation_collisions.items():
+        joined = "; ".join(path.as_posix() for path in paths)
+        errors.append(
+            f"Коллизия имён файлов per-image разметки: "
+            f"{annotation_name}: {joined}"
+        )
+    if not resolution.matches:
+        errors.append("В per-image датасете не найдено ни одной сопоставленной сцены.")
+
+    scene_to_image = {item.scene_id: item.image_path for item in resolution.matches}
+    positive_rows: list[SceneObjectCount] = []
+    hard_negative_rows: list[SceneObjectCount] = []
+    for item in resolution.matches:
+        try:
+            positive_count, hard_negative_count = count_per_image_annotation_roles(
+                item.annotation_file,
+                item.image_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                f"Не удалось прочитать per-image разметку {item.annotation_file}: {exc}"
+            )
+            positive_count = 0
+            hard_negative_count = 0
+        positive_rows.append(
+            SceneObjectCount(item.scene_id, item.image_path, positive_count)
+        )
+        hard_negative_rows.append(
+            SceneObjectCount(item.scene_id, item.image_path, hard_negative_count)
+        )
+
+    validation = (
+        validate_rasters(
+            scene_to_image,
+            expected_band_count=request.expected_band_count,
+            expected_dtype=request.expected_dtype,
+        )
+        if scene_to_image
+        else None
+    )
+    if validation is not None:
+        errors.extend(validation.errors)
+
+    dataset: PreparedDataset | None = None
+    if not errors and validation is not None:
+        annotation_by_scene = {
+            item.scene_id: item.annotation_file for item in resolution.matches
+        }
+        dataset = PreparedDataset(
+            format="per_image_binary",
+            scenes=[
+                PreparedScene(
+                    scene_id=raster.scene_id,
+                    image_path=raster.path.resolve().as_posix(),
+                    annotation_file=annotation_by_scene[
+                        raster.scene_id
+                    ].resolve().as_posix(),
+                )
+                for raster in validation.rasters
+            ],
+        )
+
+    report = _build_report(
+        scenes=scenes,
+        positive_rows=positive_rows,
+        hard_negative_rows=hard_negative_rows,
+        scene_to_image=scene_to_image,
+        missing_files=missing_files,
+        errors=errors,
+        validation=validation,
+    )
     return DatasetPreparationResult(dataset=dataset, report=report)
 
 
@@ -322,34 +435,32 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
     dataset: PreparedDataset | None = None
     if not errors and validation is not None:
         raster_by_scene = {raster.scene_id: raster for raster in validation.rasters}
-        try:
-            pool_vrt_xml = build_vrt_xml([raster_by_scene[scene] for scene in pool_scene_ids])
-            train_vrt_xml = pool_vrt_xml
-            val_vrt_xml = pool_vrt_xml
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"Не удалось построить VRT: {exc}")
-        else:
-            dataset = PreparedDataset(
-                train_vrt_xml=train_vrt_xml,
-                val_vrt_xml=val_vrt_xml,
-                pool_vrt_xml=pool_vrt_xml,
-                annotation_file=None,
-                class_annotations=[
-                    DatasetClassAnnotation(
-                        class_id=class_id,
-                        slug=class_request.slug,
-                        name=class_request.name,
-                        annotation_file=Path(class_request.annotation_file).resolve().as_posix(),
-                        hard_negative_annotation_file=(
-                            hard_negative_by_slug[class_request.slug].resolve().as_posix()
-                            if class_request.slug in hard_negative_by_slug
-                            else None
-                        ),
-                        priority=class_request.priority,
-                    )
-                    for class_id, class_request in enumerate(classes, start=1)
-                ],
-            )
+        dataset = PreparedDataset(
+            format="legacy_multiclass",
+            scenes=[
+                PreparedScene(
+                    scene_id=scene,
+                    image_path=raster_by_scene[scene].path.resolve().as_posix(),
+                )
+                for scene in pool_scene_ids
+            ],
+            annotation_file=None,
+            class_annotations=[
+                DatasetClassAnnotation(
+                    class_id=class_id,
+                    slug=class_request.slug,
+                    name=class_request.name,
+                    annotation_file=Path(class_request.annotation_file).resolve().as_posix(),
+                    hard_negative_annotation_file=(
+                        hard_negative_by_slug[class_request.slug].resolve().as_posix()
+                        if class_request.slug in hard_negative_by_slug
+                        else None
+                    ),
+                    priority=class_request.priority,
+                )
+                for class_id, class_request in enumerate(classes, start=1)
+            ],
+        )
 
     report = _build_report(
         scenes=scenes,

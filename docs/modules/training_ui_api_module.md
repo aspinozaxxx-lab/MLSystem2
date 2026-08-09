@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`training_ui_api` — отдельный FastAPI-сервис сайта MLSystem2. Он отдает публичный HTTP API для frontend, хранит UI-данные обучения и управляемый каталог датасетов в Postgres БД/схеме, синхронизирует с ним новые папки `/data/MLMarkup`, управляет очередями training/inference и не выполняет прямой доступ frontend к БД.
+`training_ui_api` — FastAPI-сервис сайта MLSystem2. Он хранит UI-данные и управляемый каталог датасетов, синхронизирует опубликованный `/data/MLMarkup`, управляет очередями training/inference и предоставляет Git-backed редактор per-image разметки. Редактор пишет только в отдельный `mlmarkup-editor`, а обучение читает только атомарно опубликованный live-релиз.
 
 Frontend — React + TypeScript + Vite SPA. TypeScript-типы генерируются из OpenAPI командой
 `npm run generate:api --prefix frontend`, production static собирается в `frontend/dist`, а сервер Node.js
@@ -21,7 +21,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
 - `BootstrapInfo` - стартовый DTO для React frontend: links, datasets, image folders, classes, models и оба набора templates одним ответом.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
-- `ImageryType`, `ImageryTypeInfo`, `DatasetInfo`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог классов и вложенных датасетов; класс задаёт `kanopus|ortho`, а датасет содержит метрику, число каналов, источник, его состояние, `scenes_file`, positive `annotation_file`, optional `hard_negative_annotation_file` и `diagnostics`.
+- `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `DatasetInfo` содержит `format=legacy|per_image`, legacy-файлы либо `annotations_dir`, источник, снимки и diagnostics.
 - `DatasetCatalogInfo`, `DatasetSourceInfo`, `DatasetClassCreate`, `DatasetClassUpdate`, `DatasetPrimaryDatasetUpdate`, `ManagedDatasetCreate`, `ManagedDatasetUpdate` - чтение и изменение классов и датасетов без удаления.
 - `ImageFolderInfo`, `ImageFolderListResponse` - папки подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT` с количеством TIFF.
 - `ModelInfo`, `ModelListResponse` - публичные модели из `models`.
@@ -36,9 +36,16 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest`, `TestSampleDownloadRequest`, `TestSampleBulkDownloadRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации, запросы оценки, одиночного и группового скачивания.
 - `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleDatasetGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail`, `TestSampleDraftPreview` - метрики, каталог, редакторское описание и незаписываемый результат чернового расчёта тестовых разметок.
 - `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; квадратный размер тайла выбирается из `512`, `768`, `1024`, `1536`, `2048`, `2560`, `3072`, `3584`, последний запуск хранит применённые настройки формы.
+- `DatasetEditorDatasetInfo`, `DatasetEditorDatasetListResponse`, `DatasetEditorSceneInfo`, `DatasetEditorSceneListResponse`, `DatasetEditorSceneDetail` - каталог per-image датасетов и сцен с revision и счётчиками ролей.
+- `DatasetEditorRasterFolderInfo`, `DatasetEditorRasterInfo`, `DatasetEditorRasterBrowserResponse` - прямые папки и TIFF из разрешённого server-side каталога.
+- `DatasetEditorAddScenesRequest`, `DatasetEditorSaveSceneRequest`, `DatasetEditorDeleteSceneRequest`, `DatasetEditorMutationResult`, `DatasetEditorPublicationInfo` - optimistic-lock мутации и статус публикации commit SHA.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `GET /api/v1/dataset-catalog` и `POST /api/v1/dataset-catalog/sync` - иерархия редактора и явная идемпотентная синхронизация с MLMarkup.
 - `POST|PATCH /api/v1/dataset-classes`, `PUT /api/v1/dataset-classes/{class_key}/primary-dataset`, `POST|PATCH /api/v1/managed-datasets` - создание и редактирование каталога; удаляющих endpoints нет. Назначение занятого источника переносит существующий датасет с сохранением его ключа, а смена источника безопасно обменивает источники и увеличивает ревизии обеих сущностей.
+- `GET /api/v1/dataset-editor/datasets` и `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes[/{annotation_name}]` - список редактируемых датасетов, сцены и GeoJSON.
+- `GET /api/v1/dataset-editor/datasets/{dataset_key}/rasters` и `GET /api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}` - серверный выбор снимков и авторизованный TIFF с HTTP Range.
+- `POST /api/v1/dataset-editor/datasets/{dataset_key}/scenes`, `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}` - добавить TIFF/папку, сохранить один GeoJSON или удалить сцену.
+- `GET /api/v1/dataset-editor/publication/{commit}` - `publishing|published` по ancestry commit текущего live-релиза.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
 - `POST /api/v1/results/training/{result_id}/triton-zip` - multipart endpoint для сборки такого же zip-архива
@@ -75,21 +82,21 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `mlflow_adapter.api` - получить и создать MLflow experiments, прочитать лучший checkpoint training run и скачать `checkpoints/best.pt` для псевдоразметки; сервис не пишет MLflow-метрики.
 - `mlflow_adapter.contracts` - передать публичные DTO создания experiment и summary лучшего checkpoint.
 - `settings.contracts` - валидировать YAML-настройки, сформированные для запуска training CLI.
-- `dataset_preparing.api` и `dataset_preparing.contracts` - точно сопоставлять строки TXT со снимками и разрешать одинаковые имена по GeoJSON датасета.
+- `dataset_preparing.api` и `dataset_preparing.contracts` - сопоставлять legacy TXT и per-image GeoJSON с TIFF.
 
 ### Автоматизация
 
 Автоматизация хранится в таблицах `automation_controls` и `automation_rules`. Правило задается парой
 `dataset_key + architecture` и двумя флагами: `training_enabled` и `pseudo_markup_enabled`. `Custom` не участвует в
-автоматизации. До первого изменения настроек `DatasetInfo.version` сохраняет формат `git:{commit_sha}` или
-`fs:{mtime_ns}`. После изменения источника, типа снимков или метрики версия содержит управляемую ревизию и
+автоматизации. Git checkout и атомарный runtime с `.mlsystem2-release-metadata.json` сохраняют формат
+`git:{commit_sha}`; иначе используется `fs:{mtime_ns}`. После изменения источника, типа снимков или метрики версия содержит управляемую ревизию и
 файловую версию, поэтому активное правило видит значимое изменение.
 
 Worker перед dispatch очередей вызывает синхронизацию автоматизации. При включенном глобальном switch он создает
 auto training job для текущей версии датасета, если нет текущего auto result/job для этой версии. Defaults берутся
 из активного шаблона конкретного датасета `(architecture, dataset_key)`, а если он не создан - из базового шаблона
-сети `(architecture, null)`. После успешного auto training result с MLflow run id создается auto pseudo-markup job
-по txt того же датасета. Очередь jobs единая: ручная псевдоразметка имеет приоритет выше ручного обучения,
+сети `(architecture, null)`. После успешного auto training result с MLflow run id создается auto pseudo-markup job;
+для per-image датасета временный TXT формируется из сопоставленных TIFF. Очередь jobs единая: ручная псевдоразметка имеет приоритет выше ручного обучения,
 ручное обучение выше auto псевдоразметки, auto псевдоразметка выше auto обучения. Auto jobs нельзя удалить или двигать
 через endpoints очереди; снятие галочки отменяет соответствующие queued/running auto jobs. Если меняется версия
 конкретного датасета, активные auto jobs предыдущей версии отменяются только для этого датасета и модели. Failed
@@ -102,4 +109,4 @@ auto jobs: queued rows уходят из очередей, running process по�
 
 ## Алгоритм работы и его особенности
 
-Каталог транзакционно добавляет неизвестные папки MLMarkup и сохраняет `dataset_key`. Класс задаёт четыре канала `kanopus` либо RGB `ortho`. Создание списка сцен сопоставляет GeoJSON с TIFF, записывает полный относительный путь без расширения и тот же набор футпринтов в WGS84, поэтому одинаковые имена в разных папках остаются однозначными. Worker запускает training/inference через общую очередь; подготовка обучения и псевдоразметка разрешают такие пути точно через `dataset_preparing`, сохраняя совместимость со старыми scene id только из имени. Тестовый F1 принимает RGBA для трёхканального checkpoint, читая RGB. Тестовые разметки формируются вне очереди, восстанавливают геометрию через `make_valid` и сохраняют допустимый пул при тайм-ауте. ZIP выбранных разметок последовательно собирается в `ZIP_STORED`; коллизии имён отклоняются. JPEG ограничен 300 KiB.
+Каталог различает legacy по TXT и per-image по его отсутствию; пустой управляемый per-image набор доступен редактору, но не обучению. Worker копирует разметку в snapshot задания, а тестовые выборки per-image используют только positive объектов своего TIFF. Редактор сериализует Git-операции межпроцессным lock, перед мутацией делает fetch/fast-forward, проверяет blob revision и возвращает `409` без слияния геометрий. CRS, Polygon/MultiPolygon, валидность и попадание в footprint TIFF обязательны; свойства и ID сохраняются. Один save/delete — один commit, добавление папки — один commit. Push допускает один rebase для постороннего коммита. Live-каталог не изменяется; frontend опрашивает публикацию по SHA.

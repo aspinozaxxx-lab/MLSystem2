@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -10,7 +11,7 @@ from collections.abc import Sequence
 from mlsystem2.dataset_preparing.api import resolve_scene_images
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
-from .contracts import ClassInfo, DatasetInfo, ImageFolderInfo
+from .contracts import ClassInfo, DatasetFormat, DatasetInfo, ImageFolderInfo
 
 
 CUSTOM_KEY = "custom"
@@ -22,15 +23,16 @@ IMAGERY_CHANNELS = {"kanopus": 4, "ortho": 3}
 
 
 def list_datasets(mlmarkup_root: Path, images_root: Path | None = None) -> list[DatasetInfo]:
-    image_index = (
-        _image_index(imagery_images_dir(images_root, "kanopus"))
-        if images_root is not None
-        else None
+    images_dir = (
+        imagery_images_dir(images_root, "kanopus") if images_root is not None else None
     )
+    image_index = _image_index(images_dir) if images_dir is not None else None
     datasets = [
         dataset
         for class_dir in _class_dirs(mlmarkup_root)
-        for dataset in _datasets_from_class_folder(class_dir, mlmarkup_root, image_index)
+        for dataset in _datasets_from_class_folder(
+            class_dir, mlmarkup_root, image_index, images_dir
+        )
     ]
     datasets.sort(key=lambda item: item.name.lower())
     datasets.append(DatasetInfo(key=CUSTOM_KEY, name=CUSTOM_NAME, is_custom=True))
@@ -38,14 +40,13 @@ def list_datasets(mlmarkup_root: Path, images_root: Path | None = None) -> list[
 
 
 def list_classes(mlmarkup_root: Path, images_root: Path | None = None) -> list[ClassInfo]:
-    image_index = (
-        _image_index(imagery_images_dir(images_root, "kanopus"))
-        if images_root is not None
-        else None
+    images_dir = (
+        imagery_images_dir(images_root, "kanopus") if images_root is not None else None
     )
+    image_index = _image_index(images_dir) if images_dir is not None else None
     classes: list[ClassInfo] = []
     for path in _class_dirs(mlmarkup_root):
-        datasets = _datasets_from_class_folder(path, mlmarkup_root, image_index)
+        datasets = _datasets_from_class_folder(path, mlmarkup_root, image_index, images_dir)
         if not datasets:
             continue
         classes.append(
@@ -177,6 +178,46 @@ def count_scenes_file_images(
     return _dataset_image_count(scenes_file, image_index if image_index is not None else _image_index(images_root))
 
 
+def per_image_scene_entries(annotations_dir: Path, images_root: Path) -> list[str]:
+    root = Path(images_root).resolve()
+    resolution = resolve_scene_images(
+        SceneImageResolutionRequest(
+            images_dir=str(root),
+            annotations_dir=str(Path(annotations_dir).resolve()),
+        )
+    )
+    if resolution.missing_scenes:
+        raise ValueError(
+            "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
+        )
+    if resolution.ambiguous_scenes:
+        raise ValueError(
+            "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
+            + ", ".join(sorted(resolution.ambiguous_scenes))
+        )
+    entries = [
+        Path(item.image_path).resolve().relative_to(root).with_suffix("").as_posix()
+        for item in resolution.images
+    ]
+    if not entries:
+        raise ValueError("Per-image датасет не содержит размеченных снимков")
+    return entries
+
+
+def per_image_annotation_files(annotations_dir: Path) -> list[str]:
+    return [
+        str(path.resolve())
+        for path in sorted(
+            (
+                item
+                for item in Path(annotations_dir).iterdir()
+                if item.is_file() and item.suffix.casefold() == ".geojson"
+            ),
+            key=lambda item: item.name.casefold(),
+        )
+    ]
+
+
 def find_class(mlmarkup_root: Path, class_key: str, images_root: Path | None = None) -> ClassInfo | None:
     for item in list_classes(mlmarkup_root, images_root):
         if item.key == class_key:
@@ -201,6 +242,7 @@ def _datasets_from_class_folder(
     class_path: Path,
     repo_root: Path,
     image_index: dict[str, list[Path]] | None,
+    images_dir: Path | None,
 ) -> list[DatasetInfo]:
     dataset_paths = [
         path
@@ -218,6 +260,7 @@ def _datasets_from_class_folder(
             dataset_path=dataset_path,
             repo_root=repo_root,
             image_index=image_index,
+            images_dir=images_dir,
         )
         for dataset_path in dataset_paths
     ]
@@ -229,11 +272,23 @@ def _dataset_from_folder(
     dataset_path: Path,
     repo_root: Path,
     image_index: dict[str, list[Path]] | None,
+    images_dir: Path | None,
 ) -> DatasetInfo:
     short_name = dataset_path.name if dataset_path != class_path else DEFAULT_DATASET_NAME
     display_name = _dataset_display_name(class_path.name, short_name)
     scenes_file = _first_file(dataset_path, ".txt")
-    annotation_file, hard_negative_annotation_file, diagnostics = _annotation_files(dataset_path)
+    if scenes_file is None:
+        dataset_format = DatasetFormat.PER_IMAGE
+        annotation_file = None
+        hard_negative_annotation_file = None
+        diagnostics: list[str] = []
+        image_count = _per_image_count(dataset_path, images_dir, diagnostics)
+    else:
+        dataset_format = DatasetFormat.LEGACY
+        annotation_file, hard_negative_annotation_file, diagnostics = _annotation_files(
+            dataset_path
+        )
+        image_count = _dataset_image_count(scenes_file, image_index)
     updated_at, version = _path_metadata(dataset_path, repo_root)
     return DatasetInfo(
         key=display_name,
@@ -247,13 +302,54 @@ def _dataset_from_folder(
         hard_negative_annotation_file=(
             str(hard_negative_annotation_file) if hard_negative_annotation_file else None
         ),
-        image_count=_dataset_image_count(scenes_file, image_index),
+        format=dataset_format,
+        annotations_dir=str(dataset_path) if dataset_format == DatasetFormat.PER_IMAGE else None,
+        image_count=image_count,
         version=version,
         updated_at=updated_at,
         imagery_type="kanopus",
         input_channels=IMAGERY_CHANNELS["kanopus"],
         diagnostics=diagnostics,
     )
+
+
+def _per_image_count(
+    annotations_dir: Path,
+    images_dir: Path | None,
+    diagnostics: list[str],
+) -> int | None:
+    geojson_count = sum(
+        1
+        for item in annotations_dir.iterdir()
+        if item.is_file() and item.suffix.casefold() == ".geojson"
+    )
+    if geojson_count == 0:
+        diagnostics.append(
+            "Per-image датасет пуст: его можно редактировать, но нельзя использовать для обучения."
+        )
+        return 0
+    if images_dir is None:
+        return geojson_count
+    try:
+        resolution = resolve_scene_images(
+            SceneImageResolutionRequest(
+                images_dir=str(images_dir),
+                annotations_dir=str(annotations_dir),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        diagnostics.append(f"Не удалось сопоставить per-image разметку: {exc}")
+        return 0
+    if resolution.missing_scenes:
+        diagnostics.append(
+            "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
+        )
+    if resolution.ambiguous_scenes:
+        diagnostics.append(
+            "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
+            + ", ".join(sorted(resolution.ambiguous_scenes))
+        )
+    return len(resolution.images)
 
 
 def _dataset_display_name(class_name: str, dataset_name: str) -> str:
@@ -443,7 +539,43 @@ def _latest_updated_at(datasets: list[DatasetInfo]) -> datetime | None:
 
 
 def _path_metadata(path: Path, repo_root: Path) -> tuple[datetime | None, str | None]:
-    return _git_path_metadata(path, repo_root) or _filesystem_path_metadata(path)
+    return (
+        _git_path_metadata(path, repo_root)
+        or _release_path_metadata(path, repo_root)
+        or _filesystem_path_metadata(path)
+    )
+
+
+def _release_path_metadata(path: Path, repo_root: Path) -> tuple[datetime, str] | None:
+    root = Path(repo_root)
+    metadata_path = root / ".mlsystem2-release-metadata.json"
+    marker_path = root / ".mlsystem2-release"
+    if not metadata_path.is_file() or not marker_path.is_file():
+        return None
+    try:
+        relative_path = Path(path).resolve().relative_to(root.resolve()).as_posix()
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        marker = marker_path.read_text(encoding="utf-8").strip().splitlines()[0]
+    except (OSError, ValueError, json.JSONDecodeError, IndexError):
+        return None
+    if not isinstance(metadata, dict) or metadata.get("release_commit") != marker:
+        return None
+    datasets = metadata.get("datasets")
+    if not isinstance(datasets, dict):
+        return None
+    item = datasets.get(relative_path)
+    if not isinstance(item, dict):
+        return None
+    commit = item.get("commit")
+    committed_at = item.get("committed_at")
+    if not isinstance(commit, str) or not isinstance(committed_at, str):
+        return None
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        return None
+    try:
+        return datetime.fromisoformat(committed_at.replace("Z", "+00:00")), f"git:{commit}"
+    except ValueError:
+        return None
 
 
 def _git_path_metadata(path: Path, repo_root: Path) -> tuple[datetime | None, str] | None:

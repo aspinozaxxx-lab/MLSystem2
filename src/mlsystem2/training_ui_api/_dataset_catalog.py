@@ -9,6 +9,9 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
+
 from ._config import TrainingUIAPIConfig
 from ._datasets import (
     CUSTOM_KEY,
@@ -42,6 +45,7 @@ from .contracts import (
     DatasetCatalogInfo,
     DatasetClassCreate,
     DatasetClassUpdate,
+    DatasetFormat,
     DatasetInfo,
     DatasetPrimaryDatasetUpdate,
     DatasetSourceInfo,
@@ -605,6 +609,8 @@ def _dataset_info(
     scenes_file: Path | None = None
     annotation_file: Path | None = None
     hard_negative_file: Path | None = None
+    dataset_format: DatasetFormat | None = None
+    annotations_dir: Path | None = None
     updated_at = None
     source_version = None
     source_available = source_inside_root and source_path.is_dir()
@@ -616,12 +622,17 @@ def _dataset_info(
         diagnostics.append(f"Источник MLMarkup недоступен: {dataset.source_path}")
     else:
         scenes_file = _first_file(source_path, ".txt")
-        annotation_file, hard_negative_file, source_diagnostics = _annotation_files(source_path)
-        diagnostics.extend(source_diagnostics)
-        if scenes_file is None:
-            diagnostics.append("В источнике датасета не найден TXT со списком сцен.")
-        if annotation_file is None and not source_diagnostics:
-            diagnostics.append("В источнике датасета не найден positive GeoJSON.")
+        if scenes_file is not None:
+            dataset_format = DatasetFormat.LEGACY
+            annotation_file, hard_negative_file, source_diagnostics = _annotation_files(
+                source_path
+            )
+            diagnostics.extend(source_diagnostics)
+            if annotation_file is None and not source_diagnostics:
+                diagnostics.append("В legacy-датасете не найден positive GeoJSON.")
+        else:
+            dataset_format = DatasetFormat.PER_IMAGE
+            annotations_dir = source_path
         updated_at, source_version = _path_metadata(source_path, config.mlmarkup_root)
     if not images_inside_root:
         diagnostics.append("Каталог снимков выходит за пределы MLSYSTEM2_IMAGES_ROOT.")
@@ -632,6 +643,7 @@ def _dataset_info(
     version = source_version
     if not dataset.legacy_version:
         version = f"managed:{dataset.config_revision}:{source_version or 'missing'}"
+    image_count: int | None = None
     index = None
     if scenes_file is not None and images_inside_root and images_dir.is_dir():
         if image_indexes is None:
@@ -641,6 +653,13 @@ def _dataset_info(
             if index is None:
                 index = _image_index(images_dir)
                 image_indexes[images_dir] = index
+        image_count = _dataset_image_count(scenes_file, index)
+    elif annotations_dir is not None and images_inside_root and images_dir.is_dir():
+        image_count = _per_image_catalog_count(
+            annotations_dir,
+            images_dir,
+            diagnostics,
+        )
     display_name = f"{class_row.name}\\{dataset.name}"
     return DatasetInfo(
         key=dataset.key,
@@ -654,7 +673,9 @@ def _dataset_info(
         hard_negative_annotation_file=(
             str(hard_negative_file) if hard_negative_file is not None else None
         ),
-        image_count=_dataset_image_count(scenes_file, index),
+        format=dataset_format,
+        annotations_dir=str(annotations_dir) if annotations_dir is not None else None,
+        image_count=image_count,
         version=version,
         updated_at=updated_at,
         quality_metric=class_row.quality_metric,
@@ -685,6 +706,37 @@ def _custom_dataset_info(config: TrainingUIAPIConfig) -> DatasetInfo:
     )
 
 
+def _per_image_catalog_count(
+    annotations_dir: Path,
+    images_dir: Path,
+    diagnostics: list[str],
+) -> int:
+    try:
+        resolution = resolve_scene_images(
+            SceneImageResolutionRequest(
+                images_dir=str(images_dir),
+                annotations_dir=str(annotations_dir),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        diagnostics.append(f"Не удалось сопоставить per-image разметку: {exc}")
+        return 0
+    if resolution.missing_scenes:
+        diagnostics.append(
+            "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
+        )
+    if resolution.ambiguous_scenes:
+        diagnostics.append(
+            "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
+            + ", ".join(sorted(resolution.ambiguous_scenes))
+        )
+    if resolution.input_scene_count == 0:
+        diagnostics.append(
+            "Per-image датасет пуст: его можно редактировать, но нельзя использовать для обучения."
+        )
+    return len(resolution.images)
+
+
 def _source_infos(session: Session, config: TrainingUIAPIConfig) -> list[DatasetSourceInfo]:
     assigned = {
         row.source_path: row.key
@@ -700,11 +752,19 @@ def _source_infos(session: Session, config: TrainingUIAPIConfig) -> list[Dataset
         if not _is_within_root(absolute, Path(config.mlmarkup_root).resolve()):
             diagnostics = ["Источник выходит за пределы разрешённого каталога MLMarkup."]
         else:
-            annotation, _hard_negative, diagnostics = _annotation_files(absolute)
-            if _first_file(absolute, ".txt") is None:
-                diagnostics.append("Не найден TXT со списком сцен.")
-            if annotation is None and not any("positive GeoJSON" in item for item in diagnostics):
-                diagnostics.append("Не найден positive GeoJSON.")
+            scenes_file = _first_file(absolute, ".txt")
+            if scenes_file is None:
+                diagnostics = []
+                if _first_file(absolute, ".geojson") is None:
+                    diagnostics.append(
+                        "Per-image датасет пуст: его можно наполнить только через редактор."
+                    )
+            else:
+                annotation, _hard_negative, diagnostics = _annotation_files(absolute)
+                if annotation is None and not any(
+                    "positive GeoJSON" in item for item in diagnostics
+                ):
+                    diagnostics.append("Не найден positive GeoJSON.")
         result.append(
             DatasetSourceInfo(
                 key=source_path,
@@ -781,16 +841,29 @@ def _infer_imagery_type(config: TrainingUIAPIConfig, source_path: str) -> str:
     if not _is_within_root(source, Path(config.mlmarkup_root).resolve()):
         return DEFAULT_IMAGERY_TYPE
     scenes = _first_file(source, ".txt") if source.is_dir() else None
-    if scenes is None:
-        return DEFAULT_IMAGERY_TYPE
-    matched = [
-        imagery_type
-        for imagery_type in IMAGERY_FOLDERS
-        if resolve_scenes_file_images(
-            scenes,
-            imagery_images_dir(config.images_root, imagery_type),
-        )
-    ]
+    if scenes is not None:
+        matched = [
+            imagery_type
+            for imagery_type in IMAGERY_FOLDERS
+            if resolve_scenes_file_images(
+                scenes,
+                imagery_images_dir(config.images_root, imagery_type),
+            )
+        ]
+        return matched[0] if len(matched) == 1 else DEFAULT_IMAGERY_TYPE
+    matched = []
+    for imagery_type in IMAGERY_FOLDERS:
+        try:
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=str(imagery_images_dir(config.images_root, imagery_type)),
+                    annotations_dir=str(source),
+                )
+            )
+        except (OSError, ValueError):
+            continue
+        if resolution.images and not resolution.missing_scenes and not resolution.ambiguous_scenes:
+            matched.append(imagery_type)
     return matched[0] if len(matched) == 1 else DEFAULT_IMAGERY_TYPE
 
 

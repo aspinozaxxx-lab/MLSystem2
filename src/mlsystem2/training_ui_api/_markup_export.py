@@ -32,6 +32,9 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from sqlalchemy.orm import Session
 
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
+
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
 from ._datasets import find_dataset, imagery_images_dir, resolve_scenes_file_images
@@ -176,6 +179,7 @@ class _Candidate:
     raster_footprint: BaseGeometry
     annotation_footprint: BaseGeometry
     feature_positions: tuple[int, ...]
+    annotations: _AnnotationSet | None = None
 
     @property
     def object_count(self) -> int:
@@ -513,20 +517,11 @@ def generate_markup_files(
         raise TrainingUIAPIError("Для экспорта разметки нужен существующий датасет MLMarkup.")
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
-    if not dataset.scenes_file or not dataset.annotation_file:
-        raise TrainingUIAPIError("У датасета должны быть TXT со сценами и один positive GeoJSON.")
-
     images_root = Path(dataset.images_dir or config.images_root)
-    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
-    if not source_paths:
-        raise TrainingUIAPIError(
-            "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
-        )
-    annotations = _load_annotations(Path(dataset.annotation_file))
+    sources = _dataset_markup_sources(dataset, images_root)
     candidates = _build_candidates(
-        source_paths=source_paths,
+        sources=sources,
         images_root=images_root,
-        annotations=annotations,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
         max_grid_origins=max(32, request.image_count * 8),
@@ -557,7 +552,7 @@ def generate_markup_files(
             item.column,
         )
     )
-    warnings = list(annotations.warnings)
+    warnings = _source_annotation_warnings(sources)
     actual_object_count = sum(item.object_count for item in selected)
     if actual_object_count != request.object_count:
         warnings.append(
@@ -573,7 +568,6 @@ def generate_markup_files(
     tile_files = _write_selected_tiles(
         output_root=output_root,
         selected=selected,
-        annotations=annotations,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
     )
@@ -616,18 +610,8 @@ def generate_markup_pool_files(
         )
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
-    if not dataset.scenes_file or not dataset.annotation_file:
-        raise TrainingUIAPIError(
-            "У датасета должны быть TXT со сценами и один positive GeoJSON."
-        )
-
     images_root = Path(dataset.images_dir or config.images_root)
-    source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
-    if not source_paths:
-        raise TrainingUIAPIError(
-            "Для датасета не найдены TIFF в MLSYSTEM2_IMAGES_ROOT."
-        )
-    annotations = _load_annotations(Path(dataset.annotation_file))
+    sources = _dataset_markup_sources(dataset, images_root)
     if min_final_image_count > max_final_image_count:
         raise TrainingUIAPIError(
             "Минимальное число итоговых тайлов не может быть больше максимального."
@@ -635,9 +619,8 @@ def generate_markup_pool_files(
     requested_pool_count = max_final_image_count * 3
     requested_pool_objects = min_object_count * 3
     candidates = _build_candidates(
-        source_paths=source_paths,
+        sources=sources,
         images_root=images_root,
-        annotations=annotations,
         tile_width=tile_size,
         tile_height=tile_size,
         max_grid_origins=max(32, requested_pool_count * 8),
@@ -701,7 +684,7 @@ def generate_markup_pool_files(
         )
     )
     actual_object_count = sum(item.object_count for item in selected)
-    warnings = list(annotations.warnings)
+    warnings = _source_annotation_warnings(sources)
     if selected_pool_count < requested_pool_count:
         warnings.append(
             "Расширенный пул уменьшен: "
@@ -720,7 +703,6 @@ def generate_markup_pool_files(
     tile_files = _write_selected_tiles(
         output_root=output_root,
         selected=selected,
-        annotations=annotations,
         tile_width=tile_size,
         tile_height=tile_size,
     )
@@ -818,14 +800,23 @@ def cleanup_expired_markup_exports(
             shutil.rmtree(child, ignore_errors=True)
 
 
-def _load_annotations(path: Path) -> _AnnotationSet:
+def _load_annotations(
+    path: Path,
+    *,
+    positive_only: bool = False,
+    allow_empty: bool = False,
+) -> _AnnotationSet:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         raise TrainingUIAPIError(
             f"Не удалось прочитать GeoJSON положительной разметки: {exc}"
         ) from exc
-    return _annotations_from_payload(payload)
+    return _annotations_from_payload(
+        payload,
+        positive_only=positive_only,
+        allow_empty=allow_empty,
+    )
 
 
 def _load_uploaded_annotations(content: bytes) -> _AnnotationSet:
@@ -838,7 +829,12 @@ def _load_uploaded_annotations(content: bytes) -> _AnnotationSet:
     return _annotations_from_payload(payload)
 
 
-def _annotations_from_payload(payload: Any) -> _AnnotationSet:
+def _annotations_from_payload(
+    payload: Any,
+    *,
+    positive_only: bool = False,
+    allow_empty: bool = False,
+) -> _AnnotationSet:
     if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection":
         raise TrainingUIAPIError(
             "GeoJSON положительной разметки должен быть FeatureCollection."
@@ -863,16 +859,24 @@ def _annotations_from_payload(payload: Any) -> _AnnotationSet:
             skipped += 1
             continue
         properties = raw_feature.get("properties")
+        normalized_properties = dict(properties) if isinstance(properties, dict) else {}
+        role = normalized_properties.get("_mlsystem2_role", "positive")
+        if role not in {"positive", "hard_negative"}:
+            raise TrainingUIAPIError(
+                f"Неизвестная роль объекта _mlsystem2_role: {role}"
+            )
+        if positive_only and role != "positive":
+            continue
         features.append(
             _AnnotationFeature(
                 source_index=source_index,
                 geometry=geometry,
-                properties=dict(properties) if isinstance(properties, dict) else {},
+                properties=normalized_properties,
                 feature_id=raw_feature.get("id"),
                 has_feature_id="id" in raw_feature,
             )
         )
-    if not features:
+    if not features and not allow_empty:
         raise TrainingUIAPIError(
             "GeoJSON положительной разметки не содержит валидных полигональных объектов."
         )
@@ -886,6 +890,67 @@ def _annotations_from_payload(payload: Any) -> _AnnotationSet:
         crs=crs,
         features=tuple(features),
         warnings=warnings,
+    )
+
+
+def _dataset_markup_sources(
+    dataset: DatasetInfo,
+    images_root: Path,
+) -> list[tuple[Path, _AnnotationSet]]:
+    if dataset.annotations_dir:
+        try:
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=str(images_root),
+                    annotations_dir=dataset.annotations_dir,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            raise TrainingUIAPIError(f"Не удалось сопоставить per-image датасет: {exc}") from exc
+        if resolution.missing_scenes:
+            raise TrainingUIAPIError(
+                "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
+            )
+        if resolution.ambiguous_scenes:
+            raise TrainingUIAPIError(
+                "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
+                + ", ".join(sorted(resolution.ambiguous_scenes))
+            )
+        sources = [
+            (
+                Path(item.image_path),
+                _load_annotations(
+                    Path(item.annotation_file or ""),
+                    positive_only=True,
+                    allow_empty=True,
+                ),
+            )
+            for item in resolution.images
+        ]
+    else:
+        if not dataset.scenes_file or not dataset.annotation_file:
+            raise TrainingUIAPIError(
+                "У legacy-датасета должны быть TXT со сценами и один positive GeoJSON."
+            )
+        source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
+        annotations = _load_annotations(Path(dataset.annotation_file), positive_only=True)
+        sources = [(path, annotations) for path in source_paths]
+    if not sources:
+        raise TrainingUIAPIError(
+            "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
+        )
+    return sources
+
+
+def _source_annotation_warnings(
+    sources: list[tuple[Path, _AnnotationSet]],
+) -> list[str]:
+    return list(
+        dict.fromkeys(
+            warning
+            for _source_path, annotations in sources
+            for warning in annotations.warnings
+        )
     )
 
 
@@ -910,17 +975,16 @@ def _geojson_crs(payload: dict[str, Any]) -> PyprojCRS:
 
 def _build_candidates(
     *,
-    source_paths: list[Path],
+    sources: list[tuple[Path, _AnnotationSet]],
     images_root: Path,
-    annotations: _AnnotationSet,
     tile_width: int,
     tile_height: int,
     max_grid_origins: int,
 ) -> list[_Candidate]:
-    transformed_cache: dict[str, _TransformedAnnotations] = {}
     candidates: dict[tuple[Path, int, int], _Candidate] = {}
     root = Path(images_root).resolve()
-    for source_path in source_paths:
+    for source_path, source_annotations in sources:
+        transformed_cache: dict[str, _TransformedAnnotations] = {}
         try:
             relative_path = Path(source_path).resolve().relative_to(root)
         except (OSError, ValueError):
@@ -931,7 +995,7 @@ def _build_candidates(
                     continue
                 raster_crs = PyprojCRS.from_user_input(dataset.crs)
                 transformed = _annotations_for_crs(
-                    annotations,
+                    source_annotations,
                     raster_crs,
                     transformed_cache,
                 )
@@ -981,7 +1045,7 @@ def _build_candidates(
                         annotation_footprint = _transform_between_crs(
                             raster_footprint,
                             raster_crs,
-                            annotations.crs,
+                            source_annotations.crs,
                         )
                         candidates[key] = _Candidate(
                             source_path=Path(source_path).resolve(),
@@ -997,6 +1061,7 @@ def _build_candidates(
                             raster_footprint=raster_footprint,
                             annotation_footprint=annotation_footprint,
                             feature_positions=object_indices,
+                            annotations=source_annotations,
                         )
         except (OSError, rasterio.errors.RasterioError):
             continue
@@ -1599,12 +1664,14 @@ def _write_selected_tiles(
     *,
     output_root: Path,
     selected: list[_Candidate],
-    annotations: _AnnotationSet,
     tile_width: int,
     tile_height: int,
 ) -> list[GeneratedMarkupTile]:
     tile_infos: list[GeneratedMarkupTile] = []
     for index, candidate in enumerate(selected, start=1):
+        annotations = candidate.annotations
+        if annotations is None:
+            raise TrainingUIAPIError("У кандидата отсутствует разметка сцены.")
         base_name = f"tile_{index:03d}"
         tif_path = output_root / f"{base_name}.tif"
         geojson_path = output_root / f"{base_name}.geojson"

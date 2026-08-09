@@ -29,6 +29,7 @@ class DatasetPreparationRequest(BaseModel):
     scenes_file: str | None = None
     annotation_file: str | None = None
     hard_negative_annotation_file: str | None = None
+    annotations_dir: str | None = None
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
     expected_band_count: int | None = Field(default=None, gt=0)
@@ -37,19 +38,25 @@ class DatasetPreparationRequest(BaseModel):
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
         classes = self.classes or []
-        has_binary_paths = (
+        has_legacy_binary_paths = (
             self.scenes_file is not None
             or self.annotation_file is not None
             or self.hard_negative_annotation_file is not None
         )
-        if has_binary_paths and classes:
+        has_per_image_binary = self.annotations_dir is not None
+        mode_count = sum((has_legacy_binary_paths, has_per_image_binary, bool(classes)))
+        if mode_count != 1:
             raise ValueError(
-                "DatasetPreparationRequest должен задавать либо classes, "
-                "либо scenes_file + annotation_file"
+                "DatasetPreparationRequest должен задавать ровно один режим: classes, "
+                "scenes_file + annotation_file или annotations_dir"
             )
         if classes:
             _validate_unique_values([item.slug for item in classes], "slug")
             _validate_unique_values([item.name for item in classes], "name")
+            return self
+        if has_per_image_binary:
+            if not self.annotations_dir:
+                raise ValueError("annotations_dir не должен быть пустым")
             return self
         if not self.scenes_file or not self.annotation_file:
             raise ValueError(
@@ -69,12 +76,19 @@ class DatasetClassAnnotation(BaseModel):
     priority: int = 0
 
 
+class PreparedScene(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    image_path: str
+    annotation_file: str | None = None
+
+
 class PreparedDataset(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    train_vrt_xml: str
-    val_vrt_xml: str
-    pool_vrt_xml: str | None = None
+    format: Literal["legacy_binary", "per_image_binary", "legacy_multiclass"]
+    scenes: list[PreparedScene] = Field(min_length=1)
     annotation_file: str | None = None
     hard_negative_annotation_file: str | None = None
     class_annotations: list[DatasetClassAnnotation] = Field(default_factory=list)
@@ -117,8 +131,19 @@ class SceneImageResolutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     images_dir: str
-    scenes_file: str
+    scenes_file: str | None = None
+    annotations_dir: str | None = None
     annotation_files: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_resolution_mode(self) -> Self:
+        if bool(self.scenes_file) == bool(self.annotations_dir):
+            raise ValueError(
+                "SceneImageResolutionRequest должен задавать scenes_file или annotations_dir"
+            )
+        if self.annotations_dir and self.annotation_files:
+            raise ValueError("annotation_files допустимы только вместе со scenes_file")
+        return self
 
 
 class ResolvedSceneImage(BaseModel):
@@ -126,6 +151,7 @@ class ResolvedSceneImage(BaseModel):
 
     scene_id: str
     image_path: str
+    annotation_file: str | None = None
     request_scenes: list[str] = Field(default_factory=list)
 
 
@@ -159,6 +185,7 @@ __all__ = [
     "DatasetSceneReport",
     "DatasetPreparationReport",
     "DatasetPreparationResult",
+    "PreparedScene",
     "ResolvedSceneImage",
     "SceneImageResolution",
     "SceneImageResolutionRequest",

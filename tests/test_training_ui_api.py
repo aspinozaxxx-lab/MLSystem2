@@ -2142,6 +2142,94 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
+def test_training_ui_worker_snapshots_per_image_annotations(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset_root = tmp_path / "MLMarkup" / "Реки" / "test"
+    dataset_root.mkdir(parents=True)
+    annotation = dataset_root / "Olskij_SCN06.geojson"
+    original = '{"type":"FeatureCollection","features":[]}'
+    annotation.write_text(original, encoding="utf-8")
+    image = tmp_path / "images" / "kanopus" / "Olskij" / "SCN06.tif"
+    image.parent.mkdir(parents=True)
+    image.touch()
+
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
+        f"sqlite:///{tmp_path / 'ui.db'}",
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "MLMarkup"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT",
+        str(tmp_path / "files"),
+    )
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT",
+        str(tmp_path / "scratch"),
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    run_dir = tmp_path / "run"
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        job = create_training_job(
+            session,
+            TrainingJobCreate(
+                mlflow_experiment_id="1",
+                mlflow_experiment_name="per-image-test",
+                dataset_key="Реки\\test",
+                architecture="smp_segformer_b2",
+                config=_short_training_config(),
+            ),
+            config,
+        )
+        row = session.get(JobRow, job.id)
+        assert row is not None
+
+        payload = _worker._build_training_config(session, row, config, run_dir)
+        pseudo = _service.create_pseudo_markup_job(
+            session,
+            class_key="Реки\\test",
+            dataset_key="Реки\\test",
+            image_folder_key=None,
+            training_result_id=None,
+            scenes_name=None,
+            scenes_content_type=None,
+            scenes_bytes=None,
+            config=config,
+        )
+        pseudo_row = session.get(JobRow, pseudo.id)
+        pseudo_result = session.scalar(
+            select(PseudoMarkupResultRow).where(
+                PseudoMarkupResultRow.job_id == pseudo.id
+            )
+        )
+        assert pseudo_row is not None
+        assert pseudo_result is not None
+        assert pseudo_result.scenes_file is not None
+        generated_scenes = Path(pseudo_result.scenes_file.path).read_text(
+            encoding="utf-8"
+        )
+        annotation_files = list(pseudo_row.config["annotation_files"])
+
+    snapshot_dir = Path(payload["dataset"]["annotations_dir"])
+    snapshot = snapshot_dir / annotation.name
+    assert payload["dataset"]["images_dir"] == str(config.images_root / "kanopus")
+    assert "scenes_file" not in payload["dataset"]
+    assert snapshot.read_text(encoding="utf-8") == original
+    assert generated_scenes == "Olskij/SCN06\n"
+    assert annotation_files == [str(annotation)]
+    annotation.write_text('{"changed":true}', encoding="utf-8")
+    assert snapshot.read_text(encoding="utf-8") == original
+
+
 def test_training_ui_builds_ortho_training_config_with_three_channels(
     tmp_path: Path,
     monkeypatch,
@@ -2676,6 +2764,119 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
             )
         ).all()
         assert len(training_jobs) == 1
+
+
+def test_training_ui_automation_supports_per_image_dataset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset_root = tmp_path / "MLMarkup" / "Реки" / "test"
+    dataset_root.mkdir(parents=True)
+    annotation = dataset_root / "Olskij_SCN06.geojson"
+    annotation.write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+    image = tmp_path / "images" / "kanopus" / "Olskij" / "SCN06.tif"
+    image.parent.mkdir(parents=True)
+    image.touch()
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
+        f"sqlite:///{tmp_path / 'ui.db'}",
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(tmp_path / "MLMarkup"))
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_ROOT", str(tmp_path / "images"))
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT",
+        str(tmp_path / "files"),
+    )
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT",
+        str(tmp_path / "scratch"),
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    monkeypatch.setattr(
+        _automation,
+        "create_experiment",
+        lambda request: MLflowExperiment(experiment_id="auto-exp", name=request.name),
+    )
+    monkeypatch.setattr(
+        _automation,
+        "get_best_training_checkpoint",
+        lambda tracking_uri, run_id: MLflowBestCheckpoint(
+            tracking_uri=tracking_uri,
+            run_id=run_id,
+            metric_name="val/best_threshold_pixel_f1",
+            f1_score=0.9,
+            epoch=3,
+            artifact_path="checkpoints/best.pt",
+            artifact_uri="s3://mlflow/run/best.pt",
+            threshold=0.6,
+        ),
+    )
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        _service.set_automation(
+            session,
+            AutomationEnabledUpdate(enabled=True),
+            config,
+        )
+        _service.update_automation(
+            session,
+            AutomationRuleUpdate(
+                dataset_key="Реки\\test",
+                architecture="smp_segformer_b2",
+                training_enabled=True,
+                pseudo_markup_enabled=True,
+            ),
+            config,
+        )
+        _automation.sync_automation_once(session, config)
+        training_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.type == JobType.TRAINING.value,
+            )
+        )
+        assert training_job is not None
+        training_result = session.scalar(
+            select(TrainingResultRow).where(
+                TrainingResultRow.job_id == training_job.id
+            )
+        )
+        assert training_result is not None
+        training_job.status = JobStatus.COMPLETED.value
+        training_result.status = ResultStatus.OK.value
+        training_result.mlflow_run_id = "run-per-image"
+
+        _automation.sync_automation_once(session, config)
+
+        pseudo_job = session.scalar(
+            select(JobRow).where(
+                JobRow.source == JobSource.AUTOMATION.value,
+                JobRow.type == JobType.INFERENCE.value,
+            )
+        )
+        assert pseudo_job is not None
+        pseudo_result = session.scalar(
+            select(PseudoMarkupResultRow).where(
+                PseudoMarkupResultRow.job_id == pseudo_job.id
+            )
+        )
+        assert pseudo_result is not None
+        assert pseudo_result.image_count == 1
+        assert pseudo_result.scenes_file is not None
+        assert Path(pseudo_result.scenes_file.path).read_text(encoding="utf-8") == (
+            "Olskij/SCN06\n"
+        )
+        assert pseudo_job.config["annotation_files"] == [str(annotation.resolve())]
 
 
 def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypatch) -> None:

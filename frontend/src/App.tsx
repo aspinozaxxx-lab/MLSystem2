@@ -21,7 +21,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import type {
@@ -108,6 +118,10 @@ type ModalState = {
 };
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
+
+const DatasetEditorPage = lazy(() =>
+  import("./DatasetEditorPage").then((module) => ({ default: module.DatasetEditorPage })),
+);
 
 type TestSampleBatchFormRow = {
   dataset: DatasetInfo;
@@ -271,6 +285,13 @@ function RoutedPage(props: {
   if (head === "templates") return <TemplatesPage {...props} />;
   if (head === "automation") return <AutomationPage {...props} />;
   if (head === "classes") return <ClassEditorPage {...props} />;
+  if (head === "dataset-editor") {
+    return (
+      <Suspense fallback={<LoadingPage text="Загрузка редактора датасетов" />}>
+        <DatasetEditorPage run={props.run} registerRouteGuard={props.registerRouteGuard} />
+      </Suspense>
+    );
+  }
   if (head === "model-export") return <ModelExportPage {...props} />;
   if (head === "scene-list-export") return <SceneListExportPage {...props} />;
   if (head === "test-markups" && second === "create") {
@@ -306,6 +327,7 @@ function Shell({
     { href: "#/templates", key: "templates", label: "Шаблоны", icon: Settings },
     { href: "#/automation", key: "automation", label: "Автоматизация", icon: Activity },
     { href: "#/classes", key: "classes", label: "Редактор классов", icon: Database },
+    { href: "#/dataset-editor", key: "dataset-editor", label: "Редактор датасетов", icon: Layers3 },
   ];
   return (
     <div className="app-shell">

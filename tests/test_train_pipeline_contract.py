@@ -11,6 +11,7 @@ from mlsystem2.dataset_preparing.contracts import (
     DatasetPreparationReport,
     DatasetPreparationResult,
     PreparedDataset,
+    PreparedScene,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
 from mlsystem2.models.contracts import CheckpointArtifact, LoadedCheckpoint, ModelHandle, ModelSpec
@@ -152,6 +153,57 @@ def test_dataset_artifact_files_include_binary_hard_negative_source() -> None:
     }
 
 
+def test_train_pipeline_builds_per_image_requests_and_logs_all_geojson(
+    tmp_path: Path,
+) -> None:
+    annotations_dir = tmp_path / "MLMarkup" / "Реки" / "test"
+    annotations_dir.mkdir(parents=True)
+    first_annotation = annotations_dir / "Olskij_SCN06.geojson"
+    second_annotation = annotations_dir / "Olskij_SCN07.geojson"
+    first_annotation.write_text("{}", encoding="utf-8")
+    second_annotation.write_text("{}", encoding="utf-8")
+    (annotations_dir / "README.md").write_text("описание", encoding="utf-8")
+    settings = _settings(initial_checkpoint_uri=None)
+    settings.dataset = DatasetSettings(
+        images_dir="./images",
+        annotations_dir=str(annotations_dir),
+        val_fraction=0.2,
+    )
+    prepared = PreparedDataset(
+        format="per_image_binary",
+        scenes=[
+            PreparedScene(
+                scene_id="Olskij/SCN06",
+                image_path="./SCN06.tif",
+                annotation_file=str(first_annotation),
+            ),
+            PreparedScene(
+                scene_id="Olskij/SCN07",
+                image_path="./SCN07.tif",
+                annotation_file=str(second_annotation),
+            ),
+        ],
+    )
+
+    dataset_request = _runner._dataset_request(settings)
+    tile_request = _runner._tile_request(prepared, 2, "train")
+    mlflow_request = _runner._mlflow_start_request(settings, TrainPipelineRequest())
+
+    assert dataset_request.annotations_dir == str(annotations_dir)
+    assert dataset_request.scenes_file is None
+    assert tile_request.annotation_file is None
+    assert [str(scene.annotation_file) for scene in tile_request.scenes] == [
+        str(first_annotation),
+        str(second_annotation),
+    ]
+    assert _runner._dataset_artifact_files(settings) == {
+        "per_image/Olskij_SCN06.geojson": first_annotation.as_posix(),
+        "per_image/Olskij_SCN07.geojson": second_annotation.as_posix(),
+    }
+    assert mlflow_request.dataset == "test"
+    assert mlflow_request.tags["class"] == "реки_test"
+
+
 def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
     logged_epochs: list[int] = []
     metrics = _train_result().history[0]
@@ -243,8 +295,8 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
         model=object(),
     )
     prepared = PreparedDataset(
-        train_vrt_xml="<VRTDataset />",
-        val_vrt_xml="<VRTDataset />",
+        format="legacy_multiclass",
+        scenes=[PreparedScene(scene_id="scene", image_path="./scene.tif")],
         class_annotations=[
             DatasetClassAnnotation(
                 class_id=1,
@@ -258,7 +310,7 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
     )
 
     dataset_request = _runner._dataset_request(settings)
-    tile_request = _runner._tile_request("<VRTDataset />", prepared, 2, "train")
+    tile_request = _runner._tile_request(prepared, 2, "train")
     train_request = _runner._train_request(settings, model, object(), object())
 
     assert dataset_request.classes is not None
@@ -283,9 +335,8 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     settings = _settings(initial_checkpoint_uri=None)
     settings.dataset.hard_negative_annotation_file = "./hard_negative.geojson"
     prepared = PreparedDataset(
-        train_vrt_xml="TRAIN",
-        val_vrt_xml="VAL",
-        pool_vrt_xml="POOL",
+        format="legacy_binary",
+        scenes=[PreparedScene(scene_id="scene", image_path="./scene.tif")],
         annotation_file="./annotations.geojson",
         hard_negative_annotation_file="./hard_negative.geojson",
     )
@@ -293,14 +344,12 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     dataset_request = _runner._dataset_request(settings)
     tile_split = _runner._tile_split_request(settings)
     train_request = _runner._tile_request(
-        _runner._dataset_vrt_xml(prepared),
         prepared,
         2,
         "train",
         tile_split,
     )
     val_request = _runner._tile_request(
-        _runner._dataset_vrt_xml(prepared),
         prepared,
         2,
         "val",
@@ -313,8 +362,8 @@ def test_train_pipeline_builds_tile_split_requests() -> None:
     assert tile_split is not None
     assert tile_split.val_fraction == settings.dataset.val_fraction
     assert tile_split.seed == settings.tile_preparation.seed
-    assert train_request.vrt_xml == "POOL"
-    assert val_request.vrt_xml == "POOL"
+    assert train_request.scenes[0].image_path == "./scene.tif"
+    assert val_request.scenes[0].scene_id == "scene"
     assert train_request.hard_negative_annotation_file == "./hard_negative.geojson"
     assert val_request.hard_negative_annotation_file == "./hard_negative.geojson"
     assert train_request.tile_split == tile_split
@@ -326,9 +375,8 @@ def test_train_pipeline_passes_batch_limits_to_tile_requests() -> None:
     settings.train.max_train_batches_per_epoch = 128
     settings.train.max_val_batches_per_epoch = 256
     prepared = PreparedDataset(
-        train_vrt_xml="TRAIN",
-        val_vrt_xml="VAL",
-        pool_vrt_xml="POOL",
+        format="legacy_binary",
+        scenes=[PreparedScene(scene_id="scene", image_path="./scene.tif")],
         annotation_file="./annotations.geojson",
     )
     requests = []
@@ -372,7 +420,7 @@ def test_train_pipeline_passes_batch_limits_to_tile_requests() -> None:
 
 def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     class Dataset:
-        source_rect_count = 1
+        scene_count = 1
         candidate_window_count = 5
         candidate_window_count_before_valid_filter = 7
         black_filtered_window_count = 2
@@ -438,7 +486,7 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
     assert snapshot == {
         "tile_count": 5,
         "batch_count": 2,
-        "source_rect_count": 1,
+        "scene_count": 1,
         "candidate_window_count": 5,
         "candidate_window_count_before_valid_filter": 7,
         "black_filtered_window_count": 2,
@@ -506,7 +554,7 @@ def test_tile_preparation_report_exposes_three_train_factors() -> None:
 
 def test_counting_loader_reports_target_positive_ratio() -> None:
     class Dataset:
-        source_rect_count = 1
+        scene_count = 1
         candidate_window_count = 4
         candidate_window_count_before_valid_filter = 4
         black_filtered_window_count = 0
@@ -576,7 +624,7 @@ def test_counting_loader_reports_target_positive_ratio() -> None:
 
 def test_counting_loader_reports_cached_balanced_val_metadata() -> None:
     class Dataset:
-        source_rect_count = 1
+        scene_count = 1
         candidate_window_count = 4
         candidate_window_count_before_valid_filter = 4
         black_filtered_window_count = 0
@@ -653,7 +701,7 @@ def test_counting_loader_reports_lazy_balanced_val_metadata() -> None:
     warning = "Val tile cache не помещается; используется ленивое чтение."
 
     class Dataset:
-        source_rect_count = 1
+        scene_count = 1
         candidate_window_count = 4
         candidate_window_count_before_valid_filter = 4
         black_filtered_window_count = 0
@@ -814,8 +862,8 @@ def _dataset_result(dataset: PreparedDataset | None = None) -> DatasetPreparatio
     return DatasetPreparationResult(
         dataset=dataset
         or PreparedDataset(
-            train_vrt_xml="<VRTDataset />",
-            val_vrt_xml="<VRTDataset />",
+            format="legacy_binary",
+            scenes=[PreparedScene(scene_id="scene", image_path="./scene.tif")],
             annotation_file="./annotations.geojson",
         ),
         report=DatasetPreparationReport(

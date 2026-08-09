@@ -35,6 +35,7 @@ from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
     TileDataloaderRequest,
+    TileSceneSource,
     TileSplitRequest,
 )
 from mlsystem2.train.api import train_model
@@ -161,7 +162,6 @@ def run_train_pipeline(
             lambda: (
                 deps.create_tile_dataloader(
                     _tile_request(
-                        _dataset_vrt_xml(dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "train",
@@ -172,7 +172,6 @@ def run_train_pipeline(
                 ),
                 deps.create_tile_dataloader(
                     _tile_request(
-                        _dataset_vrt_xml(dataset_result.dataset),
                         dataset_result.dataset,
                         settings.train.batch_size,
                         "val",
@@ -340,6 +339,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         scenes_file=settings.dataset.scenes_file,
         annotation_file=settings.dataset.annotation_file,
         hard_negative_annotation_file=settings.dataset.hard_negative_annotation_file,
+        annotations_dir=settings.dataset.annotations_dir,
         val_fraction=settings.dataset.val_fraction,
         expected_band_count=settings.train.input_channels,
         expected_dtype="uint8",
@@ -357,6 +357,16 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
                     f"{item.slug}_hard_negative{Path(item.hard_negative_annotation_file).suffix}"
                 ] = item.hard_negative_annotation_file
         return files
+    if settings.dataset.annotations_dir is not None:
+        annotations_dir = Path(settings.dataset.annotations_dir)
+        return {
+            f"per_image/{path.name}": path.as_posix()
+            for path in sorted(
+                annotations_dir.glob("*.geojson"),
+                key=lambda item: item.name.casefold(),
+            )
+            if path.is_file()
+        }
     files = {}
     if settings.dataset.scenes_file is not None:
         files[Path(settings.dataset.scenes_file).name] = settings.dataset.scenes_file
@@ -369,10 +379,6 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
     return files
 
 
-def _dataset_vrt_xml(dataset: PreparedDataset) -> str:
-    return dataset.pool_vrt_xml or dataset.train_vrt_xml
-
-
 def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
@@ -381,7 +387,6 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
 
 
 def _tile_request(
-    vrt_xml: str,
     dataset: PreparedDataset,
     batch_size: int,
     mode: str,
@@ -389,9 +394,17 @@ def _tile_request(
     max_batches_per_epoch: int | None = None,
     include_object_instances: bool = False,
 ) -> TileDataloaderRequest:
+    scenes = [
+        TileSceneSource(
+            scene_id=item.scene_id,
+            image_path=item.image_path,
+            annotation_file=item.annotation_file,
+        )
+        for item in dataset.scenes
+    ]
     if dataset.class_annotations:
         return TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=scenes,
             class_annotations=[
                 TileClassAnnotation(
                     class_id=item.class_id,
@@ -409,10 +422,12 @@ def _tile_request(
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
         )
-    if dataset.annotation_file is None:
-        raise TrainPipelineError("PreparedDataset не содержит annotation_file для binary режима")
+    if dataset.annotation_file is None and not all(
+        item.annotation_file is not None for item in dataset.scenes
+    ):
+        raise TrainPipelineError("PreparedDataset не содержит binary-разметку")
     return TileDataloaderRequest(
-        vrt_xml=vrt_xml,
+        scenes=scenes,
         annotation_file=dataset.annotation_file,
         hard_negative_annotation_file=dataset.hard_negative_annotation_file,
         batch_size=batch_size,
@@ -511,10 +526,7 @@ class _CountingLoader:
         return getattr(self.loader, "dataset", None)
 
     def snapshot(self) -> dict[str, object]:
-        source_rect_count = _dataset_attr(self.dataset, "source_rect_count")
         warnings = []
-        if source_rect_count == 0:
-            warnings.append("VRT source rects не найдены, используется fallback на всю VRT grid.")
         class_balance_warnings = _dataset_attr(self.dataset, "class_balance_warnings")
         if isinstance(class_balance_warnings, list):
             warnings.extend(str(item) for item in class_balance_warnings)
@@ -566,7 +578,7 @@ class _CountingLoader:
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
-            "source_rect_count": source_rect_count,
+            "scene_count": _dataset_attr(self.dataset, "scene_count"),
             "candidate_window_count": _dataset_attr(self.dataset, "candidate_window_count"),
             "candidate_window_count_before_valid_filter": _dataset_attr(
                 self.dataset,
@@ -790,12 +802,18 @@ def _expect_train_result(value: object) -> TrainResult:
 def _mlflow_class_tag(settings: SystemSettings) -> str:
     if settings.dataset.classes:
         return "multiclass"
-    if settings.dataset.annotation_file is None:
+    if settings.dataset.annotation_file is None and settings.dataset.annotations_dir is None:
         return "unknown"
     return _binary_dataset_class_slug(settings)
 
 
 def _binary_dataset_class_slug(settings: SystemSettings) -> str:
+    if settings.dataset.annotations_dir:
+        annotations_path = Path(settings.dataset.annotations_dir)
+        class_slug = _slug_part(annotations_path.parent.name)
+        dataset_slug = _slug_part(annotations_path.name)
+        if class_slug and dataset_slug:
+            return f"{class_slug}_{dataset_slug}"
     annotation_path = Path(settings.dataset.annotation_file or "")
     if settings.dataset.scenes_file:
         scenes_path = Path(settings.dataset.scenes_file)
@@ -821,6 +839,8 @@ def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
     if settings.dataset.classes:
         names = [Path(item.annotation_file).stem for item in settings.dataset.classes]
         return "+".join(names)
+    if settings.dataset.annotations_dir is not None:
+        return Path(settings.dataset.annotations_dir).name
     if settings.dataset.annotation_file is None:
         return None
     return Path(settings.dataset.annotation_file).stem

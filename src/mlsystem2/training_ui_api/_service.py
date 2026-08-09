@@ -62,6 +62,8 @@ from ._datasets import (
     find_image_folder,
     imagery_images_dir,
     list_image_folders,
+    per_image_annotation_files,
+    per_image_scene_entries,
 )
 from ._model_export import ModelExportArchive, build_triton_model_export_zip
 from ._models import (
@@ -1322,12 +1324,33 @@ def create_pseudo_markup_job(
         dataset_name = dataset.name
         inference_dataset_version = dataset.version
         inference_images_root = dataset.images_dir or str(config.images_root)
-        inference_annotation_files = [
-            path
-            for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
-            if path
-        ]
-        if dataset.scenes_file:
+        if dataset.annotations_dir:
+            try:
+                scene_entries = per_image_scene_entries(
+                    Path(dataset.annotations_dir),
+                    Path(inference_images_root),
+                )
+            except (OSError, ValueError) as exc:
+                raise TrainingUIAPIError(str(exc)) from exc
+            scenes_row = _store_file(
+                session,
+                kind=StoredFileKind.SCENES_TXT,
+                original_name=f"{dataset.dataset_name or 'dataset'}.txt",
+                content_type="text/plain; charset=utf-8",
+                content=("\n".join(scene_entries) + "\n").encode("utf-8"),
+                config=config,
+            )
+            scenes_file_id = scenes_row.id
+            inference_annotation_files = per_image_annotation_files(
+                Path(dataset.annotations_dir)
+            )
+        else:
+            inference_annotation_files = [
+                path
+                for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+                if path
+            ]
+        if dataset.scenes_file and scenes_file_id is None:
             scenes_row = _store_existing_file(
                 session,
                 kind=StoredFileKind.SCENES_TXT,
@@ -1698,7 +1721,12 @@ def _resolve_dataset_name(
         return DatasetInfo(key=CUSTOM_KEY, name=custom.name, is_custom=True)
     dataset = find_managed_dataset(session, config, dataset_key)
     if dataset is not None:
-        if not dataset.source_available or dataset.images_dir is None:
+        ready = (
+            dataset.scenes_file is not None and dataset.annotation_file is not None
+        ) or (
+            dataset.annotations_dir is not None and (dataset.image_count or 0) > 0
+        )
+        if not dataset.source_available or dataset.images_dir is None or not ready:
             raise TrainingUIAPIError(
                 "Датасет недоступен: " + "; ".join(dataset.diagnostics)
             )

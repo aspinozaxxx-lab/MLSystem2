@@ -30,7 +30,12 @@ from mlsystem2.settings.api import load_settings
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import dataset_class_row, find_managed_dataset, list_managed_datasets
-from ._datasets import CUSTOM_KEY, count_scenes_file_images, imagery_images_dir
+from ._datasets import (
+    CUSTOM_KEY,
+    count_scenes_file_images,
+    imagery_images_dir,
+    per_image_annotation_files,
+)
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -431,7 +436,7 @@ def _build_training_config(
             "cleanup_scratch_after_mlflow_log": True,
         },
         "dataset": {
-            **_dataset_config(session, row, config),
+            **_dataset_config(session, row, config, run_dir),
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
@@ -508,11 +513,15 @@ def _build_pseudo_markup_config(
     if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
         dataset = find_managed_dataset(session, config, result.dataset_key)
         if dataset is not None:
-            annotation_files = [
-                path
-                for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
-                if path
-            ]
+            annotation_files = (
+                per_image_annotation_files(Path(dataset.annotations_dir))
+                if dataset.annotations_dir
+                else [
+                    path
+                    for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+                    if path
+                ]
+            )
     return {
         "run_root": str(run_dir / "scratch"),
         "inference_backend": "pytorch_one_off",
@@ -704,6 +713,7 @@ def _dataset_config(
     session: Session,
     row: JobRow,
     config: TrainingUIAPIConfig,
+    run_dir: Path,
 ) -> dict[str, Any]:
     result = _first_training_result(session, row)
     dataset_key = result.class_key if result is not None else row.dataset_name
@@ -734,24 +744,60 @@ def _dataset_config(
         dataset is None
         or not dataset.source_available
         or dataset.images_dir is None
-        or not dataset.scenes_file
-        or not dataset.annotation_file
     ):
         raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
+    images_dir = str(
+        row.config.get("dataset.images_dir")
+        or dataset.images_dir
+        or config.images_root
+    )
+    snapshot_dir = run_dir / "dataset_snapshot"
+    if dataset.annotations_dir:
+        source_dir = Path(dataset.annotations_dir).resolve()
+        annotation_files = sorted(
+            (
+                path
+                for path in source_dir.iterdir()
+                if path.is_file() and path.suffix.casefold() == ".geojson"
+            ),
+            key=lambda path: path.name.casefold(),
+        )
+        if not annotation_files:
+            raise RuntimeError(f"Per-image датасет пуст: {row.dataset_name}")
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for source_file in annotation_files:
+            shutil.copy2(source_file, snapshot_dir / source_file.name)
+        return {
+            "images_dir": images_dir,
+            "annotations_dir": str(snapshot_dir),
+        }
+    if not dataset.scenes_file or not dataset.annotation_file:
+        raise RuntimeError(f"Legacy-датасет не найден или неполный: {row.dataset_name}")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    scenes_file = _snapshot_dataset_file(Path(dataset.scenes_file), snapshot_dir)
+    annotation_file = _snapshot_dataset_file(Path(dataset.annotation_file), snapshot_dir)
+    hard_negative_file = (
+        _snapshot_dataset_file(Path(dataset.hard_negative_annotation_file), snapshot_dir)
+        if dataset.hard_negative_annotation_file
+        else None
+    )
     return {
-        "images_dir": str(
-            row.config.get("dataset.images_dir")
-            or dataset.images_dir
-            or config.images_root
-        ),
-        "scenes_file": dataset.scenes_file,
-        "annotation_file": dataset.annotation_file,
+        "images_dir": images_dir,
+        "scenes_file": str(scenes_file),
+        "annotation_file": str(annotation_file),
         **(
-            {"hard_negative_annotation_file": dataset.hard_negative_annotation_file}
-            if dataset.hard_negative_annotation_file
+            {"hard_negative_annotation_file": str(hard_negative_file)}
+            if hard_negative_file is not None
             else {}
         ),
     }
+
+
+def _snapshot_dataset_file(source: Path, snapshot_dir: Path) -> Path:
+    resolved = source.resolve(strict=True)
+    destination = snapshot_dir / resolved.name
+    shutil.copy2(resolved, destination)
+    return destination
 
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:

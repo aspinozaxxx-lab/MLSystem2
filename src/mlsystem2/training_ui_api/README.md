@@ -10,6 +10,9 @@
 - `MLSYSTEM2_TRAINING_UI_DATABASE_URL` — Postgres URL, секреты задаются только через env.
 - `MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA` — отдельная схема Postgres, default `training_ui`.
 - `MLSYSTEM2_MLMARKUP_ROOT` — путь к MLMarkup, default `/data/MLMarkup`.
+- `MLSYSTEM2_MLMARKUP_EDITOR_ROOT` — отдельный Git-клон редактора, default `/data/mlsystem2/mlmarkup-editor`.
+- `MLSYSTEM2_MLMARKUP_RELEASE_MARKER` — marker SHA опубликованного релиза, default `/data/MLMarkup/.mlsystem2-release`.
+- `MLSYSTEM2_MLMARKUP_EDITOR_BRANCH` — ветка editor clone, default `main`.
 - `MLSYSTEM2_IMAGES_ROOT` — путь к подготовленным снимкам, default `/data/mlsystem2/prepared_images`.
 - `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT` — корень загруженных txt/geojson и постоянных тестовых разметок.
 - `MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT` — временные файлы jobs.
@@ -44,6 +47,15 @@
 - `PUT /api/v1/dataset-classes/{class_key}/primary-dataset`
 - `POST /api/v1/managed-datasets`
 - `PATCH /api/v1/managed-datasets/{dataset_key}`
+- `GET /api/v1/dataset-editor/datasets`
+- `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes`
+- `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}`
+- `POST /api/v1/dataset-editor/datasets/{dataset_key}/scenes`
+- `PUT /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}`
+- `DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}`
+- `GET /api/v1/dataset-editor/datasets/{dataset_key}/rasters`
+- `GET /api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}`
+- `GET /api/v1/dataset-editor/publication/{commit}`
 - `POST /api/v1/custom-datasets`
 - `GET /api/v1/models`
 - `GET /api/v1/automation`
@@ -105,15 +117,24 @@ OpenAPI доступен стандартно по `/openapi.json`.
 `GET /api/v1/datasets` возвращает плоский список датасетов MLMarkup, а `GET /api/v1/classes` и
 `GET /api/v1/results/classes` — классы с вложенным списком `datasets`. Класс задаёт единый тип снимков:
 `kanopus` использует четыре канала из `prepared_images/kanopus`, `ortho` — три RGB-канала из
-`prepared_images/orto`. В папке датасета ожидается один TXT со списком сцен, один ordinary positive GeoJSON и optional
-`hard_negative.geojson`. `hard_negative.geojson` возвращается как `hard_negative_annotation_file` и не выбирается
-как positive `annotation_file`; несколько обычных GeoJSON дают diagnostics вместо случайного выбора.
+`prepared_images/orto`. Папка с TXT считается legacy: в ней ожидаются один список сцен, один positive GeoJSON и
+optional `hard_negative.geojson`. Папка без TXT считается per-image: каждый GeoJSON соответствует одному TIFF,
+а `DatasetInfo` возвращает `format=per_image` и `annotations_dir`. Пустой управляемый per-image датасет виден
+редактору, но не готов к обучению. В legacy несколько обычных GeoJSON дают diagnostics вместо случайного выбора.
 `updated_at` датасета заполняется по последнему git-коммиту, затронувшему его папку в
-`MLSYSTEM2_MLMARKUP_ROOT`. Если `MLSYSTEM2_MLMARKUP_ROOT` не является git checkout, используется filesystem
+`MLSYSTEM2_MLMARKUP_ROOT`. Атомарный runtime-релиз читает те же данные из
+`.mlsystem2-release-metadata.json`; для произвольной папки без Git и release metadata используется filesystem
 mtime как fallback. `version` равен `git:{commit_sha}` или `fs:{mtime_ns}` и используется автоматизацией
-для дедупликации jobs по конкретной версии датасета. `image_count` считается по txt-списку сцен через
-индекс снимков внутри корня типа класса: строки-папки разворачиваются в фактические TIFF, повторы
-удаляются.
+для дедупликации jobs по конкретной версии датасета. Для legacy `image_count` считается по TXT через индекс
+снимков; для per-image — по однозначно сопоставленным GeoJSON и TIFF.
+
+Страница `#/dataset-editor` и endpoints `/api/v1/dataset-editor/*` работают только с per-image датасетами.
+Редактор читает и коммитит отдельный SSH-клон, никогда не пишет в live-каталог. Один save меняет один GeoJSON;
+добавление прямых TIFF папки создаёт один commit; delete удаляет одну сцену. Все Git-операции сериализованы,
+перед мутацией выполняется fetch/fast-forward, blob revision защищает от потери конкурентных изменений и даёт
+`409` без автоматического слияния геометрий. Сервер проверяет CRS снимка, Polygon/MultiPolygon, валидность и
+полное попадание в footprint. Raster endpoint авторизован и поддерживает HTTP Range. Возвращённый commit имеет
+статус `publishing`; он становится `published`, когда является предком SHA в live release marker.
 
 `POST /api/v1/scene-list-export` принимает multipart-поля `imagery_type=kanopus|ortho` и `geojson`.
 Сервис рекурсивно читает TIFF только из `prepared_images/kanopus` или `prepared_images/orto`, преобразует
@@ -124,8 +145,9 @@ UTF-8 TXT с отсортированными относительными пу�
 сохраняет кириллицу.
 
 `POST /api/v1/markup-export` формирует самостоятельный набор тестовой разметки и не создает job или запись в БД.
-Доступны только однозначные датасеты MLMarkup с TXT и одним GeoJSON положительной разметки; `Custom` и
-`hard_negative.geojson` не участвуют. TIFF читаются только из `MLSYSTEM2_IMAGES_ROOT`, в рабочей конфигурации это
+Доступны однозначные legacy и per-image датасеты MLMarkup; `Custom` и hard-negative объекты не участвуют. Для
+per-image каждая сцена использует только positive-объекты собственного GeoJSON. TIFF читаются только из
+`MLSYSTEM2_IMAGES_ROOT`, в рабочей конфигурации это
 `/data/mlsystem2/prepared_images`. Окна обязаны целиком находиться внутри растра, иметь полностью валидную
 `dataset_mask` и не содержать пикселей без данных или полностью чёрных пикселей. Выбор через `scipy.optimize.milp` сначала
 максимизирует число территорий и исходных TIFF, затем минимизирует отклонение от целевого числа объектов.
@@ -273,7 +295,9 @@ Frontend не обращается к Postgres. Сервис не импорти
 Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
 и не записываются в `run.yml`. Worker всегда записывает в `run.yml` нормализованные три tile factors,
 `train.hard_negative_weight` и добавляет
-`hard_negative_annotation_file`, если он найден у встроенного MLMarkup dataset. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
+`hard_negative_annotation_file`, если он найден у legacy MLMarkup dataset. Для per-image worker атомарно копирует
+все GeoJSON в snapshot задания и записывает `annotations_dir`; дальнейшая публикация MLMarkup не меняет уже
+запущенное обучение. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
 еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
@@ -281,7 +305,7 @@ MLflow run со статусом `KILLED`.
 
 Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
-После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job по txt того же датасета.
+После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job того же датасета.
 Jobs запускаются из единой очереди с внутренним приоритетом: ручная псевдоразметка, ручное обучение, auto
 псевдоразметка, auto обучение. При выключенной автоматизации новые auto jobs не создаются и queued auto jobs не
 стартуют, потому что `PUT /api/v1/automation/enabled` с `enabled=false` сразу отменяет и очищает все active auto
@@ -308,8 +332,9 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 принимает список успешных результатов и имен моделей, собирает каждую модель тем же кодом и возвращает общий zip с
 `models-serving-service/`, `pipelines/`, `metadata/` и корневым `export_metadata.json`.
 
-Для job типа `pseudo-markup` worker берет txt список снимков из выбранного датасета, выбранной папки снимков или
-загруженного файла, пишет в `pseudo_config.yaml` `inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`
+Для job типа `pseudo-markup` worker берёт TXT выбранного legacy датасета, выбранной папки или загруженного файла;
+для per-image он временно формирует TXT из сопоставленных TIFF. Затем пишет в `pseudo_config.yaml`
+`inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`
 через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
 разрешает точные имена сцен через `dataset_preparing.api.resolve_scene_images` и строит GeoJSON псевдоразметки
 в `EPSG:4326`. Для датасета в runner передаются его positive и optional hard-negative GeoJSON, поэтому одинаковые

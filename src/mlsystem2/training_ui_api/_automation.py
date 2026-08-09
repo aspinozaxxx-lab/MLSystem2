@@ -8,6 +8,7 @@ import re
 import shutil
 import signal
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,12 @@ from mlsystem2.mlflow_adapter.contracts import (
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import list_managed_datasets
-from ._datasets import CUSTOM_KEY, count_scenes_file_images
+from ._datasets import (
+    CUSTOM_KEY,
+    count_scenes_file_images,
+    per_image_annotation_files,
+    per_image_scene_entries,
+)
 from ._models import (
     AutomationControlRow,
     AutomationRuleRow,
@@ -213,8 +219,10 @@ def _automation_datasets(session: Session, config: TrainingUIAPIConfig) -> list[
         item
         for item in list_managed_datasets(session, config, include_custom=False)
         if item.key != CUSTOM_KEY
-        and item.scenes_file
-        and item.annotation_file
+        and (
+            (item.scenes_file is not None and item.annotation_file is not None)
+            or (item.annotations_dir is not None and (item.image_count or 0) > 0)
+        )
         and item.source_available
         and item.images_dir is not None
     ]
@@ -335,8 +343,6 @@ def _ensure_pseudo_markup_for_rule(
         return
     if _has_active_automation_job(session, JobType.INFERENCE, rule, dataset.version):
         return
-    if not dataset.scenes_file:
-        return
     inference_template = _inference_template_row_for_dataset(
         session,
         training_result.architecture,
@@ -347,18 +353,35 @@ def _ensure_pseudo_markup_for_rule(
         if inference_template is not None
         else {}
     )
-    scenes_row = _store_existing_file(session, kind=StoredFileKind.SCENES_TXT, path=Path(dataset.scenes_file))
     images_root = Path(dataset.images_dir or config.images_root)
-    annotation_files = [
-        path
-        for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
-        if path
-    ]
-    image_count = count_scenes_file_images(
-        Path(scenes_row.path),
-        images_root,
-        annotation_files=annotation_files,
-    )
+    if dataset.annotations_dir:
+        scene_entries = per_image_scene_entries(Path(dataset.annotations_dir), images_root)
+        scenes_row = _store_generated_scenes_file(
+            session,
+            config,
+            f"{dataset.dataset_name or 'dataset'}.txt",
+            scene_entries,
+        )
+        annotation_files = per_image_annotation_files(Path(dataset.annotations_dir))
+        image_count = len(scene_entries)
+    else:
+        if not dataset.scenes_file:
+            return
+        scenes_row = _store_existing_file(
+            session,
+            kind=StoredFileKind.SCENES_TXT,
+            path=Path(dataset.scenes_file),
+        )
+        annotation_files = [
+            path
+            for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+            if path
+        ]
+        image_count = count_scenes_file_images(
+            Path(scenes_row.path),
+            images_root,
+            annotation_files=annotation_files,
+        )
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.AUTOMATION.value,
@@ -744,6 +767,31 @@ def _store_existing_file(session: Session, *, kind: StoredFileKind, path: Path) 
         content_type="text/plain",
         path=str(path),
         size_bytes=path.stat().st_size if path.exists() else 0,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _store_generated_scenes_file(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    original_name: str,
+    entries: list[str],
+) -> StoredFileRow:
+    file_id = uuid.uuid4()
+    target_dir = config.stored_files_root / StoredFileKind.SCENES_TXT.value
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{file_id}.txt"
+    content = ("\n".join(entries) + "\n").encode("utf-8")
+    target_path.write_bytes(content)
+    row = StoredFileRow(
+        id=file_id,
+        kind=StoredFileKind.SCENES_TXT.value,
+        original_name=original_name,
+        content_type="text/plain; charset=utf-8",
+        path=str(target_path),
+        size_bytes=len(content),
     )
     session.add(row)
     session.flush()

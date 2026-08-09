@@ -13,6 +13,7 @@ def test_dataset_preparing_contracts_all_is_exact() -> None:
         "DatasetSceneReport",
         "DatasetPreparationReport",
         "DatasetPreparationResult",
+        "PreparedScene",
         "ResolvedSceneImage",
         "SceneImageResolution",
         "SceneImageResolutionRequest",

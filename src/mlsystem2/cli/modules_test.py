@@ -15,7 +15,7 @@ from mlsystem2.dataset_preparing.api import prepare_dataset
 from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest
 from mlsystem2.settings.api import get_settings, load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSceneSource
 
 
 IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
@@ -89,13 +89,13 @@ def main() -> int:
             print(error, file=sys.stderr)
             return 1
 
-        Path(paths["train_vrt"]).write_text(result.dataset.train_vrt_xml, encoding="utf-8")
-        Path(paths["val_vrt"]).write_text(result.dataset.val_vrt_xml, encoding="utf-8")
-
         dataloader_started = perf_counter()
         loader = create_tile_dataloader(
             TileDataloaderRequest(
-                vrt_xml=result.dataset.train_vrt_xml,
+                scenes=[
+                    TileSceneSource(**item.model_dump())
+                    for item in result.dataset.scenes
+                ],
                 annotation_file=result.dataset.annotation_file,
                 batch_size=get_settings().train.batch_size,
                 mode=MODE,
@@ -354,7 +354,7 @@ def _initial_tile_scan(loader: object) -> dict[str, Any]:
         "mask_positive_pixels_total": 0,
         "image_min": None,
         "image_max": None,
-        "source_rect_count": _dataset_attr(dataset, "source_rect_count"),
+        "scene_count": _dataset_attr(dataset, "scene_count"),
         "candidate_window_count": _dataset_attr(dataset, "candidate_window_count"),
         "candidate_window_count_before_valid_filter": _dataset_attr(
             dataset,
@@ -930,8 +930,6 @@ def _paths() -> dict[str, str]:
         "scenes_file": str(SCENES_FILE),
         "annotation_file": str(ANNOTATION_FILE),
         "settings_file": str(OUT_DIR / "modules_test.local.yaml"),
-        "train_vrt": str(OUT_DIR / "train.vrt"),
-        "val_vrt": str(OUT_DIR / "val.vrt"),
         "tile_batches_dir": str(OUT_DIR / "tile_batches"),
         "black_examples_dir": str(OUT_DIR / "black_tile_examples"),
         "tensor_integrity_dir": str(OUT_DIR / "tensor_integrity"),

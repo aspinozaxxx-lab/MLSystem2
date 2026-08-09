@@ -21,6 +21,8 @@ from shapely.ops import transform as transform_geometry
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 from mlsystem2.mlflow_adapter.api import get_usable_training_checkpoint
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
 
@@ -684,20 +686,34 @@ def _channel_mapping(model_channels: int, source_imagery_type: str) -> str:
 
 def _dataset_target_resolution_m(dataset: Any) -> float | None:
     scenes_file = Path(dataset.scenes_file) if dataset.scenes_file else None
+    annotations_dir = Path(dataset.annotations_dir) if dataset.annotations_dir else None
     images_dir = Path(dataset.images_dir) if dataset.images_dir else None
     if images_dir is None or not images_dir.is_dir():
         return None
     try:
-        marker = scenes_file.stat().st_mtime_ns if scenes_file and scenes_file.is_file() else 0
+        marker_path = scenes_file or annotations_dir
+        marker = marker_path.stat().st_mtime_ns if marker_path and marker_path.exists() else 0
     except OSError:
         marker = 0
-    key = (str(scenes_file or ""), int(marker), str(images_dir.resolve()))
+    dataset_source = scenes_file or annotations_dir
+    key = (str(dataset_source or ""), int(marker), str(images_dir.resolve()))
     if key in _RESOLUTION_CACHE:
         return _RESOLUTION_CACHE[key]
-    paths = (
-        resolve_scenes_file_images(scenes_file, images_dir)
-        if scenes_file is not None and scenes_file.is_file()
-        else sorted(
+    if annotations_dir is not None and annotations_dir.is_dir():
+        try:
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=str(images_dir),
+                    annotations_dir=str(annotations_dir),
+                )
+            )
+            paths = [Path(item.image_path) for item in resolution.images]
+        except (OSError, ValueError):
+            paths = []
+    elif scenes_file is not None and scenes_file.is_file():
+        paths = resolve_scenes_file_images(scenes_file, images_dir)
+    else:
+        paths = sorted(
             (
                 path
                 for path in images_dir.rglob("*")
@@ -705,7 +721,6 @@ def _dataset_target_resolution_m(dataset: Any) -> float | None:
             ),
             key=lambda path: path.as_posix().casefold(),
         )
-    )
     resolutions: list[float] = []
     for path in paths:
         try:

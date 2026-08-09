@@ -38,24 +38,32 @@ class DatasetSettings(BaseModel):
     scenes_file: str | None = None
     annotation_file: str | None = None
     hard_negative_annotation_file: str | None = None
+    annotations_dir: str | None = None
     classes: list[DatasetClassSettings] = Field(default_factory=list)
     val_fraction: float = Field(gt=0.0, lt=1.0)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
-        has_binary_paths = (
+        has_legacy_binary_paths = (
             self.scenes_file is not None
             or self.annotation_file is not None
             or self.hard_negative_annotation_file is not None
         )
+        has_per_image_binary = self.annotations_dir is not None
         has_classes = bool(self.classes)
-        if has_binary_paths and has_classes:
+        mode_count = sum((has_legacy_binary_paths, has_per_image_binary, has_classes))
+        if mode_count != 1:
             raise ValueError(
-                "dataset должен задавать либо classes, либо scenes_file + annotation_file"
+                "dataset должен задавать ровно один режим: classes, "
+                "scenes_file + annotation_file или annotations_dir"
             )
         if has_classes:
             _validate_unique_values([item.slug for item in self.classes], "slug")
             _validate_unique_values([item.name for item in self.classes], "name")
+            return self
+        if has_per_image_binary:
+            if not self.annotations_dir:
+                raise ValueError("annotations_dir не должен быть пустым")
             return self
         if not self.scenes_file or not self.annotation_file:
             raise ValueError(

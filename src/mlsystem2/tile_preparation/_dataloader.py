@@ -43,7 +43,7 @@ def create_tile_dataloader(
     tile_settings = get_settings().tile_preparation
     try:
         dataset = TileDataset(
-            vrt_xml=request.vrt_xml,
+            scenes=request.scenes,
             annotation_file=request.annotation_file,
             hard_negative_annotation_file=request.hard_negative_annotation_file,
             class_annotations=request.class_annotations,

@@ -5,7 +5,11 @@ import importlib
 
 EXPECTED_API = {
     "settings.api": ["load_settings", "get_settings", "get_settings_path"],
-    "dataset_preparing.api": ["prepare_dataset", "resolve_scene_images"],
+    "dataset_preparing.api": [
+        "prepare_dataset",
+        "resolve_scene_images",
+        "per_image_annotation_name",
+    ],
     "tile_preparation.api": ["create_tile_dataloader"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],
     "metrics.api": ["compute_object_f1", "compute_pixel_f1", "summarize_epoch_metrics"],

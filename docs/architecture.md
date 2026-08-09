@@ -54,9 +54,37 @@ training runs и не пишет MLflow-метрики; запись метри�
 историю и не перезаписывает ручные настройки. Пути источников хранятся относительно корня MLMarkup. Первый
 импорт сохраняет исторические `dataset_key`; сущности, обнаруженные позднее, получают независимые UUID.
 
+MLMarkup поддерживает два формата binary-датасетов. Legacy сохраняет `TXT + positive GeoJSON + optional
+hard-negative GeoJSON`, включая legacy multiclass. Per-image не содержит TXT: каждый прямой GeoJSON соответствует
+одному TIFF и называется `<родительская_папка>_<имя_TIFF_без_расширения>.geojson`. Это только binary-режим.
+Файл является `FeatureCollection` в CRS TIFF; `_mlsystem2_role` равен `positive` или `hard_negative`, а отсутствие
+свойства совместимо трактуется как `positive`. Коллизии формулы, неоднозначные и отсутствующие TIFF делают датасет
+невалидным. Пустой управляемый per-image датасет доступен редактору, но не запуску обучения.
+
+Страница `#/dataset-editor` редактирует только per-image датасеты. TIFF выбираются из существующего
+`prepared_images` по одному или прямыми файлами папки, без browser upload и рекурсии. OpenLayers отображает
+авторизованный GeoTIFF через HTTP Range и позволяет Draw/Modify/Snap, смену роли и удаление. Сервер обязательно
+проверяет CRS, `Polygon/MultiPolygon`, валидность и попадание в footprint конкретного TIFF; свойства и feature ID
+сохраняются. Optimistic lock использует Git blob revision, конфликт возвращает `409`, автоматического слияния
+геометрий нет.
+
+Редактор никогда не пишет в live-каталог. Все мутации сериализуются межпроцессным lock в отдельном клоне
+`/data/mlsystem2/mlmarkup-editor`, принадлежащем `MLMarkup_deploy_user` и использующем отдельный write deploy key.
+Перед чтением и мутацией выполняются fetch и fast-forward, перед push повторно проверяется blob revision. Один save
+или delete создаёт один commit, добавление папки — один commit на все новые GeoJSON; автор фиксирован сервисный,
+пользователь записывается trailer. Разрешён один rebase/retry для постороннего коммита, но не для изменения целевого
+GeoJSON.
+
+MLMarkup публикуется атомарно: неизменяемые каталоги `/data/mlmarkup-runtime/releases/<commit>`, ссылка
+`/data/mlmarkup-runtime/current` и стабильная внешняя ссылка `/data/MLMarkup -> current`. CI сначала собирает и
+проверяет staging-релиз, дедуплицирует неизменённые файлы через `rsync --link-dest`, затем атомарно переключает
+`current`. Current и previous сохраняются всегда, прочие релизы — 30 дней. Маркер `.mlsystem2-release` содержит
+commit релиза. Save сразу возвращает `publishing`; commit становится `published`, когда является предком live SHA,
+что допускает последующий автоматический README-коммит.
+
 Автоматизация обучения и псевдоразметки является частью `training_ui_api`. Она хранит правила
 `датасет × модель` в Postgres, отслеживает управляемую версию датасета и файловую версию его источника
-MLMarkup по git-коммиту или filesystem mtime fallback и создает auto jobs только через те же очереди, что
+MLMarkup по git-коммиту, release metadata или filesystem mtime fallback и создает auto jobs только через те же очереди, что
 и ручной запуск. Jobs диспетчеризуются общей очередью: ручная псевдоразметка выше ручного обучения,
 ручное обучение выше auto псевдоразметки, auto псевдоразметка выше auto обучения. Auto jobs отменяются
 изменением правила автоматизации или заменяются при новой версии конкретного датасета; frontend не
@@ -77,6 +105,9 @@ production-инференсом и явным экспортом. Эффекти
 модели независимо от источника снимков. Для трёхканального checkpoint этот одноразовый инференс принимает
 RGB и совместимые RGBA GeoTIFF, читая из RGBA только первые три канала; остальные несовпадения числа каналов
 отклоняются. Подготовка датасета, обучение и основной CLI-инференс сохраняют строгую проверку каналов.
+Перед обучением worker копирует legacy-файлы либо все per-image GeoJSON в неизменяемый snapshot задания. Для
+псевдоразметки per-image набора временный TXT строится из строго сопоставленных TIFF, а в runner передаются все
+файлы разметки этого набора.
 Распознавание AOI для QGIS является дополнительным HTTP-контрактом того же `training_ui_api` и проходит
 через общую inference-очередь и тот же `pytorch_one_off` runner. Клиент передаёт класс, выбранный источник,
 Polygon или MultiPolygon и CRS. Сервер фиксирует основную сеть класса. Источник выбирается независимо:
@@ -107,7 +138,8 @@ MLMarkup и по умолчанию выбирает основные датас
 Нарезка тестовой разметки является самостоятельной функцией `training_ui_api` и не входит в конвейер обучения,
 training/inference-очередь или автоматизацию. Она читает исходные TIFF только из `MLSYSTEM2_IMAGES_ROOT` с серверным значением
 `/data/mlsystem2/prepared_images`, выбирает полностью валидные непересекающиеся тайлы по положительной разметке
-датасета MLMarkup и формирует TIFF, GeoJSON, бинарную PNG-маску и PNG-превью. Совместимые endpoints
+датасета MLMarkup и формирует TIFF, GeoJSON, бинарную PNG-маску и PNG-превью. Для per-image источника каждый TIFF
+использует только свои features с ролью `positive`; hard negative в тестовую разметку не попадает. Совместимые endpoints
 `/markup-export` хранят временный ZIP один час в `scratch_root`. Основной интерфейс создаёт постоянные тестовые
 разметки: описание и состояния тайлов хранятся в Postgres, а файлы — в
 `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT/test-samples/{uuid}` без TTL. Разметку можно переименовать, удалить,
@@ -167,11 +199,11 @@ inference-шаблона; неуспешная попытка той же рев
 
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
-3. `dataset_preparing` принимает локальные пути, проверяет наличие подготовленных снимков в `dataset.images_dir`, точное совпадение числа каналов с `train.input_channels` и dtype `uint8`, готовит датасет и возвращает общий VRT XML найденного пула снимков. Поддерживаются два режима датасета: binary через `dataset.scenes_file` + `dataset.annotation_file` + optional `dataset.hard_negative_annotation_file` и multiclass через `dataset.classes` с optional class-level hard negative GeoJSON. Train/val split всегда выполняется по тайлам; scene-based отбор negative-снимков не используется.
+3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. Поддерживаются legacy binary, per-image binary через `dataset.annotations_dir` и legacy multiclass. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
-5. После успешной подготовки `train_pipeline` сохраняет исходные txt/geojson файлы датасета в MLflow artifacts `dataset/`.
-6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` отдельно для train и val. Оба loader получают общий VRT и одинаковый `tile_split`, а `tile_preparation` детерминированно делит список окон на непересекающиеся train/val subsets. Train loader читает raster и rasterize лениво в `Dataset.__getitem__`, классифицирует tiles как positive, hard_negative или background, использует weighted sampling с общим marked-бюджетом `positive_factor + hard_negative_factor` и отдельным `background_factor`, а также применяет `tile_preparation.prefetch_epochs` как расчетный PyTorch `prefetch_factor`; если задан `train.max_train_batches_per_epoch`, расчет prefetch использует ограниченную длину train-эпохи. Val loader выбирает фиксированный balanced subset без replacement по positive/non-positive hints; `train.max_val_batches_per_epoch` ограничивает этот набор до `batch_size × max_val_batches_per_epoch` до оценки RAM и чтения тайлов. Если расчетный размер не превышает 50% доступной RAM, CPU batch tensors собираются один раз и переиспользуются на каждой эпохе; если доступную память определить нельзя, оценка превышает безопасный лимит или фактическая сборка исчерпала память, те же фиксированные индексы читаются лениво на каждой эпохе с консервативным worker prefetch. В обоих режимах порядок и состав val неизменны, а в binary режиме передаётся instance mask объектов каждого тайла. Train factors и `prefetch_epochs` к val не применяются. Image tensors уже соответствуют Geoalert ABI: raw `float32`, `C,H,W` на sample и `B,C,H,W` в batch. Mask является единой supervision mask: `-1` - служебный hard negative, `0` - background, `1` - binary positive или `1..N` - class id в multiclass. `-1` не является классом модели и перед loss декодируется в background target плюс pixel weight mask.
+5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON в `dataset/`.
+6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. Окна строятся отдельно внутри каждого TIFF, включая nodata-padding края; split детерминирован по `scene_id+x+y`. Train читает raster/rasterize лениво, использует LRU дескрипторов, category-aware sampling и prefetch. Val выбирает фиксированный balanced subset и кэширует его при безопасном лимите RAM, иначе лениво читает те же индексы. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; `-1` декодируется в background target с повышенным pixel weight.
 7. `train_pipeline` создает поддерживаемую segmentation-модель (`segformer_b0`, `segformer_b2`, диагностический SMP-совместимый `smp_segformer_b0`/`smp_segformer_b2`/`smp_segformer_b3` или `smp_deeplabv3plus_resnet50`) через `models.create_model` с `train.input_channels` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Спецификация checkpoint обязана совпадать с запросом, поэтому трёх- и четырёхканальные модели нельзя перепутать. Для multiclass `train.output_channels` должен быть равен `len(dataset.classes) + 1`.
 8. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy, validation metrics, early stopping и best/final checkpoints. Для binary рассчитываются пиксельная и объектовая F1 по порогам; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`, каждый тайл оценивается независимо; независимые пары «порог × тайл» обрабатываются ограниченным пулом не более чем из 8 CPU-потоков с последовательной агрегацией счётчиков. Multiclass поддерживает только pixel. Background имеет фиксированный вес `1`, `pos_weight` усиливает positive pixels в binary loss, а `hard_negative_weight` усиливает штраф только на пикселях supervision mask со значением `-1`; эти пиксели становятся target background `0`, но получают повышенный pixel loss weight. Checkpoint metadata содержит выбранную метрику, обе группы validation-метрик, лучший threshold и `sample_size`, необходимый для экспорта в Triton.
 9. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.

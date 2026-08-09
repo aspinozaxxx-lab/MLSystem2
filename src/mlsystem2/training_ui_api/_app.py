@@ -22,6 +22,7 @@ from ._routes.auth import register_auth_routes
 from ._routes.automation import register_automation_routes
 from ._routes.catalog import register_catalog_routes
 from ._routes.common import RouteContext
+from ._routes.dataset_editor import register_dataset_editor_routes
 from ._routes.export import register_export_routes
 from ._routes.files import register_file_routes
 from ._routes.frontend import register_frontend_routes
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
 
     register_auth_routes(app, route_context)
     register_catalog_routes(app, route_context)
+    register_dataset_editor_routes(app, route_context)
     register_export_routes(app, route_context)
     register_test_sample_routes(app, route_context)
     register_automation_routes(app, route_context)

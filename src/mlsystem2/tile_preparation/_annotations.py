@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from pyproj import Transformer
@@ -45,7 +46,9 @@ class AnnotationIndex:
 
 def load_annotation_index(
     annotation_file: str | Path,
-    vrt_crs: str | None,
+    raster_crs: str | None,
+    *,
+    role: Literal["positive", "hard_negative"] | None = None,
 ) -> AnnotationIndex:
     path = Path(annotation_file)
     try:
@@ -58,12 +61,16 @@ def load_annotation_index(
     if payload.get("type") != "FeatureCollection":
         raise TilePreparationError("GeoJSON-разметка должна быть FeatureCollection")
 
-    target_crs = _crs_from_user_input(vrt_crs)
+    target_crs = _crs_from_user_input(raster_crs)
     source_crs = _geojson_crs(payload) or target_crs
     transformer = _build_transformer(source_crs, target_crs)
 
     geometries: list[Polygon | MultiPolygon] = []
-    for feature in payload.get("features", []):
+    for feature_index, feature in enumerate(payload.get("features", []), start=1):
+        if role is not None:
+            feature_role = _feature_role(feature, path, feature_index)
+            if feature_role != role:
+                continue
         geometry_payload = feature.get("geometry") if isinstance(feature, dict) else None
         if geometry_payload is None:
             continue
@@ -74,6 +81,23 @@ def load_annotation_index(
             geometry = shapely_transform(transformer.transform, geometry)
         geometries.append(geometry)
     return AnnotationIndex(geometries)
+
+
+def _feature_role(feature: object, path: Path, feature_index: int) -> str:
+    properties = feature.get("properties") if isinstance(feature, dict) else None
+    if properties is None:
+        role = "positive"
+    elif isinstance(properties, dict):
+        role = properties.get("_mlsystem2_role", "positive")
+    else:
+        raise TilePreparationError(
+            f"properties Feature #{feature_index} должен быть объектом: {path}"
+        )
+    if role not in {"positive", "hard_negative"}:
+        raise TilePreparationError(
+            f"Feature #{feature_index} содержит неизвестную роль {role!r}: {path}"
+        )
+    return str(role)
 
 
 def _safe_geometry(geometry_payload: dict[str, object]) -> Polygon | MultiPolygon | None:

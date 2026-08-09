@@ -295,9 +295,12 @@ def create_test_sample_batch(
             raise TrainingUIAPIError(f"Датасет не найден: {item.dataset_key}")
         if dataset.diagnostics:
             raise TrainingUIAPIError(f"{dataset.name}: {'; '.join(dataset.diagnostics)}")
-        if not dataset.scenes_file or not dataset.annotation_file:
+        if not (
+            (dataset.scenes_file and dataset.annotation_file)
+            or (dataset.annotations_dir and (dataset.image_count or 0) > 0)
+        ):
             raise TrainingUIAPIError(
-                f"{dataset.name}: нужны TXT со сценами и один positive GeoJSON."
+                f"{dataset.name}: датасет не готов к формированию тестовой разметки."
             )
         class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
         dataset_name = dataset.dataset_name or dataset.name

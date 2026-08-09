@@ -46,6 +46,43 @@ def test_load_settings_accepts_multiclass_dataset(tmp_path: Path) -> None:
     assert settings.train.output_channels == 3
 
 
+def test_load_settings_accepts_per_image_binary_dataset(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  scenes_file: /data/MLMarkup/Вырубки/deforestation.txt\n"
+            "  annotation_file: /data/MLMarkup/Вырубки/deforestation.geojson",
+            "  annotations_dir: /data/MLMarkup/Реки/test",
+        ),
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.dataset.annotations_dir == "/data/MLMarkup/Реки/test"
+    assert settings.dataset.scenes_file is None
+    assert settings.dataset.annotation_file is None
+    assert settings.dataset.is_multiclass is False
+
+
+def test_load_settings_rejects_mixed_legacy_and_per_image_dataset(
+    tmp_path: Path,
+) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  val_fraction: 0.2",
+            "  annotations_dir: /data/MLMarkup/Реки/test\n  val_fraction: 0.2",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError):
+        api.load_settings(settings_path)
+
+
 def test_load_settings_accepts_multiclass_class_balance_and_ce_dice(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"

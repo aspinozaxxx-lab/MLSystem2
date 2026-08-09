@@ -586,6 +586,420 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets": {
+      "get": {
+        "summary": "Datasets",
+        "operationId": "datasets_api_v1_dataset_editor_datasets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDatasetListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes": {
+      "get": {
+        "summary": "Scenes",
+        "operationId": "scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add Scenes",
+        "operationId": "add_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorAddScenesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
+      "get": {
+        "summary": "Scene",
+        "operationId": "scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Scene",
+        "operationId": "save_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__put",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorSaveSceneRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Scene",
+        "operationId": "delete_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__delete",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorDeleteSceneRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rasters": {
+      "get": {
+        "summary": "Rasters",
+        "operationId": "rasters_api_v1_dataset_editor_datasets__dataset_key__rasters_get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Folder"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorRasterBrowserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/publication/{commit}": {
+      "get": {
+        "summary": "Publication",
+        "operationId": "publication_api_v1_dataset_editor_publication__commit__get",
+        "parameters": [
+          {
+            "name": "commit",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Commit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorPublicationInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}": {
+      "get": {
+        "summary": "Raster",
+        "operationId": "raster_api_v1_dataset_editor_datasets__dataset_key__raster__image_path__get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "image_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Path"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/scene-list-export": {
       "post": {
         "summary": "Post Scene List Export",
@@ -3830,6 +4244,389 @@
         "type": "object",
         "title": "DatasetClassUpdate"
       },
+      "DatasetEditorAddScenesRequest": {
+        "properties": {
+          "image_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Paths"
+          },
+          "folder_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DatasetEditorAddScenesRequest"
+      },
+      "DatasetEditorDatasetInfo": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "imagery_type": {
+            "type": "string",
+            "enum": [
+              "kanopus",
+              "ortho"
+            ],
+            "title": "Imagery Type"
+          },
+          "scene_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Scene Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "class_key",
+          "class_name",
+          "dataset_name",
+          "imagery_type",
+          "scene_count"
+        ],
+        "title": "DatasetEditorDatasetInfo"
+      },
+      "DatasetEditorDatasetListResponse": {
+        "properties": {
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorDatasetInfo"
+            },
+            "type": "array",
+            "title": "Datasets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "datasets"
+        ],
+        "title": "DatasetEditorDatasetListResponse"
+      },
+      "DatasetEditorDeleteSceneRequest": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "title": "DatasetEditorDeleteSceneRequest"
+      },
+      "DatasetEditorMutationResult": {
+        "properties": {
+          "commit": {
+            "type": "string",
+            "title": "Commit"
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "publishing",
+              "published"
+            ],
+            "title": "Publication Status"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorSceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commit",
+          "publication_status"
+        ],
+        "title": "DatasetEditorMutationResult"
+      },
+      "DatasetEditorPublicationInfo": {
+        "properties": {
+          "commit": {
+            "type": "string",
+            "title": "Commit"
+          },
+          "live_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Commit"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "publishing",
+              "published"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commit",
+          "status"
+        ],
+        "title": "DatasetEditorPublicationInfo"
+      },
+      "DatasetEditorRasterBrowserResponse": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorRasterFolderInfo"
+            },
+            "type": "array",
+            "title": "Folders"
+          },
+          "rasters": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorRasterInfo"
+            },
+            "type": "array",
+            "title": "Rasters"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "folder",
+          "folders",
+          "rasters"
+        ],
+        "title": "DatasetEditorRasterBrowserResponse"
+      },
+      "DatasetEditorRasterFolderInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "path"
+        ],
+        "title": "DatasetEditorRasterFolderInfo"
+      },
+      "DatasetEditorRasterInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "annotation_name": {
+            "type": "string",
+            "title": "Annotation Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "annotation_name",
+          "size_bytes"
+        ],
+        "title": "DatasetEditorRasterInfo"
+      },
+      "DatasetEditorSaveSceneRequest": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Revision"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "geojson"
+        ],
+        "title": "DatasetEditorSaveSceneRequest"
+      },
+      "DatasetEditorSceneDetail": {
+        "properties": {
+          "scene": {
+            "$ref": "#/components/schemas/DatasetEditorSceneInfo"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scene",
+          "geojson"
+        ],
+        "title": "DatasetEditorSceneDetail"
+      },
+      "DatasetEditorSceneInfo": {
+        "properties": {
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id"
+          },
+          "annotation_name": {
+            "type": "string",
+            "title": "Annotation Name"
+          },
+          "image_name": {
+            "type": "string",
+            "title": "Image Name"
+          },
+          "raster_url": {
+            "type": "string",
+            "title": "Raster Url"
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Count"
+          },
+          "positive_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Positive Count"
+          },
+          "hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hard Negative Count"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scene_id",
+          "annotation_name",
+          "image_name",
+          "raster_url",
+          "total_count",
+          "positive_count",
+          "hard_negative_count",
+          "revision"
+        ],
+        "title": "DatasetEditorSceneInfo"
+      },
+      "DatasetEditorSceneListResponse": {
+        "properties": {
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetEditorDatasetInfo"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorSceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset",
+          "scenes"
+        ],
+        "title": "DatasetEditorSceneListResponse"
+      },
+      "DatasetFormat": {
+        "type": "string",
+        "enum": [
+          "legacy",
+          "per_image"
+        ],
+        "title": "DatasetFormat"
+      },
       "DatasetInfo": {
         "properties": {
           "key": {
@@ -3921,6 +4718,27 @@
               }
             ],
             "title": "Hard Negative Annotation File"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotations_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations Dir"
           },
           "image_count": {
             "anyOf": [

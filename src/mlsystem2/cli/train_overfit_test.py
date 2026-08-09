@@ -14,7 +14,7 @@ from mlsystem2.models.api import create_model
 from mlsystem2.models.contracts import ModelHandle, ModelSpec
 from mlsystem2.settings.api import get_settings, load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSceneSource
 from mlsystem2.train import _trainer
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import TrainConfig, TrainRequest
@@ -333,17 +333,24 @@ def _collect_real_dataset(settings):
             images_dir=settings.dataset.images_dir,
             scenes_file=settings.dataset.scenes_file,
             annotation_file=settings.dataset.annotation_file,
+            annotations_dir=settings.dataset.annotations_dir,
             val_fraction=settings.dataset.val_fraction,
         )
     )
     if dataset_result.dataset is None:
         raise SystemExit(f"dataset_preparing failed: {dataset_result.report.errors}")
 
-    # mode=val отключает train augmentation и shuffle, но использует тот же train VRT.
+    # mode=val отключает train augmentation и shuffle для того же списка TIFF.
     source_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=dataset_result.dataset.train_vrt_xml,
+            scenes=[
+                TileSceneSource(**item.model_dump())
+                for item in dataset_result.dataset.scenes
+            ],
             annotation_file=dataset_result.dataset.annotation_file,
+            hard_negative_annotation_file=(
+                dataset_result.dataset.hard_negative_annotation_file
+            ),
             batch_size=settings.train.batch_size,
             mode="val",
         )
@@ -490,6 +497,7 @@ def _collect_largest_positive_records(settings) -> list[dict[str, object]]:
             images_dir=settings.dataset.images_dir,
             scenes_file=settings.dataset.scenes_file,
             annotation_file=settings.dataset.annotation_file,
+            annotations_dir=settings.dataset.annotations_dir,
             val_fraction=settings.dataset.val_fraction,
         )
     )
@@ -498,8 +506,14 @@ def _collect_largest_positive_records(settings) -> list[dict[str, object]]:
 
     source_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=dataset_result.dataset.train_vrt_xml,
+            scenes=[
+                TileSceneSource(**item.model_dump())
+                for item in dataset_result.dataset.scenes
+            ],
             annotation_file=dataset_result.dataset.annotation_file,
+            hard_negative_annotation_file=(
+                dataset_result.dataset.hard_negative_annotation_file
+            ),
             batch_size=settings.train.batch_size,
             mode="val",
         )

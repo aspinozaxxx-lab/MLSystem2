@@ -23,6 +23,7 @@ from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
     TileDataloaderRequest,
+    TileSceneSource,
     TileSplitRequest,
 )
 
@@ -214,6 +215,8 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         images_dir=dataset.images_dir,
         scenes_file=dataset.scenes_file,
         annotation_file=dataset.annotation_file,
+        hard_negative_annotation_file=dataset.hard_negative_annotation_file,
+        annotations_dir=dataset.annotations_dir,
         val_fraction=dataset.val_fraction,
     )
 
@@ -226,7 +229,9 @@ def _tile_request(
     split: Literal["train", "val"],
 ) -> TileDataloaderRequest:
     kwargs: dict[str, Any] = {
-        "vrt_xml": _vrt_xml(dataset, split),
+        "scenes": [
+            TileSceneSource(**item.model_dump()) for item in dataset.scenes
+        ],
         "batch_size": batch_size,
         "mode": split,
         "tile_split": _tile_split(settings),
@@ -244,14 +249,8 @@ def _tile_request(
         ]
     else:
         kwargs["annotation_file"] = dataset.annotation_file
+        kwargs["hard_negative_annotation_file"] = dataset.hard_negative_annotation_file
     return TileDataloaderRequest(**kwargs)
-
-
-def _vrt_xml(
-    dataset: PreparedDataset,
-    split: Literal["train", "val"],
-) -> str:
-    return dataset.pool_vrt_xml or (dataset.train_vrt_xml if split == "train" else dataset.val_vrt_xml)
 
 
 def _tile_split(settings: SystemSettings) -> TileSplitRequest:

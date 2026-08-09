@@ -26,6 +26,14 @@ class TileClassAnnotation(BaseModel):
     priority: int = 0
 
 
+class TileSceneSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    image_path: str | Path
+    annotation_file: str | Path | None = None
+
+
 class TileSplitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -36,7 +44,7 @@ class TileSplitRequest(BaseModel):
 class TileDataloaderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    vrt_xml: str
+    scenes: list[TileSceneSource] = Field(min_length=1)
     annotation_file: str | Path | None = None
     hard_negative_annotation_file: str | Path | None = None
     class_annotations: list[TileClassAnnotation] = Field(default_factory=list)
@@ -48,12 +56,23 @@ class TileDataloaderRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
-        has_binary = self.annotation_file is not None
+        has_per_image = any(item.annotation_file is not None for item in self.scenes)
+        if has_per_image and not all(item.annotation_file is not None for item in self.scenes):
+            raise ValueError("Все per-image сцены должны содержать annotation_file")
+        has_binary = self.annotation_file is not None or has_per_image
         has_multiclass = bool(self.class_annotations)
         if has_binary == has_multiclass:
             raise ValueError(
                 "TileDataloaderRequest должен задавать либо annotation_file, "
                 "либо class_annotations"
+            )
+        if has_per_image and (
+            self.annotation_file is not None
+            or self.hard_negative_annotation_file is not None
+            or has_multiclass
+        ):
+            raise ValueError(
+                "Per-image TileDataloaderRequest не смешивается с глобальной разметкой"
             )
         if has_multiclass and self.hard_negative_annotation_file is not None:
             raise ValueError(
@@ -71,5 +90,6 @@ __all__ = [
     "TileClassAnnotation",
     "TileDataloaderRequest",
     "TilePreparationError",
+    "TileSceneSource",
     "TileSplitRequest",
 ]

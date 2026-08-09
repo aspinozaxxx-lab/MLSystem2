@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._prepare import prepare_dataset as _prepare_dataset
+from ._per_image import per_image_annotation_name as _per_image_annotation_name
 from ._scene_resolution import resolve_scene_images as _resolve_scene_images
 from .contracts import (
     DatasetPreparationRequest,
@@ -20,4 +21,8 @@ def resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageReso
     return _resolve_scene_images(request)
 
 
-__all__ = ["prepare_dataset", "resolve_scene_images"]
+def per_image_annotation_name(image_path: str) -> str:
+    return _per_image_annotation_name(image_path)
+
+
+__all__ = ["prepare_dataset", "resolve_scene_images", "per_image_annotation_name"]

@@ -130,6 +130,8 @@ def _mlflow_dataset_name(settings: SystemSettings) -> str | None:
     if settings.dataset.classes:
         names = [Path(item.annotation_file).stem for item in settings.dataset.classes]
         return "+".join(names)
+    if settings.dataset.annotations_dir is not None:
+        return Path(settings.dataset.annotations_dir).name
     if settings.dataset.annotation_file is None:
         return None
     return Path(settings.dataset.annotation_file).stem

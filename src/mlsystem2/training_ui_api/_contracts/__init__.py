@@ -8,6 +8,7 @@ _MODULES = (
     "bootstrap",
     "catalog",
     "common",
+    "dataset_editor",
     "exports",
     "jobs",
     "pseudolabel",

@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -66,6 +67,39 @@ def test_list_classes_uses_git_history_for_dataset_update_dates(tmp_path: Path) 
     assert datasets["class_b\\main"].version == initial_datasets["class_b\\main"].version
     assert datasets["class_b\\test"].version != initial_datasets["class_b\\test"].version
     assert datasets["class_b\\test"].version.startswith("git:")
+
+
+def test_list_datasets_uses_atomic_release_metadata_without_git(tmp_path: Path) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    dataset = mlmarkup_root / "Реки" / "test"
+    dataset.mkdir(parents=True)
+    (dataset / "Olskij_SCN06.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}',
+        encoding="utf-8",
+    )
+    release_commit = "a" * 40
+    dataset_commit = "b" * 40
+    (mlmarkup_root / ".mlsystem2-release").write_text(release_commit + "\n", encoding="utf-8")
+    (mlmarkup_root / ".mlsystem2-release-metadata.json").write_text(
+        json.dumps(
+            {
+                "release_commit": release_commit,
+                "datasets": {
+                    "Реки/test": {
+                        "commit": dataset_commit,
+                        "committed_at": "2026-08-09T10:20:30+00:00",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = {item.key: item for item in list_datasets(mlmarkup_root)}["Реки\\test"]
+
+    assert result.version == f"git:{dataset_commit}"
+    assert result.updated_at == datetime(2026, 8, 9, 10, 20, 30, tzinfo=timezone.utc)
 
 
 def test_list_image_folders_returns_direct_raster_folder_counts(tmp_path: Path) -> None:
@@ -146,6 +180,32 @@ def test_list_datasets_splits_positive_and_hard_negative_geojson(tmp_path: Path)
         dataset / "hard_negative.geojson"
     )
     assert datasets["Вырубки\\main"].diagnostics == []
+
+
+def test_list_datasets_detects_per_image_format_and_counts_geojson(
+    tmp_path: Path,
+) -> None:
+    mlmarkup_root = tmp_path / "MLMarkup"
+    dataset = mlmarkup_root / "Реки" / "test"
+    dataset.mkdir(parents=True)
+    (dataset / "Olskij_SCN06.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "Olskij_SCN07.geojson").write_text("{}", encoding="utf-8")
+    images_root = tmp_path / "prepared_images"
+    images = images_root / "kanopus" / "Olskij"
+    images.mkdir(parents=True)
+    (images / "SCN06.tif").touch()
+    (images / "SCN07.tif").touch()
+
+    info = {
+        item.key: item for item in list_datasets(mlmarkup_root, images_root)
+    }["Реки\\test"]
+
+    assert info.format == "per_image"
+    assert info.annotations_dir == str(dataset)
+    assert info.scenes_file is None
+    assert info.annotation_file is None
+    assert info.image_count == 2
+    assert info.diagnostics == []
 
 
 def test_list_datasets_reports_ambiguous_positive_geojson(tmp_path: Path) -> None:

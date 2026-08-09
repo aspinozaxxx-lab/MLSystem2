@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
-from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from mlsystem2.dataset_preparing.api import prepare_dataset, resolve_scene_images
@@ -16,7 +16,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 
 
-def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
+def test_prepare_dataset_returns_independent_scenes(tmp_path: Path) -> None:
     images = tmp_path / "images"
     images.mkdir()
     _write_raster(images / "scene_a.tif", 1, 0)
@@ -38,17 +38,17 @@ def test_prepare_dataset_builds_in_memory_vrt_xml(tmp_path: Path) -> None:
 
     assert result.report.status == "ok"
     assert result.dataset is not None
-    assert result.dataset.pool_vrt_xml is not None
-    assert result.dataset.train_vrt_xml == result.dataset.pool_vrt_xml
-    assert result.dataset.val_vrt_xml == result.dataset.pool_vrt_xml
-    assert result.dataset.train_vrt_xml.startswith("<VRTDataset")
-    assert "<VRTDataset" in result.dataset.val_vrt_xml
-    assert max(
-        result.dataset.train_vrt_xml.count("<SourceFilename"),
-        result.dataset.val_vrt_xml.count("<SourceFilename"),
-    ) >= 2
-    _assert_vrt_reads(result.dataset.train_vrt_xml)
-    _assert_vrt_reads(result.dataset.val_vrt_xml)
+    assert result.dataset.format == "legacy_binary"
+    assert [scene.scene_id for scene in result.dataset.scenes] == [
+        "scene_a",
+        "scene_b",
+        "scene_c",
+    ]
+    assert all(scene.annotation_file is None for scene in result.dataset.scenes)
+    assert not any("vrt" in key for key in type(result.dataset).model_fields)
+    for scene in result.dataset.scenes:
+        with rasterio.open(scene.image_path) as raster:
+            assert raster.count == 1
 
 
 def test_prepare_dataset_report_counts_hard_negative_objects(tmp_path: Path) -> None:
@@ -160,8 +160,8 @@ def test_prepare_dataset_multiclass_merges_scenes_and_assigns_class_ids(
         "class_c",
     ]
     assert [item.priority for item in result.dataset.class_annotations] == [0, 0, 0]
-    _assert_vrt_reads(result.dataset.train_vrt_xml)
-    _assert_vrt_reads(result.dataset.val_vrt_xml)
+    assert result.dataset.format == "legacy_multiclass"
+    assert len(result.dataset.scenes) == 3
 
 
 def test_prepare_dataset_tile_mode_keeps_all_binary_scenes(
@@ -187,10 +187,10 @@ def test_prepare_dataset_tile_mode_keeps_all_binary_scenes(
 
     assert first.report.status == "ok"
     assert first.dataset is not None
-    assert first.dataset.pool_vrt_xml is not None
-    assert first.dataset.train_vrt_xml == first.dataset.pool_vrt_xml
-    assert first.dataset.val_vrt_xml == first.dataset.pool_vrt_xml
     assert _scene_ids(first) == _scene_ids(second)
+    assert [scene.model_dump() for scene in first.dataset.scenes] == [
+        scene.model_dump() for scene in second.dataset.scenes
+    ]
     assert set(_scene_ids(first)) == {"scene_a", "scene_b", "scene_c", "scene_d"}
     assert all(scene.image_path is not None for scene in first.report.scenes)
 
@@ -239,7 +239,7 @@ def test_prepare_dataset_tile_mode_keeps_all_multiclass_scenes(
     assert len(_scene_ids(result)) == 3
 
 
-def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(
+def test_prepare_dataset_keeps_scenes_with_different_resolution_and_grid_independent(
     tmp_path: Path,
 ) -> None:
     images = tmp_path / "images"
@@ -269,11 +269,17 @@ def test_prepare_dataset_builds_vrt_for_different_resolution_and_grid(
 
     assert result.report.status == "ok"
     assert result.dataset is not None
-    assert "<VRTDataset" in result.dataset.train_vrt_xml
-    assert "<VRTDataset" in result.dataset.val_vrt_xml
+    assert [Path(scene.image_path).name for scene in result.dataset.scenes] == [
+        "scene_a.tif",
+        "scene_b.tif",
+    ]
+    with rasterio.open(result.dataset.scenes[0].image_path) as first:
+        assert first.res == (1.0, 1.0)
+    with rasterio.open(result.dataset.scenes[1].image_path) as second:
+        assert second.res == (0.5, 0.5)
 
 
-def test_prepare_dataset_vrt_uses_source_masks_for_overlap(tmp_path: Path) -> None:
+def test_prepare_dataset_does_not_merge_overlapping_scenes(tmp_path: Path) -> None:
     images = tmp_path / "images"
     images.mkdir()
     _write_raster(images / "lower.tif", 10, 0)
@@ -298,10 +304,176 @@ def test_prepare_dataset_vrt_uses_source_masks_for_overlap(tmp_path: Path) -> No
 
     assert result.report.status == "ok"
     assert result.dataset is not None
-    with MemoryFile(result.dataset.train_vrt_xml.encode("utf-8")) as memory_file:
-        with memory_file.open() as dataset:
-            data = dataset.read(1, window=((0, 1), (0, 1)), masked=False)
-    assert int(data[0, 0]) == 10
+    assert [Path(scene.image_path).name for scene in result.dataset.scenes] == [
+        "lower.tif",
+        "upper.tif",
+        "val_scene.tif",
+    ]
+    with rasterio.open(result.dataset.scenes[0].image_path) as dataset:
+        data = dataset.read(1, window=((0, 1), (0, 1)), masked=False)
+        assert int(data[0, 0]) == 10
+
+
+def test_prepare_per_image_dataset_matches_names_and_counts_roles(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    first_folder = images / "Ольский"
+    second_folder = images / "Магадан"
+    first_folder.mkdir(parents=True)
+    second_folder.mkdir(parents=True)
+    first_image = first_folder / "SCN06.tif"
+    second_image = second_folder / "SCN07.tiff"
+    _write_raster(first_image, 1, 0)
+    _write_raster(second_image, 2, 4)
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    _write_per_image_annotation(
+        annotations / "Ольский_SCN06.geojson",
+        [None, "hard_negative", "hard_negative"],
+    )
+    _write_per_image_annotation(
+        annotations / "Магадан_SCN07.geojson",
+        ["positive"],
+    )
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            annotations_dir=str(annotations),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.report.scenes_total == 2
+    assert result.report.scenes_found == 2
+    assert result.report.positive_objects == 2
+    assert result.report.hard_negative_objects == 2
+    assert result.dataset is not None
+    assert result.dataset.format == "per_image_binary"
+    assert [scene.scene_id for scene in result.dataset.scenes] == [
+        "Магадан/SCN07",
+        "Ольский/SCN06",
+    ]
+    assert all(scene.annotation_file is not None for scene in result.dataset.scenes)
+
+
+def test_prepare_per_image_dataset_accepts_empty_feature_collection(tmp_path: Path) -> None:
+    images = tmp_path / "images" / "folder"
+    images.mkdir(parents=True)
+    _write_raster(images / "scene.tif", 1, 0)
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    _write_per_image_annotation(annotations / "folder_scene.geojson", [])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images.parent),
+            annotations_dir=str(annotations),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.report.status == "ok"
+    assert result.report.objects_total == 0
+    assert result.dataset is not None
+
+
+def test_prepare_per_image_dataset_reports_missing_and_ambiguous_tiff(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    first = images / "one" / "same"
+    second = images / "two" / "same"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    _write_raster(first / "scene.tif", 1, 0)
+    _write_raster(second / "scene.tif", 2, 4)
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    _write_per_image_annotation(annotations / "same_scene.geojson", [])
+    _write_per_image_annotation(annotations / "missing_scene.geojson", [])
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            annotations_dir=str(annotations),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.dataset is None
+    assert result.report.status == "error"
+    assert result.report.scenes_total == 2
+    assert result.report.scenes_found == 0
+    assert result.report.missing_files == ["missing_scene.geojson"]
+    assert any("неоднозначно" in error for error in result.report.errors)
+
+
+@pytest.mark.parametrize(
+    ("crs", "geometry_type", "error_fragment"),
+    [
+        ("EPSG:4326", "Polygon", "не совпадает"),
+        ("EPSG:3857", "Point", "Polygon или MultiPolygon"),
+    ],
+)
+def test_prepare_per_image_dataset_validates_crs_and_geometry(
+    tmp_path: Path,
+    crs: str,
+    geometry_type: str,
+    error_fragment: str,
+) -> None:
+    images = tmp_path / "images" / "folder"
+    images.mkdir(parents=True)
+    _write_raster(images / "scene.tif", 1, 0)
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    geometry = (
+        {"type": "Point", "coordinates": [1, 1]}
+        if geometry_type == "Point"
+        else {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+        }
+    )
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": crs}},
+        "features": [
+            {"type": "Feature", "properties": {}, "geometry": geometry}
+        ],
+    }
+    (annotations / "folder_scene.geojson").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images.parent),
+            annotations_dir=str(annotations),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.dataset is None
+    assert any(error_fragment in error for error in result.report.errors)
+
+
+def test_prepare_per_image_dataset_rejects_empty_directory(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    annotations = tmp_path / "annotations"
+    images.mkdir()
+    annotations.mkdir()
+
+    result = prepare_dataset(
+        DatasetPreparationRequest(
+            images_dir=str(images),
+            annotations_dir=str(annotations),
+            val_fraction=0.2,
+        )
+    )
+
+    assert result.dataset is None
+    assert any("ни одной сопоставленной сцены" in error for error in result.report.errors)
 
 
 def test_prepare_dataset_expands_folder_scene_entry(tmp_path: Path) -> None:
@@ -693,11 +865,28 @@ def _write_geometry_annotation(path: Path, coordinates: list[list[list[float]]])
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _assert_vrt_reads(vrt_xml: str) -> None:
-    with MemoryFile(vrt_xml.encode("utf-8")) as memory_file:
-        with memory_file.open() as dataset:
-            data = dataset.read(1, window=((0, 1), (0, 1)))
-    assert data.shape == (1, 1)
+def _write_per_image_annotation(path: Path, roles: list[str | None]) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "id": index,
+                "properties": (
+                    {} if role is None else {"_mlsystem2_role": role}
+                ),
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5], [0, 0]]
+                    ],
+                },
+            }
+            for index, role in enumerate(roles)
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _scene_ids(result) -> list[str]:

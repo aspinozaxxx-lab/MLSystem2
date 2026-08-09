@@ -1,4 +1,4 @@
-"""Одноразовая подготовка GeoTIFF для VRT-мозаик."""
+"""Одноразовая подготовка локальных GeoTIFF/COG для MLSystem2."""
 
 from __future__ import annotations
 
@@ -23,12 +23,12 @@ from rasterio.warp import calculate_default_transform, reproject
 
 RAW_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestation")
 PREPARED_IMAGES_DIR = Path(r"D:\Projects\ImagesDeforestationPrepared3857")
-REPORT_PATH = Path(r"D:\Projects\test\prepare_images_for_vrt_report.json")
+REPORT_PATH = Path(r"D:\Projects\test\prepare_images_report.json")
 TARGET_CRS = "EPSG:3857"
 WORKERS = 8
 SERVER_SOURCE_URI = "s3://mlsystems/images/kanopus/"
 SERVER_PREPARED_IMAGES_DIR = Path("/data/mlsystem2/prepared_images/kanopus")
-SERVER_REPORT_PATH = Path("/data/mlsystem2/prepared_images/report/prepare_images_for_vrt_report.json")
+SERVER_REPORT_PATH = Path("/data/mlsystem2/prepared_images/report/prepare_images_report.json")
 SERVER_WORKERS = 32
 
 
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     config = _config_for_mode(args.mode)
     if config.mode == "server":
-        report = prepare_images_for_vrt_from_s3(
+        report = prepare_images_from_s3(
             config.source_uri,
             config.prepared_images_dir,
             config.report_path,
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if config.raw_images_dir is None:
             raise ValueError("Для local режима нужен локальный путь к исходным снимкам")
-        report = prepare_images_for_vrt(
+        report = prepare_images(
             config.raw_images_dir,
             config.prepared_images_dir,
             config.report_path,
@@ -95,7 +95,7 @@ def _config_for_mode(mode: str) -> RunConfig:
     raise ValueError(f"Неизвестный режим подготовки снимков: {mode}")
 
 
-def prepare_images_for_vrt(
+def prepare_images(
     raw_images_dir: Path,
     prepared_images_dir: Path,
     report_path: Path,
@@ -134,7 +134,7 @@ def prepare_images_for_vrt(
     return report
 
 
-def prepare_images_for_vrt_from_s3(
+def prepare_images_from_s3(
     source_uri: str,
     prepared_images_dir: Path,
     report_path: Path,

@@ -1,4 +1,4 @@
-"""Внутренний coarse-index фактического valid-data footprint VRT."""
+"""Внутренний coarse-index фактического valid-data footprint TIFF."""
 
 from __future__ import annotations
 

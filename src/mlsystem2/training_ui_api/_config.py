@@ -77,6 +77,9 @@ class TrainingUIAPIConfig:
     pseudolabel_tile_read_workers: int = 4
     pseudolabel_prefetch_batches: int = 2
     pseudolabel_external_http_workers: int = 8
+    mlmarkup_editor_root: Path = Path("/data/mlsystem2/mlmarkup-editor")
+    mlmarkup_release_marker: Path = Path("/data/MLMarkup/.mlsystem2-release")
+    mlmarkup_editor_branch: str = "main"
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -177,6 +180,22 @@ def get_config() -> TrainingUIAPIConfig:
         pseudolabel_external_http_workers=max(
             1,
             _int_env("MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS", 8),
+        ),
+        mlmarkup_editor_root=Path(
+            os.getenv(
+                "MLSYSTEM2_MLMARKUP_EDITOR_ROOT",
+                "/data/mlsystem2/mlmarkup-editor",
+            )
+        ),
+        mlmarkup_release_marker=Path(
+            os.getenv(
+                "MLSYSTEM2_MLMARKUP_RELEASE_MARKER",
+                "/data/MLMarkup/.mlsystem2-release",
+            )
+        ),
+        mlmarkup_editor_branch=os.getenv(
+            "MLSYSTEM2_MLMARKUP_EDITOR_BRANCH",
+            "main",
         ),
     )
 

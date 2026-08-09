@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import json
-import re
 import sys
 import builtins
 import inspect
@@ -11,7 +10,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
-from rasterio.shutil import copy as rio_copy
 from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
@@ -38,6 +36,7 @@ from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
     TileDataloaderRequest,
     TilePreparationError,
+    TileSceneSource,
     TileSplitRequest,
 )
 
@@ -104,7 +103,7 @@ def test_create_tile_dataloader_reports_missing_torch(monkeypatch: pytest.Monkey
     with pytest.raises(TilePreparationError, match="PyTorch"):
         create_tile_dataloader(
             TileDataloaderRequest(
-                vrt_xml="",
+                scenes=[TileSceneSource(scene_id="scene", image_path="missing.tif")],
                 annotation_file="annotations.geojson",
                 batch_size=1,
                 mode="val",
@@ -117,14 +116,13 @@ def test_create_tile_dataloader_returns_image_mask_meta_tuple(tmp_path: Path) ->
     raster_path = tmp_path / "image.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -161,14 +159,13 @@ def test_binary_val_loader_returns_individual_object_masks(tmp_path: Path) -> No
     raster_path = tmp_path / "image.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -189,7 +186,7 @@ def test_binary_val_loader_returns_individual_object_masks(tmp_path: Path) -> No
 def test_object_instance_masks_are_only_allowed_for_binary_validation() -> None:
     with pytest.raises(ValueError, match="binary val loader"):
         TileDataloaderRequest(
-            vrt_xml="vrt",
+            scenes=[TileSceneSource(scene_id="scene", image_path="missing.tif")],
             annotation_file="annotations.geojson",
             batch_size=1,
             mode="train",
@@ -207,7 +204,6 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
         ]
     )
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     load_settings(
@@ -224,7 +220,7 @@ def test_create_tile_dataloader_keeps_raw_integer_values_and_chw_layout(tmp_path
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="train",
@@ -259,7 +255,6 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
     raster_path = tmp_path / "raw_aug.tif"
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(
@@ -277,7 +272,7 @@ def test_train_photometric_augmentation_keeps_raw_value_scale(tmp_path: Path) ->
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="train",
@@ -445,7 +440,6 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
     raster_path = tmp_path / "multiclass.tif"
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     class_a = tmp_path / "class_a.geojson"
     class_b = tmp_path / "class_b.geojson"
     _write_annotation_polygon(class_a, [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])
@@ -464,7 +458,7 @@ def test_create_tile_dataloader_returns_multiclass_long_mask(tmp_path: Path) -> 
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             class_annotations=[
                 TileClassAnnotation(
                     class_id=1,
@@ -503,7 +497,6 @@ def test_create_tile_dataloader_returns_multiclass_supervision_mask_with_hard_ne
     raster_path = tmp_path / "multiclass_hard.tif"
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     class_a = tmp_path / "class_a.geojson"
     hard_negative = tmp_path / "hard_negative.geojson"
     _write_annotation_polygon(class_a, [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]])
@@ -522,7 +515,7 @@ def test_create_tile_dataloader_returns_multiclass_supervision_mask_with_hard_ne
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             class_annotations=[
                 TileClassAnnotation(
                     class_id=1,
@@ -550,7 +543,6 @@ def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path
     raster_path = tmp_path / "overlap.tif"
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     class_a = tmp_path / "overlap_a.geojson"
     class_b = tmp_path / "overlap_b.geojson"
     polygon = [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]]
@@ -570,7 +562,7 @@ def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             class_annotations=[
                 TileClassAnnotation(
                     class_id=1,
@@ -604,13 +596,12 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     raster_path = tmp_path / "edge.tif"
     data = np.arange(25, dtype=np.int16).reshape(1, 5, 5) + 1000
     _write_raster_data(raster_path, data, nodata=-1)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=4, input_channels=1))
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=4,
         stride=4,
@@ -640,18 +631,105 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     dataset.close()
 
 
+def test_tile_dataset_keeps_overlapping_tiffs_as_independent_scenes(
+    tmp_path: Path,
+) -> None:
+    first_raster = tmp_path / "first.tif"
+    second_raster = tmp_path / "second.tif"
+    _write_raster_data(
+        first_raster,
+        np.full((1, 4, 4), 11, dtype=np.uint16),
+        nodata=0,
+    )
+    _write_raster_data(
+        second_raster,
+        np.full((1, 4, 4), 22, dtype=np.uint16),
+        nodata=0,
+    )
+    first_annotation = tmp_path / "first.geojson"
+    second_annotation = tmp_path / "second.geojson"
+    _write_empty_annotation(first_annotation)
+    _write_empty_annotation(second_annotation)
+
+    dataset = TileDataset(
+        scenes=[
+            TileSceneSource(
+                scene_id="first",
+                image_path=first_raster,
+                annotation_file=first_annotation,
+            ),
+            TileSceneSource(
+                scene_id="second",
+                image_path=second_raster,
+                annotation_file=second_annotation,
+            ),
+        ],
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    assert _window_keys(dataset) == [("first", 0, 0), ("second", 0, 0)]
+    first_image, _first_mask, _first_meta = dataset[0]
+    second_image, _second_mask, _second_meta = dataset[1]
+    assert np.all(first_image == 11)
+    assert np.all(second_image == 22)
+    dataset.close()
+
+
+def test_per_image_annotation_builds_positive_and_hard_negative_masks(
+    tmp_path: Path,
+) -> None:
+    raster_path = tmp_path / "scene.tif"
+    _write_raster_data(
+        raster_path,
+        np.full((1, 4, 8), 1000, dtype=np.uint16),
+        nodata=0,
+    )
+    annotation_file = tmp_path / "scene.geojson"
+    _write_per_image_roles_annotation(annotation_file)
+
+    dataset = TileDataset(
+        scenes=[
+            TileSceneSource(
+                scene_id="scene",
+                image_path=raster_path,
+                annotation_file=annotation_file,
+            )
+        ],
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    assert dataset.tile_categories == [
+        TILE_CATEGORY_POSITIVE,
+        TILE_CATEGORY_HARD_NEGATIVE,
+    ]
+    _positive_image, positive_mask, positive_meta = dataset[0]
+    _negative_image, hard_negative_mask, hard_negative_meta = dataset[1]
+    assert positive_meta["positive"] is True
+    assert np.any(positive_mask == 1)
+    assert hard_negative_meta["hard_negative"] is True
+    assert np.any(hard_negative_mask == HARD_NEGATIVE_LABEL)
+    dataset.close()
+
+
 def test_create_tile_dataloader_filters_fully_nodata_tiles(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "nodata.tif"
     data = np.zeros((1, 4, 4), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=4,
         stride=4,
@@ -675,13 +753,12 @@ def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
     data = np.zeros((1, 64, 128), dtype=np.uint16)
     data[:, :, 64:] = 1000
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=64, stride=64, batch_size=2, input_channels=1))
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=64,
         stride=64,
@@ -710,7 +787,7 @@ def test_valid_footprint_filter_removes_zero_window_and_keeps_nonzero_window(
     dataset.close()
 
 
-def test_large_vrt_valid_filter_skips_full_footprint_read(
+def test_large_tiff_valid_filter_skips_full_footprint_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -719,7 +796,6 @@ def test_large_vrt_valid_filter_skips_full_footprint_read(
     data = np.zeros((1, 64, 128), dtype=np.uint16)
     data[:, :, 64:] = 1000
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=64, stride=64, batch_size=2, input_channels=1))
@@ -734,7 +810,7 @@ def test_large_vrt_valid_filter_skips_full_footprint_read(
     monkeypatch.setattr(valid_footprint, "_read_valid_footprint", fail_full_footprint)
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=64,
         stride=64,
@@ -759,12 +835,11 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
     raster_path = tmp_path / "lazy.tif"
     data = np.ones((1, 8, 8), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     read_calls = 0
 
-    def fake_read_image_raw(self, dataset, window):
+    def fake_read_image_raw(self, dataset, window, nodata):
         nonlocal read_calls
         read_calls += 1
         return np.ones((1, 4, 4), dtype=np.uint16)
@@ -772,7 +847,7 @@ def test_tile_dataset_does_not_read_windows_during_initialization(
     monkeypatch.setattr(TileDataset, "_read_image_raw", fake_read_image_raw)
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=4,
         stride=4,
@@ -802,7 +877,6 @@ def test_create_tile_dataloader_is_fast_on_synthetic_data(tmp_path: Path) -> Non
     raster_path = tmp_path / "fast.tif"
     data = np.ones((1, 16, 16), dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
@@ -810,7 +884,7 @@ def test_create_tile_dataloader_is_fast_on_synthetic_data(tmp_path: Path) -> Non
     started = perf_counter()
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="val",
@@ -830,13 +904,12 @@ def test_train_loader_is_stable_with_same_seed_when_augmentation_is_disabled(
     torch = pytest.importorskip("torch")
     raster_path = tmp_path / "image.tif"
     _write_raster(raster_path)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2))
 
     request = TileDataloaderRequest(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         batch_size=2,
         mode="train",
@@ -860,14 +933,13 @@ def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "image.tif"
     _write_raster(raster_path)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, num_workers=1))
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -887,7 +959,6 @@ def test_tile_category_precedence_keeps_hard_negative_pixels_in_supervision_mask
     raster_path = tmp_path / "category.tif"
     data = np.full((1, 4, 12), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     hard_negative_file = tmp_path / "hard_negative.geojson"
     _write_annotation_polygon(
@@ -900,7 +971,7 @@ def test_tile_category_precedence_keeps_hard_negative_pixels_in_supervision_mask
     )
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         hard_negative_annotation_file=hard_negative_file,
         tile_size=4,
@@ -937,7 +1008,6 @@ def test_train_augmentation_applies_to_positive_and_hard_negative_tiles(tmp_path
     raster_path = tmp_path / "smart_aug.tif"
     data = np.full((1, 4, 12), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     hard_negative_file = tmp_path / "hard_negative.geojson"
     _write_annotation_polygon(
@@ -950,7 +1020,7 @@ def test_train_augmentation_applies_to_positive_and_hard_negative_tiles(tmp_path
     )
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         hard_negative_annotation_file=hard_negative_file,
         tile_size=4,
@@ -1035,7 +1105,6 @@ def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) ->
     raster_path = tmp_path / "smart_sampler.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(
@@ -1050,7 +1119,7 @@ def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) ->
 
     train_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="train",
@@ -1058,7 +1127,7 @@ def test_weighted_sampler_is_used_for_train_and_val_is_cached(tmp_path: Path) ->
     )
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="val",
@@ -1085,7 +1154,6 @@ def test_val_cached_loader_returns_same_batches_on_each_iteration(tmp_path: Path
     raster_path = tmp_path / "cached_val_stable.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(
@@ -1101,7 +1169,7 @@ def test_val_cached_loader_returns_same_batches_on_each_iteration(tmp_path: Path
 
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -1141,7 +1209,6 @@ def test_val_loader_applies_batch_limit_before_building_cache(
     raster_path = tmp_path / "limited_val_cache.tif"
     data = np.full((1, 4, 52), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_polygon(
         annotation_file,
@@ -1152,7 +1219,7 @@ def test_val_loader_applies_batch_limit_before_building_cache(
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -1180,7 +1247,6 @@ def test_val_loader_rejects_limit_smaller_than_balanced_pair(tmp_path: Path) -> 
     raster_path = tmp_path / "invalid_val_limit.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
@@ -1188,7 +1254,7 @@ def test_val_loader_rejects_limit_smaller_than_balanced_pair(tmp_path: Path) -> 
     with pytest.raises(TilePreparationError, match="хотя бы один positive"):
         create_tile_dataloader(
             TileDataloaderRequest(
-                vrt_xml=vrt_xml,
+                scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
                 annotation_file=annotation_file,
                 batch_size=1,
                 mode="val",
@@ -1205,7 +1271,6 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
     raster_path = tmp_path / "cached_val_reads.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
@@ -1215,22 +1280,22 @@ def test_val_cached_loader_reads_tiles_only_during_cache_build(
     original_read = TileDataset._read_image_raw
     original_mask = TileDataset._read_supervision_mask
 
-    def counted_read(self, dataset, window):
+    def counted_read(self, dataset, window, nodata):
         nonlocal read_calls
         read_calls += 1
-        return original_read(self, dataset, window)
+        return original_read(self, dataset, window, nodata)
 
-    def counted_mask(self, dataset, window, nodata_pixels):
+    def counted_mask(self, scene_index, dataset, window, nodata_pixels):
         nonlocal mask_calls
         mask_calls += 1
-        return original_mask(self, dataset, window, nodata_pixels)
+        return original_mask(self, scene_index, dataset, window, nodata_pixels)
 
     monkeypatch.setattr(TileDataset, "_read_image_raw", counted_read)
     monkeypatch.setattr(TileDataset, "_read_supervision_mask", counted_mask)
 
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="val",
@@ -1258,7 +1323,6 @@ def test_val_loader_falls_back_to_deterministic_lazy_reads(
     raster_path = tmp_path / "lazy_val_reads.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, input_channels=1))
@@ -1271,16 +1335,16 @@ def test_val_loader_falls_back_to_deterministic_lazy_reads(
     read_calls = 0
     original_read = TileDataset._read_image_raw
 
-    def counted_read(self, dataset, window):
+    def counted_read(self, dataset, window, nodata):
         nonlocal read_calls
         read_calls += 1
-        return original_read(self, dataset, window)
+        return original_read(self, dataset, window, nodata)
 
     monkeypatch.setattr(TileDataset, "_read_image_raw", counted_read)
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -1358,7 +1422,6 @@ def test_val_cached_loader_uses_min_group_without_replacement(tmp_path: Path) ->
     raster_path = tmp_path / "cached_val_imbalance.tif"
     data = np.full((1, 4, 52), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_polygon(
         annotation_file,
@@ -1368,7 +1431,7 @@ def test_val_cached_loader_uses_min_group_without_replacement(tmp_path: Path) ->
 
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
             mode="val",
@@ -1394,7 +1457,6 @@ def test_val_cached_loader_requires_positive_and_negative_tiles(tmp_path: Path) 
     raster_path = tmp_path / "cached_val_empty_positive.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "empty.geojson"
     _write_empty_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
@@ -1402,7 +1464,7 @@ def test_val_cached_loader_requires_positive_and_negative_tiles(tmp_path: Path) 
     with pytest.raises(TilePreparationError, match="positive=0"):
         create_tile_dataloader(
             TileDataloaderRequest(
-                vrt_xml=vrt_xml,
+                scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
                 annotation_file=annotation_file,
                 batch_size=1,
                 mode="val",
@@ -1415,7 +1477,6 @@ def test_tile_split_divides_common_pool_without_overlap(tmp_path: Path) -> None:
     raster_path = tmp_path / "tile_split.tif"
     data = np.full((1, 4, 16), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_polygon(
         annotation_file,
@@ -1426,7 +1487,7 @@ def test_tile_split_divides_common_pool_without_overlap(tmp_path: Path) -> None:
 
     train_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="train",
@@ -1435,7 +1496,7 @@ def test_tile_split_divides_common_pool_without_overlap(tmp_path: Path) -> None:
     )
     val_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=1,
             mode="val",
@@ -1464,7 +1525,6 @@ def test_tile_split_is_stable_with_same_seed(tmp_path: Path) -> None:
     raster_path = tmp_path / "tile_split_stable.tif"
     data = np.full((1, 4, 16), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_polygon(
         annotation_file,
@@ -1472,7 +1532,7 @@ def test_tile_split_is_stable_with_same_seed(tmp_path: Path) -> None:
     )
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
     request = TileDataloaderRequest(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         batch_size=1,
         mode="val",
@@ -1487,18 +1547,50 @@ def test_tile_split_is_stable_with_same_seed(tmp_path: Path) -> None:
     second_loader.dataset.close()
 
 
+def test_tile_split_is_stable_when_scene_order_changes(tmp_path: Path) -> None:
+    first_raster = tmp_path / "first.tif"
+    second_raster = tmp_path / "second.tif"
+    data = np.full((1, 4, 8), 1000, dtype=np.uint16)
+    _write_raster_data(first_raster, data, nodata=0)
+    _write_raster_data(second_raster, data, nodata=0)
+    annotation_file = tmp_path / "empty.geojson"
+    _write_empty_annotation(annotation_file)
+    sources = [
+        TileSceneSource(scene_id="first", image_path=first_raster),
+        TileSceneSource(scene_id="second", image_path=second_raster),
+    ]
+
+    def build(order: list[TileSceneSource]) -> TileDataset:
+        return TileDataset(
+            scenes=order,
+            annotation_file=annotation_file,
+            tile_size=4,
+            stride=4,
+            mode="val",
+            seed=42,
+            augmentation_level=0,
+            tile_split=TileSplitRequest(val_fraction=0.5, seed=11),
+        )
+
+    first = build(sources)
+    second = build(list(reversed(sources)))
+
+    assert set(_window_keys(first)) == set(_window_keys(second))
+    first.close()
+    second.close()
+
+
 def test_tile_split_reports_warning_for_tiny_positive_pool(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "tile_split_tiny.tif"
     data = np.full((1, 4, 8), 1000, dtype=np.uint16)
     _write_raster_data(raster_path, data, nodata=0)
-    vrt_xml = _write_vrt_xml(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation_height4(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=1, input_channels=1))
 
     dataset = TileDataset(
-        vrt_xml=vrt_xml,
+        scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
         annotation_file=annotation_file,
         tile_size=4,
         stride=4,
@@ -1725,8 +1817,11 @@ def test_class_balance_uses_effective_positive_budget_with_hard_negative_deficit
     assert dataset.background_factor_used == pytest.approx(0.2)
 
 
-def _window_keys(dataset) -> list[tuple[int, int]]:
-    return [(window.x, window.y) for window in dataset._windows]
+def _window_keys(dataset) -> list[tuple[str, int, int]]:
+    return [
+        (window.scene_id, window.window.x, window.window.y)
+        for window in dataset._windows
+    ]
 
 
 def _write_raster(path: Path) -> None:
@@ -1751,18 +1846,6 @@ def _write_raster_data(path: Path, data: np.ndarray, *, nodata: int | float | No
         nodata=nodata,
     ) as dataset:
         dataset.write(data)
-
-
-def _write_vrt_xml(raster_path: Path) -> str:
-    vrt_path = raster_path.with_suffix(".vrt")
-    rio_copy(raster_path.as_posix(), vrt_path.as_posix(), driver="VRT")
-    vrt_xml = vrt_path.read_text(encoding="utf-8")
-    source = re.escape(raster_path.name)
-    return re.sub(
-        rf'<SourceFilename relativeToVRT="1">{source}</SourceFilename>',
-        f'<SourceFilename relativeToVRT="0">{raster_path.as_posix()}</SourceFilename>',
-        vrt_xml,
-    )
 
 
 def _write_annotation(path: Path) -> None:
@@ -1843,6 +1926,30 @@ def _write_empty_annotation(path: Path) -> None:
         json.dumps({"type": "FeatureCollection", "features": []}),
         encoding="utf-8",
     )
+
+
+def _write_per_image_roles_annotation(path: Path) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"_mlsystem2_role": "positive"},
+                "geometry": _polygon_geometry(
+                    [[0.5, 2.5], [1.5, 2.5], [1.5, 3.5], [0.5, 3.5], [0.5, 2.5]]
+                ),
+            },
+            {
+                "type": "Feature",
+                "properties": {"_mlsystem2_role": "hard_negative"},
+                "geometry": _polygon_geometry(
+                    [[4.5, 2.5], [5.5, 2.5], [5.5, 3.5], [4.5, 3.5], [4.5, 2.5]]
+                ),
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _write_config(

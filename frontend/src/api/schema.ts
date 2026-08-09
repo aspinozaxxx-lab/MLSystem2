@@ -328,6 +328,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Datasets */
+        get: operations["datasets_api_v1_dataset_editor_datasets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scenes */
+        get: operations["scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_get"];
+        put?: never;
+        /** Add Scenes */
+        post: operations["add_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scene */
+        get: operations["scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__get"];
+        /** Save Scene */
+        put: operations["save_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__put"];
+        post?: never;
+        /** Delete Scene */
+        delete: operations["delete_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rasters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rasters */
+        get: operations["rasters_api_v1_dataset_editor_datasets__dataset_key__rasters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/publication/{commit}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Publication */
+        get: operations["publication_api_v1_dataset_editor_publication__commit__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Raster */
+        get: operations["raster_api_v1_dataset_editor_datasets__dataset_key__raster__image_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scene-list-export": {
         parameters: {
             query?: never;
@@ -1483,6 +1588,143 @@ export interface components {
             quality_metric?: components["schemas"]["QualityMetric"] | null;
             imagery_type?: components["schemas"]["ImageryType"] | null;
         };
+        /** DatasetEditorAddScenesRequest */
+        DatasetEditorAddScenesRequest: {
+            /** Image Paths */
+            image_paths?: string[];
+            /** Folder Path */
+            folder_path?: string | null;
+        };
+        /** DatasetEditorDatasetInfo */
+        DatasetEditorDatasetInfo: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /**
+             * Imagery Type
+             * @enum {string}
+             */
+            imagery_type: "kanopus" | "ortho";
+            /** Scene Count */
+            scene_count: number;
+        };
+        /** DatasetEditorDatasetListResponse */
+        DatasetEditorDatasetListResponse: {
+            /** Datasets */
+            datasets: components["schemas"]["DatasetEditorDatasetInfo"][];
+        };
+        /** DatasetEditorDeleteSceneRequest */
+        DatasetEditorDeleteSceneRequest: {
+            /** Revision */
+            revision: string;
+        };
+        /** DatasetEditorMutationResult */
+        DatasetEditorMutationResult: {
+            /** Commit */
+            commit: string;
+            /**
+             * Publication Status
+             * @enum {string}
+             */
+            publication_status: "publishing" | "published";
+            /** Scenes */
+            scenes?: components["schemas"]["DatasetEditorSceneInfo"][];
+        };
+        /** DatasetEditorPublicationInfo */
+        DatasetEditorPublicationInfo: {
+            /** Commit */
+            commit: string;
+            /** Live Commit */
+            live_commit?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "publishing" | "published";
+        };
+        /** DatasetEditorRasterBrowserResponse */
+        DatasetEditorRasterBrowserResponse: {
+            /** Folder */
+            folder: string;
+            /** Parent */
+            parent?: string | null;
+            /** Folders */
+            folders: components["schemas"]["DatasetEditorRasterFolderInfo"][];
+            /** Rasters */
+            rasters: components["schemas"]["DatasetEditorRasterInfo"][];
+        };
+        /** DatasetEditorRasterFolderInfo */
+        DatasetEditorRasterFolderInfo: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
+        /** DatasetEditorRasterInfo */
+        DatasetEditorRasterInfo: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Annotation Name */
+            annotation_name: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** DatasetEditorSaveSceneRequest */
+        DatasetEditorSaveSceneRequest: {
+            /** Revision */
+            revision: string;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
+        /** DatasetEditorSceneDetail */
+        DatasetEditorSceneDetail: {
+            scene: components["schemas"]["DatasetEditorSceneInfo"];
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
+        /** DatasetEditorSceneInfo */
+        DatasetEditorSceneInfo: {
+            /** Scene Id */
+            scene_id: string;
+            /** Annotation Name */
+            annotation_name: string;
+            /** Image Name */
+            image_name: string;
+            /** Raster Url */
+            raster_url: string;
+            /** Total Count */
+            total_count: number;
+            /** Positive Count */
+            positive_count: number;
+            /** Hard Negative Count */
+            hard_negative_count: number;
+            /** Revision */
+            revision: string;
+        };
+        /** DatasetEditorSceneListResponse */
+        DatasetEditorSceneListResponse: {
+            dataset: components["schemas"]["DatasetEditorDatasetInfo"];
+            /** Scenes */
+            scenes: components["schemas"]["DatasetEditorSceneInfo"][];
+        };
+        /**
+         * DatasetFormat
+         * @enum {string}
+         */
+        DatasetFormat: "legacy" | "per_image";
         /** DatasetInfo */
         DatasetInfo: {
             /** Key */
@@ -1508,6 +1750,9 @@ export interface components {
             annotation_file?: string | null;
             /** Hard Negative Annotation File */
             hard_negative_annotation_file?: string | null;
+            format?: components["schemas"]["DatasetFormat"] | null;
+            /** Annotations Dir */
+            annotations_dir?: string | null;
             /** Image Count */
             image_count?: number | null;
             /** Version */
@@ -3528,6 +3773,294 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomDatasetInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    datasets_api_v1_dataset_editor_datasets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorDatasetListResponse"];
+                };
+            };
+        };
+    };
+    scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorSceneListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_scenes_api_v1_dataset_editor_datasets__dataset_key__scenes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorAddScenesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorSceneDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorSaveSceneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scene_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorDeleteSceneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rasters_api_v1_dataset_editor_datasets__dataset_key__rasters_get: {
+        parameters: {
+            query?: {
+                folder?: string;
+            };
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorRasterBrowserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publication_api_v1_dataset_editor_publication__commit__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commit: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorPublicationInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    raster_api_v1_dataset_editor_datasets__dataset_key__raster__image_path__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                Range?: string | null;
+            };
+            path: {
+                dataset_key: string;
+                image_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

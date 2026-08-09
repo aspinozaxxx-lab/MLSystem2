@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -52,7 +51,7 @@ def main() -> int:
 def _run_test(input_raster: Path, result_dir: Path) -> dict[str, Any]:
     from mlsystem2.settings.api import load_settings
     from mlsystem2.tile_preparation.api import create_tile_dataloader
-    from mlsystem2.tile_preparation.contracts import TileDataloaderRequest
+    from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSceneSource
 
     tile_size = _env_positive_int("MLSYSTEM_GEOALERT_TENSOR_TEST_TILE_SIZE", 512)
     stride = _env_positive_int("MLSYSTEM_GEOALERT_TENSOR_TEST_STRIDE", tile_size)
@@ -60,10 +59,6 @@ def _run_test(input_raster: Path, result_dir: Path) -> dict[str, Any]:
 
     empty_geojson_path = result_dir / "empty.geojson"
     _write_empty_geojson(empty_geojson_path)
-
-    vrt_path = result_dir / "input.vrt"
-    _build_vrt(input_raster, vrt_path)
-    vrt_xml = vrt_path.read_text(encoding="utf-8")
 
     with rasterio.open(input_raster) as dataset:
         raster_info = {
@@ -87,7 +82,12 @@ def _run_test(input_raster: Path, result_dir: Path) -> dict[str, Any]:
     load_settings(settings_path)
     loader = create_tile_dataloader(
         TileDataloaderRequest(
-            vrt_xml=vrt_xml,
+            scenes=[
+                TileSceneSource(
+                    scene_id=input_raster.stem,
+                    image_path=input_raster,
+                )
+            ],
             annotation_file=empty_geojson_path,
             batch_size=1,
             mode="val",
@@ -314,45 +314,6 @@ mlflow:
   experiment_name: MLSystem-Geolert-tensor-test
 """
     path.write_text(settings_text.lstrip(), encoding="utf-8")
-
-
-def _build_vrt(input_raster: Path, vrt_path: Path) -> None:
-    gdalbuildvrt = _find_gdalbuildvrt()
-    if gdalbuildvrt is None:
-        raise RuntimeError(
-            "gdalbuildvrt не найден. Установите GDAL/QGIS или добавьте gdalbuildvrt в PATH."
-        )
-    command = [
-        gdalbuildvrt,
-        "-overwrite",
-        vrt_path.as_posix(),
-        input_raster.resolve().as_posix(),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        message = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"gdalbuildvrt завершился с ошибкой: {message}")
-    if not vrt_path.is_file():
-        raise RuntimeError(f"gdalbuildvrt не создал VRT: {vrt_path}")
-
-
-def _find_gdalbuildvrt() -> str | None:
-    executable = shutil.which("gdalbuildvrt")
-    if executable is not None:
-        return executable
-
-    candidates = [
-        Path(r"C:\Program Files\QGIS 3.44.10\bin\gdalbuildvrt.exe"),
-        Path(r"C:\Program Files\QGIS 3.42.0\bin\gdalbuildvrt.exe"),
-        Path(r"C:\Program Files\QGIS 3.40.0\bin\gdalbuildvrt.exe"),
-    ]
-    candidates.extend(
-        sorted(Path(r"C:\Program Files").glob("QGIS */bin/gdalbuildvrt.exe"))
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return None
 
 
 def _find_input_raster(input_dir: Path) -> Path | None:

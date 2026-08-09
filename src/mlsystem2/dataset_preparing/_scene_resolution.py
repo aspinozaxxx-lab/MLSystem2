@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ._per_image import resolve_per_image_annotations
 from ._prepare import _resolve_ambiguous_scenes
 from ._scene_matching import (
     expand_scene_entries,
@@ -22,6 +23,10 @@ def resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageReso
     """Найти точные TIFF для строк списка сцен с optional разрешением по разметке."""
 
     images_root = Path(request.images_dir).resolve()
+    if request.annotations_dir is not None:
+        return _resolve_per_image_scene_images(images_root, Path(request.annotations_dir))
+    if request.scenes_file is None:
+        raise AssertionError("scenes_file должен быть провалидирован")
     scene_entries = read_scene_list(Path(request.scenes_file))
     image_index = index_image_files(images_root)
     annotation_files = [Path(value) for value in request.annotation_files]
@@ -74,6 +79,38 @@ def resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageReso
         images=images,
         missing_scenes=missing_scenes,
         ambiguous_scenes=ambiguous_scenes,
+    )
+
+
+def _resolve_per_image_scene_images(
+    images_root: Path,
+    annotations_dir: Path,
+) -> SceneImageResolution:
+    resolution = resolve_per_image_annotations(images_root, annotations_dir)
+    return SceneImageResolution(
+        input_scene_count=(
+            len(resolution.matches)
+            + len(resolution.missing_annotations)
+            + len(resolution.ambiguous_annotations)
+            + len(resolution.annotation_collisions)
+        ),
+        images=[
+            ResolvedSceneImage(
+                scene_id=item.scene_id,
+                image_path=item.image_path.as_posix(),
+                annotation_file=item.annotation_file.as_posix(),
+                request_scenes=[item.annotation_file.name],
+            )
+            for item in resolution.matches
+        ],
+        missing_scenes=list(resolution.missing_annotations),
+        ambiguous_scenes={
+            name: [path.as_posix() for path in paths]
+            for name, paths in {
+                **resolution.ambiguous_annotations,
+                **resolution.annotation_collisions,
+            }.items()
+        },
     )
 
 

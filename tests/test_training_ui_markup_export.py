@@ -200,6 +200,65 @@ def test_markup_export_builds_black_free_georeferenced_archive(
             assert dataset.height == 16
 
 
+def test_markup_export_uses_only_positive_features_from_per_image_dataset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    dataset_root = config.mlmarkup_root / "Реки" / "test"
+    dataset_root.mkdir(parents=True)
+    first_image = config.images_root / "kanopus" / "region_a" / "scene_a.tif"
+    second_image = config.images_root / "kanopus" / "region_b" / "scene_b.tif"
+    _write_cog(
+        first_image,
+        left=0,
+        top=64,
+        valid_slice=(slice(8, 56), slice(8, 56)),
+    )
+    _write_cog(
+        second_image,
+        left=100,
+        top=64,
+        valid_slice=(slice(8, 56), slice(8, 56)),
+    )
+    _write_per_image_geojson(
+        dataset_root / "region_a_scene_a.geojson",
+        [
+            (1, box(11, 49, 13, 51), "positive"),
+            (2, box(17, 49, 19, 51), "hard_negative"),
+        ],
+    )
+    _write_per_image_geojson(
+        dataset_root / "region_b_scene_b.geojson",
+        [(3, box(111, 49, 113, 51), "positive")],
+    )
+
+    info = _markup_export.build_markup_export(
+        MarkupExportRequest(
+            dataset_key="Реки\\test",
+            tile_width=16,
+            tile_height=16,
+            image_count=2,
+            object_count=2,
+        ),
+        config,
+    )
+
+    assert info.actual_object_count == 2
+    assert info.image_count == 2
+    output_root = config.scratch_root / _markup_export.EXPORT_ROOT_NAME / str(info.id)
+    features = [
+        feature
+        for path in output_root.glob("tile_*.geojson")
+        for feature in json.loads(path.read_text(encoding="utf-8"))["features"]
+    ]
+    assert {feature["id"] for feature in features} == {1, 3}
+    assert all(
+        feature["properties"]["_mlsystem2_role"] == "positive"
+        for feature in features
+    )
+
+
 def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
     image = np.full((3, 9, 9), 100, dtype=np.uint8)
     mask = np.zeros((9, 9), dtype=np.uint8)
@@ -2620,6 +2679,26 @@ def _write_geojson(path: Path, features: list[tuple[int, object, str]]) -> None:
                 "geometry": mapping(geometry),
             }
             for feature_id, geometry, kind in features
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_per_image_geojson(
+    path: Path,
+    features: list[tuple[int, object, str]],
+) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "id": feature_id,
+                "properties": {"_mlsystem2_role": role},
+                "geometry": mapping(geometry),
+            }
+            for feature_id, geometry, role in features
         ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")

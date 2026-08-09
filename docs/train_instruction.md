@@ -180,7 +180,7 @@ PY
 
 ## 5. Конфиг двоичного датасета
 
-Для одного класса используй `dataset.scenes_file` и `dataset.annotation_file`. Если есть hard negative объекты, добавь `dataset.hard_negative_annotation_file`.
+Поддерживаются два взаимоисключающих формата. В legacy-формате используй `dataset.scenes_file` и `dataset.annotation_file`. Если есть hard negative объекты, добавь `dataset.hard_negative_annotation_file`.
 Hard-negative GeoJSON содержит области, которые модель должна считать фоном: внутри tile supervision mask они
 получают служебное значение `-1`, перед loss превращаются в target background `0` и получают pixel weight из
 `train.hard_negative_weight`. Это не отдельный выходной класс модели.
@@ -199,6 +199,25 @@ train:
   model_name: smp_segformer_b2
 ```
 
+В per-image формате укажи только каталог `dataset.annotations_dir`. В нём каждому TIFF соответствует один
+`FeatureCollection` в CRS снимка с именем `<родительская_папка>_<имя_TIFF_без_расширения>.geojson`.
+Свойство `_mlsystem2_role` равно `positive` или `hard_negative`; отсутствующее свойство совместимо с
+`positive`. Снимки берутся из `images_dir`, сопоставляются строго по имени, а каждый снимок нарезается
+независимо.
+
+```yaml
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/
+  annotations_dir: /data/MLMarkup/Реки/test
+  val_fraction: 0.2
+
+train:
+  model_name: smp_segformer_b2
+```
+
+Не смешивай `annotations_dir` с legacy-полями или `dataset.classes`. Пустой per-image датасет можно наполнять
+в редакторе, но запуск обучения отклонит его до добавления хотя бы одного снимка.
+
 Для дообучения укажи:
 
 ```yaml
@@ -208,7 +227,7 @@ train:
 
 ## 6. Конфиг многоклассового датасета
 
-Для нескольких классов используй только `dataset.classes`; не смешивай `classes` с полями двоичного режима `scenes_file` и `annotation_file`.
+Для нескольких классов используй только `dataset.classes`; per-image multiclass пока не поддерживается.
 
 Принципы:
 

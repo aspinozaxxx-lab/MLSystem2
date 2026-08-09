@@ -10,6 +10,10 @@ from math import inf
 from pathlib import Path
 from typing import Any
 
+import rasterio
+from rasterio.crs import CRS
+from shapely.geometry import MultiPolygon, Polygon, shape
+
 from ._scene_matching import scene_basename, scene_match_key, scene_stem
 
 SCENE_PROPERTY_FIELDS = (
@@ -28,6 +32,9 @@ SCENE_PROPERTY_FIELDS = (
     "source_file",
     "src",
 )
+PER_IMAGE_ROLE_PROPERTY = "_mlsystem2_role"
+PER_IMAGE_POSITIVE_ROLE = "positive"
+PER_IMAGE_HARD_NEGATIVE_ROLE = "hard_negative"
 
 
 @dataclass
@@ -48,6 +55,91 @@ class ImageGeometryScore:
     image_path: Path
     object_count: int
     distance_to_annotation: float
+
+
+def count_per_image_annotation_roles(
+    annotation_path: Path,
+    image_path: Path | None = None,
+) -> tuple[int, int]:
+    payload = _load_json(annotation_path)
+    if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection":
+        raise ValueError(f"GeoJSON должен быть FeatureCollection: {annotation_path}")
+    features = payload.get("features")
+    if not isinstance(features, list):
+        raise ValueError(f"GeoJSON должен содержать массив features: {annotation_path}")
+
+    if image_path is not None:
+        annotation_crs = _required_geojson_crs(payload, annotation_path)
+        try:
+            with rasterio.open(image_path) as dataset:
+                image_crs = dataset.crs
+        except rasterio.errors.RasterioError as exc:
+            raise ValueError(f"Не удалось открыть TIFF {image_path}: {exc}") from exc
+        if image_crs is None:
+            raise ValueError(f"У TIFF отсутствует CRS: {image_path}")
+        if annotation_crs != image_crs:
+            raise ValueError(
+                f"CRS GeoJSON ({annotation_crs}) не совпадает с CRS TIFF "
+                f"({image_crs}): {annotation_path}"
+            )
+
+    positive = 0
+    hard_negative = 0
+    for index, feature in enumerate(features, start=1):
+        if not isinstance(feature, dict):
+            raise ValueError(f"Feature #{index} должен быть объектом: {annotation_path}")
+        raw_properties = feature.get("properties")
+        if raw_properties is None:
+            properties: dict[str, Any] = {}
+        elif isinstance(raw_properties, dict):
+            properties = raw_properties
+        else:
+            raise ValueError(
+                f"properties Feature #{index} должен быть объектом: {annotation_path}"
+            )
+        role = properties.get(PER_IMAGE_ROLE_PROPERTY, PER_IMAGE_POSITIVE_ROLE)
+        if role == PER_IMAGE_POSITIVE_ROLE:
+            positive += 1
+        elif role == PER_IMAGE_HARD_NEGATIVE_ROLE:
+            hard_negative += 1
+        else:
+            raise ValueError(
+                f"Feature #{index} содержит неизвестную роль {role!r}: {annotation_path}"
+            )
+        geometry_payload = feature.get("geometry")
+        try:
+            geometry = shape(geometry_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                f"Некорректная геометрия Feature #{index}: {annotation_path}"
+            ) from exc
+        if not isinstance(geometry, (Polygon, MultiPolygon)):
+            raise ValueError(
+                f"Feature #{index} должен содержать Polygon или MultiPolygon: "
+                f"{annotation_path}"
+            )
+        if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
+            raise ValueError(
+                f"Геометрия Feature #{index} пуста или невалидна: {annotation_path}"
+            )
+    return positive, hard_negative
+
+
+def _required_geojson_crs(payload: dict[str, Any], annotation_path: Path) -> CRS:
+    raw_crs = payload.get("crs")
+    value: Any = raw_crs
+    if isinstance(raw_crs, dict):
+        properties = raw_crs.get("properties")
+        if isinstance(properties, dict):
+            value = properties.get("name") or properties.get("href")
+        if not value:
+            value = raw_crs.get("name")
+    if not value:
+        raise ValueError(f"В GeoJSON должен быть явно указан CRS снимка: {annotation_path}")
+    try:
+        return CRS.from_user_input(value)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Некорректный CRS GeoJSON {value!r}: {annotation_path}") from exc
 
 
 def count_objects_per_scene(

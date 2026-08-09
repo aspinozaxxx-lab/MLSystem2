@@ -9,5 +9,6 @@ def test_tile_preparation_contracts_all_is_exact() -> None:
         "TileClassAnnotation",
         "TileDataloaderRequest",
         "TilePreparationError",
+        "TileSceneSource",
         "TileSplitRequest",
     ]
