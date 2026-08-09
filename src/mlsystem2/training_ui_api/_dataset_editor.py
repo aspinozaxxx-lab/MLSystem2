@@ -684,7 +684,7 @@ def _validate_editor_geojson(payload: dict[str, Any], image_path: Path) -> None:
             raise TrainingUIAPIError(f"Объект {index} должен быть Polygon или MultiPolygon")
         if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
             raise TrainingUIAPIError(f"Геометрия объекта {index} пуста или невалидна")
-        if not footprint.covers(geometry):
+        if not _footprint_covers_geometry(footprint, geometry):
             raise TrainingUIAPIError(
                 f"Геометрия объекта {index} выходит за реальный footprint TIFF"
             )
@@ -700,6 +700,17 @@ def _valid_data_footprint(image_path: Path) -> BaseGeometry:
         status.st_mtime_ns,
         status.st_size,
     )
+
+
+def _footprint_covers_geometry(
+    footprint: BaseGeometry,
+    geometry: BaseGeometry,
+) -> bool:
+    if footprint.covers(geometry):
+        return True
+    outside_area = geometry.difference(footprint).area
+    numerical_tolerance = max(geometry.area, 1.0) * 1e-12
+    return outside_area <= numerical_tolerance
 
 
 @lru_cache(maxsize=64)

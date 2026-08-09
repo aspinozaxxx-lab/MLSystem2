@@ -13,8 +13,10 @@ import pytest
 import rasterio
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
+from shapely.geometry import box
 
 from mlsystem2.training_ui_api.api import create_app
+from mlsystem2.training_ui_api._dataset_editor import _footprint_covers_geometry
 
 
 @dataclass(frozen=True)
@@ -441,6 +443,13 @@ def test_dataset_editor_returns_service_unavailable_for_missing_clone(
 
     assert response.status_code == 503
     assert "Editor-клон" in response.json()["detail"]
+
+
+def test_dataset_editor_footprint_allows_only_numerical_boundary_sliver() -> None:
+    footprint = box(0, 0, 10, 10)
+
+    assert _footprint_covers_geometry(footprint, box(-1e-13, 1, 2, 2))
+    assert not _footprint_covers_geometry(footprint, box(-0.01, 1, 2, 2))
 
 
 def _annotation_payload(features: list[dict[str, object]]) -> dict[str, object]:
