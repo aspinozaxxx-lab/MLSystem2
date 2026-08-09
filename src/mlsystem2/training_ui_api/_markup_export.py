@@ -39,6 +39,7 @@ from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
 from ._datasets import find_dataset, imagery_images_dir, resolve_scenes_file_images
 from ._raster_index import load_raster_index
+from ._raster_valid_data import clip_geometries_to_valid_data
 from .contracts import (
     DatasetInfo,
     ImageryType,
@@ -332,10 +333,13 @@ def build_scene_list_export(
                     image_footprint,
                     predicate="intersects",
                 )
-                has_objects = any(
-                    transformed.geometries[int(index)].intersection(image_footprint).area > 0.0
-                    for index in feature_indices
+                clipped_geometries = clip_geometries_to_valid_data(
+                    dataset,
+                    tuple(
+                        transformed.geometries[int(index)] for index in feature_indices
+                    ),
                 )
+                has_objects = any(geometry.area > 0.0 for geometry in clipped_geometries)
         except TrainingUIAPIError:
             raise
         except Exception as exc:  # noqa: BLE001

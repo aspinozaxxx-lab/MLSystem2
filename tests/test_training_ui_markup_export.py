@@ -42,6 +42,9 @@ from mlsystem2.training_ui_api._models import (
     TrainingResultRow,
     TrainingResultTestMetricRow,
 )
+from mlsystem2.training_ui_api._raster_valid_data import (
+    clip_geometries_to_valid_data,
+)
 from mlsystem2.training_ui_api._test_samples import (
     _object_counts,
     build_test_sample_download,
@@ -962,6 +965,56 @@ def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
         config=config,
     )
     assert touching_artifact.content == b""
+
+
+def test_scene_list_export_ignores_objects_only_in_nodata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_cog(
+        config.images_root / "kanopus" / "регион" / "только_nodata.tif",
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 32), slice(0, 32)),
+    )
+    _write_cog(
+        config.images_root / "kanopus" / "регион" / "валидное_пересечение.tif",
+        left=100,
+        top=64,
+        valid_slice=(slice(0, 32), slice(0, 32)),
+    )
+
+    artifact = _markup_export.build_scene_list_export(
+        imagery_type=ImageryType.KANOPUS,
+        geojson_filename="реки.geojson",
+        geojson_bytes=_geojson_bytes(
+            [
+                box(40, 40, 50, 50),
+                box(110, 40, 120, 50),
+            ]
+        ),
+        config=config,
+    )
+
+    assert artifact.scene_count == 1
+    assert artifact.content.decode("utf-8") == "регион/валидное_пересечение\n"
+
+
+def test_clip_geometries_to_valid_data_uses_native_pixel_mask(tmp_path: Path) -> None:
+    image_path = tmp_path / "точная_маска.tif"
+    _write_cog(
+        image_path,
+        left=0,
+        top=64,
+        valid_slice=(slice(16, 48), slice(8, 40)),
+    )
+
+    with rasterio.open(image_path) as dataset:
+        clipped = clip_geometries_to_valid_data(dataset, (box(0, 0, 64, 64),))
+
+    assert len(clipped) == 1
+    assert clipped[0].equals(box(8, 16, 40, 48))
 
 
 def test_scene_list_export_returns_empty_txt_without_matches(
