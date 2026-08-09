@@ -46,6 +46,26 @@ describe("черновики редактора датасетов", () => {
     });
   });
 
+  it("не считает изменением только другой порядок полей GeoJSON", () => {
+    const baseline: DraftSnapshot = {
+      geojson: {
+        type: "FeatureCollection",
+        crs: { type: "name", properties: { name: "EPSG:32637" } },
+        features: [],
+      },
+      newFeatureIndexes: [],
+    };
+    const current: DraftSnapshot = {
+      geojson: {
+        features: [],
+        crs: { properties: { name: "EPSG:32637" }, type: "name" },
+        type: "FeatureCollection",
+      },
+      newFeatureIndexes: [],
+    };
+    expect(draftChanged({ baseline, current, history: [] })).toBe(false);
+  });
+
   it("сортирует по текущему количеству в обоих направлениях", () => {
     const scenes = [
       { annotation_name: "b.geojson", total_count: 5, positive_count: 5, hard_negative_count: 0 },

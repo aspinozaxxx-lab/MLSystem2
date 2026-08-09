@@ -52,7 +52,21 @@ export function featureCounts(geojson: JsonObject): {
 }
 
 export function draftChanged(draft: DraftState): boolean {
-  return JSON.stringify(draft.baseline.geojson) !== JSON.stringify(draft.current.geojson);
+  return canonicalJson(draft.baseline.geojson) !== canonicalJson(draft.current.geojson);
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortObjectKeys(value));
+}
+
+function sortObjectKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortObjectKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as JsonObject)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortObjectKeys(item)]),
+  );
 }
 
 export function appendHistory(
