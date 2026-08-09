@@ -50,6 +50,7 @@ class DatasetEditorSceneDetail(BaseModel):
 
     scene: DatasetEditorSceneInfo
     geojson: dict[str, Any]
+    valid_data_footprint: dict[str, Any]
 
 
 class DatasetEditorRasterFolderInfo(BaseModel):

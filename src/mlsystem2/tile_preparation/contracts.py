@@ -13,6 +13,7 @@ class TilePreparationError(RuntimeError):
 
 
 HARD_NEGATIVE_LABEL = -1
+NODATA_LABEL = -2
 
 
 class TileClassAnnotation(BaseModel):
@@ -87,6 +88,7 @@ class TileDataloaderRequest(BaseModel):
 
 __all__ = [
     "HARD_NEGATIVE_LABEL",
+    "NODATA_LABEL",
     "TileClassAnnotation",
     "TileDataloaderRequest",
     "TilePreparationError",

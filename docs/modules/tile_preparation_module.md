@@ -8,7 +8,7 @@
 
 - `create_tile_dataloader(request: TileDataloaderRequest) -> object` — загрузить `settings.tile_preparation`, создать Dataset и PyTorch DataLoader.
 
-Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,W]` либо multiclass `masks: long[B,H,W]` и `batch_meta` со счётчиками категорий/аугментаций. Значения mask: `-1` — hard negative, `0` — фон, `1` либо `1..N` — positive/class id.
+Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,W]` либо multiclass `masks: long[B,H,W]` и `batch_meta` со счётчиками категорий/аугментаций. Значения mask: `-2` — nodata/ignore, `-1` — hard negative, `0` — фон, `1` либо `1..N` — positive/class id.
 
 ## Публичные контракты
 
@@ -28,4 +28,4 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 
 ## Алгоритм работы и его особенности
 
-Для каждой сцены строится сетка `0,stride,...`; крайнее окно сохраняет `tile_size` и дополняется nodata. Coarse/sparse valid-footprint фильтр заранее удаляет black/nodata окна без полного чтения всех тайлов. Дескрипторы TIFF открываются лениво и удерживаются ограниченным LRU на worker. Разметка сцены индексируется отдельно; positive перекрывает hard negative, nodata становится фоном. Split вычисляется хешем `seed+scene_id+x+y`, поэтому не зависит от порядка сцен. Train использует category-aware sampling и аугментации positive/hard-negative. Val выбирает фиксированный balanced subset и кэширует его в RAM при безопасном лимите, иначе лениво читает те же индексы. Пересекающиеся TIFF дают независимые тайлы.
+Для каждой сцены строится сетка `0,stride,...`; крайнее окно сохраняет `tile_size` и дополняется nodata. Coarse/sparse valid-footprint фильтр заранее удаляет black/nodata окна без полного чтения всех тайлов. Дескрипторы TIFF открываются лениво и удерживаются ограниченным LRU на worker. Разметка сцены индексируется отдельно; positive перекрывает hard negative, а nodata по значению либо raster mask получает `NODATA_LABEL=-2` и не превращается в обучающий фон. Split вычисляется хешем `seed+scene_id+x+y`, поэтому не зависит от порядка сцен. Train использует category-aware sampling и аугментации positive/hard-negative. Val выбирает фиксированный balanced subset и кэширует его в RAM при безопасном лимите, иначе лениво читает те же индексы. Пересекающиеся TIFF дают независимые тайлы.

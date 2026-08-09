@@ -46,6 +46,11 @@ def editor_environment(
                 [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]],
                 properties={"source": "legacy"},
             ),
+            _feature(
+                3,
+                "positive",
+                [[6.25, 0.25], [7.75, 0.25], [7.75, 1.75], [6.25, 1.75], [6.25, 0.25]],
+            ),
         ]
     )
     live_annotation = live_dataset / "Olskij_SCN01.geojson"
@@ -59,7 +64,8 @@ def editor_environment(
     batch = images_root / "kanopus" / "batch"
     olskij.mkdir(parents=True)
     batch.mkdir(parents=True)
-    _write_raster(olskij / "SCN01.tif", value=11)
+    scene_image = olskij / "SCN01.tif"
+    _write_raster(scene_image, value=11, nodata_corner=True)
     _write_raster(batch / "SCN02.tif", value=22)
     _write_raster(batch / "SCN03.tiff", value=33)
 
@@ -155,8 +161,8 @@ def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
     assert response.status_code == 200
     scenes = response.json()["scenes"]
     assert len(scenes) == 1
-    assert scenes[0]["total_count"] == 2
-    assert scenes[0]["positive_count"] == 1
+    assert scenes[0]["total_count"] == 3
+    assert scenes[0]["positive_count"] == 2
     assert scenes[0]["hard_negative_count"] == 1
     assert len(scenes[0]["revision"]) == 40
     empty_path = quote(env.empty_dataset_key, safe="")
@@ -194,6 +200,8 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     annotation_path = quote(scene["annotation_name"], safe="")
     detail_url = f"{scenes_url}/{annotation_path}"
     detail = env.client.get(detail_url).json()
+    assert detail["valid_data_footprint"]["type"] == "Polygon"
+    assert len(detail["geojson"]["features"]) == 2
     updated = detail["geojson"]
     updated["features"][0]["geometry"] = {
         "type": "Polygon",
@@ -238,6 +246,23 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     )
     assert rejected.status_code == 400
     assert "footprint" in rejected.json()["detail"]
+
+    inside_nodata = current["geojson"]
+    inside_nodata["features"][0]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [
+            [[6.25, 0.25], [7.75, 0.25], [7.75, 1.75], [6.25, 1.75], [6.25, 0.25]]
+        ],
+    }
+    rejected_nodata = env.client.put(
+        detail_url,
+        json={
+            "revision": current["scene"]["revision"],
+            "geojson": inside_nodata,
+        },
+    )
+    assert rejected_nodata.status_code == 400
+    assert "footprint" in rejected_nodata.json()["detail"]
 
     publishing = env.client.get(f"/api/v1/dataset-editor/publication/{commit}")
     assert publishing.json()["status"] == "publishing"
@@ -444,8 +469,10 @@ def _feature(
     }
 
 
-def _write_raster(path: Path, *, value: int) -> None:
+def _write_raster(path: Path, *, value: int, nodata_corner: bool = False) -> None:
     data = np.full((1, 8, 8), value, dtype=np.uint16)
+    if nodata_corner:
+        data[:, 6:, 6:] = 0
     with rasterio.open(
         path,
         "w",

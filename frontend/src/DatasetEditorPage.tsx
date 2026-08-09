@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import Feature from "ol/Feature";
 import { defaults as defaultControls } from "ol/control/defaults";
-import { containsExtent, type Extent } from "ol/extent";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
 import Draw from "ol/interaction/Draw";
@@ -72,9 +71,14 @@ type EditorScene = {
   revision: string;
 };
 
-type SceneDetail = { scene: EditorScene; geojson: JsonObject };
+type SceneDetail = {
+  scene: EditorScene;
+  geojson: JsonObject;
+  valid_data_footprint: JsonObject;
+};
 type SceneDraft = DraftState & {
   scene: EditorScene;
+  validDataFootprint: JsonObject;
   normalized: boolean;
 };
 type DraftMap = Record<string, SceneDraft>;
@@ -138,7 +142,7 @@ export function DatasetEditorPage({
   const selectRef = useRef<Select | null>(null);
   const modifyRef = useRef<Modify | null>(null);
   const drawRef = useRef<Draw | null>(null);
-  const rasterExtentRef = useRef<Extent | null>(null);
+  const rasterFootprintRef = useRef<Geometry | null>(null);
   const draftsRef = useRef<DraftMap>({});
   const dirtyRef = useRef(false);
   const roleRef = useRef<Role>(role);
@@ -301,7 +305,11 @@ export function DatasetEditorPage({
       const cached = draftsRef.current[name];
       if (cached) {
         setEditMode("select");
-        setDetail({ scene: cached.scene, geojson: cached.current.geojson });
+        setDetail({
+          scene: cached.scene,
+          geojson: cached.current.geojson,
+          valid_data_footprint: cached.validDataFootprint,
+        });
         return;
       }
       const payload = await run(() =>
@@ -315,6 +323,7 @@ export function DatasetEditorPage({
         ...current,
         [name]: {
           scene: payload.scene,
+          validDataFootprint: payload.valid_data_footprint,
           baseline: cloneSnapshot(initial),
           current: cloneSnapshot(initial),
           history: [],
@@ -372,6 +381,10 @@ export function DatasetEditorPage({
     if (!draft) return;
     const format = new GeoJSON();
     const crs = geojsonCrs(draft.current.geojson);
+    rasterFootprintRef.current = format.readGeometry(detail.valid_data_footprint, {
+      dataProjection: crs,
+      featureProjection: crs,
+    });
     const vectorSource = new VectorSource<Feature<Geometry>>();
     const features = format.readFeatures(draft.current.geojson, {
       dataProjection: crs,
@@ -389,10 +402,8 @@ export function DatasetEditorPage({
     const rasterSource = new GeoTIFF({
       sources: [{ url: detail.scene.raster_url }],
       normalize: true,
-    });
-    let active = true;
-    void rasterSource.getView().then((viewOptions) => {
-      if (active) rasterExtentRef.current = viewOptions.extent || null;
+      interpolate: false,
+      transition: 0,
     });
     const rasterLayer = new WebGLTileLayer({
       source: rasterSource,
@@ -461,7 +472,7 @@ export function DatasetEditorPage({
     draw.on("drawend", (event) => {
       setDrawingState(false);
       event.feature.set(ROLE_PROPERTY, roleRef.current);
-      if (!insideRaster(event.feature, rasterExtentRef.current)) {
+      if (!insideRaster(event.feature, rasterFootprintRef.current)) {
         drawBefore = null;
         window.setTimeout(() => vectorSource.removeFeature(event.feature), 0);
         window.alert("Полигон должен целиком находиться внутри снимка.");
@@ -486,7 +497,7 @@ export function DatasetEditorPage({
     });
     modify.on("modifyend", (event) => {
       const outside = event.features.getArray().some((feature) =>
-        !insideRaster(feature, rasterExtentRef.current),
+        !insideRaster(feature, rasterFootprintRef.current),
       );
       if (outside) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
@@ -518,7 +529,6 @@ export function DatasetEditorPage({
     drawRef.current = draw;
 
     return () => {
-      active = false;
       if (drawCommitTimer !== null) window.clearTimeout(drawCommitTimer);
       map.setTarget(undefined);
       mapRef.current = null;
@@ -528,7 +538,7 @@ export function DatasetEditorPage({
       selectRef.current = null;
       modifyRef.current = null;
       drawRef.current = null;
-      rasterExtentRef.current = null;
+      rasterFootprintRef.current = null;
       newFeaturesRef.current = new WeakSet();
       setDrawingState(false);
     };
@@ -694,7 +704,11 @@ export function DatasetEditorPage({
     });
     const refreshedActive = draftsRef.current[activeAnnotationRef.current];
     if (refreshedActive && updatedByName.has(refreshedActive.scene.annotation_name)) {
-      setDetail({ scene: refreshedActive.scene, geojson: refreshedActive.current.geojson });
+      setDetail({
+        scene: refreshedActive.scene,
+        geojson: refreshedActive.current.geojson,
+        valid_data_footprint: refreshedActive.validDataFootprint,
+      });
     }
     setPublication({
       commit: result.commit,
@@ -1070,9 +1084,22 @@ function geojsonCrs(payload: JsonObject): string {
   return "EPSG:4326";
 }
 
-function insideRaster(feature: Feature<Geometry>, extent: Extent | null): boolean {
+function insideRaster(feature: Feature<Geometry>, footprint: Geometry | null): boolean {
   const geometry = feature.getGeometry();
-  return Boolean(geometry && (!extent || containsExtent(extent, geometry.getExtent())));
+  if (!geometry || !footprint) return Boolean(geometry);
+  const simpleGeometry = geometry as Geometry & {
+    getFlatCoordinates?: () => number[] | null;
+    getStride?: () => number;
+  };
+  const coordinates = simpleGeometry.getFlatCoordinates?.();
+  const stride = simpleGeometry.getStride?.() || 2;
+  if (!coordinates) return false;
+  for (let index = 0; index < coordinates.length; index += stride) {
+    if (!footprint.intersectsCoordinate([coordinates[index], coordinates[index + 1]])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function vectorSnapshot(

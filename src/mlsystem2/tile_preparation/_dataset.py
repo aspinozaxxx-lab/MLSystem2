@@ -172,7 +172,10 @@ class TileDataset:
         nodata = self._scene_nodata[scene_window.scene_index]
 
         image_raw = self._read_image_raw(dataset, window, nodata)
-        nodata_pixels = _nodata_pixels(image_raw, nodata)
+        nodata_pixels = np.logical_or(
+            _nodata_pixels(image_raw, nodata),
+            self._read_invalid_data_pixels(dataset, window),
+        )
         image = image_raw.astype(np.float32, copy=False)
         mask = self._read_supervision_mask(
             scene_window.scene_index,
@@ -459,6 +462,18 @@ class TileDataset:
             out_shape=(self.channel_count, self._tile_size, self._tile_size),
             masked=False,
         )
+
+    def _read_invalid_data_pixels(
+        self,
+        dataset: DatasetReader,
+        window: Window,
+    ) -> np.ndarray:
+        valid_mask = dataset.dataset_mask(
+            window=window,
+            boundless=True,
+            out_shape=(self._tile_size, self._tile_size),
+        )
+        return valid_mask == 0
 
     def _read_supervision_mask(
         self,

@@ -1711,6 +1711,10 @@ export interface components {
             geojson: {
                 [key: string]: unknown;
             };
+            /** Valid Data Footprint */
+            valid_data_footprint: {
+                [key: string]: unknown;
+            };
         };
         /** DatasetEditorSceneInfo */
         DatasetEditorSceneInfo: {

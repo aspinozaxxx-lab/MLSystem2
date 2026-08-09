@@ -33,6 +33,7 @@ from mlsystem2.tile_preparation._dataset import (
 from mlsystem2.tile_preparation._mask import build_supervision_mask
 from mlsystem2.tile_preparation.contracts import (
     HARD_NEGATIVE_LABEL,
+    NODATA_LABEL,
     TileClassAnnotation,
     TileDataloaderRequest,
     TilePreparationError,
@@ -339,7 +340,7 @@ def test_supervision_mask_builder_preserves_hard_negative_background_and_priorit
         nodata_pixels=nodata,
     )
 
-    assert mask[0, 0] == 0
+    assert mask[0, 0] == NODATA_LABEL
     assert mask[1, 1] == 1
     assert HARD_NEGATIVE_LABEL in set(np.unique(mask).tolist())
     assert 0 in set(np.unique(mask).tolist())
@@ -716,6 +717,34 @@ def test_per_image_annotation_builds_positive_and_hard_negative_masks(
     assert np.any(positive_mask == 1)
     assert hard_negative_meta["hard_negative"] is True
     assert np.any(hard_negative_mask == HARD_NEGATIVE_LABEL)
+    dataset.close()
+
+
+def test_partial_nodata_pixels_are_marked_as_ignored_supervision(tmp_path: Path) -> None:
+    raster_path = tmp_path / "partial_nodata.tif"
+    data = np.full((1, 4, 4), 1000, dtype=np.uint16)
+    data[:, :2, :2] = 0
+    _write_raster_data(raster_path, data, nodata=0)
+    annotation_file = tmp_path / "partial_nodata.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]],
+    )
+
+    dataset = TileDataset(
+        scenes=[TileSceneSource(scene_id="scene", image_path=raster_path)],
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    _image, mask, _meta = dataset[0]
+    assert np.all(mask[0, :2, :2] == NODATA_LABEL)
+    assert np.all(mask[0, 2:, :] == 1)
+    assert np.all(mask[0, :2, 2:] == 1)
     dataset.close()
 
 

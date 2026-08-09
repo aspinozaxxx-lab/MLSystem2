@@ -4630,13 +4630,19 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Geojson"
+          },
+          "valid_data_footprint": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Valid Data Footprint"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "scene",
-          "geojson"
+          "geojson",
+          "valid_data_footprint"
         ],
         "title": "DatasetEditorSceneDetail"
       },
