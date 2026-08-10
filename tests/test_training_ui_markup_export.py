@@ -639,29 +639,23 @@ def test_candidate_pool_accepts_final_subset_in_image_count_range() -> None:
         )
         for index in range(7)
     ]
-    request = MarkupExportRequest(
-        dataset_key="test\\main",
-        tile_width=16,
-        tile_height=16,
-        image_count=7,
-        object_count=15,
-    )
-
-    selected = _markup_export._select_candidates(
+    selected = _markup_export._select_candidate_pool(
         candidates,
-        request,
-        allow_touching=False,
         min_final_image_count=5,
         max_final_image_count=10,
         min_final_object_count=5,
-    )
-    impossible = _markup_export._select_candidates(
-        candidates,
-        request,
+        max_pool_count=7,
+        target_pool_object_count=15,
         allow_touching=False,
+    )
+    impossible = _markup_export._select_candidate_pool(
+        candidates,
         min_final_image_count=8,
         max_final_image_count=10,
         min_final_object_count=5,
+        max_pool_count=7,
+        target_pool_object_count=15,
+        allow_touching=False,
     )
 
     assert selected == list(range(7))
@@ -737,7 +731,78 @@ def test_milp_accepts_only_valid_incumbent_on_time_limit(monkeypatch) -> None:
         )
 
 
-def test_candidate_pool_keeps_feasible_solution_when_first_refinement_times_out(
+def test_candidate_pool_uses_greedy_seed_without_large_milp(monkeypatch) -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate(
+            crs,
+            index=index,
+            territory=f"region-{index}",
+            source=f"region-{index}/scene.tif",
+            count=1,
+        )
+        for index in range(7)
+    ]
+    monkeypatch.setattr(
+        _markup_export,
+        "_run_milp",
+        lambda *args, **kwargs: pytest.fail("MILP не должен запускаться"),
+    )
+    selected = _markup_export._select_candidate_pool(
+        candidates,
+        min_final_image_count=5,
+        max_final_image_count=7,
+        min_final_object_count=5,
+        max_pool_count=7,
+        target_pool_object_count=15,
+        allow_touching=False,
+    )
+
+    assert selected == list(range(7))
+
+
+def test_candidate_pool_greedy_seed_avoids_blocking_dense_tile(monkeypatch) -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate_with_footprint(
+            crs,
+            index=0,
+            count=100,
+            footprint=box(0, 0, 40, 10),
+        ),
+        _selection_candidate_with_footprint(
+            crs,
+            index=1,
+            count=60,
+            footprint=box(0, 0, 10, 10),
+        ),
+        _selection_candidate_with_footprint(
+            crs,
+            index=2,
+            count=60,
+            footprint=box(30, 0, 40, 10),
+        ),
+    ]
+    monkeypatch.setattr(
+        _markup_export,
+        "_run_milp",
+        lambda *args, **kwargs: pytest.fail("MILP не должен запускаться"),
+    )
+
+    selected = _markup_export._select_candidate_pool(
+        candidates,
+        min_final_image_count=2,
+        max_final_image_count=2,
+        min_final_object_count=120,
+        max_pool_count=2,
+        target_pool_object_count=360,
+        allow_touching=True,
+    )
+
+    assert selected == [1, 2]
+
+
+def test_candidate_pool_uses_small_milp_when_greedy_seed_is_missing(
     monkeypatch,
 ) -> None:
     crs = CRS.from_epsg(3857)
@@ -751,39 +816,21 @@ def test_candidate_pool_keeps_feasible_solution_when_first_refinement_times_out(
         )
         for index in range(7)
     ]
-    request = MarkupExportRequest(
-        dataset_key="test\\main",
-        tile_width=16,
-        tile_height=16,
-        image_count=7,
-        object_count=15,
-    )
-    original_run_milp = _markup_export._run_milp
-    calls = 0
-
-    def timeout_on_territory_refinement(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
-        return original_run_milp(*args, **kwargs)
-
-    monkeypatch.setattr(_markup_export, "_run_milp", timeout_on_territory_refinement)
-    selected = _markup_export._select_candidates(
+    monkeypatch.setattr(_markup_export, "_greedy_final_subset", lambda *args, **kwargs: None)
+    selected = _markup_export._select_candidate_pool(
         candidates,
-        request,
-        allow_touching=False,
         min_final_image_count=5,
         max_final_image_count=7,
         min_final_object_count=5,
+        max_pool_count=7,
+        target_pool_object_count=15,
+        allow_touching=False,
     )
 
     assert selected == list(range(7))
 
 
-def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
-    monkeypatch,
-) -> None:
+def test_direct_candidate_selection_still_reports_milp_timeout(monkeypatch) -> None:
     crs = CRS.from_epsg(3857)
     candidates = [
         _selection_candidate(
@@ -793,37 +840,23 @@ def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
             source=f"region-{index}/scene.tif",
             count=1,
         )
-        for index in range(7)
+        for index in range(2)
     ]
     request = MarkupExportRequest(
         dataset_key="test\\main",
         tile_width=16,
         tile_height=16,
-        image_count=7,
-        object_count=15,
+        image_count=2,
+        object_count=2,
     )
-    original_run_milp = _markup_export._run_milp
-    calls = 0
-
-    def timeout_on_deviation(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 4:
-            raise _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
-        return original_run_milp(*args, **kwargs)
-
-    monkeypatch.setattr(_markup_export, "_run_milp", timeout_on_deviation)
-    selected = _markup_export._select_candidates(
-        candidates,
-        request,
-        allow_touching=False,
-        min_final_image_count=5,
-        max_final_image_count=7,
-        min_final_object_count=5,
+    monkeypatch.setattr(
+        _markup_export,
+        "_run_milp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
+        ),
     )
 
-    assert selected == list(range(7))
-    calls = 0
     with pytest.raises(_markup_export._MilpTimeLimitError):
         _markup_export._select_candidates(
             candidates,

@@ -637,34 +637,23 @@ def generate_markup_pool_files(
         )
 
     selected_indices: list[int] | None = None
-    selected_pool_count: int | None = None
     touching_allowed = False
     maximum_pool_count = min(requested_pool_count, len(candidates))
     for allow_touching in (False, True):
-        for pool_count in range(maximum_pool_count, min_final_image_count - 1, -1):
-            request = MarkupExportRequest(
-                dataset_key=dataset_key,
-                tile_width=tile_size,
-                tile_height=tile_size,
-                image_count=pool_count,
-                object_count=requested_pool_objects,
-            )
-            selected_indices = _select_candidates(
-                candidates,
-                request,
-                allow_touching=allow_touching,
-                min_final_image_count=min_final_image_count,
-                max_final_image_count=min(max_final_image_count, pool_count),
-                min_final_object_count=min_object_count,
-            )
-            if selected_indices is not None:
-                selected_pool_count = pool_count
-                touching_allowed = allow_touching
-                break
+        selected_indices = _select_candidate_pool(
+            candidates,
+            min_final_image_count=min_final_image_count,
+            max_final_image_count=max_final_image_count,
+            min_final_object_count=min_object_count,
+            max_pool_count=maximum_pool_count,
+            target_pool_object_count=requested_pool_objects,
+            allow_touching=allow_touching,
+        )
         if selected_indices is not None:
+            touching_allowed = allow_touching
             break
 
-    if selected_indices is None or selected_pool_count is None:
+    if selected_indices is None:
         maximum_objects = _maximum_achievable_object_count(
             candidates,
             max_image_count=max_final_image_count,
@@ -689,6 +678,7 @@ def generate_markup_pool_files(
     )
     actual_object_count = sum(item.object_count for item in selected)
     warnings = _source_annotation_warnings(sources)
+    selected_pool_count = len(selected_indices)
     if selected_pool_count < requested_pool_count:
         warnings.append(
             "Расширенный пул уменьшен: "
@@ -1247,14 +1237,235 @@ def _window_is_fully_valid(
     return not bool(np.any(np.all(pixels == 0, axis=0)))
 
 
+def _select_candidate_pool(
+    candidates: list[_Candidate],
+    *,
+    min_final_image_count: int,
+    max_final_image_count: int,
+    min_final_object_count: int,
+    max_pool_count: int,
+    target_pool_object_count: int,
+    allow_touching: bool,
+) -> list[int] | None:
+    conflicts = _candidate_conflicts(candidates, allow_touching=allow_touching)
+    adjacency = [set() for _ in candidates]
+    for left, right in conflicts:
+        adjacency[left].add(right)
+        adjacency[right].add(left)
+
+    seed = _greedy_final_subset(
+        candidates,
+        adjacency=adjacency,
+        min_image_count=min_final_image_count,
+        max_image_count=max_final_image_count,
+        min_object_count=min_final_object_count,
+    )
+    if seed is None:
+        seed = _milp_final_subset(
+            candidates,
+            conflicts=conflicts,
+            min_image_count=min_final_image_count,
+            max_image_count=max_final_image_count,
+            min_object_count=min_final_object_count,
+        )
+    if seed is None:
+        return None
+    return _expand_candidate_pool(
+        candidates,
+        seed=seed,
+        adjacency=adjacency,
+        max_pool_count=max_pool_count,
+        target_object_count=target_pool_object_count,
+    )
+
+
+def _greedy_final_subset(
+    candidates: list[_Candidate],
+    *,
+    adjacency: list[set[int]],
+    min_image_count: int,
+    max_image_count: int,
+    min_object_count: int,
+) -> list[int] | None:
+    indices = list(range(len(candidates)))
+    orderings = (
+        sorted(
+            indices,
+            key=lambda index: (
+                -candidates[index].object_count,
+                len(adjacency[index]),
+                index,
+            ),
+        ),
+        sorted(
+            indices,
+            key=lambda index: (
+                len(adjacency[index]),
+                -candidates[index].object_count,
+                index,
+            ),
+        ),
+        indices,
+    )
+    solutions: list[list[int]] = []
+    for ordering in orderings:
+        selected: list[int] = []
+        selected_set: set[int] = set()
+        for index in ordering:
+            if adjacency[index].isdisjoint(selected_set):
+                selected.append(index)
+                selected_set.add(index)
+                if len(selected) == max_image_count:
+                    break
+        if (
+            len(selected) >= min_image_count
+            and sum(candidates[index].object_count for index in selected)
+            >= min_object_count
+        ):
+            solutions.append(sorted(selected))
+    if not solutions:
+        return None
+    return max(solutions, key=lambda selected: _candidate_selection_score(candidates, selected))
+
+
+def _milp_final_subset(
+    candidates: list[_Candidate],
+    *,
+    conflicts: set[tuple[int, int]],
+    min_image_count: int,
+    max_image_count: int,
+    min_object_count: int,
+) -> list[int] | None:
+    candidate_count = len(candidates)
+    constraints = [
+        _single_constraint(
+            candidate_count,
+            [(index, 1.0) for index in range(candidate_count)],
+            minimum=float(min_image_count),
+            maximum=float(max_image_count),
+        ),
+        _single_constraint(
+            candidate_count,
+            [
+                (index, float(candidate.object_count))
+                for index, candidate in enumerate(candidates)
+            ],
+            minimum=float(min_object_count),
+            maximum=np.inf,
+        ),
+    ]
+    if conflicts:
+        rows: list[int] = []
+        columns: list[int] = []
+        values: list[float] = []
+        for row_index, (left, right) in enumerate(sorted(conflicts)):
+            rows.extend((row_index, row_index))
+            columns.extend((left, right))
+            values.extend((1.0, 1.0))
+        matrix = coo_matrix(
+            (values, (rows, columns)),
+            shape=(len(conflicts), candidate_count),
+            dtype=float,
+        ).tocsr()
+        constraints.append(
+            LinearConstraint(
+                matrix,
+                np.full(len(conflicts), -np.inf),
+                np.ones(len(conflicts)),
+            )
+        )
+    result = _run_milp(
+        np.zeros(candidate_count, dtype=float),
+        integrality=np.ones(candidate_count, dtype=int),
+        bounds=Bounds(
+            np.zeros(candidate_count, dtype=float),
+            np.ones(candidate_count, dtype=float),
+        ),
+        constraints=constraints,
+        allow_infeasible=True,
+        accept_feasible_on_time_limit=True,
+    )
+    if result is None:
+        return None
+    selected = [index for index in range(candidate_count) if result[index] > 0.5]
+    if not min_image_count <= len(selected) <= max_image_count:
+        return None
+    if sum(candidates[index].object_count for index in selected) < min_object_count:
+        return None
+    return selected
+
+
+def _expand_candidate_pool(
+    candidates: list[_Candidate],
+    *,
+    seed: list[int],
+    adjacency: list[set[int]],
+    max_pool_count: int,
+    target_object_count: int,
+) -> list[int]:
+    indices = list(range(len(candidates)))
+    orderings = (
+        sorted(
+            indices,
+            key=lambda index: (
+                len(adjacency[index]),
+                -candidates[index].object_count,
+                index,
+            ),
+        ),
+        sorted(
+            indices,
+            key=lambda index: (
+                -candidates[index].object_count,
+                len(adjacency[index]),
+                index,
+            ),
+        ),
+        indices,
+    )
+    solutions: list[list[int]] = []
+    for ordering in orderings:
+        selected = list(seed)
+        selected_set = set(seed)
+        for index in ordering:
+            if len(selected) == max_pool_count:
+                break
+            if index not in selected_set and adjacency[index].isdisjoint(selected_set):
+                selected.append(index)
+                selected_set.add(index)
+        solutions.append(sorted(selected))
+    return max(
+        solutions,
+        key=lambda selected: (
+            len(selected),
+            len({candidates[index].territory for index in selected}),
+            len({candidates[index].source_name for index in selected}),
+            -abs(
+                sum(candidates[index].object_count for index in selected)
+                - target_object_count
+            ),
+            tuple(-index for index in selected),
+        ),
+    )
+
+
+def _candidate_selection_score(
+    candidates: list[_Candidate],
+    selected: list[int],
+) -> tuple[int, int, int, tuple[int, ...]]:
+    return (
+        len({candidates[index].territory for index in selected}),
+        len({candidates[index].source_name for index in selected}),
+        sum(candidates[index].object_count for index in selected),
+        tuple(-index for index in selected),
+    )
+
+
 def _select_candidates(
     candidates: list[_Candidate],
     request: MarkupExportRequest,
     *,
     allow_touching: bool,
-    min_final_image_count: int | None = None,
-    max_final_image_count: int | None = None,
-    min_final_object_count: int | None = None,
 ) -> list[int] | None:
     candidate_count = len(candidates)
     territories = sorted({item.territory for item in candidates}, key=str.casefold)
@@ -1264,13 +1475,7 @@ def _select_candidates(
     territory_offset = candidate_count
     source_offset = territory_offset + len(territories)
     deviation_index = source_offset + len(sources)
-    final_offset = deviation_index + 1
-    has_final_subset = (
-        min_final_image_count is not None
-        and max_final_image_count is not None
-        and min_final_object_count is not None
-    )
-    variable_count = final_offset + (candidate_count if has_final_subset else 0)
+    variable_count = deviation_index + 1
 
     rows: list[int] = []
     columns: list[int] = []
@@ -1297,27 +1502,6 @@ def _select_candidates(
         minimum=request.image_count,
         maximum=request.image_count,
     )
-    if has_final_subset:
-        assert min_final_image_count is not None
-        assert max_final_image_count is not None
-        assert min_final_object_count is not None
-        add_constraint(
-            [(final_offset + index, 1.0) for index in range(candidate_count)],
-            minimum=min_final_image_count,
-            maximum=max_final_image_count,
-        )
-        for index in range(candidate_count):
-            add_constraint(
-                [(final_offset + index, 1.0), (index, -1.0)],
-                maximum=0.0,
-            )
-        add_constraint(
-            [
-                (final_offset + index, float(candidates[index].object_count))
-                for index in range(candidate_count)
-            ],
-            minimum=min_final_object_count,
-        )
     for left, right in _candidate_conflicts(candidates, allow_touching=allow_touching):
         add_constraint([(left, 1.0), (right, 1.0)], maximum=1.0)
 
@@ -1386,37 +1570,15 @@ def _select_candidates(
     integrality[deviation_index] = 0
     bounds = Bounds(lower_bounds, upper_bounds)
 
-    feasible_result: np.ndarray | None = None
-    if has_final_subset:
-        feasible_result = _run_milp(
-            np.zeros(variable_count, dtype=float),
-            integrality=integrality,
-            bounds=bounds,
-            constraints=common_constraints,
-            allow_infeasible=True,
-            accept_feasible_on_time_limit=True,
-        )
-        if feasible_result is None:
-            return None
-
     territory_objective = np.zeros(variable_count, dtype=float)
     territory_objective[territory_offset:source_offset] = -1.0
-    try:
-        territory_result = _run_milp(
-            territory_objective,
-            integrality=integrality,
-            bounds=bounds,
-            constraints=common_constraints,
-            allow_infeasible=True,
-        )
-    except _MilpTimeLimitError:
-        if feasible_result is not None:
-            return _selected_indices(
-                feasible_result,
-                candidate_count,
-                request.image_count,
-            )
-        raise
+    territory_result = _run_milp(
+        territory_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=common_constraints,
+        allow_infeasible=True,
+    )
     if territory_result is None:
         return None
     territory_optimum = int(
@@ -1431,21 +1593,12 @@ def _select_candidates(
 
     source_objective = np.zeros(variable_count, dtype=float)
     source_objective[source_offset:deviation_index] = -1.0
-    try:
-        source_result = _run_milp(
-            source_objective,
-            integrality=integrality,
-            bounds=bounds,
-            constraints=[*common_constraints, territory_constraint],
-        )
-    except _MilpTimeLimitError:
-        if has_final_subset:
-            return _selected_indices(
-                territory_result,
-                candidate_count,
-                request.image_count,
-            )
-        raise
+    source_result = _run_milp(
+        source_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=[*common_constraints, territory_constraint],
+    )
     if source_result is None:
         return None
     source_optimum = int(round(float(np.sum(source_result[source_offset:deviation_index]))))
@@ -1458,17 +1611,12 @@ def _select_candidates(
 
     deviation_objective = np.zeros(variable_count, dtype=float)
     deviation_objective[deviation_index] = 1.0
-    try:
-        deviation_result = _run_milp(
-            deviation_objective,
-            integrality=integrality,
-            bounds=bounds,
-            constraints=[*common_constraints, territory_constraint, source_constraint],
-        )
-    except _MilpTimeLimitError:
-        if has_final_subset:
-            return _selected_indices(source_result, candidate_count, request.image_count)
-        raise
+    deviation_result = _run_milp(
+        deviation_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=[*common_constraints, territory_constraint, source_constraint],
+    )
     if deviation_result is None:
         return None
     deviation_optimum = int(round(float(deviation_result[deviation_index])))
@@ -1481,26 +1629,17 @@ def _select_candidates(
 
     density_objective = np.zeros(variable_count, dtype=float)
     density_objective[:candidate_count] = -object_counts
-    try:
-        density_result = _run_milp(
-            density_objective,
-            integrality=integrality,
-            bounds=bounds,
-            constraints=[
-                *common_constraints,
-                territory_constraint,
-                deviation_constraint,
-                source_constraint,
-            ],
-        )
-    except _MilpTimeLimitError:
-        if has_final_subset:
-            return _selected_indices(
-                deviation_result,
-                candidate_count,
-                request.image_count,
-            )
-        raise
+    density_result = _run_milp(
+        density_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=[
+            *common_constraints,
+            territory_constraint,
+            deviation_constraint,
+            source_constraint,
+        ],
+    )
     if density_result is None:
         return None
     object_optimum = int(
@@ -1520,27 +1659,18 @@ def _select_candidates(
     )
     stable_objective = np.zeros(variable_count, dtype=float)
     stable_objective[:candidate_count] = np.arange(1, candidate_count + 1, dtype=float)
-    try:
-        stable_result = _run_milp(
-            stable_objective,
-            integrality=integrality,
-            bounds=bounds,
-            constraints=[
-                *common_constraints,
-                territory_constraint,
-                deviation_constraint,
-                source_constraint,
-                object_constraint,
-            ],
-        )
-    except _MilpTimeLimitError:
-        if has_final_subset:
-            return _selected_indices(
-                density_result,
-                candidate_count,
-                request.image_count,
-            )
-        raise
+    stable_result = _run_milp(
+        stable_objective,
+        integrality=integrality,
+        bounds=bounds,
+        constraints=[
+            *common_constraints,
+            territory_constraint,
+            deviation_constraint,
+            source_constraint,
+            object_constraint,
+        ],
+    )
     if stable_result is None:
         return None
     return _selected_indices(stable_result, candidate_count, request.image_count)
