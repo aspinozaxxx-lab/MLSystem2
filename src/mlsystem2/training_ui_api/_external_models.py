@@ -239,7 +239,8 @@ def load_external_model(
 
             if not hasattr(torch.ops.torchvision, "nms"):
                 raise ExternalModelError("TorchVision не зарегистрировал оператор torchvision::nms")
-        model = torch.jit.load(str(model_path), map_location=torch.device(device))
+        model = torch.jit.load(str(model_path), map_location=torch.device("cpu"))
+        model.to(torch.device(device))
         model.eval()
     except ExternalModelError:
         raise

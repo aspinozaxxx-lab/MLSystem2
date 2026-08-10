@@ -4,6 +4,8 @@ from contextlib import nullcontext
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
 import zipfile
 
 import numpy as np
@@ -17,6 +19,7 @@ from mlsystem2.training_ui_api._external_models import (
     ExternalModelError,
     ExternalModelManifest,
     LoadedExternalModel,
+    load_external_model,
     merge_external_instance_features,
     predict_external_test_tile,
     validate_external_archive,
@@ -68,6 +71,44 @@ def test_external_archive_checks_hash_and_unsafe_members(tmp_path: Path) -> None
     unsafe_hash = _archive(unsafe_path, unsafe_name="../outside.pt")
     with pytest.raises((ExternalModelError, ValueError), match="небезопасный путь"):
         validate_external_archive(unsafe_path, _oks_manifest(unsafe_hash))
+
+
+def test_external_model_loads_on_cpu_before_moving_to_device(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "model.zip"
+    manifest = _oks_manifest(_archive(archive_path))
+    calls: dict[str, str] = {}
+
+    class _Model:
+        def to(self, device):
+            calls["device"] = device
+            return self
+
+        def eval(self):
+            calls["eval"] = "yes"
+            return self
+
+    fake_torch = ModuleType("torch")
+    fake_torch.device = lambda value: value
+
+    def _load(_path: str, *, map_location: str):
+        calls["map_location"] = map_location
+        return _Model()
+
+    fake_torch.jit = SimpleNamespace(load=_load)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    loaded = load_external_model(
+        archive_path,
+        manifest,
+        device="cuda",
+        scratch_root=tmp_path / "scratch",
+    )
+
+    assert calls == {"map_location": "cpu", "device": "cuda", "eval": "yes"}
+    assert loaded.device == "cuda"
 
 
 def test_external_export_renames_root_and_config(tmp_path: Path) -> None:
