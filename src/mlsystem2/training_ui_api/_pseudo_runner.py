@@ -46,6 +46,14 @@ from mlsystem2.mlflow_adapter.api import download_run_artifact
 from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
 
+from ._external_models import (
+    ExternalModelManifest,
+    external_model_manifest,
+    load_external_model,
+    merge_external_instance_features,
+    predict_external_scene,
+    predict_external_test_tile,
+)
 from ._markup_export import find_intersecting_images
 from ._external_imagery import ExternalImageryError, prepare_external_imagery
 
@@ -222,12 +230,15 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     progress_path = run_root / "progress.json"
     tiles = list(config.get("tiles") or [])
     _write_test_f1_progress(progress_path, current=0, total=len(tiles), started=started)
-    threshold = float(config.get("threshold"))
+    threshold: float | None = None
     inference_tile_size = int(config.get("tile_size") or 768)
     stride = int(config.get("stride") or inference_tile_size)
     device = str(config.get("device") or "cpu")
+    has_external_model = isinstance(config.get("external_model"), dict)
     profile = _postprocess_profile_from_config(
-        _configured_postprocess_profile(config, len(tiles)),
+        _POSTPROCESS_NONE
+        if has_external_model
+        else _configured_postprocess_profile(config, len(tiles)),
         config.get("postprocess_config"),
     )
     counts = {"true_positive": 0, "false_positive": 0, "false_negative": 0}
@@ -239,31 +250,75 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     reports: list[dict[str, Any]] = []
     torch = None
     loaded = None
+    external_loaded = None
     model = None
     try:
-        checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
-        torch = _torch()
-        loaded = load_checkpoint(
-            LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
+        external_manifest = external_model_manifest(config)
+        threshold_value = config.get("threshold")
+        threshold = (
+            float(threshold_value)
+            if threshold_value is not None
+            else (
+                external_manifest.score_threshold
+                if external_manifest is not None
+                else None
+            )
         )
-        model = loaded.model.model
-        input_channels = _loaded_input_channels(loaded, config)
-        _validate_configured_input_channels(config, input_channels)
-        model.to(torch.device(device))
-        model.eval()
+        if external_manifest is None and threshold is None:
+            raise RuntimeError("Для нативной модели не задан порог распознавания.")
+        checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
+        if external_manifest is not None:
+            external_loaded = load_external_model(
+                checkpoint_path,
+                external_manifest,
+                device=device,
+                scratch_root=run_root / "external-load",
+            )
+            torch = external_loaded.torch
+            input_channels = external_manifest.input_channels
+            _validate_configured_input_channels(config, input_channels)
+        else:
+            torch = _torch()
+            loaded = load_checkpoint(
+                LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
+            )
+            model = loaded.model.model
+            input_channels = _loaded_input_channels(loaded, config)
+            _validate_configured_input_channels(config, input_channels)
+            model.to(torch.device(device))
+            model.eval()
         for number, tile in enumerate(tiles, start=1):
             tile_started = time.time()
-            prediction = _infer_test_tile_mask(
-                torch=torch,
-                model=model,
-                input_channels=input_channels,
-                image_path=Path(str(tile["image_path"])),
-                tile_size=inference_tile_size,
-                stride=stride,
-                threshold=threshold,
-                device=device,
-                postprocess_profile=profile,
-            )
+            if external_loaded is not None:
+                external_prediction = predict_external_test_tile(
+                    external_loaded,
+                    Path(str(tile["image_path"])),
+                    geometry_postprocessor=(
+                        lambda geometry, crs: _postprocess_geometry(
+                            geometry,
+                            crs,
+                            profile,
+                        )
+                        if _has_vector_postprocess(profile)
+                        else None
+                    ),
+                )
+                prediction = external_prediction.mask
+                predicted_instances = external_prediction.instances
+            else:
+                assert threshold is not None
+                prediction = _infer_test_tile_mask(
+                    torch=torch,
+                    model=model,
+                    input_channels=input_channels,
+                    image_path=Path(str(tile["image_path"])),
+                    tile_size=inference_tile_size,
+                    stride=stride,
+                    threshold=threshold,
+                    device=device,
+                    postprocess_profile=profile,
+                )
+                predicted_instances = None
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", NotGeoreferencedWarning)
                 with rasterio.open(Path(str(tile["mask_path"]))) as mask_dataset:
@@ -286,7 +341,11 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             objects = compute_object_f1(
                 ObjectF1Request(
                     y_true_instances=ground_truth_instances,
-                    y_pred_mask=predicted,
+                    **(
+                        {"y_pred_instances": predicted_instances}
+                        if predicted_instances is not None
+                        else {"y_pred_mask": predicted}
+                    ),
                 )
             )
             true_positive = int(np.count_nonzero(ground_truth & predicted))
@@ -339,6 +398,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         try:
             del model
             del loaded
+            del external_loaded
         except UnboundLocalError:
             pass
         _release_cuda_cache(torch, device)
@@ -539,8 +599,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     else:
         scene_inputs, missing, input_scene_count = _resolve_scene_inputs(config)
     progress_total = len(scene_inputs) + len(missing)
+    has_external_model = isinstance(config.get("external_model"), dict)
     postprocess_profile = _postprocess_profile_from_config(
-        _select_postprocess_profile(len(scene_inputs)),
+        _POSTPROCESS_NONE if has_external_model else _select_postprocess_profile(len(scene_inputs)),
         config.get("postprocess_config"),
     )
     all_features: list[dict[str, Any]] = []
@@ -588,7 +649,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 "details": {},
             },
         )
-    threshold = float(config.get("threshold") or 0.5)
+    threshold_value = config.get("threshold")
+    threshold = float(threshold_value) if threshold_value is not None else None
     tile_size = int(config.get("tile_size") or 768)
     stride = int(config.get("stride") or tile_size)
     batch_size = int(config.get("batch_size") or 1)
@@ -596,18 +658,39 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
 
     torch = None
     loaded = None
+    external_loaded = None
+    external_manifest: ExternalModelManifest | None = None
     model = None
     try:
+        external_manifest = external_model_manifest(config)
+        if external_manifest is None and threshold is None:
+            threshold = 0.5
+        elif external_manifest is not None:
+            threshold = external_manifest.score_threshold
+            tile_size = external_manifest.tile_size
+            stride = external_manifest.stride
+            batch_size = 1
         checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
-        torch = _torch()
-        loaded = load_checkpoint(
-            LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
-        )
-        model = loaded.model.model
-        input_channels = _loaded_input_channels(loaded, config)
-        _validate_configured_input_channels(config, input_channels)
-        model.to(torch.device(device))
-        model.eval()
+        if external_manifest is not None:
+            external_loaded = load_external_model(
+                checkpoint_path,
+                external_manifest,
+                device=device,
+                scratch_root=run_root / "external-load",
+            )
+            torch = external_loaded.torch
+            input_channels = external_manifest.input_channels
+            _validate_configured_input_channels(config, input_channels)
+        else:
+            torch = _torch()
+            loaded = load_checkpoint(
+                LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
+            )
+            model = loaded.model.model
+            input_channels = _loaded_input_channels(loaded, config)
+            _validate_configured_input_channels(config, input_channels)
+            model.to(torch.device(device))
+            model.eval()
     except Exception as exc:  # noqa: BLE001
         try:
             del model
@@ -682,22 +765,41 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         for scene_input in scene_inputs:
             scene_started = time.time()
             try:
-                scene_features = _infer_scene(
-                    torch=torch,
-                    model=model,
-                    input_channels=input_channels,
-                    image_path=scene_input.image_path,
-                    scene=scene_input.scene_id,
-                    config=config,
-                    tile_size=tile_size,
-                    stride=stride,
-                    batch_size=batch_size,
-                    threshold=threshold,
-                    device=device,
-                    postprocess_profile=postprocess_profile,
-                    aoi_wgs84=aoi_wgs84,
-                    metrics=performance,
-                )
+                if external_loaded is not None:
+                    scene_features = predict_external_scene(
+                        external_loaded,
+                        image_path=scene_input.image_path,
+                        scene=scene_input.scene_id,
+                        config=config,
+                        aoi_wgs84=aoi_wgs84,
+                        geometry_postprocessor=(
+                            lambda geometry, crs: _postprocess_geometry(
+                                geometry,
+                                crs,
+                                postprocess_profile,
+                            )
+                            if _has_vector_postprocess(postprocess_profile)
+                            else None
+                        ),
+                    )
+                else:
+                    assert threshold is not None
+                    scene_features = _infer_scene(
+                        torch=torch,
+                        model=model,
+                        input_channels=input_channels,
+                        image_path=scene_input.image_path,
+                        scene=scene_input.scene_id,
+                        config=config,
+                        tile_size=tile_size,
+                        stride=stride,
+                        batch_size=batch_size,
+                        threshold=threshold,
+                        device=device,
+                        postprocess_profile=postprocess_profile,
+                        aoi_wgs84=aoi_wgs84,
+                        metrics=performance,
+                    )
                 all_features.extend(scene_features)
                 _write_feature_collection(
                     run_root / "per_scene" / _safe_dir_name(scene_input.scene_id) / "pseudo_markup.geojson",
@@ -757,11 +859,17 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             stage="vectorization",
             **progress_context,
         )
-        merged_features = (
-            _merge_connected_features(all_features)
-            if is_aoi
-            else _merge_overlapping_features(all_features)
-        )
+        if (
+            external_manifest is not None
+            and external_manifest.adapter == "detectron2_instances"
+        ):
+            merged_features = merge_external_instance_features(all_features)
+        else:
+            merged_features = (
+                _merge_connected_features(all_features)
+                if is_aoi
+                else _merge_overlapping_features(all_features)
+            )
         merged_features = _filter_compact_features(merged_features, postprocess_profile)
         if is_aoi:
             assert aoi_wgs84 is not None
@@ -835,6 +943,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         try:
             del model
             del loaded
+            del external_loaded
         except UnboundLocalError:
             pass
         _release_cuda_cache(torch, device)
@@ -2566,7 +2675,7 @@ def _resolve_checkpoint(config: dict[str, Any], dst_dir: Path) -> Path:
     checkpoint_uri = str(config.get("checkpoint_uri") or "")
     if checkpoint_uri and Path(checkpoint_uri).is_file():
         return Path(checkpoint_uri)
-    raise RuntimeError("Не задан локальный checkpoint или MLflow run id для скачивания best.pt.")
+    raise RuntimeError("Не задан локальный артефакт модели или MLflow run id для его скачивания.")
 
 
 def _windows(width: int, height: int, tile_size: int, stride: int):

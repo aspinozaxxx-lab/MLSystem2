@@ -1347,6 +1347,143 @@ def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path
     assert [item["model_name"] for item in metadata["models"]] == ["rivers_kanopus", "deforest_kanopus"]
 
 
+def test_training_results_batch_export_supports_native_and_external_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_MLFLOW_TRACKING_URI", "http://mlflow.local")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    manifest = {
+        "version": 1,
+        "adapter": "detectron2_instances",
+        "artifact_path": "models/model.zip",
+        "archive_sha256": "2" * 64,
+        "model_member": "zu/1/model.pt",
+        "model_root": "zu",
+        "input_channels": 3,
+        "target_resolution_m": 0.15,
+        "tile_size": 1884,
+        "stride": 628,
+        "context": 628,
+        "score_threshold": 0.0,
+        "min_area_m2": 50.0,
+        "min_hole_area_m2": 10.0,
+        "nms_iou_threshold": 0.75,
+        "nms_relative_intersection": 0.75,
+        "max_shift_m": None,
+        "shift_iterations": None,
+        "shift_confidence": None,
+        "correction_confidence": None,
+    }
+    with session_factory() as session:
+        source_job = JobRow(
+            type=JobType.TRAINING.value,
+            source=JobSource.MANUAL.value,
+            status=JobStatus.COMPLETED.value,
+            queue_position=0,
+            dataset_name="ЗУ500\\main",
+            model_name="zu500_orto",
+            architecture="external_torchscript",
+            config={"external_model": manifest},
+        )
+        session.add(source_job)
+        session.flush()
+        native = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            class_key="Реки\\main",
+            class_display_name="Реки\\main",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.OK.value,
+            mlflow_run_id="run-native",
+        )
+        external = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            class_key="ЗУ500\\main",
+            class_display_name="ЗУ500\\main",
+            architecture="external_torchscript",
+            model_name="zu500_orto",
+            status=ResultStatus.OK.value,
+            mlflow_run_id="run-external",
+            job_id=source_job.id,
+        )
+        session.add_all([native, external])
+        session.commit()
+        native_id = native.id
+        external_id = external.id
+
+    downloads: list[tuple[str, str]] = []
+    builders: list[tuple[str, str]] = []
+
+    def fake_download(**kwargs: object) -> SimpleNamespace:
+        artifact_path = str(kwargs["artifact_path"])
+        downloads.append((str(kwargs["run_id"]), artifact_path))
+        path = Path(str(kwargs["dst_dir"])) / Path(artifact_path).name
+        path.write_bytes(b"artifact")
+        return SimpleNamespace(local_path=str(path))
+
+    def archive_for(model_name: str, kind: str) -> SimpleNamespace:
+        builders.append((model_name, kind))
+        path = tmp_path / f"{model_name}-{kind}.zip"
+        with zipfile.ZipFile(path, "w") as zip_file:
+            zip_file.writestr(f"models-serving-service/{model_name}.zip", b"model")
+            zip_file.writestr(f"pipelines/{model_name}_triton.yaml", "pipeline")
+            zip_file.writestr("export_metadata.json", json.dumps({"kind": kind}))
+        return SimpleNamespace(
+            zip_path=path,
+            filename=path.name,
+            cleanup=lambda: None,
+        )
+
+    monkeypatch.setattr(_service, "download_run_artifact", fake_download)
+    monkeypatch.setattr(
+        _service,
+        "build_triton_model_export_zip",
+        lambda **kwargs: archive_for(str(kwargs["model_name"]), "native"),
+    )
+
+    def fake_external_builder(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["manifest"].archive_sha256 == "2" * 64
+        return archive_for(str(kwargs["model_name"]), "external")
+
+    monkeypatch.setattr(
+        _service,
+        "build_external_triton_model_export_zip",
+        fake_external_builder,
+    )
+    with session_factory() as session:
+        archive = _service.export_training_results_triton_zip(
+            session,
+            request=TrainingResultBatchExportRequest(
+                items=[
+                    TrainingResultExportItem(result_id=native_id, model_name="native_model"),
+                    TrainingResultExportItem(
+                        result_id=external_id,
+                        model_name="external_model",
+                        sample_size=512,
+                    ),
+                ]
+            ),
+            config=config,
+        )
+    try:
+        assert downloads == [
+            ("run-native", "checkpoints/best.pt"),
+            ("run-external", "models/model.zip"),
+        ]
+        assert builders == [("native_model", "native"), ("external_model", "external")]
+        with zipfile.ZipFile(archive.zip_path) as zip_file:
+            assert "models-serving-service/native_model.zip" in zip_file.namelist()
+            assert "models-serving-service/external_model.zip" in zip_file.namelist()
+    finally:
+        archive.cleanup()
+
+
 def test_training_result_model_export_requires_ok_status_and_mlflow_run(
     tmp_path: Path,
     monkeypatch,
@@ -1758,7 +1895,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
-        assert len(inference_templates) == 8
+        assert len(inference_templates) == 9
         inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
         inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
         assert "postprocess.min_area_m2" in inference_keys

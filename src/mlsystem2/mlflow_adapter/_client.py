@@ -20,6 +20,7 @@ from .contracts import (
     MLflowExperiment,
     MLflowExperimentRequest,
     MLflowRunRef,
+    MLflowRunArtifactInfo,
     MLflowRunStatus,
     MLflowStartRunRequest,
     MLflowTrainingProgress,
@@ -138,6 +139,47 @@ def get_usable_training_checkpoint(
     if not any(str(getattr(item, "path", "")) == expected for item in artifacts):
         return None
     return checkpoint
+
+
+def get_finished_run_artifact(
+    tracking_uri: str,
+    run_id: str,
+    artifact_path: str,
+) -> MLflowRunArtifactInfo | None:
+    """Вернуть точный артефакт только завершённого MLflow run."""
+
+    normalized = artifact_path.strip().strip("/")
+    if not normalized or normalized.endswith("/"):
+        raise MLflowAdapterError("Путь MLflow-артефакта должен указывать на файл")
+    parent, _, _ = normalized.rpartition("/")
+    mlflow = _mlflow()
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        if str(getattr(run.info, "status", "")) != MLflowRunStatus.FINISHED.value:
+            return None
+        artifacts = client.list_artifacts(run_id, parent or None)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось проверить MLflow-артефакт завершённого run") from exc
+    if not any(
+        str(getattr(item, "path", "")) == normalized
+        and not bool(getattr(item, "is_dir", False))
+        for item in artifacts
+    ):
+        return None
+    artifact_root = getattr(run.info, "artifact_uri", None)
+    artifact_uri = (
+        f"{artifact_root.rstrip('/')}/{normalized}"
+        if isinstance(artifact_root, str) and artifact_root.strip()
+        else None
+    )
+    return MLflowRunArtifactInfo(
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+        artifact_path=normalized,
+        artifact_uri=artifact_uri,
+    )
 
 
 def get_training_epoch_progress(

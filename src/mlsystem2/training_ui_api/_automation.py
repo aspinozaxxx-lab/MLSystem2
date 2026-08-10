@@ -16,7 +16,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mlsystem2.mlflow_adapter.api import create_experiment, get_best_training_checkpoint, mark_run_killed
+from mlsystem2.mlflow_adapter.api import (
+    create_experiment,
+    get_best_training_checkpoint,
+    get_finished_run_artifact,
+    mark_run_killed,
+)
 from mlsystem2.mlflow_adapter.contracts import (
     MLflowAdapterError,
     MLflowBestCheckpoint,
@@ -31,6 +36,11 @@ from ._datasets import (
     count_scenes_file_images,
     per_image_annotation_files,
     per_image_scene_entries,
+)
+from ._external_models import (
+    ExternalModelError,
+    external_model_payload,
+    external_result_manifest,
 )
 from ._models import (
     AutomationControlRow,
@@ -407,7 +417,7 @@ def _ensure_pseudo_markup_for_rule(
                 dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
             ),
             "input_channels": dataset.input_channels or 4,
-            **_checkpoint_config(training_result, config),
+            **_checkpoint_config(session, training_result, config),
         },
     )
     session.add(row)
@@ -724,9 +734,33 @@ def _reset_failed_pseudo_attempts(
 
 
 def _checkpoint_config(
+    session: Session,
     row: TrainingResultRow,
     config: TrainingUIAPIConfig,
 ) -> dict[str, object]:
+    try:
+        external_manifest = external_result_manifest(session, row)
+    except ExternalModelError as exc:
+        raise TrainingUIAPIError(str(exc)) from exc
+    if external_manifest is not None:
+        payload: dict[str, object] = {
+            "mlflow_run_id": row.mlflow_run_id,
+            "checkpoint_artifact_path": external_manifest.artifact_path,
+            "checkpoint_threshold": external_manifest.score_threshold,
+            "external_model": external_model_payload(external_manifest),
+        }
+        if row.mlflow_run_id:
+            try:
+                artifact = get_finished_run_artifact(
+                    config.mlflow_tracking_uri,
+                    row.mlflow_run_id,
+                    external_manifest.artifact_path,
+                )
+            except MLflowAdapterError:
+                artifact = None
+            if artifact is not None and artifact.artifact_uri is not None:
+                payload["checkpoint_uri"] = artifact.artifact_uri
+        return payload
     payload: dict[str, object] = {
         "mlflow_run_id": row.mlflow_run_id,
         "checkpoint_artifact_path": "checkpoints/best.pt",

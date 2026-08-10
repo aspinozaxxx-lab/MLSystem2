@@ -20,6 +20,7 @@ from mlsystem2.mlflow_adapter.api import (
     create_experiment,
     download_run_artifact,
     get_best_training_checkpoint,
+    get_finished_run_artifact,
     get_training_epoch_progress,
     list_experiments,
     mark_run_killed,
@@ -65,7 +66,16 @@ from ._datasets import (
     per_image_annotation_files,
     per_image_scene_entries,
 )
-from ._model_export import ModelExportArchive, build_triton_model_export_zip
+from ._external_models import (
+    ExternalModelError,
+    external_model_payload,
+    external_result_manifest,
+)
+from ._model_export import (
+    ModelExportArchive,
+    build_external_triton_model_export_zip,
+    build_triton_model_export_zip,
+)
 from ._models import (
     CustomDatasetRow,
     InferenceTemplateRow,
@@ -1405,7 +1415,7 @@ def create_pseudo_markup_job(
             "training_result_id": str(training_result_id) if training_result_id else None,
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
-            **_checkpoint_config(training_result, config),
+            **_checkpoint_config(session, training_result, config),
         },
     )
     session.add(row)
@@ -1480,6 +1490,7 @@ def export_training_result_triton_zip(
 ) -> ModelExportArchive:
     row = _training_result_row_for_export(session, result_id)
     return _build_training_result_export_archive(
+        session,
         row,
         model_name=model_name,
         sample_size=sample_size,
@@ -1512,6 +1523,7 @@ def export_training_results_triton_zip(
             row = _training_result_row_for_export(session, item.result_id)
             model_name = item.model_name.strip()
             archive = _build_training_result_export_archive(
+                session,
                 row,
                 model_name=model_name,
                 sample_size=item.sample_size,
@@ -1580,31 +1592,47 @@ def _training_result_row_for_export(session: Session, result_id: uuid.UUID) -> T
     if row.status != ResultStatus.OK.value:
         raise TrainingUIAPIError("Экспорт доступен только для успешного результата обучения.")
     if not row.mlflow_run_id:
-        raise TrainingUIAPIError("У результата обучения нет MLflow run id для скачивания best.pt.")
+        raise TrainingUIAPIError("У результата обучения нет MLflow run id для скачивания модели.")
     return row
 
 
 def _build_training_result_export_archive(
+    session: Session,
     row: TrainingResultRow,
     *,
     model_name: str,
     sample_size: int | None,
     config: TrainingUIAPIConfig,
 ) -> ModelExportArchive:
+    try:
+        external_manifest = external_result_manifest(session, row)
+    except ExternalModelError as exc:
+        raise TrainingUIAPIError(str(exc)) from exc
+    artifact_path = (
+        external_manifest.artifact_path
+        if external_manifest is not None
+        else "checkpoints/best.pt"
+    )
     with tempfile.TemporaryDirectory(prefix="mlsystem2-result-export-") as temp_dir:
         try:
             downloaded = download_run_artifact(
                 tracking_uri=config.mlflow_tracking_uri,
                 run_id=row.mlflow_run_id,
-                artifact_path="checkpoints/best.pt",
+                artifact_path=artifact_path,
                 dst_dir=temp_dir,
             )
         except MLflowAdapterError as exc:
-            raise TrainingUIAPIError("Не удалось скачать checkpoints/best.pt из MLflow.") from exc
+            raise TrainingUIAPIError(f"Не удалось скачать {artifact_path} из MLflow.") from exc
 
         checkpoint_path = Path(downloaded.local_path)
         if not checkpoint_path.is_file():
-            raise TrainingUIAPIError("MLflow не вернул файл checkpoints/best.pt.")
+            raise TrainingUIAPIError(f"MLflow не вернул файл {artifact_path}.")
+        if external_manifest is not None:
+            return build_external_triton_model_export_zip(
+                model_name=model_name,
+                source_archive=checkpoint_path,
+                manifest=external_manifest,
+            )
         try:
             checkpoint_bytes = checkpoint_path.read_bytes()
         except OSError as exc:
@@ -1664,11 +1692,34 @@ def _resolve_training_result(
 
 
 def _checkpoint_config(
+    session: Session,
     row: TrainingResultRow | None,
     config: TrainingUIAPIConfig,
 ) -> dict[str, object]:
     if row is None or row.mlflow_run_id is None:
         return {}
+    try:
+        external_manifest = external_result_manifest(session, row)
+    except ExternalModelError as exc:
+        raise TrainingUIAPIError(str(exc)) from exc
+    if external_manifest is not None:
+        payload: dict[str, object] = {
+            "mlflow_run_id": row.mlflow_run_id,
+            "checkpoint_artifact_path": external_manifest.artifact_path,
+            "checkpoint_threshold": external_manifest.score_threshold,
+            "external_model": external_model_payload(external_manifest),
+        }
+        try:
+            artifact = get_finished_run_artifact(
+                config.mlflow_tracking_uri,
+                row.mlflow_run_id,
+                external_manifest.artifact_path,
+            )
+        except MLflowAdapterError:
+            artifact = None
+        if artifact is not None and artifact.artifact_uri is not None:
+            payload["checkpoint_uri"] = artifact.artifact_uri
+        return payload
     payload: dict[str, object] = {
         "mlflow_run_id": row.mlflow_run_id,
         "checkpoint_artifact_path": "checkpoints/best.pt",

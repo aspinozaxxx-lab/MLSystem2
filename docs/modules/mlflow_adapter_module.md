@@ -10,6 +10,8 @@
 - `create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment` - создает experiment или возвращает существующий с тем же именем.
 - `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает `val/quality_f1` для запуска с tag `quality_metric`, использует pixel fallback для старого запуска и возвращает эпоху, значение F1, threshold и ссылку на `checkpoints/best.pt`.
 - `get_usable_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - дополнительно требует статус MLflow `FINISHED`, threshold и фактический артефакт `checkpoints/best.pt`; используется при выборе модели для нового инференса.
+- `get_finished_run_artifact(tracking_uri: str, run_id: str, artifact_path: str) -> MLflowRunArtifactInfo | None` - возвращает точный файловый артефакт только завершённого запуска без требования training-метрик.
+- `get_training_epoch_progress(tracking_uri: str, run_id: str) -> MLflowTrainingProgress` - возвращает число завершённых эпох по истории `train/epoch_time_sec`.
 - `download_run_artifact(tracking_uri: str, run_id: str, artifact_path: str, dst_dir: str | Path) -> MLflowDownloadedArtifact` - скачивает артефакт запуска в локальную рабочую папку вызывающего модуля.
 - `start_run(request: MLflowStartRunRequest) -> MLflowRunRef` - создает или отключает MLflow run.
 - `log_dataset_preparation(run: MLflowRunRef, report: DatasetPreparationReport) -> None` - пишет отчет подготовки датасета.
@@ -22,6 +24,7 @@
 - `log_timing_report(run: MLflowRunRef, report: TimingReport) -> None` - пишет отчет времени выполнения.
 - `log_pipeline_report(run: MLflowRunRef, report: PipelineReport) -> None` - пишет итоговый отчет конвейера.
 - `end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None` - завершает MLflow run.
+- `mark_run_killed(tracking_uri: str, run_id: str) -> None` - переводит активный запуск в `KILLED`.
 
 ## Публичные контракты
 
@@ -34,6 +37,8 @@
 - `MLflowArtifactRef` - ссылка на артефакт MLflow.
 - `MLflowBestCheckpoint` - поля `tracking_uri`, `run_id`, `metric_name`, `f1_score`, `epoch`, `artifact_path`, `artifact_uri`, `threshold`.
 - `MLflowDownloadedArtifact` - поля `run_id`, `artifact_path`, `local_path`.
+- `MLflowRunArtifactInfo` - поля `tracking_uri`, `run_id`, `artifact_path`, `artifact_uri` произвольного файла завершённого запуска.
+- `MLflowTrainingProgress` - поле `completed_epochs`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -88,4 +93,4 @@
 
 `get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` читает `val/quality_f1`, потому что `best.pt` сохраняется train-модулем по этой же метрике. Запуск без tag считается старым и читается по `val/best_threshold_pixel_f1`; если новый metric history отсутствует, также применяется pixel fallback. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается вместе с checkpoint summary.
 
-`download_run_artifact` оборачивает публичный MLflow client и нужен вызывающим модулям, которым требуется локальный файл артефакта без прямого импорта MLflow.
+`get_finished_run_artifact` проверяет статус запуска, точное имя и то, что найден именно файл. `download_run_artifact` оборачивает публичный MLflow client и нужен вызывающим модулям, которым требуется локальный файл артефакта без прямого импорта MLflow.

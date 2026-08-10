@@ -30,3 +30,33 @@ def test_object_f1_rejects_mismatched_masks() -> None:
                 y_pred_mask=[[1], [0]],
             )
         )
+
+
+def test_object_f1_preserves_explicit_adjacent_instances() -> None:
+    explicit = compute_object_f1(
+        ObjectF1Request(
+            y_true_instances=[[1, 1, 2, 2]],
+            y_pred_instances=[[10, 10, 20, 20]],
+        )
+    )
+    binary = compute_object_f1(
+        ObjectF1Request(
+            y_true_instances=[[1, 1, 2, 2]],
+            y_pred_mask=[[1, 1, 1, 1]],
+        )
+    )
+
+    assert explicit.true_positive == 2
+    assert explicit.f1 == 1.0
+    assert binary.true_positive == 1
+
+
+def test_object_f1_requires_exactly_one_prediction_representation() -> None:
+    with pytest.raises(ValueError, match="ровно одно"):
+        ObjectF1Request(y_true_instances=[[1]])
+    with pytest.raises(ValueError, match="ровно одно"):
+        ObjectF1Request(
+            y_true_instances=[[1]],
+            y_pred_mask=[[1]],
+            y_pred_instances=[[1]],
+        )

@@ -53,7 +53,8 @@ Authorization: Bearer <MLSYSTEM2_PSEUDOLABEL_API_TOKEN>
 ### `GET /api/v1/pseudolabel/classes`
 
 Возвращает только классы, у которых есть основная успешная сеть
-с завершённым MLflow run, метрикой порога и доступным `checkpoints/best.pt`. В ответе есть
+с завершённым MLflow run и доступным нативным `checkpoints/best.pt` либо проверенным внешним ZIP. Нативной
+сети требуется threshold; argmax-профиль внешней модели порога не выдумывает. В ответе есть
 `class_id`, `display_name`, `model_id`, `model_version`, `model_name`, `trained_at`,
 `model_imagery_type`, `input_channels`, `target_resolution_m` и массив `sources`. Для старой БД без
 ручного выбора временно используется последняя пригодная сеть, а миграция назначает её основной.

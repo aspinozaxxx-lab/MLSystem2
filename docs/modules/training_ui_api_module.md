@@ -49,9 +49,9 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
   `models-serving-service` и Triton CPU; endpoint возвращает файл и не создает записей в БД.
 - `POST /api/v1/results/training/{result_id}/triton-zip` - multipart endpoint для сборки такого же zip-архива
-  из `checkpoints/best.pt` успешного результата обучения в MLflow; endpoint возвращает файл и не создает записей в БД.
+  из `checkpoints/best.pt` либо внешнего ZIP успешного результата в MLflow; endpoint возвращает файл и не создаёт записей в БД.
 - `POST /api/v1/results/training/triton-zip` - JSON endpoint для сборки общего zip-архива нескольких успешных
-  результатов обучения; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
+  нативных и импортированных результатов; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД.
 - `POST /api/v1/scene-list-export` - multipart endpoint с `imagery_type=kanopus|ortho`, optional
   `include_footprints` и GeoJSON; рекурсивно находит TIFF с полигональными объектами. Без флага возвращает
@@ -79,8 +79,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 ## Список используемых данным модулем модулей и с какой целью
 
 - `models.api` - получить публичный список поддерживаемых архитектур.
-- `mlflow_adapter.api` - получить и создать MLflow experiments, прочитать лучший checkpoint training run и скачать `checkpoints/best.pt` для псевдоразметки; сервис не пишет MLflow-метрики.
-- `mlflow_adapter.contracts` - передать публичные DTO создания experiment и summary лучшего checkpoint.
+- `mlflow_adapter.api` - получить и создать MLflow experiments, прочитать лучший нативный checkpoint либо произвольный артефакт завершённого run и скачать его для инференса; сервис не пишет MLflow-метрики.
+- `mlflow_adapter.contracts` - передать публичные DTO experiment, нативного checkpoint и артефакта завершённого run.
 - `settings.contracts` - валидировать YAML-настройки, сформированные для запуска training CLI.
 - `dataset_preparing.api` и `dataset_preparing.contracts` - сопоставлять legacy TXT и per-image GeoJSON с TIFF.
 
@@ -109,4 +109,4 @@ auto jobs: queued rows уходят из очередей, running process по�
 
 ## Алгоритм работы и его особенности
 
-Каталог различает legacy по TXT и per-image по его отсутствию; пустой управляемый per-image набор доступен редактору, но не обучению. Worker копирует разметку в snapshot задания, а тестовые выборки per-image используют только positive объектов своего TIFF. Редактор хранит черновики нескольких снимков в памяти вкладки и отправляет их одним batch; backend под межпроцессным lock сначала проверяет все revision и геометрии, затем создаёт один атомарный commit. Конфликт любого файла возвращает `409` без частичной записи и слияния. После операции UID/GID всего editor-клона восстанавливаются по владельцу его корня, поэтому запуск API от другого пользователя не нарушает владение клоном. Footprint строится по `dataset_mask` TIFF, кэшируется по версии raster-файла и возвращается в деталях сцены; существующая GeoJSON при чтении обрезается этим контуром. CRS, Polygon/MultiPolygon, валидность и полное попадание в valid-data footprint обязательны; свойства и ID сохраняются. Экспорт списка сцен проверяет положительную площадь пересечения по нативной `dataset_mask` блоками и исключает TIFF, где разметка попала только в `nodata`. OpenLayers показывает GeoTIFF с nearest-neighbor resampling без переходного размытия, overzoom до 1000% и умеренным контрастом; разметка скрывается независимо от заливки. Одиночный save/delete остаётся совместимым, добавление папки создаёт один commit. Push допускает один rebase для постороннего коммита. Live-каталог не изменяется; frontend опрашивает публикацию по SHA.
+Каталог различает legacy по TXT и per-image по его отсутствию; пустой per-image набор доступен редактору, но не обучению. Worker копирует разметку в snapshot. Редактор публикует черновики batch под Git-lock; конфликт возвращает `409`. Footprint строится по valid-data mask, и геометрия обязана целиком попадать в него. Псевдоразметка, F1 и AOI используют нативный checkpoint либо проверенный ZIP `external_torchscript`; внешний манифест фиксирует SHA-256, RGB, разрешение, окна и постобработку. ЗУ сохраняет instance ID, ОКС применяет классы крыши/контура и коррекцию по стенам; nodata обнуляется. Экспорт переименовывает исходную Triton-модель и допускает смешанный batch. Live-каталог редактор не изменяет.

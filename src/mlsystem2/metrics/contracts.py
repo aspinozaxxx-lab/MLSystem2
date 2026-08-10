@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MetricsError(RuntimeError):
@@ -34,8 +34,15 @@ class ObjectF1Request(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     y_true_instances: Any
-    y_pred_mask: Any
+    y_pred_mask: Any | None = None
+    y_pred_instances: Any | None = None
     iou_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_prediction(self) -> "ObjectF1Request":
+        if (self.y_pred_mask is None) == (self.y_pred_instances is None):
+            raise ValueError("Нужно передать ровно одно из полей y_pred_mask или y_pred_instances")
+        return self
 
 
 class ObjectF1Result(BaseModel):

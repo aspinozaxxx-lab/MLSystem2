@@ -14,6 +14,7 @@ from typing import Any
 
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 
+from ._external_models import ExternalModelManifest, validate_external_archive
 from .contracts import TrainingUIAPIError
 
 MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$")
@@ -114,6 +115,297 @@ def build_triton_model_export_zip(
     except Exception:
         shutil.rmtree(temp_root, ignore_errors=True)
         raise
+
+
+def build_external_triton_model_export_zip(
+    *,
+    model_name: str,
+    source_archive: Path,
+    manifest: ExternalModelManifest,
+) -> ModelExportArchive:
+    """Переупаковать проверенную внешнюю TorchScript-модель под выбранным именем."""
+
+    parsed_model_name = _validate_model_name(model_name)
+    try:
+        validate_external_archive(source_archive, manifest)
+    except Exception as exc:
+        raise TrainingUIAPIError(str(exc)) from exc
+    temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-external-model-export-"))
+    try:
+        export_root = temp_root / "export"
+        service_zip_dir = export_root / "models-serving-service"
+        pipeline_dir = export_root / "pipelines"
+        service_zip_dir.mkdir(parents=True)
+        pipeline_dir.mkdir(parents=True)
+        service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
+        _rewrite_external_model_archive(
+            source_archive=source_archive,
+            target_archive=service_zip_path,
+            source_root=manifest.model_root,
+            target_root=parsed_model_name,
+        )
+        _write_text(
+            pipeline_dir / f"{parsed_model_name}_triton.yaml",
+            _external_pipeline_yaml(parsed_model_name, manifest),
+        )
+        _write_json(
+            export_root / "export_metadata.json",
+            {
+                "model_name": parsed_model_name,
+                "model_archive": f"models-serving-service/{parsed_model_name}.zip",
+                "pipeline": f"pipelines/{parsed_model_name}_triton.yaml",
+                "format": "torchscript",
+                "triton_platform": (
+                    "python" if manifest.adapter == "detectron2_instances" else "pytorch_libtorch"
+                ),
+                "triton_instance_kind": "SOURCE_CONFIG",
+                "source_triton_config_preserved": True,
+                "input_channels": manifest.input_channels,
+                "sample_size": manifest.stride,
+                "sample_size_source": "external_model_manifest",
+                "tile_size_with_context": manifest.tile_size,
+                "context": manifest.context,
+                "target_resolution_m": manifest.target_resolution_m,
+                "threshold": manifest.score_threshold,
+                "threshold_source": (
+                    "external_model_manifest"
+                    if manifest.score_threshold is not None
+                    else "not_applicable"
+                ),
+                "source_archive_sha256": manifest.archive_sha256,
+                "external_adapter": manifest.adapter,
+            },
+        )
+        zip_path = temp_root / f"{parsed_model_name}_export.zip"
+        _zip_directory(export_root, zip_path)
+        return ModelExportArchive(
+            zip_path=zip_path,
+            filename=f"{parsed_model_name}_export.zip",
+            cleanup_root=temp_root,
+        )
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise
+
+
+def _rewrite_external_model_archive(
+    *,
+    source_archive: Path,
+    target_archive: Path,
+    source_root: str,
+    target_root: str,
+) -> None:
+    config_name = f"{source_root}/config.pbtxt"
+    with zipfile.ZipFile(source_archive) as source, zipfile.ZipFile(
+        target_archive,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as target:
+        for item in sorted(source.infolist(), key=lambda value: value.filename):
+            normalized = item.filename.replace("\\", "/").rstrip("/")
+            if item.is_dir() or not normalized:
+                continue
+            relative = normalized.removeprefix(f"{source_root}/")
+            if relative == normalized:
+                raise TrainingUIAPIError("ZIP внешней модели содержит файл вне корневой папки.")
+            content = source.read(item)
+            if normalized == config_name:
+                content = _renamed_triton_config(content, target_root)
+            target.writestr(f"{target_root}/{relative}", content)
+
+
+def _renamed_triton_config(content: bytes, model_name: str) -> bytes:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TrainingUIAPIError("config.pbtxt внешней модели должен быть UTF-8.") from exc
+    updated, count = re.subn(
+        r'(?m)^\s*name\s*:\s*"[^"]+"\s*$',
+        f'name: "{model_name}"',
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise TrainingUIAPIError("В config.pbtxt внешней модели не найдено однозначное имя модели.")
+    return updated.encode("utf-8")
+
+
+def _external_pipeline_yaml(model_name: str, manifest: ExternalModelManifest) -> str:
+    if manifest.adapter == "detectron2_instances":
+        return _external_zu_pipeline_yaml(model_name, manifest)
+    return _external_oks_pipeline_yaml(model_name, manifest)
+
+
+def _external_zu_pipeline_yaml(model_name: str, manifest: ExternalModelManifest) -> str:
+    return f"""version: 0.1.4
+config:
+  _class: Compose
+  inputs:
+    - input.tif
+  outputs:
+    - output.geojson
+  bricks:
+    - _class: SplitRaster
+      input: input
+      input_ext: tif
+      output: [RED, GRN, BLU]
+    - _class: NSPDParcels
+      bounds: {manifest.context}
+      input_rasters: [RED, GRN, BLU]
+      output_fc: output
+      sample_size: [{manifest.stride}, {manifest.stride}]
+      crs: utm
+      res: [{manifest.target_resolution_m}, {manifest.target_resolution_m}]
+      adapter:
+        _class: TritonAdapter
+        name: "{model_name}"
+        host: 127.0.0.1
+        port: 8000
+        protocol: http
+        input_ndim: 3
+        output_ndim: null
+        output_dtype: null
+        output_transpose: null
+    - _class: UnifiedVectorProcessing
+      input: output
+      output: output
+      crs: utm
+      bricks:
+        - _class: NMSVector
+          algorithm: original
+          corr_coef: {manifest.nms_relative_intersection}
+          iou_threshold: {manifest.nms_iou_threshold}
+        - _class: CorrectTopology
+          correct_by_subtraction: -1
+          distance_step: 0.0
+        - _class: FilterOutput
+          flatten_multipolygons: true
+          min_hole_area: {manifest.min_hole_area_m2}
+        - _class: FilterSmallObjects
+          min_area: {manifest.min_area_m2}
+          area_tag: area
+"""
+
+
+def _external_oks_pipeline_yaml(model_name: str, manifest: ExternalModelManifest) -> str:
+    return f"""version: 0.1.4
+config:
+  _class: Compose
+  inputs:
+    - input.tif
+  outputs:
+    - output.geojson
+  blocks:
+    - name: Segmentation
+      optional: false
+      inputs: [input.tif]
+      outputs: [roofs.geojson, walls.geojson]
+      bricks:
+        - _class: SplitRaster
+          input: input
+          input_ext: tif
+          output: [RED, GRN, BLU]
+        - _class: Segmentation
+          bounds: {manifest.context}
+          sample_size: [{manifest.stride}, {manifest.stride}]
+          vectorize: false
+          input_rasters: [RED, GRN, BLU]
+          output_labels: [shadow, wall, markers, contour]
+          crs: utm
+          res: [{manifest.target_resolution_m}, {manifest.target_resolution_m}]
+          adapter:
+            _class: TritonAdapter
+            name: "{model_name}"
+            host: 127.0.0.1
+            port: 8000
+            protocol: http
+            input_ndim: 4
+            output_ndim: 3
+          postprocessors:
+            - _class: LabelsToOnehot
+              class_map: 1, 2, 3, 4
+        - _class: ApplyMask
+          child_masks: [contour]
+          parent_mask: markers
+          out_masks: [roof]
+          mask_operation: or
+          reverse_parent: false
+          sample_size: [2000, 2000]
+        - _class: VectorizeMasks
+          input_rasters: [roof, wall]
+          output_fcs: [roofs, walls]
+    - name: Подготовка геометрии
+      optional: false
+      inputs: [roofs.geojson]
+      outputs: [roofs.geojson]
+      bricks:
+        - _class: UnifiedVectorProcessing
+          input: roofs
+          output: roofs
+          crs: utm
+          bricks:
+            - _class: FilterBigObjects
+              max_area_sq_m: 100000
+            - _class: FilterSmallObjects
+              min_area: {manifest.min_area_m2}
+            - _class: RemoveSmallHoles
+              min_hole_area: {manifest.min_hole_area_m2}
+    - name: Смещение footprint
+      optional: false
+      inputs: [roofs.geojson, walls.geojson]
+      outputs: [footprints.geojson]
+      bricks:
+        - _class: MeasureShift
+          roofs: roofs
+          walls: walls
+          output: roof_shift
+          max_shift: {manifest.max_shift_m}
+          max_iterations: {manifest.shift_iterations}
+        - _class: GenerateFootprints
+          roofs: roof_shift
+          output: footprint_shift
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          confidence_shift_thr: {manifest.shift_confidence}
+        - _class: CorrectShift
+          footprints: footprint_shift
+          walls: walls
+          output: footprint_corrected
+          x_shift_tag: _x_shift
+          y_shift_tag: _y_shift
+          confidence_shift_tag: _confidence_shift
+          corr_x_shift_tag: _x_shift_corr
+          corr_y_shift_tag: _y_shift_corr
+          corr_confidence_shift_tag: _confidence_shift_corr
+          corr_threshold: {manifest.correction_confidence}
+        - _class: GenerateFootprints
+          roofs: footprint_corrected
+          output: footprints
+          x_shift_tag: _x_shift_corr
+          y_shift_tag: _y_shift_corr
+          confidence_shift_tag: _confidence_shift_corr
+          confidence_shift_thr: {manifest.correction_confidence}
+    - name: Финальная топология
+      optional: false
+      inputs: [footprints.geojson]
+      outputs: [output.geojson]
+      bricks:
+        - _class: UnifiedVectorProcessing
+          input: footprints
+          output: output
+          crs: utm
+          bricks:
+            - _class: CorrectTopology
+              distance_step: 1.0
+              correct_by_subtraction: 1
+              buffer: 0.0
+            - _class: FilterSmallObjects
+              min_area: 5.0
+              area_tag: area
+            - _class: RemoveTags
+              remove_underscore_tags: true
+"""
 
 
 def _validate_model_name(value: str) -> str:

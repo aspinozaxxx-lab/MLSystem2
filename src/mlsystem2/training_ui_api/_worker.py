@@ -23,7 +23,11 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from mlsystem2.mlflow_adapter.api import get_best_training_checkpoint, list_experiments
+from mlsystem2.mlflow_adapter.api import (
+    get_best_training_checkpoint,
+    get_finished_run_artifact,
+    list_experiments,
+)
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
 from mlsystem2.settings.api import load_settings
 
@@ -35,6 +39,11 @@ from ._datasets import (
     count_scenes_file_images,
     imagery_images_dir,
     per_image_annotation_files,
+)
+from ._external_models import (
+    ExternalModelError,
+    external_model_payload,
+    external_result_manifest,
 )
 from ._models import (
     AutomationControlRow,
@@ -496,9 +505,21 @@ def _build_pseudo_markup_config(
         else None
     )
     flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
-    tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
+    try:
+        external_manifest = (
+            external_result_manifest(session, training_result)
+            if training_result is not None
+            else None
+        )
+    except ExternalModelError as exc:
+        raise RuntimeError(str(exc)) from exc
+    tile_size = (
+        external_manifest.tile_size
+        if external_manifest is not None
+        else _int_value(flat, "tile_preparation.tile_size", 768)
+    )
     threshold = _optional_float(row.config, "checkpoint_threshold")
-    if threshold is None and training_result is not None:
+    if threshold is None and training_result is not None and external_manifest is None:
         raise RuntimeError(
             "Для псевдоразметки по результату обучения не найден MLflow val/best_threshold "
             "на эпохе best checkpoint."
@@ -539,13 +560,22 @@ def _build_pseudo_markup_config(
         "checkpoint_artifact_path": row.config.get("checkpoint_artifact_path") or "checkpoints/best.pt",
         "checkpoint_f1_score": row.config.get("checkpoint_f1_score"),
         "checkpoint_epoch": row.config.get("checkpoint_epoch"),
+        "external_model": external_model_payload(external_manifest),
         "imagery_type": row.config.get("imagery_type"),
         "input_channels": _int_value(row.config, "input_channels", 4),
         "postprocess_config": row.config.get("inference_template_config") or {},
         "threshold": threshold,
         "tile_size": tile_size,
-        "stride": _int_value(flat, "tile_preparation.stride", tile_size),
-        "batch_size": _int_value(flat, "train.batch_size", 1),
+        "stride": (
+            external_manifest.stride
+            if external_manifest is not None
+            else _int_value(flat, "tile_preparation.stride", tile_size)
+        ),
+        "batch_size": (
+            1
+            if external_manifest is not None
+            else _int_value(flat, "train.batch_size", 1)
+        ),
         "device": "cuda",
     }
 
@@ -561,7 +591,8 @@ def _build_pseudolabel_aoi_config(
     if not isinstance(state, dict):
         raise RuntimeError("В задании распознавания отсутствуют зафиксированные параметры.")
     threshold = state.get("checkpoint_threshold")
-    if threshold is None:
+    external_model = state.get("external_model")
+    if threshold is None and not isinstance(external_model, dict):
         raise RuntimeError("У зафиксированной модели отсутствует порог распознавания.")
     images_root = str(state.get("images_root") or "")
     index_key = hashlib.sha256(images_root.encode("utf-8")).hexdigest()[:20] if images_root else ""
@@ -592,6 +623,7 @@ def _build_pseudolabel_aoi_config(
         "checkpoint_artifact_path": state.get("checkpoint_artifact_path") or "checkpoints/best.pt",
         "checkpoint_f1_score": state.get("checkpoint_f1_score"),
         "checkpoint_epoch": state.get("checkpoint_epoch"),
+        "external_model": external_model,
         "imagery_type": state.get("imagery_type"),
         "model_imagery_type": state.get("model_imagery_type") or state.get("imagery_type"),
         "target_resolution_m": state.get("target_resolution_m"),
@@ -608,7 +640,7 @@ def _build_pseudolabel_aoi_config(
         "channel_mapping": state.get("channel_mapping"),
         "input_channels": _int_value(state, "input_channels", 4),
         "postprocess_config": state.get("inference_template_config") or {},
-        "threshold": float(threshold),
+        "threshold": float(threshold) if threshold is not None else None,
         "tile_size": _int_value(state, "tile_size", 768),
         "stride": _int_value(state, "stride", 768),
         "batch_size": _int_value(state, "batch_size", 1),
@@ -648,19 +680,51 @@ def _build_test_sample_f1_config(
         raise RuntimeError("Состав включённых тайлов не совпадает с ревизией задания.")
     if not training_result.mlflow_run_id:
         raise RuntimeError("У результата обучения отсутствует MLflow run id.")
-    checkpoint = _best_training_checkpoint(config, training_result.mlflow_run_id)
-    if checkpoint is None:
-        raise RuntimeError("Не удалось получить best checkpoint из MLflow.")
-    if checkpoint.threshold is None:
-        raise RuntimeError("У best checkpoint отсутствует порог val/best_threshold.")
-
     source_training_job = (
         session.get(JobRow, training_result.job_id)
         if training_result.job_id is not None
         else None
     )
     flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
-    inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
+    try:
+        external_manifest = external_result_manifest(session, training_result)
+    except ExternalModelError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if external_manifest is not None:
+        try:
+            artifact = get_finished_run_artifact(
+                config.mlflow_tracking_uri,
+                training_result.mlflow_run_id,
+                external_manifest.artifact_path,
+            )
+        except MLflowAdapterError as exc:
+            raise RuntimeError("Не удалось проверить ZIP внешней модели в MLflow.") from exc
+        if artifact is None:
+            raise RuntimeError("ZIP внешней модели отсутствует в завершённом MLflow run.")
+        checkpoint_uri = artifact.artifact_uri
+        checkpoint_artifact_path = artifact.artifact_path
+        checkpoint_f1_score = None
+        checkpoint_epoch = None
+        checkpoint_threshold = external_manifest.score_threshold
+        inference_tile_size = external_manifest.tile_size
+        inference_stride = external_manifest.stride
+        input_channels = external_manifest.input_channels
+        batch_size = 1
+    else:
+        checkpoint = _best_training_checkpoint(config, training_result.mlflow_run_id)
+        if checkpoint is None:
+            raise RuntimeError("Не удалось получить best checkpoint из MLflow.")
+        if checkpoint.threshold is None:
+            raise RuntimeError("У best checkpoint отсутствует порог val/best_threshold.")
+        checkpoint_uri = checkpoint.artifact_uri
+        checkpoint_artifact_path = checkpoint.artifact_path
+        checkpoint_f1_score = checkpoint.f1_score
+        checkpoint_epoch = checkpoint.epoch
+        checkpoint_threshold = checkpoint.threshold
+        inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
+        inference_stride = _int_value(flat, "tile_preparation.stride", inference_tile_size)
+        input_channels = _int_value(flat, "train.input_channels", 4)
+        batch_size = _int_value(flat, "train.batch_size", 1)
     sample_root = Path(config.stored_files_root) / "test-samples" / str(sample.id)
     tiles: list[dict[str, Any]] = []
     for tile in sorted(enabled_tiles, key=lambda item: item.tile_index):
@@ -693,18 +757,19 @@ def _build_test_sample_f1_config(
         "tiles": tiles,
         "mlflow_tracking_uri": config.mlflow_tracking_uri,
         "mlflow_run_id": training_result.mlflow_run_id,
-        "checkpoint_uri": checkpoint.artifact_uri,
-        "checkpoint_artifact_path": checkpoint.artifact_path,
-        "checkpoint_f1_score": checkpoint.f1_score,
-        "checkpoint_epoch": checkpoint.epoch,
-        "input_channels": _int_value(flat, "train.input_channels", 4),
+        "checkpoint_uri": checkpoint_uri,
+        "checkpoint_artifact_path": checkpoint_artifact_path,
+        "checkpoint_f1_score": checkpoint_f1_score,
+        "checkpoint_epoch": checkpoint_epoch,
+        "external_model": external_model_payload(external_manifest),
+        "input_channels": input_channels,
         "postprocess_config": row.config.get("inference_template_config") or {},
         "postprocess_profile": row.config.get("postprocess_profile"),
         "test_f1_evaluator_version": row.config.get("test_f1_evaluator_version"),
-        "threshold": checkpoint.threshold,
+        "threshold": checkpoint_threshold,
         "tile_size": inference_tile_size,
-        "stride": _int_value(flat, "tile_preparation.stride", inference_tile_size),
-        "batch_size": _int_value(flat, "train.batch_size", 1),
+        "stride": inference_stride,
+        "batch_size": batch_size,
         "device": "cuda",
     }
 
@@ -1181,7 +1246,10 @@ def _finish_test_sample_f1_job(
             metric.object_true_positive = object_true_positive
             metric.object_false_positive = object_false_positive
             metric.object_false_negative = object_false_negative
-            metric.threshold = float(report.get("threshold"))
+            report_threshold = report.get("threshold")
+            metric.threshold = (
+                float(report_threshold) if report_threshold is not None else None
+            )
             metric.status = "current"
             metric.evaluated_at = row.finished_at
             metric.error = None

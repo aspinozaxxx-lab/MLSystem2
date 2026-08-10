@@ -81,6 +81,15 @@ class MLflowDownloadedArtifact(BaseModel):
     local_path: str
 
 
+class MLflowRunArtifactInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tracking_uri: str
+    run_id: str
+    artifact_path: str
+    artifact_uri: str | None = None
+
+
 class MLflowTrainingProgress(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +104,7 @@ __all__ = [
     "MLflowExperiment",
     "MLflowExperimentRequest",
     "MLflowRunRef",
+    "MLflowRunArtifactInfo",
     "MLflowRunStatus",
     "MLflowStartRunRequest",
     "MLflowTrainingProgress",

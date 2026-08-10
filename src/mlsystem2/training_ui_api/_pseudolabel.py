@@ -23,8 +23,11 @@ from sqlalchemy.orm import Session
 
 from mlsystem2.dataset_preparing.api import resolve_scene_images
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
-from mlsystem2.mlflow_adapter.api import get_usable_training_checkpoint
-from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
+from mlsystem2.mlflow_adapter.api import (
+    get_finished_run_artifact,
+    get_usable_training_checkpoint,
+)
+from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import (
@@ -34,6 +37,12 @@ from ._dataset_catalog import (
     list_managed_classes,
 )
 from ._datasets import CUSTOM_KEY, imagery_images_dir, resolve_scenes_file_images
+from ._external_models import (
+    ExternalModelError,
+    ExternalModelManifest,
+    external_model_payload,
+    external_result_manifest,
+)
 from ._imagery_sources import find_imagery_source, list_imagery_sources
 from ._models import JobRow, StoredFileRow, TrainingResultRow
 from ._queueing import next_queue_position
@@ -61,6 +70,15 @@ _RESOLUTION_CACHE: dict[tuple[str, int, str], float | None] = {}
 
 
 @dataclass(frozen=True)
+class _SelectedCheckpoint:
+    artifact_path: str
+    artifact_uri: str | None
+    threshold: float | None
+    f1_score: float | None
+    epoch: int | None
+
+
+@dataclass(frozen=True)
 class _SelectedModel:
     """Zafiksirovannaya model i ee effektivnyi inference-profile."""
 
@@ -73,7 +91,8 @@ class _SelectedModel:
     input_channels: int
     target_resolution_m: float | None
     result: TrainingResultRow
-    checkpoint: MLflowBestCheckpoint
+    checkpoint: _SelectedCheckpoint
+    external_model: ExternalModelManifest | None
     inference_template_id: uuid.UUID | None
     inference_template_config: dict[str, Any]
 
@@ -153,9 +172,21 @@ def create_pseudolabel_job(
         else None
     )
     source_config = dict(source_job.config or {}) if source_job is not None else {}
-    tile_size = _positive_int(source_config.get("tile_preparation.tile_size"), 768)
-    stride = _positive_int(source_config.get("tile_preparation.stride"), tile_size)
-    batch_size = _positive_int(source_config.get("train.batch_size"), 1)
+    tile_size = (
+        selected.external_model.tile_size
+        if selected.external_model is not None
+        else _positive_int(source_config.get("tile_preparation.tile_size"), 768)
+    )
+    stride = (
+        selected.external_model.stride
+        if selected.external_model is not None
+        else _positive_int(source_config.get("tile_preparation.stride"), tile_size)
+    )
+    batch_size = (
+        1
+        if selected.external_model is not None
+        else _positive_int(source_config.get("train.batch_size"), 1)
+    )
     aoi_payload = mapping(aoi_wgs84)
     row = JobRow(
         type=JobType.INFERENCE.value,
@@ -190,12 +221,15 @@ def create_pseudolabel_job(
                 "checkpoint_threshold": selected.checkpoint.threshold,
                 "checkpoint_f1_score": selected.checkpoint.f1_score,
                 "checkpoint_epoch": selected.checkpoint.epoch,
+                "external_model": external_model_payload(selected.external_model),
                 "imagery_type": selected.imagery_type,
                 "model_imagery_type": selected.imagery_type,
                 "input_channels": selected.input_channels,
                 "target_resolution_m": selected.target_resolution_m,
                 "resample_to_resolution_m": (
-                    selected.target_resolution_m if cross_source or is_external else None
+                    selected.target_resolution_m
+                    if selected.external_model is not None or cross_source or is_external
+                    else None
                 ),
                 "source_id": source.source_id,
                 "source_name": source.display_name,
@@ -404,11 +438,48 @@ def _select_model(
         ):
             continue
         try:
-            checkpoint = get_usable_training_checkpoint(config.mlflow_tracking_uri, row.mlflow_run_id or "")
-        except MLflowAdapterError:
+            external_manifest = external_result_manifest(session, row)
+        except ExternalModelError:
             continue
-        if checkpoint is None:
-            continue
+        if external_manifest is not None:
+            try:
+                artifact = get_finished_run_artifact(
+                    config.mlflow_tracking_uri,
+                    row.mlflow_run_id or "",
+                    external_manifest.artifact_path,
+                )
+            except MLflowAdapterError:
+                continue
+            if artifact is None:
+                continue
+            checkpoint = _SelectedCheckpoint(
+                artifact_path=artifact.artifact_path,
+                artifact_uri=artifact.artifact_uri,
+                threshold=external_manifest.score_threshold,
+                f1_score=None,
+                epoch=None,
+            )
+            target_resolution_m = external_manifest.target_resolution_m
+            input_channels = external_manifest.input_channels
+        else:
+            try:
+                native_checkpoint = get_usable_training_checkpoint(
+                    config.mlflow_tracking_uri,
+                    row.mlflow_run_id or "",
+                )
+            except MLflowAdapterError:
+                continue
+            if native_checkpoint is None:
+                continue
+            checkpoint = _SelectedCheckpoint(
+                artifact_path=native_checkpoint.artifact_path,
+                artifact_uri=native_checkpoint.artifact_uri,
+                threshold=native_checkpoint.threshold,
+                f1_score=native_checkpoint.f1_score,
+                epoch=native_checkpoint.epoch,
+            )
+            target_resolution_m = _dataset_target_resolution_m(model_dataset)
+            input_channels = model_dataset.input_channels
         template = inference_template_row_for_dataset(
             session,
             row.architecture,
@@ -426,10 +497,11 @@ def _select_model(
             dataset_name=model_dataset.name,
             dataset_version=model_dataset.version,
             imagery_type=model_dataset.imagery_type.value,
-            input_channels=model_dataset.input_channels,
-            target_resolution_m=_dataset_target_resolution_m(model_dataset),
+            input_channels=input_channels,
+            target_resolution_m=target_resolution_m,
             result=row,
             checkpoint=checkpoint,
+            external_model=external_manifest,
             inference_template_id=template.id if template is not None else None,
             inference_template_config=template_config,
         )

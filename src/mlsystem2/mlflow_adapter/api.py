@@ -12,6 +12,7 @@ from ._client import end_run as _end_run
 from ._client import create_experiment as _create_experiment
 from ._client import download_run_artifact as _download_run_artifact
 from ._client import get_best_training_checkpoint as _get_best_training_checkpoint
+from ._client import get_finished_run_artifact as _get_finished_run_artifact
 from ._client import get_usable_training_checkpoint as _get_usable_training_checkpoint
 from ._client import get_training_epoch_progress as _get_training_epoch_progress
 from ._client import list_experiments as _list_experiments
@@ -32,6 +33,7 @@ from .contracts import (
     MLflowBestCheckpoint,
     MLflowDownloadedArtifact,
     MLflowRunRef,
+    MLflowRunArtifactInfo,
     MLflowRunStatus,
     MLflowStartRunRequest,
     MLflowTrainingProgress,
@@ -60,6 +62,16 @@ def get_usable_training_checkpoint(
     """Vernut tolko zavershennyi run s fakticheskim best.pt."""
 
     return _get_usable_training_checkpoint(tracking_uri, run_id)
+
+
+def get_finished_run_artifact(
+    tracking_uri: str,
+    run_id: str,
+    artifact_path: str,
+) -> MLflowRunArtifactInfo | None:
+    """Вернуть точный артефакт только завершённого MLflow run."""
+
+    return _get_finished_run_artifact(tracking_uri, run_id, artifact_path)
 
 
 def get_training_epoch_progress(
@@ -137,6 +149,7 @@ __all__ = [
     "create_experiment",
     "get_best_training_checkpoint",
     "get_usable_training_checkpoint",
+    "get_finished_run_artifact",
     "get_training_epoch_progress",
     "download_run_artifact",
     "start_run",

@@ -13,6 +13,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, shape
 
 from mlsystem2.training_ui_api import _pseudo_runner
+from mlsystem2.training_ui_api._external_models import ExternalTestPrediction
 from mlsystem2.training_ui_api._pseudo_runner import (
     PSEUDO_INFERENCE_BACKEND,
     _completed_image_count,
@@ -763,6 +764,45 @@ def test_run_pseudo_markup_releases_cuda_on_checkpoint_error(tmp_path, monkeypat
     assert output == {"type": "FeatureCollection", "features": []}
 
 
+def test_run_pseudo_markup_uses_external_torchscript_adapter(tmp_path, monkeypatch) -> None:
+    config = _pseudo_runner_config(tmp_path)
+    config["external_model"] = _external_oks_manifest()
+    config["threshold"] = None
+    fake_torch = _FakeTorch()
+    loaded_external = SimpleNamespace(torch=fake_torch)
+    calls: dict[str, object] = {}
+
+    def fake_load_external(archive_path, manifest, *, device, scratch_root):
+        calls["archive_path"] = archive_path
+        calls["manifest"] = manifest
+        calls["device"] = device
+        calls["scratch_root"] = scratch_root
+        return loaded_external
+
+    def fake_predict(loaded, **kwargs):
+        assert loaded is loaded_external
+        calls["prediction"] = kwargs
+        return []
+
+    monkeypatch.setattr(_pseudo_runner, "load_external_model", fake_load_external)
+    monkeypatch.setattr(_pseudo_runner, "predict_external_scene", fake_predict)
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "load_checkpoint",
+        lambda request: pytest.fail(f"Нативный loader вызван для внешней модели: {request}"),
+    )
+
+    report = run_pseudo_markup(config)
+
+    assert report["status"] == "ok"
+    assert report["processed"] == 1
+    assert report["source"]["threshold"] is None
+    assert calls["device"] == "cuda"
+    assert calls["manifest"].adapter == "oks_multiclass_footprints"
+    assert calls["prediction"]["scene"] == "scene-1"
+    assert fake_torch.cuda.empty_cache_calls == 1
+
+
 def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independently(
     tmp_path,
     monkeypatch,
@@ -849,6 +889,71 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert fake_torch.cuda.empty_cache_calls == 1
 
 
+def test_test_sample_f1_passes_external_instance_ids(tmp_path, monkeypatch) -> None:
+    checkpoint_path = tmp_path / "model.zip"
+    checkpoint_path.write_bytes(b"archive")
+    image_path = tmp_path / "tile.tif"
+    image_path.touch()
+    mask_path = tmp_path / "tile_mask.png"
+    with rasterio.open(
+        mask_path,
+        "w",
+        driver="PNG",
+        width=4,
+        height=1,
+        count=1,
+        dtype="uint8",
+    ) as dataset:
+        dataset.write(np.ones((1, 4), dtype=np.uint8) * 255, 1)
+    fake_torch = _FakeTorch()
+    loaded_external = SimpleNamespace(torch=fake_torch)
+    predicted_instances = np.asarray([[10, 10, 20, 20]], dtype=np.int64)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "load_external_model",
+        lambda *args, **kwargs: loaded_external,
+    )
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "predict_external_test_tile",
+        lambda *args, **kwargs: ExternalTestPrediction(
+            mask=(predicted_instances > 0).astype(np.uint8),
+            instances=predicted_instances,
+        ),
+    )
+
+    def fake_object_f1(request):
+        captured["instances"] = request.y_pred_instances
+        return SimpleNamespace(true_positive=2, false_positive=0, false_negative=0)
+
+    monkeypatch.setattr(_pseudo_runner, "compute_object_f1", fake_object_f1)
+
+    report = run_test_sample_f1(
+        {
+            "operation": "test_sample_f1",
+            "run_root": str(tmp_path / "run"),
+            "local_checkpoint_path": str(checkpoint_path),
+            "external_model": _external_zu_manifest(),
+            "threshold": 0.0,
+            "device": "cuda",
+            "tiles": [
+                {
+                    "index": 1,
+                    "image_path": str(image_path),
+                    "mask_path": str(mask_path),
+                }
+            ],
+        }
+    )
+
+    assert report["status"] == "ok"
+    assert np.array_equal(captured["instances"], predicted_instances)
+    assert report["object_true_positive"] == 2
+    assert fake_torch.cuda.empty_cache_calls == 1
+
+
 def test_pseudo_runner_keeps_triton_registration_out_of_one_off_path() -> None:
     source = Path(_pseudo_runner.__file__).read_text(encoding="utf-8")
 
@@ -905,6 +1010,56 @@ def _pseudo_runner_config(tmp_path) -> dict[str, object]:
         "device": "cuda",
         "class_key": "deforestation",
         "class_name": "Вырубки",
+    }
+
+
+def _external_oks_manifest() -> dict[str, object]:
+    return {
+        "version": 1,
+        "adapter": "oks_multiclass_footprints",
+        "artifact_path": "models/model.zip",
+        "archive_sha256": "0" * 64,
+        "model_member": "oks/1/model.pt",
+        "model_root": "oks",
+        "input_channels": 3,
+        "target_resolution_m": 0.6,
+        "tile_size": 1024,
+        "stride": 768,
+        "context": 128,
+        "score_threshold": None,
+        "min_area_m2": 30.0,
+        "min_hole_area_m2": 50.0,
+        "nms_iou_threshold": None,
+        "nms_relative_intersection": None,
+        "max_shift_m": 50.0,
+        "shift_iterations": 50,
+        "shift_confidence": 0.2,
+        "correction_confidence": 0.05,
+    }
+
+
+def _external_zu_manifest() -> dict[str, object]:
+    return {
+        "version": 1,
+        "adapter": "detectron2_instances",
+        "artifact_path": "models/model.zip",
+        "archive_sha256": "0" * 64,
+        "model_member": "zu/1/model.pt",
+        "model_root": "zu",
+        "input_channels": 3,
+        "target_resolution_m": 0.15,
+        "tile_size": 1884,
+        "stride": 628,
+        "context": 628,
+        "score_threshold": 0.0,
+        "min_area_m2": 50.0,
+        "min_hole_area_m2": 10.0,
+        "nms_iou_threshold": 0.75,
+        "nms_relative_intersection": 0.75,
+        "max_shift_m": None,
+        "shift_iterations": None,
+        "shift_confidence": None,
+        "correction_confidence": None,
     }
 
 

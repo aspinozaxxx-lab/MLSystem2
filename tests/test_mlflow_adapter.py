@@ -5,6 +5,7 @@ from pathlib import Path
 from mlsystem2.mlflow_adapter.api import (
     download_run_artifact,
     get_best_training_checkpoint,
+    get_finished_run_artifact,
     get_training_epoch_progress,
     get_usable_training_checkpoint,
     log_dataset_artifacts,
@@ -254,6 +255,50 @@ def test_get_usable_training_checkpoint_requires_finished_run_and_artifact(monke
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
 
     assert get_usable_training_checkpoint("http://mlflow:5000", "run-1") == checkpoint
+
+
+def test_get_finished_run_artifact_requires_finished_run_and_exact_file(monkeypatch) -> None:
+    class Info:
+        status = "FINISHED"
+        artifact_uri = "s3://artifacts/run-1/artifacts"
+
+    class Run:
+        info = Info()
+
+    class Artifact:
+        path = "models/model.zip"
+        is_dir = False
+
+    class Client:
+        def get_run(self, run_id: str):
+            assert run_id == "run-1"
+            return Run()
+
+        def list_artifacts(self, run_id: str, path: str | None):
+            assert (run_id, path) == ("run-1", "models")
+            return [Artifact()]
+
+    class MLflow:
+        class tracking:
+            @staticmethod
+            def MlflowClient():
+                return Client()
+
+        @staticmethod
+        def set_tracking_uri(uri: str) -> None:
+            assert uri == "http://mlflow:5000"
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+
+    artifact = get_finished_run_artifact(
+        "http://mlflow:5000",
+        "run-1",
+        "models/model.zip",
+    )
+
+    assert artifact is not None
+    assert artifact.artifact_path == "models/model.zip"
+    assert artifact.artifact_uri == "s3://artifacts/run-1/artifacts/models/model.zip"
 
 
 def test_get_training_epoch_progress_uses_epoch_time_history(monkeypatch) -> None:

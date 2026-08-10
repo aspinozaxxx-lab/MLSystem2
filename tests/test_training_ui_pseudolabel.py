@@ -15,7 +15,7 @@ from rasterio.transform import from_origin
 from sqlalchemy import select
 from shapely.geometry import box, shape
 
-from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint
+from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowRunArtifactInfo
 from mlsystem2.training_ui_api import _markup_export, _pseudolabel, _pseudo_runner, _worker
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
@@ -418,6 +418,116 @@ def test_pseudolabel_does_not_offer_failed_or_unusable_newer_models(
     assert selected["model_id"] == str(expected_model_id)
     assert selected["model_version"] == "run-current"
     assert selected["model_name"] == "segformer b2"
+
+
+def test_pseudolabel_pins_external_model_resolution_and_manifest(tmp_path: Path, monkeypatch) -> None:
+    config, session_factory = _environment(tmp_path, monkeypatch)
+    ortho_image = tmp_path / "images" / "orto" / "region" / "scene-a.tif"
+    ortho_image.parent.mkdir(parents=True)
+    with rasterio.open(
+        ortho_image,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(30.0, 60.0, 0.002, 0.002),
+    ) as dataset:
+        dataset.write(np.ones((3, 8, 8), dtype=np.uint8))
+    manifest = {
+        "version": 1,
+        "adapter": "oks_multiclass_footprints",
+        "artifact_path": "models/model.zip",
+        "archive_sha256": "1" * 64,
+        "model_member": "oks/1/model.pt",
+        "model_root": "oks",
+        "input_channels": 3,
+        "target_resolution_m": 0.6,
+        "tile_size": 1024,
+        "stride": 768,
+        "context": 128,
+        "score_threshold": None,
+        "min_area_m2": 30.0,
+        "min_hole_area_m2": 50.0,
+        "nms_iou_threshold": None,
+        "nms_relative_intersection": None,
+        "max_shift_m": 50.0,
+        "shift_iterations": 50,
+        "shift_confidence": 0.2,
+        "correction_confidence": 0.05,
+    }
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        class_row = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес"))
+        dataset_row = session.scalar(select(DatasetRow).where(DatasetRow.class_id == class_row.id))
+        class_row.imagery_type = "ortho"
+        source_job = JobRow(
+            type="training",
+            source="manual",
+            status=JobStatus.COMPLETED.value,
+            queue_position=0,
+            dataset_key=dataset_row.key,
+            dataset_name=dataset_row.name,
+            model_name="oks500_orto",
+            architecture="external_torchscript",
+            config={"train.input_channels": 3, "external_model": manifest},
+        )
+        session.add(source_job)
+        session.flush()
+        result = TrainingResultRow(
+            source="manual",
+            dataset_key=dataset_row.key,
+            class_key=dataset_row.key,
+            class_display_name="Лес\\main",
+            architecture="external_torchscript",
+            model_name="oks500_orto",
+            trained_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            mlflow_run_id="run-external",
+            status=ResultStatus.OK.value,
+            job_id=source_job.id,
+        )
+        session.add(result)
+        session.flush()
+        class_row.primary_training_result_id = result.id
+        session.commit()
+        class_key = class_row.key
+
+    monkeypatch.setattr(
+        _pseudolabel,
+        "get_finished_run_artifact",
+        lambda tracking_uri, run_id, artifact_path: MLflowRunArtifactInfo(
+            tracking_uri=tracking_uri,
+            run_id=run_id,
+            artifact_path=artifact_path,
+            artifact_uri="s3://models/run-external/models/model.zip",
+        ),
+    )
+    with session_factory() as session:
+        selected = _pseudolabel._select_model(session, config, class_key, required=True)
+        assert selected is not None
+        assert selected.target_resolution_m == 0.6
+        assert selected.input_channels == 3
+        job_info = _pseudolabel.create_pseudolabel_job(
+            session,
+            PseudolabelJobCreate(
+                class_id=class_key,
+                aoi=box(30.001, 59.985, 30.01, 59.995).__geo_interface__,
+                aoi_crs="EPSG:4326",
+                source_id="ortho",
+            ),
+            config,
+        )
+        row = session.get(JobRow, job_info.job_id)
+        state = row.config["pseudolabel"]
+        assert state["external_model"] == manifest
+        assert state["checkpoint_threshold"] is None
+        assert state["resample_to_resolution_m"] == 0.6
+        assert state["tile_size"] == 1024
+        runner = _worker._build_pseudolabel_aoi_config(row, config, tmp_path / "run")
+        assert runner["external_model"] == manifest
+        assert runner["threshold"] is None
 
 
 # Proveriaet oshibku klassa bez prigodnoi modeli.

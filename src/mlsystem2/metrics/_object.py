@@ -12,15 +12,28 @@ from .contracts import MetricsError, ObjectF1Request, ObjectF1Result
 
 def compute_object_f1(request: ObjectF1Request) -> ObjectF1Result:
     true_instances = np.asarray(request.y_true_instances, dtype=np.int64)
-    predicted_mask = np.asarray(request.y_pred_mask, dtype=bool)
-    if true_instances.shape != predicted_mask.shape or true_instances.ndim != 2:
-        raise MetricsError(
-            "y_true_instances и y_pred_mask должны быть двумерными массивами одинаковой формы"
+    if request.y_pred_instances is not None:
+        predicted_instances = np.asarray(request.y_pred_instances, dtype=np.int64)
+        if np.any(predicted_instances < 0):
+            raise MetricsError("y_pred_instances не может содержать отрицательные идентификаторы")
+    else:
+        predicted_mask = np.asarray(request.y_pred_mask, dtype=bool)
+        predicted_instances, _ = ndimage.label(
+            predicted_mask,
+            structure=np.ones((3, 3), dtype=np.uint8),
         )
-    predicted_instances, predicted_count = ndimage.label(
-        predicted_mask,
-        structure=np.ones((3, 3), dtype=np.uint8),
+    if true_instances.shape != predicted_instances.shape or true_instances.ndim != 2:
+        raise MetricsError(
+            "y_true_instances и предсказание должны быть двумерными массивами одинаковой формы"
+        )
+    predicted_ids, predicted_area_counts = np.unique(
+        predicted_instances,
+        return_counts=True,
     )
+    positive_ids = predicted_ids > 0
+    predicted_ids = predicted_ids[positive_ids]
+    predicted_area_counts = predicted_area_counts[positive_ids]
+    predicted_count = int(predicted_ids.size)
     true_ids = np.unique(true_instances)
     true_ids = true_ids[true_ids > 0]
     if true_ids.size == 0 or predicted_count == 0:
@@ -30,22 +43,30 @@ def compute_object_f1(request: ObjectF1Request) -> ObjectF1Result:
             false_negative=int(true_ids.size),
         )
 
-    predicted_ids = np.arange(1, predicted_count + 1, dtype=np.int64)
     adjacency = np.zeros((true_ids.size, predicted_ids.size), dtype=np.uint8)
-    predicted_areas = np.bincount(predicted_instances.ravel(), minlength=predicted_count + 1)
+    predicted_areas = dict(
+        zip(
+            (int(predicted_id) for predicted_id in predicted_ids),
+            (int(area) for area in predicted_area_counts),
+            strict=True,
+        )
+    )
     for true_position, true_id in enumerate(true_ids):
         true_mask = true_instances == true_id
         true_area = int(np.count_nonzero(true_mask))
-        overlaps = np.bincount(
+        overlap_ids, overlap_counts = np.unique(
             predicted_instances[true_mask],
-            minlength=predicted_count + 1,
+            return_counts=True,
         )
-        for predicted_id in np.flatnonzero(overlaps[1:]) + 1:
-            intersection = int(overlaps[predicted_id])
-            union = true_area + int(predicted_areas[predicted_id]) - intersection
+        for predicted_id, raw_intersection in zip(overlap_ids, overlap_counts, strict=True):
+            if predicted_id <= 0:
+                continue
+            intersection = int(raw_intersection)
+            union = true_area + predicted_areas[int(predicted_id)] - intersection
             iou = intersection / union if union else 0.0
             if iou >= request.iou_threshold:
-                adjacency[true_position, predicted_id - 1] = 1
+                predicted_position = int(np.searchsorted(predicted_ids, predicted_id))
+                adjacency[true_position, predicted_position] = 1
 
     matching = maximum_bipartite_matching(csr_matrix(adjacency), perm_type="column")
     true_positive = int(np.count_nonzero(matching >= 0))

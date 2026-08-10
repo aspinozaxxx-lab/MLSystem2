@@ -2,7 +2,7 @@
 
 Этот документ описывает, как Codex должен делать псевдоразметку снимков через Geoalert по лучшей обученной сети MLSystem2. Инструкция рассчитана на ручную оркестрацию действиями Codex: проверить модель, экспортировать checkpoint в Triton, запустить Geoalert `Compose`, собрать GeoJSON, проверить результат и скопировать его пользователю.
 
-Псевдоразметка через Training UI не использует этот путь: UI запускает `mlsystem2.training_ui_api._pseudo_runner`, загружает `checkpoints/best.pt` напрямую через PyTorch (`inference_backend=pytorch_one_off`) и не создает Triton model archive, pipeline YAML или запись в model repository. Этот Geoalert/Triton runbook нужен только для явного ручного production-инференса или экспорта модели по отдельному запросу.
+Псевдоразметка через Training UI не использует этот путь: UI запускает `mlsystem2.training_ui_api._pseudo_runner`, загружает нативный `checkpoints/best.pt` либо проверенный внешний TorchScript ZIP напрямую через PyTorch (`inference_backend=pytorch_one_off`) и не создаёт Triton model archive, pipeline YAML или запись в model repository. Этот Geoalert/Triton runbook нужен только для явного ручного production-инференса или экспорта модели по отдельному запросу.
 
 Не добавляй новый CLI и не создавай постоянный модуль в `src`, если пользователь просит только псевдоразметку. Временные скрипты для одноразового серверного прогона можно создавать в runtime-папке запуска или подавать в Python через stdin. Код MLSystem2 менять не нужно, если нет явной ошибки.
 
