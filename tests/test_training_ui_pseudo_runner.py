@@ -20,6 +20,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _final_status,
     _features_from_mask,
     _filter_compact_features,
+    _geometry_postprocessor,
     _infer_test_tile_mask,
     _merge_overlapping_features,
     _postprocess_mask,
@@ -307,6 +308,19 @@ def test_postprocess_profile_accepts_template_overrides() -> None:
     assert profile.simplify_m == 15.0
     assert profile.filter_compact_min_isoperimetric_quotient == 0.25
     assert profile.filter_compact_max_bbox_ratio == 3.5
+
+
+def test_geometry_postprocessor_is_absent_for_none_profile() -> None:
+    assert _geometry_postprocessor(_select_postprocess_profile(1)) is None
+
+
+def test_geometry_postprocessor_applies_configured_vector_filters() -> None:
+    profile = replace(_select_postprocess_profile(1), min_area_m2=50.0)
+    postprocessor = _geometry_postprocessor(profile)
+
+    assert postprocessor is not None
+    assert postprocessor(box(0, 0, 10, 10), "EPSG:32637").area == 100.0
+    assert postprocessor(box(0, 0, 5, 5), "EPSG:32637").is_empty
 
 
 def test_find_images_accepts_txt_scene_forms_and_dataset_folders(tmp_path) -> None:
@@ -800,6 +814,7 @@ def test_run_pseudo_markup_uses_external_torchscript_adapter(tmp_path, monkeypat
     assert calls["device"] == "cuda"
     assert calls["manifest"].adapter == "oks_multiclass_footprints"
     assert calls["prediction"]["scene"] == "scene-1"
+    assert calls["prediction"]["geometry_postprocessor"] is None
     assert fake_torch.cuda.empty_cache_calls == 1
 
 
@@ -915,13 +930,18 @@ def test_test_sample_f1_passes_external_instance_ids(tmp_path, monkeypatch) -> N
         "load_external_model",
         lambda *args, **kwargs: loaded_external,
     )
+
+    def fake_external_prediction(*args, **kwargs):
+        captured["geometry_postprocessor"] = kwargs["geometry_postprocessor"]
+        return ExternalTestPrediction(
+            mask=(predicted_instances > 0).astype(np.uint8),
+            instances=predicted_instances,
+        )
+
     monkeypatch.setattr(
         _pseudo_runner,
         "predict_external_test_tile",
-        lambda *args, **kwargs: ExternalTestPrediction(
-            mask=(predicted_instances > 0).astype(np.uint8),
-            instances=predicted_instances,
-        ),
+        fake_external_prediction,
     )
 
     def fake_object_f1(request):
@@ -950,6 +970,7 @@ def test_test_sample_f1_passes_external_instance_ids(tmp_path, monkeypatch) -> N
 
     assert report["status"] == "ok"
     assert np.array_equal(captured["instances"], predicted_instances)
+    assert captured["geometry_postprocessor"] is None
     assert report["object_true_positive"] == 2
     assert fake_torch.cuda.empty_cache_calls == 1
 

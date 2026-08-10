@@ -20,6 +20,7 @@ from mlsystem2.training_ui_api._external_models import (
     ExternalModelError,
     ExternalModelManifest,
     LoadedExternalModel,
+    _open_resampled_dataset,
     load_external_model,
     merge_external_instance_features,
     predict_external_test_tile,
@@ -341,3 +342,30 @@ def test_oks_prediction_uses_alpha_and_returns_instances_in_original_grid(tmp_pa
     )
     assert np.all(cropped.mask[:, :1] == 1)
     assert np.all(cropped.mask[:, 1:] == 0)
+
+    with pytest.raises(ExternalModelError, match="Постобработчик внешней модели"):
+        predict_external_test_tile(
+            loaded,
+            image_path,
+            geometry_postprocessor=lambda _geometry, _crs: None,
+        )
+
+
+def test_external_resampling_uses_local_utm_for_web_mercator(tmp_path: Path) -> None:
+    image_path = tmp_path / "web-mercator.tif"
+    with rasterio.open(
+        image_path,
+        mode="w",
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(4_361_172, 6_741_324, 0.25, 0.25),
+    ) as dataset:
+        dataset.write(np.ones((3, 64, 64), dtype=np.uint8))
+
+    with _open_resampled_dataset(image_path, 0.6) as dataset:
+        assert dataset.crs == rasterio.crs.CRS.from_epsg(32637)
+        assert dataset.res == pytest.approx((0.6, 0.6))

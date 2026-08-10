@@ -399,7 +399,10 @@ def _postprocess_prediction_geometries(
         return prediction
     output: list[_PredictedGeometry] = []
     for item in prediction.geometries:
-        geometry = _polygons_geometry(make_valid(postprocessor(item.geometry, prediction.crs)))
+        processed = postprocessor(item.geometry, prediction.crs)
+        if not isinstance(processed, BaseGeometry):
+            raise ExternalModelError("Постобработчик внешней модели должен вернуть геометрию")
+        geometry = _polygons_geometry(make_valid(processed))
         if geometry.is_empty:
             continue
         output.append(
@@ -1043,11 +1046,8 @@ def _open_resampled_dataset(image_path: Path, resolution: float) -> _ResampledDa
 
 
 def _metric_target_crs(dataset) -> object:
-    source_crs = PyprojCRS.from_user_input(dataset.crs)
-    if source_crs.is_projected and source_crs.axis_info:
-        factor = source_crs.axis_info[0].unit_conversion_factor
-        if factor is not None and math.isclose(float(factor), 1.0, rel_tol=1e-6):
-            return dataset.crs
+    """Выбрать локальную UTM, где разрешение манифеста измеряется реальными метрами."""
+
     center_x = (dataset.bounds.left + dataset.bounds.right) / 2.0
     center_y = (dataset.bounds.bottom + dataset.bounds.top) / 2.0
     lon, lat = Transformer.from_crs(dataset.crs, "EPSG:4326", always_xy=True).transform(

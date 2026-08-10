@@ -293,15 +293,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 external_prediction = predict_external_test_tile(
                     external_loaded,
                     Path(str(tile["image_path"])),
-                    geometry_postprocessor=(
-                        lambda geometry, crs: _postprocess_geometry(
-                            geometry,
-                            crs,
-                            profile,
-                        )
-                        if _has_vector_postprocess(profile)
-                        else None
-                    ),
+                    geometry_postprocessor=_geometry_postprocessor(profile),
                 )
                 prediction = external_prediction.mask
                 predicted_instances = external_prediction.instances
@@ -772,15 +764,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                         scene=scene_input.scene_id,
                         config=config,
                         aoi_wgs84=aoi_wgs84,
-                        geometry_postprocessor=(
-                            lambda geometry, crs: _postprocess_geometry(
-                                geometry,
-                                crs,
-                                postprocess_profile,
-                            )
-                            if _has_vector_postprocess(postprocess_profile)
-                            else None
-                        ),
+                        geometry_postprocessor=_geometry_postprocessor(postprocess_profile),
                     )
                 else:
                     assert threshold is not None
@@ -2463,6 +2447,18 @@ def _has_vector_postprocess(profile: _PostprocessProfile) -> bool:
             profile.filter_compact_max_bbox_ratio,
         )
     )
+
+
+def _geometry_postprocessor(
+    profile: _PostprocessProfile,
+) -> Callable[[BaseGeometry, object], BaseGeometry] | None:
+    if not _has_vector_postprocess(profile):
+        return None
+
+    def postprocess(geometry: BaseGeometry, crs: object) -> BaseGeometry:
+        return _postprocess_geometry(geometry, crs, profile)
+
+    return postprocess
 
 
 def _postprocess_geometry(
