@@ -1386,15 +1386,37 @@ def _select_candidates(
     integrality[deviation_index] = 0
     bounds = Bounds(lower_bounds, upper_bounds)
 
+    feasible_result: np.ndarray | None = None
+    if has_final_subset:
+        feasible_result = _run_milp(
+            np.zeros(variable_count, dtype=float),
+            integrality=integrality,
+            bounds=bounds,
+            constraints=common_constraints,
+            allow_infeasible=True,
+            accept_feasible_on_time_limit=True,
+        )
+        if feasible_result is None:
+            return None
+
     territory_objective = np.zeros(variable_count, dtype=float)
     territory_objective[territory_offset:source_offset] = -1.0
-    territory_result = _run_milp(
-        territory_objective,
-        integrality=integrality,
-        bounds=bounds,
-        constraints=common_constraints,
-        allow_infeasible=True,
-    )
+    try:
+        territory_result = _run_milp(
+            territory_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=common_constraints,
+            allow_infeasible=True,
+        )
+    except _MilpTimeLimitError:
+        if feasible_result is not None:
+            return _selected_indices(
+                feasible_result,
+                candidate_count,
+                request.image_count,
+            )
+        raise
     if territory_result is None:
         return None
     territory_optimum = int(
@@ -1624,6 +1646,7 @@ def _run_milp(
     bounds: Bounds,
     constraints: list[LinearConstraint],
     allow_infeasible: bool = False,
+    accept_feasible_on_time_limit: bool = False,
     time_limit: float = _MILP_TIME_LIMIT_SECONDS,
 ) -> np.ndarray | None:
     result = milp(
@@ -1636,6 +1659,15 @@ def _run_milp(
     if allow_infeasible and result.status == 2:
         return None
     if result.status == 1:
+        if accept_feasible_on_time_limit and result.x is not None:
+            feasible_result = _validated_milp_result(
+                result.x,
+                integrality=integrality,
+                bounds=bounds,
+                constraints=constraints,
+            )
+            if feasible_result is not None:
+                return feasible_result
         raise _MilpTimeLimitError(
             "Не удалось оптимально подобрать тестовые тайлы за допустимое время."
         )
@@ -1644,6 +1676,42 @@ def _run_milp(
             "Не удалось подобрать тестовые тайлы с заданными ограничениями."
         )
     return np.asarray(result.x)
+
+
+def _validated_milp_result(
+    raw_result: np.ndarray,
+    *,
+    integrality: np.ndarray,
+    bounds: Bounds,
+    constraints: list[LinearConstraint],
+) -> np.ndarray | None:
+    tolerance = 1e-6
+    result = np.asarray(raw_result, dtype=float).reshape(-1).copy()
+    if result.shape != integrality.shape or not bool(np.all(np.isfinite(result))):
+        return None
+
+    integer_mask = integrality != 0
+    rounded = np.rint(result[integer_mask])
+    if not bool(np.all(np.abs(result[integer_mask] - rounded) <= tolerance)):
+        return None
+    result[integer_mask] = rounded
+
+    lower_bounds = np.broadcast_to(np.asarray(bounds.lb, dtype=float), result.shape)
+    upper_bounds = np.broadcast_to(np.asarray(bounds.ub, dtype=float), result.shape)
+    if bool(np.any(result < lower_bounds - tolerance)) or bool(
+        np.any(result > upper_bounds + tolerance)
+    ):
+        return None
+
+    for constraint in constraints:
+        actual = np.asarray(constraint.A @ result, dtype=float).reshape(-1)
+        lower = np.broadcast_to(np.asarray(constraint.lb, dtype=float), actual.shape)
+        upper = np.broadcast_to(np.asarray(constraint.ub, dtype=float), actual.shape)
+        if bool(np.any(actual < lower - tolerance)) or bool(
+            np.any(actual > upper + tolerance)
+        ):
+            return None
+    return result
 
 
 def _single_constraint(

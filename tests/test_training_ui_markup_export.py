@@ -690,6 +690,97 @@ def test_milp_uses_one_minute_default_time_limit(monkeypatch) -> None:
     assert captured_options == {"presolve": True, "time_limit": 60.0}
 
 
+def test_milp_accepts_only_valid_incumbent_on_time_limit(monkeypatch) -> None:
+    constraint = _markup_export._single_constraint(
+        2,
+        [(0, 1.0), (1, 1.0)],
+        minimum=1.0,
+        maximum=1.0,
+    )
+
+    monkeypatch.setattr(
+        _markup_export,
+        "milp",
+        lambda *args, **kwargs: SimpleNamespace(
+            status=1,
+            success=False,
+            x=np.asarray([1.0, 0.0]),
+        ),
+    )
+    result = _markup_export._run_milp(
+        np.zeros(2, dtype=float),
+        integrality=np.ones(2, dtype=int),
+        bounds=_markup_export.Bounds(np.zeros(2), np.ones(2)),
+        constraints=[constraint],
+        accept_feasible_on_time_limit=True,
+    )
+
+    assert result is not None
+    assert result.tolist() == [1.0, 0.0]
+
+    monkeypatch.setattr(
+        _markup_export,
+        "milp",
+        lambda *args, **kwargs: SimpleNamespace(
+            status=1,
+            success=False,
+            x=np.asarray([1.0, 1.0]),
+        ),
+    )
+    with pytest.raises(_markup_export._MilpTimeLimitError):
+        _markup_export._run_milp(
+            np.zeros(2, dtype=float),
+            integrality=np.ones(2, dtype=int),
+            bounds=_markup_export.Bounds(np.zeros(2), np.ones(2)),
+            constraints=[constraint],
+            accept_feasible_on_time_limit=True,
+        )
+
+
+def test_candidate_pool_keeps_feasible_solution_when_first_refinement_times_out(
+    monkeypatch,
+) -> None:
+    crs = CRS.from_epsg(3857)
+    candidates = [
+        _selection_candidate(
+            crs,
+            index=index,
+            territory=f"region-{index}",
+            source=f"region-{index}/scene.tif",
+            count=1,
+        )
+        for index in range(7)
+    ]
+    request = MarkupExportRequest(
+        dataset_key="test\\main",
+        tile_width=16,
+        tile_height=16,
+        image_count=7,
+        object_count=15,
+    )
+    original_run_milp = _markup_export._run_milp
+    calls = 0
+
+    def timeout_on_territory_refinement(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
+        return original_run_milp(*args, **kwargs)
+
+    monkeypatch.setattr(_markup_export, "_run_milp", timeout_on_territory_refinement)
+    selected = _markup_export._select_candidates(
+        candidates,
+        request,
+        allow_touching=False,
+        min_final_image_count=5,
+        max_final_image_count=7,
+        min_final_object_count=5,
+    )
+
+    assert selected == list(range(7))
+
+
 def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
     monkeypatch,
 ) -> None:
@@ -717,7 +808,7 @@ def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
     def timeout_on_deviation(*args, **kwargs):
         nonlocal calls
         calls += 1
-        if calls == 3:
+        if calls == 4:
             raise _markup_export._MilpTimeLimitError("Диагностический тайм-аут.")
         return original_run_milp(*args, **kwargs)
 
