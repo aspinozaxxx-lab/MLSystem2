@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from hashlib import sha256
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -27,13 +28,18 @@ from mlsystem2.training_ui_api._external_models import (
 from mlsystem2.training_ui_api._model_export import build_external_triton_model_export_zip
 
 
-def _archive(path: Path, *, unsafe_name: str | None = None) -> str:
+def _archive(
+    path: Path,
+    *,
+    unsafe_name: str | None = None,
+    model_bytes: bytes = b"torchscript",
+) -> str:
     with zipfile.ZipFile(path, mode="w") as archive:
         archive.writestr(
             "sample/config.pbtxt",
             'name: "sample"\nplatform: "pytorch_libtorch"\n',
         )
-        archive.writestr("sample/1/model.pt", b"torchscript")
+        archive.writestr("sample/1/model.pt", model_bytes)
         if unsafe_name is not None:
             archive.writestr(unsafe_name, b"bad")
     return sha256(path.read_bytes()).hexdigest()
@@ -59,6 +65,25 @@ def _oks_manifest(archive_hash: str, *, model_root: str = "sample") -> ExternalM
     )
 
 
+def _zu_manifest(archive_hash: str) -> ExternalModelManifest:
+    return ExternalModelManifest(
+        adapter="detectron2_instances",
+        artifact_path="models/model.zip",
+        archive_sha256=archive_hash,
+        model_member="sample/1/model.pt",
+        model_root="sample",
+        target_resolution_m=1.0,
+        tile_size=4,
+        stride=2,
+        context=1,
+        score_threshold=0.0,
+        min_area_m2=0.0,
+        min_hole_area_m2=0.0,
+        nms_iou_threshold=0.75,
+        nms_relative_intersection=0.75,
+    )
+
+
 def test_external_archive_checks_hash_and_unsafe_members(tmp_path: Path) -> None:
     archive_path = tmp_path / "model.zip"
     archive_hash = _archive(archive_path)
@@ -78,7 +103,7 @@ def test_external_model_loads_on_cpu_before_moving_to_device(
     monkeypatch,
 ) -> None:
     archive_path = tmp_path / "model.zip"
-    manifest = _oks_manifest(_archive(archive_path))
+    manifest = _zu_manifest(_archive(archive_path))
     calls: dict[str, str] = {}
 
     class _Model:
@@ -92,9 +117,64 @@ def test_external_model_loads_on_cpu_before_moving_to_device(
 
     fake_torch = ModuleType("torch")
     fake_torch.device = lambda value: value
+    fake_torch.ops = SimpleNamespace(
+        torchvision=SimpleNamespace(nms=object()),
+    )
 
     def _load(_path: str, *, map_location: str):
         calls["map_location"] = map_location
+        return _Model()
+
+    fake_torch.jit = SimpleNamespace(load=_load)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torchvision", ModuleType("torchvision"))
+
+    loaded = load_external_model(
+        archive_path,
+        manifest,
+        device="cuda",
+        scratch_root=tmp_path / "scratch",
+    )
+
+    assert calls == {"map_location": "cpu", "device": "cuda", "eval": "yes"}
+    assert loaded.device == "cuda"
+
+
+def test_oks_model_patches_only_scratch_copy_for_cuda(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inner = BytesIO()
+    code_entry = (
+        "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py"
+    )
+    with zipfile.ZipFile(inner, mode="w") as archive:
+        archive.writestr(
+            code_entry,
+            b'skip = torch.empty([1, 0, 1, 1], device=torch.device("cpu"))\n',
+        )
+    archive_path = tmp_path / "model.zip"
+    manifest = _oks_manifest(_archive(archive_path, model_bytes=inner.getvalue()))
+    calls: dict[str, str] = {}
+
+    class _Device:
+        type = "cuda"
+        index = None
+
+    class _Model:
+        def eval(self):
+            return self
+
+    fake_torch = ModuleType("torch")
+    fake_torch.device = lambda _value: _Device()
+    fake_torch.cuda = SimpleNamespace(current_device=lambda: 0)
+
+    def _load(path: str, *, map_location: _Device):
+        calls["map_location"] = map_location.type
+        with zipfile.ZipFile(path) as archive:
+            code = archive.read(code_entry)
+        assert b'torch.device("cuda:0")' in code
+        assert b'torch.device("cpu")' not in code
         return _Model()
 
     fake_torch.jit = SimpleNamespace(load=_load)
@@ -107,8 +187,9 @@ def test_external_model_loads_on_cpu_before_moving_to_device(
         scratch_root=tmp_path / "scratch",
     )
 
-    assert calls == {"map_location": "cpu", "device": "cuda", "eval": "yes"}
+    assert calls == {"map_location": "cuda"}
     assert loaded.device == "cuda"
+    assert sha256(archive_path.read_bytes()).hexdigest() == manifest.archive_sha256
 
 
 def test_external_export_renames_root_and_config(tmp_path: Path) -> None:

@@ -35,6 +35,10 @@ from shapely.strtree import STRtree
 EXTERNAL_ARCHITECTURE = "external_torchscript"
 EXTERNAL_MANIFEST_KEY = "external_model"
 ExternalAdapter = Literal["detectron2_instances", "oks_multiclass_footprints"]
+_OKS_CUDA_CODE_ENTRY = (
+    "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py"
+)
+_OKS_CPU_SKIP_DEVICE = b'device=torch.device("cpu")'
 
 
 class ExternalModelError(RuntimeError):
@@ -239,14 +243,68 @@ def load_external_model(
 
             if not hasattr(torch.ops.torchvision, "nms"):
                 raise ExternalModelError("TorchVision не зарегистрировал оператор torchvision::nms")
-        model = torch.jit.load(str(model_path), map_location=torch.device("cpu"))
-        model.to(torch.device(device))
+        target_device = torch.device(device)
+        if manifest.adapter == "oks_multiclass_footprints" and target_device.type == "cuda":
+            cuda_model_path = _prepare_oks_cuda_torchscript(
+                model_path,
+                target_device,
+                torch,
+            )
+            model = torch.jit.load(str(cuda_model_path), map_location=target_device)
+        else:
+            model = torch.jit.load(str(model_path), map_location=torch.device("cpu"))
+            model.to(target_device)
         model.eval()
     except ExternalModelError:
         raise
     except Exception as exc:
         raise ExternalModelError("Не удалось загрузить TorchScript внешней модели") from exc
     return LoadedExternalModel(manifest=manifest, torch=torch, model=model, device=device)
+
+
+def _prepare_oks_cuda_torchscript(
+    source_path: Path,
+    target_device: Any,
+    torch: Any,
+) -> Path:
+    """Исправить зафиксированное CPU-устройство пустого skip-тензора ОКС в scratch-копии."""
+
+    device_index = target_device.index
+    if device_index is None:
+        device_index = int(torch.cuda.current_device())
+    replacement = f'device=torch.device("cuda:{device_index}")'.encode("ascii")
+    target_path = source_path.with_name("model.cuda.pt")
+    replacements = 0
+    try:
+        with zipfile.ZipFile(source_path) as source, zipfile.ZipFile(
+            target_path,
+            mode="w",
+        ) as target:
+            for item in source.infolist():
+                content = source.read(item)
+                if item.filename == _OKS_CUDA_CODE_ENTRY:
+                    count = content.count(_OKS_CPU_SKIP_DEVICE)
+                    if count != 1:
+                        raise ExternalModelError(
+                            "TorchScript ОКС содержит неожиданное описание CPU skip-тензора"
+                        )
+                    content = content.replace(_OKS_CPU_SKIP_DEVICE, replacement)
+                    replacements += count
+                target.writestr(item, content)
+    except ExternalModelError:
+        target_path.unlink(missing_ok=True)
+        raise
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        target_path.unlink(missing_ok=True)
+        raise ExternalModelError(
+            "Не удалось подготовить CUDA-копию TorchScript ОКС"
+        ) from exc
+    if replacements != 1:
+        target_path.unlink(missing_ok=True)
+        raise ExternalModelError(
+            "В TorchScript ОКС не найдено ожидаемое описание encoder skip"
+        )
+    return target_path
 
 
 def predict_external_scene(
