@@ -6,9 +6,10 @@ import threading
 import time
 import uuid
 import zipfile
-from io import BytesIO
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import unquote
 
 import numpy as np
@@ -665,6 +666,28 @@ def test_candidate_pool_accepts_final_subset_in_image_count_range() -> None:
 
     assert selected == list(range(7))
     assert impossible is None
+
+
+def test_milp_uses_one_minute_default_time_limit(monkeypatch) -> None:
+    captured_options: dict[str, object] = {}
+
+    def fake_milp(*args, **kwargs):
+        del args
+        captured_options.update(kwargs["options"])
+        return SimpleNamespace(status=0, success=True, x=np.ones(1, dtype=float))
+
+    monkeypatch.setattr(_markup_export, "milp", fake_milp)
+
+    result = _markup_export._run_milp(
+        np.zeros(1, dtype=float),
+        integrality=np.ones(1, dtype=int),
+        bounds=_markup_export.Bounds(np.zeros(1), np.ones(1)),
+        constraints=[],
+    )
+
+    assert result is not None
+    assert result.tolist() == [1.0]
+    assert captured_options == {"presolve": True, "time_limit": 60.0}
 
 
 def test_candidate_pool_uses_last_feasible_solution_after_refinement_timeout(
