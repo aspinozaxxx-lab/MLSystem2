@@ -1556,6 +1556,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         _login(client)
         openapi = client.get("/openapi.json").json()
         assert "TestSampleDetail" in openapi["components"]["schemas"]
+        assert "f1_score" in openapi["components"]["schemas"]["TestSampleTileInfo"][
+            "properties"
+        ]
         assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
@@ -1595,6 +1598,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert sample["evaluation"]["status"] == "unavailable"
         assert sample["enabled_image_count"] == 2
         assert [tile["enabled"] for tile in sample["tiles"]] == [True, True]
+        assert [tile["f1_score"] for tile in sample["tiles"]] == [None, None]
         draft_preview = client.post(
             f"/api/v1/test-samples/{sample_id}/evaluate-preview",
             json={"enabled_tile_indices": [2]},
@@ -1939,12 +1943,37 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert detail.evaluation.objects.false_positive == 0
         assert detail.evaluation.objects.false_negative == 0
         assert detail.evaluation.pseudo_markup_result_id == pseudo.id
+        assert all(tile.f1_score == pytest.approx(1.0) for tile in detail.tiles)
 
         sample_row = session.get(_TestSampleRow, sample_id)
         assert sample_row is not None
+        for tile in sample_row.tiles:
+            tile.pixel_f1 = None
+            tile.object_f1 = None
+        session.flush()
+        backfilled = _test_sample_detail(session, sample_id, config)
+        assert all(tile.f1_score == pytest.approx(1.0) for tile in backfilled.tiles)
+
+        first_tile = sample_row.tiles[0]
+        first_tile.pixel_f1 = 0.25
+        first_tile.object_f1 = 0.75
+        sample_row.quality_metric = "objects"
+        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(
+            0.75
+        )
+        sample_row.quality_metric = "pixel"
+        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(
+            0.25
+        )
+        evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
+
         saved_revision = sample_row.content_revision
         saved_evaluated_revision = sample_row.evaluated_revision
         saved_enabled = [tile.tile_index for tile in sample_row.tiles if tile.enabled]
+        saved_tile_f1 = [
+            (tile.pixel_f1, tile.object_f1)
+            for tile in sample_row.tiles
+        ]
         evaluation_preview = evaluate_test_sample_preview(
             session,
             sample_id,
@@ -1971,6 +2000,10 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert sample_row.content_revision == saved_revision
         assert sample_row.evaluated_revision == saved_evaluated_revision
         assert [tile.tile_index for tile in sample_row.tiles if tile.enabled] == saved_enabled
+        assert [
+            (tile.pixel_f1, tile.object_f1)
+            for tile in sample_row.tiles
+        ] == saved_tile_f1
 
         update_test_sample_tile(
             session,

@@ -792,6 +792,12 @@
   gap: 10px;
 }
 
+.test-sample-tile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 .test-sample-toggle {
   display: inline-flex;
   align-items: center;

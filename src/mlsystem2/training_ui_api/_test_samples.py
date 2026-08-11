@@ -630,8 +630,45 @@ def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
     return TestSampleCatalogResponse(classes=classes)
 
 
-def test_sample_detail(session: Session, sample_id: uuid.UUID) -> TestSampleDetail:
-    return _detail(_sample_row(session, sample_id))
+def test_sample_detail(
+    session: Session,
+    sample_id: uuid.UUID,
+    config: TrainingUIAPIConfig | None = None,
+) -> TestSampleDetail:
+    row = _sample_row(session, sample_id)
+    if config is not None:
+        _backfill_test_sample_tile_f1(session, row, config)
+    return _detail(row)
+
+
+def _backfill_test_sample_tile_f1(
+    session: Session,
+    row: TestSampleRow,
+    config: TrainingUIAPIConfig,
+) -> None:
+    if all(
+        tile.pixel_f1 is not None and tile.object_f1 is not None
+        for tile in row.tiles
+    ):
+        return
+    if (
+        row.metric_status not in {"current", "stale"}
+        or not _has_metrics(row)
+        or row.evaluation_pseudo_result_id is None
+    ):
+        return
+    source = session.get(PseudoMarkupResultRow, row.evaluation_pseudo_result_id)
+    if source is None or source.status != "ok" or source.geojson_file is None:
+        return
+    source_path = Path(source.geojson_file.path)
+    if not source_path.is_file():
+        return
+    try:
+        tile_metrics = _calculate_tile_metrics(row, source_path, config)
+    except Exception:  # noqa: BLE001
+        return
+    _apply_test_sample_tile_f1(row, tile_metrics)
+    session.flush()
 
 
 def update_test_sample(
@@ -990,6 +1027,7 @@ def _optimize_test_sample_row(
         request,
         config,
         prediction_path,
+        persist_tile_f1=True,
     )
 
     now = _utc_now()
@@ -1011,10 +1049,14 @@ def _optimized_selection_and_metrics(
     request: TestSampleOptimizeRequest,
     config: TrainingUIAPIConfig,
     prediction_path: Path,
+    *,
+    persist_tile_f1: bool = False,
 ) -> tuple[set[int], _MetricCounts, _MetricCounts]:
     _validate_optimization_request(row, request)
     effective_request = request.model_copy(update={"metric": row.quality_metric})
     tile_metrics = _calculate_tile_metrics(row, prediction_path, config)
+    if persist_tile_f1:
+        _apply_test_sample_tile_f1(row, tile_metrics)
     selected = set(
         _select_optimized_tile_indices(row.tiles, tile_metrics, effective_request)
     )
@@ -1037,6 +1079,7 @@ def evaluate_test_sample(
         return
     source = pseudo_result or _latest_pseudo_markup(session, row.dataset_key)
     if source is None or source.geojson_file is None:
+        _clear_test_sample_tile_f1(row)
         _evaluation_unavailable(
             row,
             "Нет успешной разметки для этого датасета.",
@@ -1044,13 +1087,19 @@ def evaluate_test_sample(
         return
     source_path = Path(source.geojson_file.path)
     if not source_path.is_file():
+        _clear_test_sample_tile_f1(row)
         _evaluation_error(row, "Файл последней разметки не найден на сервере.")
         return
     try:
-        pixel_counts, object_counts = _calculate_metrics(row, source_path, config)
+        tile_metrics = _calculate_tile_metrics(row, source_path, config)
+        enabled = {tile.tile_index for tile in row.tiles if tile.enabled}
+        pixel_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=0)
+        object_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=1)
     except Exception as exc:  # noqa: BLE001
+        _clear_test_sample_tile_f1(row)
         _evaluation_error(row, f"Не удалось рассчитать F1: {exc}")
         return
+    _apply_test_sample_tile_f1(row, tile_metrics)
     _apply_evaluation(row, source, pixel_counts, object_counts)
 
 
@@ -1442,6 +1491,7 @@ def mark_test_samples_stale_for_pseudo_markup(
         )
     ).all()
     for row in rows:
+        _clear_test_sample_tile_f1(row)
         row.metric_status = "stale" if _has_metrics(row) else "unavailable"
         row.evaluation_pseudo_result_id = None
         row.evaluation_error = "Использованная разметка удалена; требуется пересчёт."
@@ -1875,6 +1925,26 @@ def _calculate_metrics(
         _sum_tile_metrics(tile_metrics, enabled, metric_index=0),
         _sum_tile_metrics(tile_metrics, enabled, metric_index=1),
     )
+
+
+def _apply_test_sample_tile_f1(
+    row: TestSampleRow,
+    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+) -> None:
+    for tile in row.tiles:
+        metrics = tile_metrics.get(tile.tile_index)
+        if metrics is None:
+            tile.pixel_f1 = None
+            tile.object_f1 = None
+            continue
+        tile.pixel_f1 = metrics[0].info().f1
+        tile.object_f1 = metrics[1].info().f1
+
+
+def _clear_test_sample_tile_f1(row: TestSampleRow) -> None:
+    for tile in row.tiles:
+        tile.pixel_f1 = None
+        tile.object_f1 = None
 
 
 def _calculate_tile_metrics(
@@ -2646,6 +2716,11 @@ def _detail(row: TestSampleRow) -> TestSampleDetail:
                 source_name=tile.source_name,
                 territory=tile.territory,
                 object_count=tile.object_count,
+                f1_score=(
+                    tile.object_f1
+                    if row.quality_metric == "objects"
+                    else tile.pixel_f1
+                ),
                 enabled=tile.enabled,
                 preview_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/{tile.tile_index}/preview"

@@ -167,6 +167,7 @@ class TestSampleTileInfo(BaseModel):
     source_name: str
     territory: str
     object_count: int = Field(gt=0)
+    f1_score: float | None = Field(default=None, ge=0.0, le=1.0)
     enabled: bool
     preview_url: str
 

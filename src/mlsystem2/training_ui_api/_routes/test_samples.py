@@ -132,7 +132,9 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return _sample_or_404(lambda: test_sample_detail(db, sample_id))
+        return _sample_or_404(
+            lambda: test_sample_detail(db, sample_id, ctx.config)
+        )
 
     @app.patch("/api/v1/test-samples/{sample_id}", response_model=TestSampleDetail)
     def patch_test_sample(

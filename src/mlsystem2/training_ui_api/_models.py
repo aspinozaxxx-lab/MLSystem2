@@ -456,6 +456,8 @@ class TestSampleTileRow(Base):
     territory: Mapped[str] = mapped_column(String(512))
     object_count: Mapped[int] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    pixel_f1: Mapped[float | None] = mapped_column(nullable=True)
+    object_f1: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

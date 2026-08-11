@@ -2015,7 +2015,15 @@ function TestSampleEditorPage({
                 </div>
                 <span title={tile.source_name}>{tile.source_name}</span>
                 <small>{tile.territory}</small>
-                <span className="badge neutral">Объектов: {tile.object_count}</span>
+                <div className="test-sample-tile-badges">
+                  <span className="badge neutral">Объектов: {tile.object_count}</span>
+                  <span
+                    className="badge neutral"
+                    title={`${qualityMetricLabel(sample.quality_metric)} для этого тайла`}
+                  >
+                    {qualityMetricShort(sample.quality_metric)}: {formatF1Score(tile.f1_score)}
+                  </span>
+                </div>
               </div>
             </article>
           ))}

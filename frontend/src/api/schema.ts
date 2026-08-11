@@ -3016,6 +3016,8 @@ export interface components {
             territory: string;
             /** Object Count */
             object_count: number;
+            /** F1 Score */
+            f1_score?: number | null;
             /** Enabled */
             enabled: boolean;
             /** Preview Url */

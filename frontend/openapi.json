@@ -8222,6 +8222,19 @@
             "exclusiveMinimum": 0.0,
             "title": "Object Count"
           },
+          "f1_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F1 Score"
+          },
           "enabled": {
             "type": "boolean",
             "title": "Enabled"
