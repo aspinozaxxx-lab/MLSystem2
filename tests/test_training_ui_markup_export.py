@@ -2042,6 +2042,8 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert detail.evaluation.status == "current"
         assert detail.evaluation.pixel is not None
         assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+        assert detail.tiles[0].enabled is False
+        assert all(tile.f1_score == pytest.approx(1.0) for tile in detail.tiles)
 
         artifact = build_test_sample_download(session, sample_id, config)
         try:
