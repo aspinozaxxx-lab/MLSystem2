@@ -373,7 +373,7 @@ def _apply_target_priorities(
     for definition in sorted(classes, key=lambda item: (-item.priority, item.id)):
         current_class: list[tuple[_SourceFeature, BaseGeometry]] = []
         for feature, geometry in positives_by_slug[definition.slug]:
-            resolved = _polygonal(geometry.difference(occupied))
+            resolved = _difference_with_clearance(geometry, occupied)
             if resolved.is_empty or resolved.area <= 0:
                 continue
             current_class.append((feature, resolved))
@@ -384,11 +384,24 @@ def _apply_target_priorities(
             )
 
     for feature, geometry in hard_negatives:
-        resolved = _polygonal(geometry.difference(occupied))
+        resolved = _difference_with_clearance(geometry, occupied)
         if resolved.is_empty or resolved.area <= 0:
             continue
         output.append((feature, resolved))
     return output
+
+
+def _difference_with_clearance(
+    geometry: BaseGeometry,
+    occupied: BaseGeometry,
+) -> BaseGeometry:
+    if occupied.is_empty:
+        return _polygonal(geometry)
+    bounds = occupied.bounds
+    coordinate_scale = max((abs(value) for value in bounds), default=1.0)
+    clearance = max(1.0, coordinate_scale) * 1e-12
+    exclusion = occupied.buffer(clearance, quad_segs=1)
+    return _polygonal(geometry.difference(exclusion))
 
 
 def _safe_source_dir(repo_root: Path, relative_value: str) -> Path:

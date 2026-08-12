@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
@@ -119,8 +120,8 @@ def test_combined_builder_applies_priority_background_and_stable_ids(
     }
     assert by_class["first"].intersection(by_class["second"]).area == 0.0
     assert by_class["first"].intersection(by_class["hard_negative"]).area == 0.0
-    assert by_class["second"].area == 12.0
-    assert by_class["hard_negative"].area == 5.0
+    assert by_class["second"].area == pytest.approx(12.0, abs=1e-9)
+    assert by_class["hard_negative"].area == pytest.approx(5.0, abs=1e-9)
     assert any("пустая геометрия" in warning for warning in first_build.warnings)
     assert [item["id"] for item in features] == [
         item["id"] for item in next(iter(second_build.files.values()))["features"]
@@ -183,8 +184,9 @@ def test_target_priorities_remove_reprojection_overlap() -> None:
 
     assert by_key["high"].intersection(by_key["low"]).area == 0.0
     assert unary_union([by_key["high"], by_key["low"]]).intersection(by_key["hard"]).area == 0.0
-    assert by_key["low"].area == 3.0
-    assert by_key["hard"].area == 9.0
+    assert by_key["high"].distance(by_key["low"]) > 0.0
+    assert by_key["low"].area == pytest.approx(3.0, abs=1e-9)
+    assert by_key["hard"].area == pytest.approx(9.0, abs=1e-9)
 
 
 def test_rebuild_merge_preserves_manual_edits_additions_and_deletions() -> None:
