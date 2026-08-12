@@ -1,9 +1,12 @@
 ﻿from __future__ import annotations
 
+import builtins
 import inspect
+import random
 from pathlib import Path
 from typing import get_type_hints
 
+import numpy as np
 import pytest
 
 from mlsystem2.dataset_preparing.contracts import (
@@ -29,6 +32,23 @@ from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.api import run_train_pipeline
 from mlsystem2.train_pipeline import _runner
 from mlsystem2.train_pipeline.contracts import TrainPipelineError, TrainPipelineRequest, TrainPipelineResult
+
+
+def test_seed_training_without_torch_still_seeds_python_and_numpy(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def import_without_torch(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "torch":
+            raise ModuleNotFoundError("No module named 'torch'", name="torch")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_torch)
+
+    _runner._seed_training(42)
+    first = (random.random(), float(np.random.random()))
+    _runner._seed_training(42)
+
+    assert (random.random(), float(np.random.random())) == first
 
 
 def test_run_train_pipeline_signature_uses_request_contract() -> None:

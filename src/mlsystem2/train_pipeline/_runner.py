@@ -504,10 +504,17 @@ def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies)
 
 def _seed_training(seed: int) -> None:
     import numpy as np
-    import torch
 
     random.seed(seed)
     np.random.seed(seed)
+
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch":
+            raise
+        return
+
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
