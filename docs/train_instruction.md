@@ -184,8 +184,8 @@ PY
 Hard-negative GeoJSON содержит области, которые модель должна считать фоном: внутри tile supervision mask они
 получают служебное значение `-1`, перед loss превращаются в target background `0` и получают pixel weight из
 `train.hard_negative_weight`. Это не отдельный выходной класс модели.
-Пиксели вне фактической raster mask TIFF получают служебное значение `-2` и полностью исключаются из loss и
-validation-метрик; чёрные поля снимка не становятся обучающим фоном.
+Nodata по значению, невалидные пиксели `dataset_mask` и padding за границей TIFF получают target background `0`.
+Ложный прогноз целевого класса на них увеличивает loss и учитывается validation-метриками как false positive.
 
 Пример для вырубок:
 

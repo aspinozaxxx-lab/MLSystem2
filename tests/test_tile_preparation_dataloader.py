@@ -14,7 +14,11 @@ from rasterio.transform import from_origin
 
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
-from mlsystem2.tile_preparation._augmentations import _geometric, _photometric
+from mlsystem2.tile_preparation._augmentations import (
+    _geometric,
+    _photometric,
+    apply_augmentations,
+)
 from mlsystem2.tile_preparation import _dataloader as dataloader_impl
 from mlsystem2.tile_preparation import _dataset as dataset_impl
 from mlsystem2.tile_preparation._dataloader import (
@@ -33,7 +37,6 @@ from mlsystem2.tile_preparation._dataset import (
 from mlsystem2.tile_preparation._mask import build_supervision_mask
 from mlsystem2.tile_preparation.contracts import (
     HARD_NEGATIVE_LABEL,
-    NODATA_LABEL,
     TileClassAnnotation,
     TileDataloaderRequest,
     TilePreparationError,
@@ -307,10 +310,17 @@ def test_multiclass_geometric_augmentation_keeps_labels() -> None:
     mask[0:2, 0:2] = 1
     mask[2:4, 2:4] = 2
 
-    _image, augmented_mask, augmented = _geometric(image, mask, _DeterministicRng())
+    nodata_pixels = np.zeros((4, 4), dtype=bool)
+    _image, augmented_mask, augmented_nodata, augmented = _geometric(
+        image,
+        mask,
+        nodata_pixels,
+        _DeterministicRng(),
+    )
 
     assert augmented is True
     assert augmented_mask.shape == (4, 4)
+    assert not np.any(augmented_nodata)
     assert set(np.unique(augmented_mask).tolist()) == {0, 1, 2}
 
 
@@ -327,11 +337,11 @@ def test_supervision_mask_builder_handles_empty_hard_negative_layer() -> None:
     assert set(np.unique(mask).tolist()) == {0, 1}
 
 
-def test_supervision_mask_builder_preserves_hard_negative_background_and_priority() -> None:
+def test_supervision_mask_builder_cuts_multiclass_and_hard_negative_by_nodata() -> None:
     nodata = np.zeros((4, 4), dtype=bool)
     nodata[0, 0] = True
     mask = build_supervision_mask(
-        positive_layers=[(1, [_polygon_geometry([[1, 2], [2, 2], [2, 3], [1, 3], [1, 2]])])],
+        positive_layers=[(2, [_polygon_geometry([[1, 2], [2, 2], [2, 3], [1, 3], [1, 2]])])],
         hard_negative_geometries=[
             _polygon_geometry([[0, 1], [3, 1], [3, 4], [0, 4], [0, 1]])
         ],
@@ -340,8 +350,8 @@ def test_supervision_mask_builder_preserves_hard_negative_background_and_priorit
         nodata_pixels=nodata,
     )
 
-    assert mask[0, 0] == NODATA_LABEL
-    assert mask[1, 1] == 1
+    assert mask[0, 0] == 0
+    assert mask[1, 1] == 2
     assert HARD_NEGATIVE_LABEL in set(np.unique(mask).tolist())
     assert 0 in set(np.unique(mask).tolist())
     assert mask[1, 0] == HARD_NEGATIVE_LABEL
@@ -373,11 +383,43 @@ def test_geometric_augmentation_preserves_hard_negative_label_values() -> None:
     mask[0:2, 0:2] = HARD_NEGATIVE_LABEL
     mask[2:4, 2:4] = 2
 
-    _image, augmented_mask, augmented = _geometric(image, mask, _DeterministicRng())
+    nodata_pixels = np.zeros((4, 4), dtype=bool)
+    _image, augmented_mask, augmented_nodata, augmented = _geometric(
+        image,
+        mask,
+        nodata_pixels,
+        _DeterministicRng(),
+    )
 
     assert augmented is True
+    assert not np.any(augmented_nodata)
     assert int(np.sum(augmented_mask == HARD_NEGATIVE_LABEL)) == 4
     assert set(np.unique(augmented_mask).tolist()) == {HARD_NEGATIVE_LABEL, 0, 2}
+
+
+def test_augmentation_transforms_nodata_with_mask_and_restores_image_value() -> None:
+    image = np.full((2, 4, 4), 100.0, dtype=np.float32)
+    nodata_pixels = np.zeros((4, 4), dtype=bool)
+    nodata_pixels[:2, :2] = True
+    image[:, nodata_pixels] = -1.0
+    mask = np.ones((1, 4, 4), dtype=np.float32)
+    mask[:, nodata_pixels] = 0.0
+
+    augmented_image, augmented_mask, augmented = apply_augmentations(
+        image,
+        mask,
+        nodata_pixels=nodata_pixels,
+        nodata=-1.0,
+        level=2,
+        seed=42,
+        sample_index=0,
+    )
+
+    augmented_nodata = np.all(augmented_image == -1.0, axis=0)
+    assert augmented is True
+    assert int(augmented_nodata.sum()) == int(nodata_pixels.sum())
+    assert np.all(augmented_mask[:, augmented_nodata] == 0.0)
+    assert np.all(augmented_image[:, ~augmented_nodata] >= 0.0)
 
 
 def test_photometric_augmentation_does_not_change_supervision_mask() -> None:
@@ -597,8 +639,11 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     raster_path = tmp_path / "edge.tif"
     data = np.arange(25, dtype=np.int16).reshape(1, 5, 5) + 1000
     _write_raster_data(raster_path, data, nodata=-1)
-    annotation_file = tmp_path / "empty.geojson"
-    _write_empty_annotation(annotation_file)
+    annotation_file = tmp_path / "annotations.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0, 0], [8, 0], [8, 8], [0, 8], [0, 0]],
+    )
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=4, input_channels=1))
 
     dataset = TileDataset(
@@ -618,16 +663,18 @@ def test_create_tile_dataloader_reads_edge_tile_as_regular_grid_with_nodata_fill
     assert mask.shape == (1, 4, 4)
     assert sample_meta == {
         "augmented": False,
-        "category": TILE_CATEGORY_BACKGROUND,
-        "positive": False,
+        "category": TILE_CATEGORY_POSITIVE,
+        "positive": True,
         "hard_negative": False,
-        "background": True,
+        "background": False,
     }
     assert torch.equal(
         torch.as_tensor(edge_tile[:, 0]),
         torch.as_tensor(data[0, 0:4, 4].astype(np.float32)),
     )
     assert torch.all(torch.as_tensor(edge_tile[:, 1:]) == -1.0)
+    assert np.all(mask[0, :, 0] == 1.0)
+    assert np.all(mask[0, :, 1:] == 0.0)
 
     dataset.close()
 
@@ -720,7 +767,7 @@ def test_per_image_annotation_builds_positive_and_hard_negative_masks(
     dataset.close()
 
 
-def test_partial_nodata_pixels_are_marked_as_ignored_supervision(tmp_path: Path) -> None:
+def test_legacy_annotation_is_cut_to_nodata_as_background(tmp_path: Path) -> None:
     raster_path = tmp_path / "partial_nodata.tif"
     data = np.full((1, 4, 4), 1000, dtype=np.uint16)
     data[:, :2, :2] = 0
@@ -742,9 +789,73 @@ def test_partial_nodata_pixels_are_marked_as_ignored_supervision(tmp_path: Path)
     )
 
     _image, mask, _meta = dataset[0]
-    assert np.all(mask[0, :2, :2] == NODATA_LABEL)
+    assert np.all(mask[0, :2, :2] == 0)
     assert np.all(mask[0, 2:, :] == 1)
     assert np.all(mask[0, :2, 2:] == 1)
+    dataset.close()
+
+
+def test_per_image_annotation_is_cut_to_nodata_as_background(tmp_path: Path) -> None:
+    raster_path = tmp_path / "per_image_nodata.tif"
+    data = np.full((1, 3, 3), 1000, dtype=np.uint16)
+    data[:, 0, 0] = 0
+    _write_raster_data(raster_path, data, nodata=0)
+    annotation_file = tmp_path / "per_image_nodata.geojson"
+    _write_per_image_full_positive_annotation(annotation_file)
+
+    dataset = TileDataset(
+        scenes=[
+            TileSceneSource(
+                scene_id="scene",
+                image_path=raster_path,
+                annotation_file=annotation_file,
+            )
+        ],
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    _image, mask, _meta = dataset[0]
+    assert mask[0, 0, 0] == 0
+    assert np.all(mask[0, :3, :3][data[0] != 0] == 1)
+    assert np.all(mask[0, 3, :] == 0)
+    assert np.all(mask[0, :, 3] == 0)
+    dataset.close()
+
+
+def test_raster_mask_invalid_pixels_are_background_and_normalized_to_nodata(
+    tmp_path: Path,
+) -> None:
+    raster_path = tmp_path / "raster_mask.tif"
+    data = np.full((1, 4, 4), 1000, dtype=np.uint16)
+    _write_raster_data(raster_path, data, nodata=0)
+    valid_mask = np.full((4, 4), 255, dtype=np.uint8)
+    valid_mask[1, 1] = 0
+    with rasterio.open(raster_path, "r+") as raster:
+        raster.write_mask(valid_mask)
+    annotation_file = tmp_path / "raster_mask.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]],
+    )
+
+    dataset = TileDataset(
+        scenes=[TileSceneSource(scene_id="scene", image_path=raster_path)],
+        annotation_file=annotation_file,
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    image, mask, _meta = dataset[0]
+    assert np.all(image[:, 1, 1] == 0)
+    assert np.all(mask[:, 1, 1] == 0)
+    assert np.all(mask[:, valid_mask != 0] == 1)
     dataset.close()
 
 
@@ -1976,6 +2087,23 @@ def _write_per_image_roles_annotation(path: Path) -> None:
                     [[4.5, 2.5], [5.5, 2.5], [5.5, 3.5], [4.5, 3.5], [4.5, 2.5]]
                 ),
             },
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_per_image_full_positive_annotation(path: Path) -> None:
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"_mlsystem2_role": "positive"},
+                "geometry": _polygon_geometry(
+                    [[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]]
+                ),
+            }
         ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")

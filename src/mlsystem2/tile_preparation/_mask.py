@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from rasterio.features import rasterize
 
-from .contracts import HARD_NEGATIVE_LABEL, NODATA_LABEL
+from .contracts import HARD_NEGATIVE_LABEL
 
 
 def rasterize_window_mask(geometries: list[object], out_shape: tuple[int, int], transform) -> np.ndarray:
@@ -68,5 +68,5 @@ def build_supervision_mask(
             transform=transform,
         )
         mask[positive_mask == 1] = int(label_id)
-    mask[nodata_pixels] = NODATA_LABEL
+    mask[nodata_pixels] = 0
     return mask
