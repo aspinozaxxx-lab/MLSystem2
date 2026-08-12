@@ -2304,6 +2304,7 @@ def _features_from_mask(
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     source_crs = str(crs) if crs is not None else None
+    parent_class_id = str(config.get("class_id") or config.get("class_key") or "")
     object_types = list(config.get("object_types") or [])
     object_type_by_id = {int(item["id"]): item for item in object_types}
     if confidence_map is not None and confidence_map.shape != mask.shape:
@@ -2352,6 +2353,7 @@ def _features_from_mask(
                     "_y_res": abs(float(resolution[1])),
                     "_crs": source_crs,
                     "scene_id": scene,
+                    "class_id": parent_class_id,
                     "class_key": config.get("class_key"),
                     "class_name": config.get("class_name"),
                     "source_model": config.get("source_model"),

@@ -88,9 +88,53 @@ def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     assert all(52.3 < y < 52.5 for y in ys)
     assert features[0]["properties"]["_crs"] == "EPSG:3857"
     assert features[0]["properties"]["_x_res"] == 3.4240042653603187
+    assert features[0]["properties"]["class_id"] == "deforestation"
     assert features[0]["properties"]["postprocess_profile"] == "none"
     assert features[0]["properties"]["postprocess_level"] == 1
     assert features[0]["properties"]["confidence"] == pytest.approx(0.83)
+
+
+def test_multiclass_features_keep_parent_class_and_object_type() -> None:
+    features = _features_from_mask(
+        np.asarray([[1, 2]], dtype=np.uint8),
+        from_origin(30.0, 60.0, 0.01, 0.01),
+        CRS.from_epsg(4326),
+        (0.01, 0.01),
+        "scene-1",
+        {
+            "class_key": "combined-dataset",
+            "class_name": "Комбинированный класс",
+            "object_types": [
+                {
+                    "id": 1,
+                    "slug": "first",
+                    "name": "Первый",
+                    "color": "#F59E0B",
+                    "priority": 100,
+                },
+                {
+                    "id": 2,
+                    "slug": "second",
+                    "name": "Второй",
+                    "color": "#8B5CF6",
+                    "priority": 0,
+                },
+            ],
+        },
+    )
+
+    assert len(features) == 2
+    assert {item["properties"]["class_id"] for item in features} == {
+        "combined-dataset"
+    }
+    assert {
+        (
+            item["properties"]["object_type_id"],
+            item["properties"]["object_type_slug"],
+            item["properties"]["object_type_color"],
+        )
+        for item in features
+    } == {(1, "first", "#F59E0B"), (2, "second", "#8B5CF6")}
 
 
 def test_aoi_inference_expands_windows_until_internal_object_is_complete(
