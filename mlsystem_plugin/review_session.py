@@ -39,6 +39,10 @@ _OUTPUT_FIELD_NAMES = (
     "job_id",
     "class_id",
     "class_name",
+    "object_type_id",
+    "object_type_slug",
+    "object_type_name",
+    "object_type_color",
     "confidence",
     "model_id",
     "model_version",
@@ -53,6 +57,10 @@ _FIELD_NAMES = (
     "job_id",
     "class_id",
     "class_name",
+    "object_type_id",
+    "object_type_slug",
+    "object_type_name",
+    "object_type_color",
     "confidence",
     "model_id",
     "model_version",
@@ -60,6 +68,11 @@ _FIELD_NAMES = (
     "area_m2",
     "review_status",
     "original_order",
+)
+_LEGACY_REQUIRED_FIELD_NAMES = tuple(
+    name
+    for name in _FIELD_NAMES
+    if not name.startswith("object_type_")
 )
 _SESSION_LAYER_PROPERTY = "mlsystem2/review_session"
 
@@ -84,6 +97,9 @@ class ReviewSession(QObject):
         self._sort = "original"
         self._min_area_m2 = 0.0
         self._min_confidence = 0.0
+        self._object_type_slug: str | None = None
+        self._view_layer_ids: list[str] = []
+        self._display_mode = "categorized"
         self._current_feature_id: int | None = None
         self._apply_view_style()
         self._refresh_current()
@@ -105,7 +121,7 @@ class ReviewSession(QObject):
         if path.is_file():
             layer = QgsVectorLayer(uri, f"Кандидаты MLSystem2 — {job_id[:8]}", "ogr")
             if not layer.isValid() or any(
-                layer.fields().indexOf(name) < 0 for name in _FIELD_NAMES
+                layer.fields().indexOf(name) < 0 for name in _LEGACY_REQUIRED_FIELD_NAMES
             ):
                 raise ReviewSessionError("Сохранённая сессия повреждена или недоступна.")
         else:
@@ -118,6 +134,14 @@ class ReviewSession(QObject):
         """Deaktivirovat istoriyu i pri neobhodimosti ubrat sloi iz proekta."""
 
         self._current_feature_id = None
+        project = QgsProject.instance()
+        for layer_id in self._view_layer_ids:
+            if project.mapLayer(layer_id) is not None:
+                project.removeMapLayer(layer_id)
+        self._view_layer_ids = []
+        canonical_node = project.layerTreeRoot().findLayer(self.layer_id)
+        if canonical_node is not None and not remove_layer:
+            canonical_node.setItemVisibilityChecked(True)
         if remove_layer and QgsProject.instance().mapLayer(self.layer_id) is not None:
             QgsProject.instance().removeMapLayer(self.layer_id)
 
@@ -133,6 +157,70 @@ class ReviewSession(QObject):
         self._min_confidence = min(1.0, max(0.0, float(min_confidence)))
         self._apply_view_style()
         self._refresh_current(keep_current=True)
+
+    def set_object_type_filter(self, slug: str | None) -> None:
+        """Фильтровать единую очередь по подтипу, не меняя review-статусы."""
+
+        normalized = str(slug or "").strip()
+        self._object_type_slug = normalized or None
+        self._apply_view_style()
+        self._refresh_current(keep_current=True)
+
+    def object_types(self) -> list[dict[str, Any]]:
+        """Вернуть типы из канонического слоя в стабильном порядке."""
+
+        result: dict[str, dict[str, Any]] = {}
+        if self.layer.fields().indexOf("object_type_slug") < 0:
+            return []
+        for feature in self.layer.getFeatures():
+            slug = str(feature["object_type_slug"] or "").strip()
+            if not slug:
+                continue
+            result.setdefault(
+                slug,
+                {
+                    "id": int(feature["object_type_id"] or 0),
+                    "slug": slug,
+                    "name": str(feature["object_type_name"] or slug),
+                    "color": str(feature["object_type_color"] or "#F3C623"),
+                },
+            )
+        return sorted(result.values(), key=lambda item: (item["id"], item["slug"]))
+
+    def set_display_mode(self, mode: str) -> list[QgsVectorLayer]:
+        """Переключить категоризированный слой или синхронизированные представления."""
+
+        if mode not in {"categorized", "group"}:
+            raise ReviewSessionError("Неизвестный режим отображения типов объектов.")
+        self._display_mode = mode
+        project = QgsProject.instance()
+        for layer_id in self._view_layer_ids:
+            if project.mapLayer(layer_id) is not None:
+                project.removeMapLayer(layer_id)
+        self._view_layer_ids = []
+        root = project.layerTreeRoot()
+        canonical_node = root.findLayer(self.layer_id)
+        if canonical_node is not None:
+            canonical_node.setItemVisibilityChecked(mode == "categorized")
+        if mode == "categorized" or len(self.object_types()) < 2:
+            return [self.layer]
+        group_name = f"Типы объектов MLSystem2 — {self.layer.name()}"
+        existing = root.findGroup(group_name)
+        group = existing or root.addGroup(group_name)
+        views: list[QgsVectorLayer] = []
+        for item in self.object_types():
+            view = QgsVectorLayer(self.layer.source(), str(item["name"]), "ogr")
+            if not view.isValid():
+                raise ReviewSessionError("Не удалось создать представление типа объекта.")
+            view.setCustomProperty("mlsystem2/review_session_view", self.layer_id)
+            view.setCustomProperty("mlsystem2/object_type_slug", str(item["slug"]))
+            view.setCustomProperty("mlsystem2/object_type_color", str(item["color"]))
+            project.addMapLayer(view, False)
+            group.addLayer(view)
+            self._view_layer_ids.append(view.id())
+            views.append(view)
+        self._apply_type_view_filters()
+        return views
 
     def feature_ids(self) -> list[int]:
         """Vernut vidimuyu ochered s tekushchim filtrom i sortirovkoi."""
@@ -280,6 +368,7 @@ class ReviewSession(QObject):
         if not self.layer.dataProvider().changeAttributeValues({feature_id: updates}):
             raise ReviewSessionError("Не удалось сохранить статус кандидата.")
         self.layer.triggerRepaint()
+        self._refresh_type_views()
 
     # Atomarno dobavlyaet vse chasti razbieniya v GeoPackage.
     def _apply_split(self, feature_id: int, parts: list[SplitPart]) -> list[int]:
@@ -289,7 +378,8 @@ class ReviewSession(QObject):
         for offset, part in enumerate(parts, start=1):
             child = QgsFeature(fields)
             for field_name in _FIELD_NAMES:
-                child[field_name] = parent[field_name]
+                if fields.indexOf(field_name) >= 0:
+                    child[field_name] = parent[field_name]
             child.setGeometry(part.geometry)
             child["candidate_id"] = part.candidate_id
             child["parent_candidate_id"] = part.parent_candidate_id
@@ -307,6 +397,7 @@ class ReviewSession(QObject):
             self.layer.dataProvider().deleteFeatures([int(item.id()) for item in added])
             raise
         self.layer.updateExtents()
+        self._refresh_type_views()
         self.changed.emit()
         return [int(item.id()) for item in added]
 
@@ -316,6 +407,12 @@ class ReviewSession(QObject):
         return status == "new" and self._passes_thresholds(feature)
 
     def _passes_thresholds(self, feature: QgsFeature) -> bool:
+        if (
+            self._object_type_slug is not None
+            and self.layer.fields().indexOf("object_type_slug") >= 0
+            and str(feature["object_type_slug"] or "") != self._object_type_slug
+        ):
+            return False
         area = _numeric_attribute(feature["area_m2"])
         if area is None or area < self._min_area_m2:
             return False
@@ -329,7 +426,9 @@ class ReviewSession(QObject):
             self.layer,
             min_area_m2=self._min_area_m2,
             min_confidence=self._min_confidence,
+            object_type_slug=self._object_type_slug,
         )
+        self._apply_type_view_filters()
 
     # Ciklicheski sdvigaet ukazatel ocheredi.
     def _move(self, offset: int) -> None:
@@ -343,6 +442,35 @@ class ReviewSession(QObject):
             self._current_feature_id = ids[(index + offset) % len(ids)]
         self.current_changed.emit(self.current_feature())
         self.changed.emit()
+
+    def _refresh_type_views(self) -> None:
+        project = QgsProject.instance()
+        for layer_id in self._view_layer_ids:
+            layer = project.mapLayer(layer_id)
+            if isinstance(layer, QgsVectorLayer):
+                layer.dataProvider().reloadData()
+                layer.triggerRepaint()
+
+    def _apply_type_view_filters(self) -> None:
+        """Синхронизировать групповые представления с общей очередью и фильтрами."""
+
+        project = QgsProject.instance()
+        for layer_id in self._view_layer_ids:
+            layer = project.mapLayer(layer_id)
+            if not isinstance(layer, QgsVectorLayer):
+                continue
+            slug = str(layer.customProperty("mlsystem2/object_type_slug", "")).strip()
+            if not slug:
+                continue
+            layer.setSubsetString(
+                _active_subset_expression(
+                    slug=slug,
+                    selected_slug=self._object_type_slug,
+                    min_area_m2=self._min_area_m2,
+                    min_confidence=self._min_confidence,
+                )
+            )
+            _apply_status_style(layer)
 
     # Perestraivaet tekushchii ukazatel posle filtra ili sortirovki.
     def _refresh_current(self, *, keep_current: bool = False) -> None:
@@ -366,6 +494,9 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
         "job_id",
         "class_id",
         "class_name",
+        "object_type_slug",
+        "object_type_name",
+        "object_type_color",
         "model_id",
         "model_version",
         "source_image_ids",
@@ -373,6 +504,7 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
     ):
         fields.append(QgsField(name, string_type))
     fields.append(QgsField("confidence", double_type))
+    fields.append(QgsField("object_type_id", int_type))
     fields.append(QgsField("area_m2", double_type))
     fields.append(QgsField("original_order", int_type))
     memory.dataProvider().addAttributes(fields)
@@ -396,6 +528,10 @@ def _create_candidate_layer(payload: dict[str, Any], job_id: str, path: Path) ->
             "job_id": properties.get("job_id") or job_id,
             "class_id": properties.get("class_id"),
             "class_name": properties.get("class_name"),
+            "object_type_id": properties.get("object_type_id"),
+            "object_type_slug": properties.get("object_type_slug"),
+            "object_type_name": properties.get("object_type_name"),
+            "object_type_color": properties.get("object_type_color"),
             "confidence": properties.get("confidence"),
             "model_id": properties.get("model_id"),
             "model_version": properties.get("model_version"),
@@ -449,17 +585,17 @@ def _field_type(qmeta_name: str, qvariant_name: str):
 
 
 # Назначает стиль и скрывает объекты вне фильтров.
-def _apply_status_style(
-    layer: QgsVectorLayer,
+def _active_subset_expression(
     *,
-    min_area_m2: float = 0.0,
-    min_confidence: float = 0.0,
-) -> None:
-    root_rule = QgsRuleBasedRenderer.Rule(None)
-    symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-    symbol.setColor(QColor(255, 215, 0, 110))
+    slug: str,
+    selected_slug: str | None,
+    min_area_m2: float,
+    min_confidence: float,
+) -> str:
+    escaped = slug.replace("'", "''")
     expression = (
-        '"review_status" = \'new\' '
+        f'"object_type_slug" = \'{escaped}\' '
+        'AND "review_status" = \'new\' '
         f'AND coalesce("area_m2", 0) >= {min_area_m2:.12g}'
     )
     if min_confidence > 0.0:
@@ -467,10 +603,58 @@ def _apply_status_style(
             ' AND "confidence" IS NOT NULL '
             f'AND "confidence" >= {min_confidence:.12g}'
         )
-    rule = QgsRuleBasedRenderer.Rule(symbol)
-    rule.setLabel("Прошёл фильтры")
-    rule.setFilterExpression(expression)
-    root_rule.appendChild(rule)
+    if selected_slug is not None and selected_slug != slug:
+        expression += " AND 1 = 0"
+    return expression
+
+
+def _apply_status_style(
+    layer: QgsVectorLayer,
+    *,
+    min_area_m2: float = 0.0,
+    min_confidence: float = 0.0,
+    object_type_slug: str | None = None,
+) -> None:
+    root_rule = QgsRuleBasedRenderer.Rule(None)
+    base_expression = (
+        '"review_status" = \'new\' '
+        f'AND coalesce("area_m2", 0) >= {min_area_m2:.12g}'
+    )
+    if min_confidence > 0.0:
+        base_expression += (
+            ' AND "confidence" IS NOT NULL '
+            f'AND "confidence" >= {min_confidence:.12g}'
+        )
+    if object_type_slug:
+        escaped = object_type_slug.replace("'", "''")
+        base_expression += f' AND "object_type_slug" = \'{escaped}\''
+    object_types: dict[str, tuple[str, str]] = {}
+    if layer.fields().indexOf("object_type_slug") >= 0:
+        for feature in layer.getFeatures():
+            slug = str(feature["object_type_slug"] or "").strip()
+            if slug:
+                object_types.setdefault(
+                    slug,
+                    (
+                        str(feature["object_type_name"] or slug),
+                        str(feature["object_type_color"] or "#F3C623"),
+                    ),
+                )
+    if not object_types:
+        object_types = {"": ("Прошёл фильтры", "#FFD700")}
+    for slug, (name, color_value) in sorted(object_types.items()):
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        color = QColor(color_value)
+        color.setAlpha(110)
+        symbol.setColor(color)
+        expression = base_expression
+        if slug:
+            escaped = slug.replace("'", "''")
+            expression += f' AND "object_type_slug" = \'{escaped}\''
+        rule = QgsRuleBasedRenderer.Rule(symbol)
+        rule.setLabel(name)
+        rule.setFilterExpression(expression)
+        root_rule.appendChild(rule)
     layer.setRenderer(QgsRuleBasedRenderer(root_rule))
     layer.triggerRepaint()
 
@@ -507,7 +691,7 @@ def is_review_session_layer(layer: object) -> bool:
         layer.name().startswith("Кандидаты MLSystem2")
         and "/.mlsystem2/review_sessions/pseudolabel_" in source
         and "|layername=candidates" in source
-        and all(layer.fields().indexOf(name) >= 0 for name in _FIELD_NAMES)
+        and all(layer.fields().indexOf(name) >= 0 for name in _LEGACY_REQUIRED_FIELD_NAMES)
     )
 
 __all__ = ["ReviewSession", "ReviewSessionError", "is_review_session_layer"]

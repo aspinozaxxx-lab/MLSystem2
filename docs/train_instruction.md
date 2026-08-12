@@ -229,17 +229,17 @@ train:
 
 ## 6. Конфиг многоклассового датасета
 
-Для нескольких классов используй только `dataset.classes`; per-image multiclass пока не поддерживается.
+Для legacy multiclass используй `dataset.classes`. Для нового per-image multiclass укажи только `dataset.annotations_dir`; schema читается из `.mlsystem2-dataset.json` и строго сверяется со всеми GeoJSON.
 
 Принципы:
 
 - `train.task: multiclass`.
 - `train.loss: cross_entropy` или `cross_entropy_dice`.
-- `train.output_channels = len(dataset.classes) + 1`.
-- `background = 0`, классы получают id по порядку в YAML.
+- `train.output_channels = N + 1`, где `N` берётся из schema dataset.
+- `background = 0`, class ID приходят из YAML для legacy или из manifest для per-image.
 - `priority` влияет на перекрытия: больший приоритет перекрывает меньший.
 
-Многоклассовый режим остается внутренним режимом модулей и не используется сайтом запуска обучения.
+Training UI автоматически выбирает multiclass task, три выхода для двух типов, class balance и показывает только `cross_entropy|cross_entropy_dice`.
 
 ## 7. Параметры, которые обычно задаются оператором
 

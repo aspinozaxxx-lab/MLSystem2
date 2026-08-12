@@ -20,6 +20,8 @@ from mlsystem2.training_ui_api._dataset_editor import (
     list_editor_datasets,
     list_editor_scenes,
     publish_editor_scenes,
+    preview_editor_dataset_rebuild,
+    rebuild_editor_dataset,
     resolve_editor_raster,
     save_editor_scene,
 )
@@ -31,6 +33,9 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorPublishRequest,
     DatasetEditorPublicationInfo,
     DatasetEditorRasterBrowserResponse,
+    DatasetEditorRebuildPreview,
+    DatasetEditorRebuildRequest,
+    DatasetEditorRebuildResult,
     DatasetEditorSaveSceneRequest,
     DatasetEditorSceneDetail,
     DatasetEditorSceneListResponse,
@@ -188,6 +193,42 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> DatasetEditorPublicationInfo:
         return _git_call(editor_publication_info, ctx.config, commit)
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild/preview",
+        response_model=DatasetEditorRebuildPreview,
+    )
+    def rebuild_preview(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorRebuildPreview:
+        return _git_call(
+            preview_editor_dataset_rebuild,
+            db,
+            ctx.config,
+            dataset_key,
+        )
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild",
+        response_model=DatasetEditorRebuildResult,
+    )
+    def rebuild(
+        dataset_key: str,
+        request: DatasetEditorRebuildRequest,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorRebuildResult:
+        return _git_call(
+            rebuild_editor_dataset,
+            db,
+            ctx.config,
+            dataset_key,
+            preview_token=request.preview_token,
+            mode=request.mode,
+            username=username,
+        )
 
     @app.get("/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path:path}")
     def raster(

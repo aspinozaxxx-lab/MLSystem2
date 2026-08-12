@@ -36,7 +36,7 @@ def test_prepare_dataset_returns_independent_scenes(tmp_path: Path) -> None:
         )
     )
 
-    assert result.report.status == "ok"
+    assert result.report.status == "ok", result.report.errors
     assert result.dataset is not None
     assert result.dataset.format == "legacy_binary"
     assert [scene.scene_id for scene in result.dataset.scenes] == [
@@ -779,6 +779,89 @@ def test_prepare_dataset_enforces_expected_band_count_and_dtype(tmp_path: Path) 
     assert result.dataset is None
     assert any("должен содержать 4 каналов" in error for error in result.report.errors)
     assert any("должны иметь dtype uint16" in error for error in result.report.errors)
+
+
+def test_prepare_per_image_multiclass_validates_manifest_and_feature_classes(
+    tmp_path: Path,
+) -> None:
+    images = tmp_path / "images"
+    annotations = tmp_path / "annotations"
+    images.mkdir()
+    annotations.mkdir()
+    _write_raster(images / "scene_a.tif", 1, 0)
+    classes = [
+        {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B", "priority": 100},
+        {"id": 2, "slug": "second", "name": "Второй", "color": "#8B5CF6", "priority": 0},
+    ]
+    (annotations / ".mlsystem2-dataset.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task": "multiclass",
+                "combined": False,
+                "classes": classes,
+                "sources": [],
+                "scene_ids": ["scene_a"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "_mlsystem2_schema_version": 1,
+        "_mlsystem2_task": "multiclass",
+        "_mlsystem2_classes": classes,
+        "features": [
+            {
+                "type": "Feature",
+                "id": "feature-1",
+                "properties": {
+                    "_mlsystem2_role": "positive",
+                    "_mlsystem2_class": "second",
+                    "_mlsystem2_origin_key": "origin-1",
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                },
+            },
+            {
+                "type": "Feature",
+                "id": "feature-2",
+                "properties": {
+                    "_mlsystem2_role": "hard_negative",
+                    "_mlsystem2_origin_key": "origin-2",
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[2, 2], [3, 2], [3, 3], [2, 3], [2, 2]]],
+                },
+            },
+        ],
+    }
+    annotation_path = annotations / "images_scene_a.geojson"
+    annotation_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    request = DatasetPreparationRequest(
+        images_dir=str(images),
+        annotations_dir=str(annotations),
+        val_fraction=0.5,
+    )
+    result = prepare_dataset(request)
+
+    assert result.report.status == "ok", result.report.errors
+    assert result.dataset is not None
+    assert result.dataset.format == "per_image_multiclass"
+    assert [item.slug for item in result.dataset.classes] == ["first", "second"]
+    assert result.report.class_counts == {"first": 0, "second": 1}
+    assert result.report.hard_negative_objects == 1
+
+    payload["features"][0]["properties"]["_mlsystem2_class"] = "unknown"
+    annotation_path.write_text(json.dumps(payload), encoding="utf-8")
+    invalid = prepare_dataset(request)
+    assert invalid.report.status == "error"
+    assert any("неизвестный класс" in error for error in invalid.report.errors)
 
 
 def _write_raster(

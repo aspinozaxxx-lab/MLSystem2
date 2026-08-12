@@ -11,6 +11,7 @@ import {
   PaintBucket,
   PencilLine,
   Plus,
+  RefreshCw,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -29,7 +30,7 @@ import GeoTIFF from "ol/source/GeoTIFF";
 import VectorSource from "ol/source/Vector";
 import { Fill, Stroke, Style } from "ol/style";
 import type { ViewOptions } from "ol/View";
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
 import { apiJson } from "./api/client";
@@ -39,6 +40,7 @@ import {
   cloneSnapshot,
   draftChanged,
   extendRasterResolutions,
+  featureCounts,
   geometryInsideFootprint,
   publishScenes as buildPublishScenes,
   RASTER_CONTRAST,
@@ -52,7 +54,7 @@ import {
 } from "./utils/datasetEditor";
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
-type Role = "positive" | "hard_negative";
+type ObjectSelection = string;
 type EditMode = "select" | "draw";
 type BandMode = "RGB" | "NRG" | "NGB";
 
@@ -64,6 +66,21 @@ type EditorDataset = {
   dataset_name: string;
   imagery_type: "kanopus" | "ortho";
   scene_count: number;
+  task: "binary" | "multiclass";
+  object_types: EditorObjectType[];
+  combined: boolean;
+  source_status: "current" | "stale" | "unknown" | "unavailable";
+  source_changes: string[];
+  class_counts: Record<string, number>;
+  hard_negative_count: number;
+};
+
+type EditorObjectType = {
+  id: number;
+  slug: string;
+  name: string;
+  color: string;
+  priority: number;
 };
 
 type EditorScene = {
@@ -74,6 +91,7 @@ type EditorScene = {
   total_count: number;
   positive_count: number;
   hard_negative_count: number;
+  class_counts: Record<string, number>;
   revision: string;
 };
 
@@ -106,8 +124,33 @@ type PublicationInfo = {
   live_commit: string | null;
   status: "publishing" | "published";
 };
+type RebuildChange = {
+  kind: "added" | "edited" | "deleted" | "source_added" | "source_edited" | "source_deleted";
+  annotation_name: string;
+  origin_key: string | null;
+  detail: string | null;
+};
+type RebuildPreview = {
+  preview_token: string;
+  dataset_key: string;
+  source_status: "current" | "stale" | "unknown" | "unavailable";
+  source_changes: string[];
+  local_changes: RebuildChange[];
+  conflicts: RebuildChange[];
+  replacement_scene_count: number;
+  replacement_class_counts: Record<string, number>;
+  replacement_hard_negative_count: number;
+  warnings: string[];
+};
+type RebuildResult = MutationResult & {
+  mode: "merge" | "replace";
+  conflicts: RebuildChange[];
+  warnings: string[];
+};
 
 const ROLE_PROPERTY = "_mlsystem2_role";
+const CLASS_PROPERTY = "_mlsystem2_class";
+const HARD_NEGATIVE_COLOR = "#EF4444";
 const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
   RGB: [1, 2, 3],
   NRG: [4, 1, 2],
@@ -129,7 +172,7 @@ export function DatasetEditorPage({
   const [annotationName, setAnnotationName] = useState("");
   const [detail, setDetail] = useState<SceneDetail | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
-  const [role, setRole] = useState<Role>("positive");
+  const [role, setRole] = useState<ObjectSelection>("positive");
   const [editMode, setEditMode] = useState<EditMode>("select");
   const [sortDirection, setSortDirection] = useState<SortDirection>("descending");
   const [fillEnabled, setFillEnabled] = useState(true);
@@ -141,6 +184,7 @@ export function DatasetEditorPage({
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
+  const [rebuildPreview, setRebuildPreview] = useState<RebuildPreview | null>(null);
   const mapTargetRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
@@ -152,7 +196,7 @@ export function DatasetEditorPage({
   const rasterFootprintRef = useRef<Geometry | null>(null);
   const draftsRef = useRef<DraftMap>({});
   const dirtyRef = useRef(false);
-  const roleRef = useRef<Role>(role);
+  const roleRef = useRef<ObjectSelection>(role);
   const fillEnabledRef = useRef(fillEnabled);
   const annotationsVisibleRef = useRef(annotationsVisible);
   const bandModeRef = useRef<BandMode>(bandMode);
@@ -178,6 +222,14 @@ export function DatasetEditorPage({
     [drafts, scenes, sortDirection],
   );
   const activeDraft = annotationName ? drafts[annotationName] : undefined;
+  const objectTypeChoices = useMemo(
+    () => selectedDataset?.object_types || [],
+    [selectedDataset],
+  );
+  const activeClassCounts = useMemo(
+    () => activeDraft ? featureClassCounts(activeDraft.current.geojson) : {},
+    [activeDraft],
+  );
 
   const changeDrafts = useCallback((updater: (current: DraftMap) => DraftMap) => {
     const next = updater(draftsRef.current);
@@ -300,8 +352,14 @@ export function DatasetEditorPage({
     setBandMode("RGB");
     bandModeRef.current = "RGB";
     setBandMenuOpen(false);
+    const defaultRole = selectedDataset?.task === "multiclass"
+      ? selectedDataset.object_types[0]?.slug || "positive"
+      : "positive";
+    roleRef.current = defaultRole;
+    setRole(defaultRole);
+    setRebuildPreview(null);
     void loadScenes(datasetKey);
-  }, [datasetKey, loadScenes, resetDrafts]);
+  }, [datasetKey, loadScenes, resetDrafts, selectedDataset]);
 
   const loadScene = useCallback(
     async (key: string, name: string) => {
@@ -429,6 +487,7 @@ export function DatasetEditorPage({
           false,
           fillEnabledRef.current,
           newFeaturesRef.current,
+          objectTypeChoices,
         ),
     });
     const select = new Select({
@@ -438,6 +497,7 @@ export function DatasetEditorPage({
           true,
           fillEnabledRef.current,
           newFeaturesRef.current,
+          objectTypeChoices,
         ),
     });
     const modify = new Modify({ source: vectorSource });
@@ -467,7 +527,11 @@ export function DatasetEditorPage({
     select.on("select", (event) => {
       const selected = event.selected[0] as Feature<Geometry> | undefined;
       if (!selected) return;
-      const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative" ? "hard_negative" : "positive";
+      const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative"
+        ? "hard_negative"
+        : typeof selected.get(CLASS_PROPERTY) === "string"
+          ? String(selected.get(CLASS_PROPERTY))
+          : "positive";
       roleRef.current = selectedRole;
       setRole(selectedRole);
     });
@@ -481,7 +545,7 @@ export function DatasetEditorPage({
     });
     draw.on("drawend", (event) => {
       setDrawingState(false);
-      event.feature.set(ROLE_PROPERTY, roleRef.current);
+      applyObjectSelection(event.feature, roleRef.current, selectedDataset);
       if (!geometryInsideFootprint(event.feature.getGeometry(), rasterFootprintRef.current)) {
         drawBefore = null;
         window.setTimeout(() => vectorSource.removeFeature(event.feature), 0);
@@ -557,8 +621,10 @@ export function DatasetEditorPage({
     detail,
     recordCurrentChange,
     selectedDataset?.imagery_type,
+    selectedDataset,
     setDrawingState,
     updateDraft,
+    objectTypeChoices,
   ]);
 
   useEffect(() => {
@@ -605,17 +671,51 @@ export function DatasetEditorPage({
     if (name !== annotationName) setAnnotationName(name);
   };
 
-  const changeRole = (nextRole: Role) => {
+  const changeRole = (nextRole: ObjectSelection) => {
     const selected = selectRef.current?.getFeatures().getArray() || [];
-    if (selected.length && selected.some((feature) => feature.get(ROLE_PROPERTY) !== nextRole)) {
+    if (selected.length && selected.some((feature) => !matchesObjectSelection(feature, nextRole))) {
       const before = captureActiveSnapshot();
-      selected.forEach((feature) => feature.set(ROLE_PROPERTY, nextRole));
+      selected.forEach((feature) => applyObjectSelection(feature, nextRole, selectedDataset));
       vectorSourceRef.current?.changed();
       mapRef.current?.render();
       if (before) recordCurrentChange(before);
     }
     roleRef.current = nextRole;
     setRole(nextRole);
+  };
+
+  const previewDatasetRebuild = async () => {
+    if (!datasetKey || hasDirtyDrafts) return;
+    setBusy(true);
+    const preview = await run(() =>
+      apiJson<RebuildPreview>(
+        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/rebuild/preview`,
+        { method: "POST" },
+      ),
+    );
+    setBusy(false);
+    if (preview) setRebuildPreview(preview);
+  };
+
+  const applyDatasetRebuild = async (mode: "merge" | "replace") => {
+    if (!rebuildPreview) return;
+    setBusy(true);
+    const result = await run(() =>
+      apiJson<RebuildResult>(
+        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/rebuild`,
+        {
+          method: "POST",
+          body: { preview_token: rebuildPreview.preview_token, mode },
+        },
+      ),
+    );
+    setBusy(false);
+    if (!result) return;
+    setRebuildPreview(null);
+    resetDrafts();
+    setPublication({ commit: result.commit, live_commit: null, status: result.publication_status });
+    await loadDatasets();
+    await loadScenes(datasetKey);
   };
 
   const deleteSelected = () => {
@@ -836,7 +936,28 @@ export function DatasetEditorPage({
         >
           <Plus size={16} /> Добавить снимки
         </button>
+        {selectedDataset?.combined ? (
+          <button
+            className={selectedDataset.source_status === "stale" ? "danger" : "secondary"}
+            type="button"
+            disabled={busy || hasDirtyDrafts}
+            title={hasDirtyDrafts
+              ? "Сначала опубликуйте или отмените черновики"
+              : "Сравнить исходные main-датасеты и безопасно пересобрать комбинированный датасет"}
+            onClick={() => void previewDatasetRebuild()}
+          >
+            <RefreshCw size={16} />
+            {selectedDataset.source_status === "stale" ? "Источники изменились" : "Пересобрать"}
+          </button>
+        ) : null}
       </section>
+
+      {selectedDataset?.combined && selectedDataset.source_status === "stale" ? (
+        <section className="panel dataset-editor-source-warning" role="status">
+          <strong>Комбинированный датасет устарел.</strong>
+          <span>{selectedDataset.source_changes.join(" · ") || "Изменились исходные папки main."}</span>
+        </section>
+      ) : null}
 
       {!datasets.length ? (
         <section className="panel empty-state">Per-image датасеты в editor-клоне не найдены.</section>
@@ -917,20 +1038,48 @@ export function DatasetEditorPage({
                         <PencilLine size={17} />
                       </button>
                     </div>
-                    <label
-                      className={`dataset-editor-role-switch ${role === "hard_negative" ? "negative" : "positive"}`}
-                      title={role === "positive" ? "Роль positive. Переключить вправо на hard negative" : "Роль hard negative. Переключить влево на positive"}
-                    >
-                      <span aria-hidden="true">+</span>
-                      <input
-                        type="checkbox"
-                        checked={role === "hard_negative"}
-                        aria-label="Роль полигона: слева positive, справа hard negative"
-                        onChange={(event) => changeRole(event.target.checked ? "hard_negative" : "positive")}
-                      />
-                      <span className="dataset-editor-role-track" aria-hidden="true"><span /></span>
-                      <span aria-hidden="true">−</span>
-                    </label>
+                    {selectedDataset?.task === "multiclass" ? (
+                      <div className="dataset-editor-object-switch" role="group" aria-label="Тип объекта">
+                        {objectTypeChoices.map((item) => (
+                          <button
+                            type="button"
+                            key={item.slug}
+                            className={role === item.slug ? "active" : ""}
+                            aria-pressed={role === item.slug}
+                            title={`Тип объекта: ${item.name}`}
+                            style={{ "--object-color": item.color } as CSSProperties}
+                            onClick={() => changeRole(item.slug)}
+                          >
+                            <span className="dataset-editor-color-dot" />{item.name}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className={role === "hard_negative" ? "active" : ""}
+                          aria-pressed={role === "hard_negative"}
+                          title="Общий hard negative / фон"
+                          style={{ "--object-color": HARD_NEGATIVE_COLOR } as CSSProperties}
+                          onClick={() => changeRole("hard_negative")}
+                        >
+                          <span className="dataset-editor-color-dot" />Hard negative
+                        </button>
+                      </div>
+                    ) : (
+                      <label
+                        className={`dataset-editor-role-switch ${role === "hard_negative" ? "negative" : "positive"}`}
+                        title={role === "positive" ? "Роль positive. Переключить вправо на hard negative" : "Роль hard negative. Переключить влево на positive"}
+                      >
+                        <span aria-hidden="true">+</span>
+                        <input
+                          type="checkbox"
+                          checked={role === "hard_negative"}
+                          aria-label="Роль полигона: слева positive, справа hard negative"
+                          onChange={(event) => changeRole(event.target.checked ? "hard_negative" : "positive")}
+                        />
+                        <span className="dataset-editor-role-track" aria-hidden="true"><span /></span>
+                        <span aria-hidden="true">−</span>
+                      </label>
+                    )}
                     <button
                       className="secondary icon-button dataset-editor-icon-button"
                       type="button"
@@ -965,6 +1114,20 @@ export function DatasetEditorPage({
                 <div className="dataset-editor-help">
                   <MousePointer2 size={14} /> Клик — выбор, колесо — масштаб до 1000%, Ctrl+Z — отмена.
                 </div>
+                {selectedDataset?.task === "multiclass" ? (
+                  <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
+                    {objectTypeChoices.map((item) => (
+                      <span key={item.slug}>
+                        <i style={{ backgroundColor: item.color }} />
+                        {item.name}: <strong>{activeClassCounts[item.slug] || 0}</strong>
+                      </span>
+                    ))}
+                    <span>
+                      <i style={{ backgroundColor: HARD_NEGATIVE_COLOR }} />
+                      Hard negative: <strong>{activeDraft ? featureCounts(activeDraft.current.geojson).hardNegative : 0}</strong>
+                    </span>
+                  </div>
+                ) : null}
                 <div className="dataset-editor-map-shell">
                   <div className="dataset-editor-map" ref={mapTargetRef} />
                   <div className="dataset-editor-map-controls">
@@ -1098,6 +1261,60 @@ export function DatasetEditorPage({
           </div>
         </section>
       ) : null}
+
+      {rebuildPreview ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-card panel wide" role="dialog" aria-modal="true" aria-labelledby="dataset-rebuild-title">
+            <header className="modal-header">
+              <div>
+                <h2 id="dataset-rebuild-title">Предпросмотр пересборки</h2>
+                <p className="muted">{rebuildPreview.replacement_scene_count} снимков после пересборки</p>
+              </div>
+              <button className="ghost" type="button" disabled={busy} onClick={() => setRebuildPreview(null)}>Закрыть</button>
+            </header>
+            <div className="modal-body dataset-editor-rebuild-preview">
+              <div className="dataset-editor-rebuild-counts">
+                {objectTypeChoices.map((item) => (
+                  <span key={item.slug}>
+                    <i style={{ backgroundColor: item.color }} />
+                    {item.name}: <strong>{rebuildPreview.replacement_class_counts[item.slug] || 0}</strong>
+                  </span>
+                ))}
+                <span><i style={{ backgroundColor: HARD_NEGATIVE_COLOR }} />Hard negative: <strong>{rebuildPreview.replacement_hard_negative_count}</strong></span>
+              </div>
+              {rebuildPreview.source_changes.length ? (
+                <RebuildChangeList title="Изменения источников" items={rebuildPreview.source_changes} />
+              ) : null}
+              {rebuildPreview.local_changes.length ? (
+                <RebuildChangeList
+                  title="Ручные изменения"
+                  items={rebuildPreview.local_changes.map(formatRebuildChange)}
+                />
+              ) : null}
+              {rebuildPreview.conflicts.length ? (
+                <RebuildChangeList
+                  title="Конфликты (в merge сохраняется ручная версия)"
+                  items={rebuildPreview.conflicts.map(formatRebuildChange)}
+                />
+              ) : null}
+              {rebuildPreview.warnings.length ? (
+                <RebuildChangeList title="Предупреждения" items={rebuildPreview.warnings} />
+              ) : null}
+              {!rebuildPreview.local_changes.length ? (
+                <p className="muted">Ручных отклонений от baseline нет.</p>
+              ) : null}
+            </div>
+            <footer className="modal-footer">
+              <button className="secondary" type="button" disabled={busy} onClick={() => void applyDatasetRebuild("merge")}>
+                Merge · сохранить ручные правки
+              </button>
+              <button className="danger" type="button" disabled={busy} onClick={() => void applyDatasetRebuild("replace")}>
+                Replace · заменить полностью
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -1156,29 +1373,97 @@ function restoreVectorSnapshot(
   newFeaturesRef.current = newFeatures;
 }
 
+function matchesObjectSelection(
+  feature: Feature<Geometry>,
+  selection: ObjectSelection,
+): boolean {
+  if (selection === "hard_negative") return feature.get(ROLE_PROPERTY) === "hard_negative";
+  if (feature.get(ROLE_PROPERTY) === "hard_negative") return false;
+  return selection === "positive" || feature.get(CLASS_PROPERTY) === selection;
+}
+
+function applyObjectSelection(
+  feature: Feature<Geometry>,
+  selection: ObjectSelection,
+  dataset: EditorDataset | null,
+): void {
+  if (selection === "hard_negative") {
+    feature.set(ROLE_PROPERTY, "hard_negative", true);
+    feature.unset(CLASS_PROPERTY, true);
+    return;
+  }
+  feature.set(ROLE_PROPERTY, "positive", true);
+  if (dataset?.task === "multiclass") {
+    const slug = dataset.object_types.some((item) => item.slug === selection)
+      ? selection
+      : dataset.object_types[0]?.slug;
+    if (slug) feature.set(CLASS_PROPERTY, slug, true);
+  } else {
+    feature.unset(CLASS_PROPERTY, true);
+  }
+}
+
+function featureClassCounts(geojson: JsonObject): Record<string, number> {
+  const result: Record<string, number> = {};
+  const features = Array.isArray(geojson.features) ? geojson.features : [];
+  for (const raw of features) {
+    if (!raw || typeof raw !== "object") continue;
+    const properties = (raw as JsonObject).properties;
+    if (!properties || typeof properties !== "object") continue;
+    const values = properties as JsonObject;
+    if (values[ROLE_PROPERTY] === "hard_negative") continue;
+    const slug = values[CLASS_PROPERTY];
+    if (typeof slug === "string" && slug) result[slug] = (result[slug] || 0) + 1;
+  }
+  return result;
+}
+
+function formatRebuildChange(change: RebuildChange): string {
+  const origin = change.origin_key ? ` · ${change.origin_key}` : "";
+  const detail = change.detail ? ` · ${change.detail}` : "";
+  return `${change.kind}: ${change.annotation_name}${origin}${detail}`;
+}
+
+function RebuildChangeList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <section>
+      <h3>{title}</h3>
+      <ul>{items.map((item, index) => <li key={`${index}:${item}`}>{item}</li>)}</ul>
+    </section>
+  );
+}
+
 function featureStyle(
   feature: Feature<Geometry>,
   selected: boolean,
   filled: boolean,
   newFeatures: WeakSet<Feature<Geometry>>,
+  objectTypes: EditorObjectType[],
 ): Style {
-  const role: Role = feature.get(ROLE_PROPERTY) === "hard_negative" ? "hard_negative" : "positive";
+  const role = feature.get(ROLE_PROPERTY) === "hard_negative" ? "hard_negative" : "positive";
+  const classSlug = typeof feature.get(CLASS_PROPERTY) === "string" ? String(feature.get(CLASS_PROPERTY)) : "";
+  const semanticColor = role === "hard_negative"
+    ? HARD_NEGATIVE_COLOR
+    : objectTypes.find((item) => item.slug === classSlug)?.color || "#F3C623";
   const isNew = newFeatures.has(feature);
-  const key = `${selected ? "selected" : role}:${isNew ? "new" : "saved"}:${filled ? "filled" : "outline"}`;
+  const key = `${selected ? "selected" : role}:${semanticColor}:${isNew ? "new" : "saved"}:${filled ? "filled" : "outline"}`;
   const cached = styleCache.get(key);
   if (cached) return cached;
-  const strokeColor = selected ? "#38bdf8" : role === "hard_negative" ? "#ef4444" : "#f3c623";
-  const fillColor = selected
-    ? "rgba(56, 189, 248, 0.18)"
-    : role === "hard_negative"
-      ? "rgba(239, 68, 68, 0.18)"
-      : "rgba(243, 198, 35, 0.22)";
+  const strokeColor = selected ? "#38BDF8" : semanticColor;
+  const fillColor = hexToRgba(semanticColor, selected ? 0.28 : 0.22);
   const style = new Style({
     stroke: new Stroke({ color: strokeColor, width: selected ? 4 : 3, lineDash: isNew ? [8, 5] : undefined }),
     fill: filled ? new Fill({ color: fillColor }) : undefined,
   });
   styleCache.set(key, style);
   return style;
+}
+
+function hexToRgba(color: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return `rgba(243, 198, 35, ${alpha})`;
+  const value = Number.parseInt(match[1], 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 }
 
 function rasterBandStyle(mode: BandMode): WebGLTileStyle {

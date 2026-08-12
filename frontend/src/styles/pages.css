@@ -1121,6 +1121,96 @@
   outline-offset: 2px;
 }
 
+.dataset-editor-object-switch {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--grovika-radius-control);
+  background: var(--surface-soft);
+}
+
+.dataset-editor-object-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: calc(var(--grovika-radius-control) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dataset-editor-object-switch button.active {
+  background: color-mix(in srgb, var(--object-color) 18%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--object-color);
+  color: var(--text);
+}
+
+.dataset-editor-color-dot,
+.dataset-editor-legend i,
+.dataset-editor-rebuild-counts i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--grovika-ink) 18%, transparent);
+}
+
+.dataset-editor-color-dot {
+  background: var(--object-color);
+}
+
+.dataset-editor-legend,
+.dataset-editor-rebuild-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dataset-editor-legend span,
+.dataset-editor-rebuild-counts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dataset-editor-source-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: var(--grovika-space-4);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.dataset-editor-rebuild-preview {
+  display: grid;
+  gap: var(--grovika-space-4);
+}
+
+.dataset-editor-rebuild-preview h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.dataset-editor-rebuild-preview ul {
+  max-height: 180px;
+  margin: 0;
+  padding-left: 22px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .dataset-editor-help {
   display: flex;
   align-items: center;

@@ -417,6 +417,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild Preview */
+        post: operations["rebuild_preview_api_v1_dataset_editor_datasets__dataset_key__rebuild_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild */
+        post: operations["rebuild_api_v1_dataset_editor_datasets__dataset_key__rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}": {
         parameters: {
             query?: never;
@@ -1345,6 +1379,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files/{file_id}/download-by-type": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download File By Type */
+        get: operations["download_file_by_type_api_v1_files__file_id__download_by_type_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1615,6 +1666,36 @@ export interface components {
             imagery_type: "kanopus" | "ortho";
             /** Scene Count */
             scene_count: number;
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Object Types */
+            object_types?: components["schemas"]["DatasetEditorObjectType"][];
+            /**
+             * Combined
+             * @default false
+             */
+            combined: boolean;
+            /**
+             * Source Status
+             * @default unknown
+             * @enum {string}
+             */
+            source_status: "current" | "stale" | "unknown" | "unavailable";
+            /** Source Changes */
+            source_changes?: string[];
+            /** Class Counts */
+            class_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Hard Negative Count
+             * @default 0
+             */
+            hard_negative_count: number;
         };
         /** DatasetEditorDatasetListResponse */
         DatasetEditorDatasetListResponse: {
@@ -1637,6 +1718,22 @@ export interface components {
             publication_status: "publishing" | "published";
             /** Scenes */
             scenes?: components["schemas"]["DatasetEditorSceneInfo"][];
+        };
+        /** DatasetEditorObjectType */
+        DatasetEditorObjectType: {
+            /** Id */
+            id: number;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Color */
+            color: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
         };
         /** DatasetEditorPublicationInfo */
         DatasetEditorPublicationInfo: {
@@ -1695,6 +1792,79 @@ export interface components {
             /** Size Bytes */
             size_bytes: number;
         };
+        /** DatasetEditorRebuildChange */
+        DatasetEditorRebuildChange: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "added" | "edited" | "deleted" | "source_added" | "source_edited" | "source_deleted";
+            /** Annotation Name */
+            annotation_name: string;
+            /** Origin Key */
+            origin_key?: string | null;
+            /** Detail */
+            detail?: string | null;
+        };
+        /** DatasetEditorRebuildPreview */
+        DatasetEditorRebuildPreview: {
+            /** Preview Token */
+            preview_token: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /**
+             * Source Status
+             * @enum {string}
+             */
+            source_status: "current" | "stale" | "unknown" | "unavailable";
+            /** Source Changes */
+            source_changes?: string[];
+            /** Local Changes */
+            local_changes?: components["schemas"]["DatasetEditorRebuildChange"][];
+            /** Conflicts */
+            conflicts?: components["schemas"]["DatasetEditorRebuildChange"][];
+            /** Replacement Scene Count */
+            replacement_scene_count: number;
+            /** Replacement Class Counts */
+            replacement_class_counts?: {
+                [key: string]: number;
+            };
+            /** Replacement Hard Negative Count */
+            replacement_hard_negative_count: number;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** DatasetEditorRebuildRequest */
+        DatasetEditorRebuildRequest: {
+            /** Preview Token */
+            preview_token: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "merge" | "replace";
+        };
+        /** DatasetEditorRebuildResult */
+        DatasetEditorRebuildResult: {
+            /** Commit */
+            commit: string;
+            /**
+             * Publication Status
+             * @enum {string}
+             */
+            publication_status: "publishing" | "published";
+            /** Scenes */
+            scenes?: components["schemas"]["DatasetEditorSceneInfo"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "merge" | "replace";
+            /** Conflicts */
+            conflicts?: components["schemas"]["DatasetEditorRebuildChange"][];
+            /** Warnings */
+            warnings?: string[];
+        };
         /** DatasetEditorSaveSceneRequest */
         DatasetEditorSaveSceneRequest: {
             /** Revision */
@@ -1734,6 +1904,10 @@ export interface components {
             hard_negative_count: number;
             /** Revision */
             revision: string;
+            /** Class Counts */
+            class_counts?: {
+                [key: string]: number;
+            };
         };
         /** DatasetEditorSceneListResponse */
         DatasetEditorSceneListResponse: {
@@ -1745,7 +1919,7 @@ export interface components {
          * DatasetFormat
          * @enum {string}
          */
-        DatasetFormat: "legacy" | "per_image";
+        DatasetFormat: "legacy" | "per_image" | "per_image_multiclass";
         /** DatasetInfo */
         DatasetInfo: {
             /** Key */
@@ -1807,11 +1981,59 @@ export interface components {
             is_primary: boolean;
             /** Diagnostics */
             diagnostics?: string[];
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Object Types */
+            object_types?: components["schemas"]["DatasetObjectType"][];
+            /**
+             * Combined
+             * @default false
+             */
+            combined: boolean;
+            /**
+             * Source Status
+             * @default unknown
+             * @enum {string}
+             */
+            source_status: "current" | "stale" | "unknown" | "unavailable";
+            /** Source Changes */
+            source_changes?: string[];
+            /** Class Counts */
+            class_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Hard Negative Count
+             * @default 0
+             */
+            hard_negative_count: number;
+            /** Manifest Path */
+            manifest_path?: string | null;
         };
         /** DatasetListResponse */
         DatasetListResponse: {
             /** Datasets */
             datasets: components["schemas"]["DatasetInfo"][];
+        };
+        /** DatasetObjectType */
+        DatasetObjectType: {
+            /** Id */
+            id: number;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Color */
+            color: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
         };
         /** DatasetPrimaryDatasetUpdate */
         DatasetPrimaryDatasetUpdate: {
@@ -2260,6 +2482,18 @@ export interface components {
             /** Runtime Minutes */
             runtime_minutes?: number | null;
             progress?: components["schemas"]["RuntimeProgress"] | null;
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            /** By Type Download Url */
+            by_type_download_url?: string | null;
         };
         /**
          * PseudolabelClassInfo
@@ -2296,6 +2530,16 @@ export interface components {
             input_channels: 3 | 4;
             /** Target Resolution M */
             target_resolution_m?: number | null;
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Object Types */
+            object_types?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * PseudolabelClassListResponse
@@ -2417,6 +2661,16 @@ export interface components {
             performance?: {
                 [key: string]: unknown;
             };
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Object Types */
+            object_types?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * PseudolabelSourceInfo
@@ -2827,6 +3081,20 @@ export interface components {
             /** Class Name */
             class_name: string;
             /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            /** Class Object Counts */
+            class_object_counts?: {
+                [key: string]: number;
+            };
+            /**
              * Quality Metric
              * @default pixel
              * @enum {string}
@@ -2915,6 +3183,10 @@ export interface components {
             evaluated_at?: string | null;
             /** Error */
             error?: string | null;
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            };
         };
         /** TestSampleEvaluationPreviewRequest */
         TestSampleEvaluationPreviewRequest: {
@@ -2976,6 +3248,20 @@ export interface components {
             /** Class Name */
             class_name: string;
             /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            /** Class Object Counts */
+            class_object_counts?: {
+                [key: string]: number;
+            };
+            /**
              * Quality Metric
              * @default pixel
              * @enum {string}
@@ -3016,6 +3302,14 @@ export interface components {
             territory: string;
             /** Object Count */
             object_count: number;
+            /** Class Object Counts */
+            class_object_counts?: {
+                [key: string]: number;
+            };
+            /** Evaluation Metrics */
+            evaluation_metrics?: {
+                [key: string]: unknown;
+            };
             /** F1 Score */
             f1_score?: number | null;
             /** Enabled */
@@ -3108,6 +3402,20 @@ export interface components {
              * @enum {string}
              */
             quality_metric: "pixel" | "objects";
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            /** Training Metrics */
+            training_metrics?: {
+                [key: string]: unknown;
+            };
             /** F1 Score */
             f1_score?: number | null;
             /** Epoch */
@@ -3186,6 +3494,10 @@ export interface components {
             object_false_positive?: number | null;
             /** Object False Negative */
             object_false_negative?: number | null;
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            };
             /** Sample Id */
             sample_id?: string | null;
             /** Sample Name */
@@ -4085,6 +4397,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorPublicationInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_preview_api_v1_dataset_editor_datasets__dataset_key__rebuild_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorRebuildPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_api_v1_dataset_editor_datasets__dataset_key__rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorRebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorRebuildResult"];
                 };
             };
             /** @description Validation Error */
@@ -6081,6 +6459,37 @@ export interface operations {
         };
     };
     download_file_api_v1_files__file_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_file_by_type_api_v1_files__file_id__download_by_type_get: {
         parameters: {
             query?: never;
             header?: never;

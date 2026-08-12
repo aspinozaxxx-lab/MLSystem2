@@ -47,6 +47,7 @@ def create_tile_dataloader(
             annotation_file=request.annotation_file,
             hard_negative_annotation_file=request.hard_negative_annotation_file,
             class_annotations=request.class_annotations,
+            classes=request.classes,
             tile_size=tile_settings.tile_size,
             stride=tile_settings.stride,
             mode=request.mode,

@@ -54,25 +54,33 @@ training runs и не пишет MLflow-метрики; запись метри�
 историю и не перезаписывает ручные настройки. Пути источников хранятся относительно корня MLMarkup. Первый
 импорт сохраняет исторические `dataset_key`; сущности, обнаруженные позднее, получают независимые UUID.
 
-MLMarkup поддерживает два формата binary-датасетов. Legacy сохраняет `TXT + positive GeoJSON + optional
+MLMarkup поддерживает legacy и per-image форматы. Legacy сохраняет `TXT + positive GeoJSON + optional
 hard-negative GeoJSON`, включая legacy multiclass. Per-image не содержит TXT: каждый прямой GeoJSON соответствует
-одному TIFF и называется `<родительская_папка>_<имя_TIFF_без_расширения>.geojson`. Это только binary-режим.
-Файл является `FeatureCollection` в CRS TIFF; `_mlsystem2_role` равен `positive` или `hard_negative`, а отсутствие
-свойства совместимо трактуется как `positive`. Коллизии формулы, неоднозначные и отсутствующие TIFF делают датасет
-невалидным. Пустой управляемый per-image датасет доступен редактору, но не запуску обучения.
+одному TIFF и называется `<родительская_папка>_<имя_TIFF_без_расширения>.geojson`. Binary per-image сохраняет
+прежнюю совместимость ролей. Multiclass per-image определяется файлом `.mlsystem2-dataset.json`: manifest хранит
+версию схемы, классы с ID/slug/color/priority, source-ревизии, build ID и baseline-хеши, а каждый GeoJSON строго
+повторяет schema/task/classes. Positive feature имеет `_mlsystem2_role=positive` и известный `_mlsystem2_class`,
+hard negative содержит только роль; ID и origin-key стабильны. Коллизии формулы, несовпадающая схема,
+неоднозначные и отсутствующие TIFF делают датасет невалидным. Пустой управляемый per-image датасет доступен
+редактору, но не запуску обучения.
 
 Страница `#/dataset-editor` редактирует только per-image датасеты. TIFF выбираются из существующего
 `prepared_images` по одному или прямыми файлами папки, без browser upload и рекурсии. OpenLayers отображает
 авторизованный GeoTIFF через HTTP Range без экранной интерполяции пикселей, допускает nearest-neighbor overzoom до
 `1000%` с умеренным экранным контрастом и позволяет полностью скрыть разметку отдельной кнопкой. Доступны
-Draw/Modify/Snap, смена роли, удаление и undo. Полноширинный
+Draw/Modify/Snap, смена роли/типа, удаление и undo. Для binary остаётся positive/hard negative, для multiclass
+единый segmented control содержит два смысловых типа и общий hard negative; типы имеют цвета manifest, hard negative
+красный, выбранный объект — голубой контур. Легенда и счётчики считаются по типам. Полноширинный
 frontend хранит черновики нескольких снимков в памяти вкладки и публикует их одним batch. Новые объекты до
 публикации рисуются пунктиром; заливка отключается независимо от разметки. Для четырёхканального Канопуса доступны
 экранные сочетания `RGB`, `NRG`, `NGB`, для трёхканального ортофото переключатель не показывается. Сервер обязательно
 строит footprint по фактической valid-data mask TIFF, обрезает выдаваемую для редактирования разметку этим контуром и
 проверяет CRS, `Polygon/MultiPolygon`, валидность и попадание в него; свойства и feature ID
 сохраняются. Optimistic lock использует Git blob revision, конфликт возвращает `409`, автоматического слияния
-геометрий нет.
+геометрий нет. Комбинированный датасет получает индикатор `current|stale` по всей каждой исходной папке `main`.
+Перед пересборкой endpoint preview фиксирует target/source trees и показывает локальные изменения и конфликты;
+`merge` сохраняет ручную версию конфликтующего объекта, `replace` полностью заменяет per-image файлы. Любое изменение
+после preview даёт `409`, успешная замена каталога и публикация выполняются атомарно одним Git-коммитом.
 
 Редактор никогда не пишет в live-каталог. Все мутации сериализуются межпроцессным lock в отдельном клоне
 `/data/mlsystem2/mlmarkup-editor`, принадлежащем `MLMarkup_deploy_user` и использующем отдельный write deploy key.
@@ -116,7 +124,7 @@ RGB и совместимые RGBA GeoTIFF, читая из RGBA только п
 сетей и имеет базовый inference-шаблон. Её манифест в исходном `JobRow.config` фиксирует адаптер, MLflow artifact,
 SHA-256, RGB-вход, разрешение, окна и постобработку. ЗУ500 сохраняет instance ID и confidence, выполняет NMS и
 не объединяет соседние участки; ОКС500 строит крышу из классов `1,2` и корректирует footprint по стенам класса
-`4`. Оба профиля обнуляют alpha/nodata. Подготовка датасета, обучение и основной CLI-инференс сохраняют строгую проверку каналов.
+`4`. Оба профиля обнуляют alpha/nodata. Нативный multiclass checkpoint использует `softmax → argmax → общий confidence threshold`; перекрытия окон и сцен разрешаются по confidence, затем priority и class ID. Морфология, векторизация и слияние выполняются отдельно по типам. Каноническая псевдоразметка остаётся одним FeatureCollection с родительским `class_id` и `object_type_id/slug/name/color`; дополнительный endpoint отдаёт ZIP с GeoJSON по типам. Подготовка датасета, обучение и основной CLI-инференс сохраняют строгую проверку каналов.
 Перед обучением worker копирует legacy-файлы либо все per-image GeoJSON в неизменяемый snapshot задания. Для
 псевдоразметки per-image набора временный TXT строится из строго сопоставленных TIFF, а в runner передаются все
 файлы разметки этого набора.
@@ -133,13 +141,15 @@ RGB и нулевой NIR. Альфа-канал является только �
 Метаданные результата фиксируют источник, схему каналов, целевое разрешение, лицензию и attribution.
 QGIS-плагин находится в отдельной корневой папке
 `mlsystem_plugin`, не импортирует пакет сервера и связан с ним только HTTP. Решения пользователя сохраняются
-в локальном GeoPackage staging. Плагин фильтрует кандидаты по площади и уверенности, позволяет разбить
+в одном каноническом локальном GeoPackage staging. Для multiclass сохраняются object type ID/slug/name/color,
+фильтр типа меняет ту же единую очередь и общие review-статусы. Пользователь выбирает один категоризированный
+слой либо группу синхронизированных представлений по типам. Плагин также фильтрует кандидаты по площади и уверенности, позволяет разбить
 один или все прошедшие фильтры крупные объекты и создаёт по явной команде новый временный слой из текущего
 отбора. Существующие слои проекта плагин не изменяет и поля с ними не сопоставляет.
 Страница экспорта моделей в `training_ui_api` показывает последние успешные training results по датасетам
 MLMarkup и по умолчанию выбирает основные датасеты классов, скачивает `checkpoints/best.pt` либо внешний ZIP из MLflow по сохраненным run id,
 собирает временный общий zip-архив для `models-serving-service` и Triton через тот же сборщик, что одиночный
-экспорт, отдает его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
+экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса. Binary ABI остаётся прежним. Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold и checkpoint metadata.
 Страница создания списка сцен в `training_ui_api` принимает GeoJSON и тип снимков, рекурсивно сопоставляет
 полигональные объекты с фактическими валидными пикселями TIFF только внутри соответствующего корня
 `prepared_images/kanopus` или `prepared_images/orto` и возвращает ZIP с UTF-8 TXT полных относительных путей
@@ -152,8 +162,9 @@ MLMarkup и по умолчанию выбирает основные датас
 Нарезка тестовой разметки является самостоятельной функцией `training_ui_api` и не входит в конвейер обучения,
 training/inference-очередь или автоматизацию. Она читает исходные TIFF только из `MLSYSTEM2_IMAGES_ROOT` с серверным значением
 `/data/mlsystem2/prepared_images`, выбирает полностью валидные непересекающиеся тайлы по положительной разметке
-датасета MLMarkup и формирует TIFF, GeoJSON, бинарную PNG-маску и PNG-превью. Для per-image источника каждый TIFF
-использует только свои features с ролью `positive`; hard negative в тестовую разметку не попадает. Совместимые endpoints
+датасета MLMarkup и формирует TIFF, GeoJSON, PNG class-ID mask и цветное PNG-превью. Для per-image источника каждый TIFF
+использует только свои features с ролью `positive`; hard negative в тестовую разметку не попадает. Multiclass-отбор
+гарантирует оба типа при наличии кандидатов, стремится к равным квотам и сообщает о дефиците. Совместимые endpoints
 `/markup-export` хранят временный ZIP один час в `scratch_root`. Основной интерфейс создаёт постоянные тестовые
 разметки: описание и состояния тайлов хранятся в Postgres, а файлы — в
 `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT/test-samples/{uuid}` без TTL. Разметку можно переименовать, удалить,
@@ -165,7 +176,8 @@ PNG-маску и сформированные на лету полноразм�
 только RGB (`RED, GRN, BLU`), для четырёхканального Канопуса дополнительно NRG (`NIR, RED, GRN`) и
 NGB (`NIR, GRN, BLU`); адаптивное качество
 ограничивает каждый JPEG размером `300 KiB`. По последней успешной подходящей
-псевдоразметке точного датасета сервис считает пиксельный F1 и объектный F1 с `IoU ≥ 0,5`. Расчет выполняется
+псевдоразметке точного датасета сервис считает пиксельный F1 и объектный F1 с `IoU ≥ 0,5`. Для multiclass неверный
+тип считается FP предсказанного и FN истинного типа, а API возвращает per-class, macro, micro и foreground метрики. Расчет выполняется
 внутри `training_ui_api`, не пишет MLflow и не меняет конвейер обучения. Один протяжённый объект может входить
 в несколько непересекающихся тайлов и считается отдельным объектом в каждом из них. Редактор рассчитывает F1 и
 оптимизирует состав в незаписываемом черновике; название, основной статус и полный состав применяются только одной
@@ -221,13 +233,13 @@ inference-шаблона; неуспешная попытка той же рев
 
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
-3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. Поддерживаются legacy binary, per-image binary через `dataset.annotations_dir` и legacy multiclass. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
+3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. Поддерживаются legacy binary/multiclass и per-image binary/multiclass через `dataset.annotations_dir`; multiclass-схема читается из manifest. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
-5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON в `dataset/`.
+5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON вместе с manifest в `dataset/`.
 6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. Окна строятся отдельно внутри каждого TIFF, включая nodata-padding края; split детерминирован по `scene_id+x+y`. Train читает raster/rasterize лениво, использует LRU дескрипторов, category-aware sampling и prefetch. Val выбирает фиксированный balanced subset и кэширует его при безопасном лимите RAM, иначе лениво читает те же индексы. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; nodata по значению, невалидная `dataset_mask` и padding за границей TIFF объединяются и принудительно получают target background `0`, а `-1` декодируется в background target с повышенным pixel weight. Полностью невалидные тайлы отфильтровываются, частично невалидные остаются в обучении. Аугментации геометрически преобразуют маску невалидности вместе с изображением и target и восстанавливают исходное значение nodata после фотометрических изменений.
-7. `train_pipeline` создает поддерживаемую segmentation-модель (`segformer_b0`, `segformer_b2`, диагностический SMP-совместимый `smp_segformer_b0`/`smp_segformer_b2`/`smp_segformer_b3` или `smp_deeplabv3plus_resnet50`) через `models.create_model` с `train.input_channels` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Спецификация checkpoint обязана совпадать с запросом, поэтому трёх- и четырёхканальные модели нельзя перепутать. Для multiclass `train.output_channels` должен быть равен `len(dataset.classes) + 1`.
-8. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy, validation metrics, early stopping и best/final checkpoints. Для binary рассчитываются пиксельная и объектовая F1 по порогам; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`, каждый тайл оценивается независимо; независимые пары «порог × тайл» обрабатываются ограниченным пулом не более чем из 8 CPU-потоков с последовательной агрегацией счётчиков. Multiclass поддерживает только pixel. Nodata уже представлен target background `0`, поэтому ложный прогноз класса на нём входит в loss и TP/FP/FN как обычный false positive. Background имеет фиксированный вес `1`, `pos_weight` усиливает positive pixels в binary loss, а `hard_negative_weight` усиливает штраф только на пикселях supervision mask со значением `-1`; эти пиксели становятся target background `0`, но получают повышенный pixel loss weight. Формат checkpoint не меняется: существующие checkpoint загружаются, но новая семантика обучения влияет только на переобученные модели. Checkpoint metadata содержит выбранную метрику, обе группы validation-метрик, лучший threshold и `sample_size`, необходимый для экспорта в Triton.
+7. `train_pipeline` создаёт одну из семи UI-архитектур (`smp_deeplabv3plus_resnet50`, `smp_segformer_b2`, `smp_segformer_b3`, `smp_unet_resnet34/50/101/152`) через `models.create_model` с `train.input_channels` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Спецификация checkpoint обязана совпадать с запросом, поэтому трёх- и четырёхканальные модели нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
+8. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy/CE+Dice, validation metrics, early stopping и best/final checkpoints. Для binary рассчитываются пиксельная и объектовая F1 по порогам; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`, каждый тайл оценивается независимо; независимые пары «порог × тайл» обрабатываются ограниченным пулом не более чем из 8 CPU-потоков с последовательной агрегацией счётчиков. Для multiclass основной score — macro pixel F1 по типам; дополнительно сохраняются per-class precision/recall/F1/IoU, micro и foreground F1. Единый confidence threshold выбирается по macro F1, затем macro precision и большему threshold. Nodata уже представлен target background `0`, поэтому ложный прогноз класса на нём входит в loss и TP/FP/FN как обычный false positive. Background имеет фиксированный вес `1`, `pos_weight` усиливает positive pixels в binary loss, а `hard_negative_weight` усиливает штраф только на пикселях supervision mask со значением `-1`; эти пиксели становятся target background `0`, но получают повышенный pixel loss weight. Binary checkpoint остаются совместимыми; multiclass metadata дополнительно содержит task, полную class schema, threshold и структурированные метрики.
 9. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.
 10. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет tile preparation, отчет времени и итоговый
    отчет.

@@ -7,6 +7,16 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class DatasetEditorObjectType(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(gt=0)
+    slug: str
+    name: str
+    color: str
+    priority: int = 0
+
+
 class DatasetEditorDatasetInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -17,6 +27,13 @@ class DatasetEditorDatasetInfo(BaseModel):
     dataset_name: str
     imagery_type: Literal["kanopus", "ortho"]
     scene_count: int = Field(ge=0)
+    task: Literal["binary", "multiclass"] = "binary"
+    object_types: list[DatasetEditorObjectType] = Field(default_factory=list)
+    combined: bool = False
+    source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
+    source_changes: list[str] = Field(default_factory=list)
+    class_counts: dict[str, int] = Field(default_factory=dict)
+    hard_negative_count: int = Field(default=0, ge=0)
 
 
 class DatasetEditorDatasetListResponse(BaseModel):
@@ -36,6 +53,7 @@ class DatasetEditorSceneInfo(BaseModel):
     positive_count: int = Field(ge=0)
     hard_negative_count: int = Field(ge=0)
     revision: str
+    class_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class DatasetEditorSceneListResponse(BaseModel):
@@ -143,11 +161,55 @@ class DatasetEditorPublicationInfo(BaseModel):
     status: Literal["publishing", "published"]
 
 
+class DatasetEditorRebuildPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DatasetEditorRebuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_token: str = Field(min_length=1, max_length=128)
+    mode: Literal["merge", "replace"]
+
+
+class DatasetEditorRebuildChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["added", "edited", "deleted", "source_added", "source_edited", "source_deleted"]
+    annotation_name: str
+    origin_key: str | None = None
+    detail: str | None = None
+
+
+class DatasetEditorRebuildPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_token: str
+    dataset_key: str
+    source_status: Literal["current", "stale", "unknown", "unavailable"]
+    source_changes: list[str] = Field(default_factory=list)
+    local_changes: list[DatasetEditorRebuildChange] = Field(default_factory=list)
+    conflicts: list[DatasetEditorRebuildChange] = Field(default_factory=list)
+    replacement_scene_count: int = Field(ge=0)
+    replacement_class_counts: dict[str, int] = Field(default_factory=dict)
+    replacement_hard_negative_count: int = Field(ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DatasetEditorRebuildResult(DatasetEditorMutationResult):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["merge", "replace"]
+    conflicts: list[DatasetEditorRebuildChange] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 __all__ = [
     "DatasetEditorAddScenesRequest",
     "DatasetEditorDatasetInfo",
     "DatasetEditorDatasetListResponse",
     "DatasetEditorDeleteSceneRequest",
+    "DatasetEditorObjectType",
     "DatasetEditorMutationResult",
     "DatasetEditorPublishRequest",
     "DatasetEditorPublishSceneRequest",
@@ -155,6 +217,11 @@ __all__ = [
     "DatasetEditorRasterBrowserResponse",
     "DatasetEditorRasterFolderInfo",
     "DatasetEditorRasterInfo",
+    "DatasetEditorRebuildChange",
+    "DatasetEditorRebuildPreview",
+    "DatasetEditorRebuildPreviewRequest",
+    "DatasetEditorRebuildRequest",
+    "DatasetEditorRebuildResult",
     "DatasetEditorSaveSceneRequest",
     "DatasetEditorSceneDetail",
     "DatasetEditorSceneInfo",

@@ -175,7 +175,11 @@ class _MetricCounts:
 class _GeometrySet:
     crs: PyprojCRS
     geometries: tuple[BaseGeometry, ...]
+    class_slugs: tuple[str | None, ...]
     tree: STRtree
+
+
+_TileMetric = tuple[_MetricCounts, _MetricCounts, dict[str, Any]]
 
 
 def create_test_sample(
@@ -240,6 +244,8 @@ def _new_test_sample_row(
         class_name=generated.class_name,
         dataset_short_name=generated.dataset_short_name,
         quality_metric=quality_metric,
+        task=generated.task,
+        class_schema=list(generated.class_schema),
         tile_width=generated.tile_width,
         tile_height=generated.tile_height,
         image_count=len(generated.tiles),
@@ -258,6 +264,7 @@ def _new_test_sample_row(
             source_name=tile.source_name,
             territory=tile.territory,
             object_count=tile.object_count,
+            class_object_counts=dict(tile.class_object_counts),
             enabled=True,
         )
         for tile in generated.tiles
@@ -1095,12 +1102,23 @@ def evaluate_test_sample(
         enabled = {tile.tile_index for tile in row.tiles if tile.enabled}
         pixel_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=0)
         object_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=1)
+        structured_metrics = _aggregate_tile_structured_metrics(
+            tile_metrics,
+            enabled,
+            list(row.class_schema or []),
+        )
     except Exception as exc:  # noqa: BLE001
         _clear_test_sample_tile_f1(row)
         _evaluation_error(row, f"Не удалось рассчитать F1: {exc}")
         return
     _apply_test_sample_tile_f1(row, tile_metrics)
-    _apply_evaluation(row, source, pixel_counts, object_counts)
+    _apply_evaluation(
+        row,
+        source,
+        pixel_counts,
+        object_counts,
+        structured_metrics=structured_metrics,
+    )
 
 
 def _apply_evaluation(
@@ -1108,6 +1126,8 @@ def _apply_evaluation(
     source: PseudoMarkupResultRow,
     pixel_counts: _MetricCounts,
     object_counts: _MetricCounts,
+    *,
+    structured_metrics: dict[str, Any] | None = None,
 ) -> None:
     pixel = pixel_counts.info()
     objects = object_counts.info()
@@ -1123,6 +1143,8 @@ def _apply_evaluation(
     row.object_true_positive = objects.true_positive
     row.object_false_positive = objects.false_positive
     row.object_false_negative = objects.false_negative
+    if structured_metrics is not None:
+        row.evaluation_metrics = structured_metrics
     row.evaluation_pseudo_result_id = source.id
     row.evaluation_model_name = (
         source.training_result.model_name
@@ -1162,7 +1184,7 @@ def _validate_optimization_request(
 
 def _select_optimized_tile_indices(
     tiles: list[TestSampleTileRow],
-    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+    tile_metrics: dict[int, _TileMetric],
     request: TestSampleOptimizeRequest,
 ) -> list[int]:
     ordered_tiles = sorted(tiles, key=lambda tile: tile.tile_index)
@@ -1444,7 +1466,7 @@ def _selected_sum(result: np.ndarray, values: np.ndarray, tile_count: int) -> in
 
 
 def _sum_tile_metrics(
-    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+    tile_metrics: dict[int, _TileMetric],
     tile_indices: set[int],
     *,
     metric_index: int,
@@ -1929,22 +1951,25 @@ def _calculate_metrics(
 
 def _apply_test_sample_tile_f1(
     row: TestSampleRow,
-    tile_metrics: dict[int, tuple[_MetricCounts, _MetricCounts]],
+    tile_metrics: dict[int, _TileMetric],
 ) -> None:
     for tile in row.tiles:
         metrics = tile_metrics.get(tile.tile_index)
         if metrics is None:
             tile.pixel_f1 = None
             tile.object_f1 = None
+            tile.evaluation_metrics = {}
             continue
         tile.pixel_f1 = metrics[0].info().f1
         tile.object_f1 = metrics[1].info().f1
+        tile.evaluation_metrics = dict(metrics[2])
 
 
 def _clear_test_sample_tile_f1(row: TestSampleRow) -> None:
     for tile in row.tiles:
         tile.pixel_f1 = None
         tile.object_f1 = None
+        tile.evaluation_metrics = {}
 
 
 def _calculate_tile_metrics(
@@ -1953,9 +1978,9 @@ def _calculate_tile_metrics(
     config: TrainingUIAPIConfig,
     *,
     tile_indices: set[int] | None = None,
-) -> dict[int, tuple[_MetricCounts, _MetricCounts]]:
+) -> dict[int, _TileMetric]:
     predictions = _load_geometries(prediction_path, default_crs="EPSG:4326")
-    result: dict[int, tuple[_MetricCounts, _MetricCounts]] = {}
+    result: dict[int, _TileMetric] = {}
     sample_root = _sample_root(config, row.id)
     for tile in row.tiles:
         if tile_indices is not None and tile.tile_index not in tile_indices:
@@ -1971,6 +1996,7 @@ def _calculate_tile_metrics(
                 raise TrainingUIAPIError(f"У тайла {base_name} отсутствует CRS.")
             raster_crs = PyprojCRS.from_user_input(raster.crs)
             tile_footprint = box(*raster.bounds)
+            raster_transform = raster.transform
             predicted_geometries = _prediction_geometries_for_tile(
                 predictions,
                 raster_crs,
@@ -1991,9 +2017,10 @@ def _calculate_tile_metrics(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", NotGeoreferencedWarning)
             with rasterio.open(mask_path) as mask_dataset:
-                true_mask = mask_dataset.read(1) > 0
-        if true_mask.shape != predicted_mask.shape:
+                true_labels = mask_dataset.read(1).astype(np.uint8, copy=False)
+        if true_labels.shape != predicted_mask.shape:
             raise TrainingUIAPIError(f"Размер маски не совпадает с TIFF для {base_name}.")
+        true_mask = true_labels > 0
         pixel_counts = _pixel_counts(true_mask, predicted_mask > 0)
         ground_truth = _load_geometries(geojson_path, default_crs=str(raster_crs))
         ground_truth_geometries = _geometries_for_tile(
@@ -2002,14 +2029,74 @@ def _calculate_tile_metrics(
             raster_crs,
             tile_footprint,
         )
-        result[tile.tile_index] = (
-            pixel_counts,
-            _object_counts(
-                ground_truth_geometries,
-                predicted_geometries,
-                row.object_iou_threshold,
-            ),
+        foreground_objects = _object_counts(
+            ground_truth_geometries,
+            predicted_geometries,
+            row.object_iou_threshold,
         )
+        structured: dict[str, Any] = {}
+        if row.task == "multiclass":
+            class_ids = {int(item["id"]) for item in (row.class_schema or [])}
+            unknown = set(np.unique(true_labels).tolist()) - {0, *class_ids}
+            if unknown:
+                raise TrainingUIAPIError(
+                    f"Маска {base_name} содержит неизвестные class ID: "
+                    + ", ".join(str(value) for value in sorted(unknown))
+                )
+            pixel_by_class: dict[str, _MetricCounts] = {}
+            objects_by_class: dict[str, _MetricCounts] = {}
+            for item in row.class_schema or []:
+                slug = str(item["slug"])
+                class_id = int(item["id"])
+                predicted_class_geometries = _prediction_geometries_for_tile(
+                    predictions,
+                    raster_crs,
+                    tile_footprint,
+                    class_slug=slug,
+                )
+                predicted_class_mask = (
+                    rasterize(
+                        [(geometry, 1) for geometry in predicted_class_geometries],
+                        out_shape=true_labels.shape,
+                        transform=raster_transform,
+                        fill=0,
+                        dtype="uint8",
+                        all_touched=False,
+                    )
+                    if predicted_class_geometries
+                    else np.zeros(true_labels.shape, dtype=np.uint8)
+                )
+                pixel_by_class[slug] = _pixel_counts(
+                    true_labels == class_id,
+                    predicted_class_mask > 0,
+                )
+                ground_truth_class_geometries = _geometries_for_tile(
+                    [
+                        geometry
+                        for geometry, geometry_slug in zip(
+                            ground_truth.geometries,
+                            ground_truth.class_slugs,
+                            strict=True,
+                        )
+                        if geometry_slug == slug
+                    ],
+                    ground_truth.crs,
+                    raster_crs,
+                    tile_footprint,
+                )
+                objects_by_class[slug] = _object_counts(
+                    ground_truth_class_geometries,
+                    predicted_class_geometries,
+                    row.object_iou_threshold,
+                )
+            structured = _structured_test_metrics(
+                list(row.class_schema or []),
+                pixel_by_class,
+                objects_by_class,
+                foreground_pixel=pixel_counts,
+                foreground_objects=foreground_objects,
+            )
+        result[tile.tile_index] = (pixel_counts, foreground_objects, structured)
     return result
 
 
@@ -2017,10 +2104,16 @@ def _prediction_geometries_for_tile(
     predictions: _GeometrySet,
     raster_crs: PyprojCRS,
     tile_footprint: BaseGeometry,
+    *,
+    class_slug: str | None = None,
 ) -> list[BaseGeometry]:
     query_footprint = _transform_geometry(tile_footprint, raster_crs, predictions.crs)
     indices = predictions.tree.query(query_footprint, predicate="intersects")
-    selected = [predictions.geometries[int(index)] for index in indices]
+    selected = [
+        predictions.geometries[int(index)]
+        for index in indices
+        if class_slug is None or predictions.class_slugs[int(index)] == class_slug
+    ]
     return _geometries_for_tile(
         selected,
         predictions.crs,
@@ -2094,6 +2187,100 @@ def _object_counts(
     )
 
 
+def _metric_payload(counts: _MetricCounts) -> dict[str, Any]:
+    payload = counts.info().model_dump(mode="json")
+    denominator = counts.true_positive + counts.false_positive + counts.false_negative
+    payload["iou"] = counts.true_positive / denominator if denominator else 0.0
+    return payload
+
+
+def _structured_test_metrics(
+    class_schema: list[dict[str, Any]],
+    pixel_by_class: dict[str, _MetricCounts],
+    objects_by_class: dict[str, _MetricCounts],
+    *,
+    foreground_pixel: _MetricCounts,
+    foreground_objects: _MetricCounts,
+) -> dict[str, Any]:
+    warnings_output: list[str] = []
+
+    def build(counts_by_slug: dict[str, _MetricCounts]) -> dict[str, Any]:
+        per_class: dict[str, dict[str, Any]] = {}
+        micro = _MetricCounts(0, 0, 0)
+        for item in class_schema:
+            slug = str(item["slug"])
+            counts = counts_by_slug.get(slug, _MetricCounts(0, 0, 0))
+            metric = _metric_payload(counts)
+            metric.update(
+                {
+                    "id": int(item["id"]),
+                    "slug": slug,
+                    "name": str(item["name"]),
+                    "color": str(item["color"]),
+                }
+            )
+            per_class[slug] = metric
+            micro += counts
+            if counts.true_positive + counts.false_negative == 0:
+                warnings_output.append(f"В тестовой разметке отсутствует тип {item['name']}.")
+        macro = {
+            key: (
+                sum(float(metric[key]) for metric in per_class.values()) / len(per_class)
+                if per_class
+                else 0.0
+            )
+            for key in ("precision", "recall", "f1", "iou")
+        }
+        return {"per_class": per_class, "macro": macro, "micro": _metric_payload(micro)}
+
+    pixel = build(pixel_by_class)
+    objects = build(objects_by_class)
+    pixel["foreground"] = _metric_payload(foreground_pixel)
+    objects["foreground"] = _metric_payload(foreground_objects)
+    return {
+        "pixel": pixel,
+        "objects": objects,
+        "object_iou_threshold": OBJECT_IOU_THRESHOLD,
+        "warnings": list(dict.fromkeys(warnings_output)),
+    }
+
+
+def _aggregate_tile_structured_metrics(
+    tile_metrics: dict[int, _TileMetric],
+    tile_indices: set[int],
+    class_schema: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not class_schema:
+        return {}
+    pixel_by_class = {str(item["slug"]): _MetricCounts(0, 0, 0) for item in class_schema}
+    objects_by_class = {str(item["slug"]): _MetricCounts(0, 0, 0) for item in class_schema}
+    foreground_pixel = _MetricCounts(0, 0, 0)
+    foreground_objects = _MetricCounts(0, 0, 0)
+    for tile_index in tile_indices:
+        tile = tile_metrics.get(tile_index)
+        if tile is None:
+            continue
+        foreground_pixel += tile[0]
+        foreground_objects += tile[1]
+        structured = tile[2]
+        for section, target in (("pixel", pixel_by_class), ("objects", objects_by_class)):
+            per_class = dict((structured.get(section) or {}).get("per_class") or {})
+            for slug in target:
+                raw = dict(per_class.get(slug) or {})
+                target[slug] += _MetricCounts(
+                    int(raw.get("true_positive") or 0),
+                    int(raw.get("false_positive") or 0),
+                    int(raw.get("false_negative") or 0),
+                )
+    return _structured_test_metrics(
+        class_schema,
+        pixel_by_class,
+        objects_by_class,
+        foreground_pixel=foreground_pixel,
+        foreground_objects=foreground_objects,
+    )
+
+
 def _load_geometries(path: Path, *, default_crs: str) -> _GeometrySet:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -2105,6 +2292,7 @@ def _load_geometries(path: Path, *, default_crs: str) -> _GeometrySet:
     if not isinstance(raw_features, list):
         raise TrainingUIAPIError("В GeoJSON отсутствует список features.")
     geometries: list[BaseGeometry] = []
+    class_slugs: list[str | None] = []
     for feature in raw_features:
         if not isinstance(feature, dict) or not feature.get("geometry"):
             continue
@@ -2114,9 +2302,22 @@ def _load_geometries(path: Path, *, default_crs: str) -> _GeometrySet:
             geometry = None
         if geometry is not None and not geometry.is_empty and geometry.area > 0.0:
             geometries.append(geometry)
+            properties = feature.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            raw_slug = (
+                properties.get("_mlsystem2_class")
+                or properties.get("object_type_slug")
+                or properties.get("slug")
+            )
+            class_slugs.append(str(raw_slug) if isinstance(raw_slug, str) and raw_slug else None)
     crs = _payload_crs(payload, default_crs)
     geometry_tuple = tuple(geometries)
-    return _GeometrySet(crs=crs, geometries=geometry_tuple, tree=STRtree(geometry_tuple))
+    return _GeometrySet(
+        crs=crs,
+        geometries=geometry_tuple,
+        class_slugs=tuple(class_slugs),
+        tree=STRtree(geometry_tuple),
+    )
 
 
 def _payload_crs(payload: dict[str, Any], default: str) -> PyprojCRS:
@@ -2518,6 +2719,7 @@ def training_result_test_f1_info(
         object_true_positive=metric.object_true_positive,
         object_false_positive=metric.object_false_positive,
         object_false_negative=metric.object_false_negative,
+        metrics=dict(metric.metrics or {}),
         sample_id=metric.sample_id or sample.id,
         sample_name=metric.sample.name if metric.sample is not None else sample.name,
         sample_revision=metric.sample_revision,
@@ -2688,6 +2890,15 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         dataset_version=row.dataset_version,
         class_key=row.class_key,
         class_name=row.class_name,
+        task=row.task,
+        class_schema=list(row.class_schema or []),
+        class_object_counts={
+            str(item["slug"]): sum(
+                int((tile.class_object_counts or {}).get(str(item["slug"]), 0))
+                for tile in enabled
+            )
+            for item in (row.class_schema or [])
+        },
         quality_metric=row.quality_metric,
         image_count=row.image_count,
         enabled_image_count=len(enabled),
@@ -2716,6 +2927,8 @@ def _detail(row: TestSampleRow) -> TestSampleDetail:
                 source_name=tile.source_name,
                 territory=tile.territory,
                 object_count=tile.object_count,
+                class_object_counts=dict(tile.class_object_counts or {}),
+                evaluation_metrics=dict(tile.evaluation_metrics or {}),
                 f1_score=(
                     tile.object_f1
                     if row.quality_metric == "objects"
@@ -2759,6 +2972,7 @@ def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
         markup_created_at=row.evaluation_markup_created_at,
         evaluated_at=row.evaluated_at,
         error=row.evaluation_error,
+        metrics=dict(row.evaluation_metrics or {}),
     )
 
 

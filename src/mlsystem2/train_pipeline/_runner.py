@@ -34,12 +34,19 @@ from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.tile_preparation.api import create_tile_dataloader
 from mlsystem2.tile_preparation.contracts import (
     TileClassAnnotation,
+    TileClassDefinition,
     TileDataloaderRequest,
     TileSceneSource,
     TileSplitRequest,
 )
 from mlsystem2.train.api import train_model
-from mlsystem2.train.contracts import TrainConfig, TrainProgressEvent, TrainRequest, TrainResult
+from mlsystem2.train.contracts import (
+    TrainClassDefinition,
+    TrainConfig,
+    TrainProgressEvent,
+    TrainRequest,
+    TrainResult,
+)
 
 from ._timing import elapsed_since, now, timed_call
 from .contracts import (
@@ -157,6 +164,8 @@ def run_train_pipeline(
         if deps.log_dataset_artifacts is not None:
             measure_mlflow(lambda: deps.log_dataset_artifacts(run, _dataset_artifact_files(settings)))
 
+        _validate_prepared_dataset_train_consistency(dataset_result.dataset, settings)
+
         loaders, timing = timed_call(
             "tile_preparation",
             lambda: (
@@ -232,7 +241,13 @@ def run_train_pipeline(
         train_result, timing = timed_call(
             "train",
             lambda: deps.train_model(
-                _train_request(settings, model, train_loader, val_loader),
+                _train_request(
+                    settings,
+                    model,
+                    train_loader,
+                    val_loader,
+                    dataset=dataset_result.dataset,
+                ),
                 progress_sink=progress_sink,
             ),
         )
@@ -359,7 +374,7 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
         return files
     if settings.dataset.annotations_dir is not None:
         annotations_dir = Path(settings.dataset.annotations_dir)
-        return {
+        files = {
             f"per_image/{path.name}": path.as_posix()
             for path in sorted(
                 annotations_dir.glob("*.geojson"),
@@ -367,6 +382,10 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
             )
             if path.is_file()
         }
+        manifest = annotations_dir / ".mlsystem2-dataset.json"
+        if manifest.is_file():
+            files[f"per_image/{manifest.name}"] = manifest.as_posix()
+        return files
     files = {}
     if settings.dataset.scenes_file is not None:
         files[Path(settings.dataset.scenes_file).name] = settings.dataset.scenes_file
@@ -415,6 +434,25 @@ def _tile_request(
                     priority=item.priority,
                 )
                 for item in dataset.class_annotations
+            ],
+            batch_size=batch_size,
+            mode=mode,
+            tile_split=tile_split,
+            max_batches_per_epoch=max_batches_per_epoch,
+            include_object_instances=include_object_instances,
+        )
+    if dataset.classes:
+        return TileDataloaderRequest(
+            scenes=scenes,
+            classes=[
+                TileClassDefinition(
+                    class_id=item.id,
+                    slug=item.slug,
+                    name=item.name,
+                    color=item.color,
+                    priority=item.priority,
+                )
+                for item in dataset.classes
             ],
             batch_size=batch_size,
             mode=mode,
@@ -674,7 +712,7 @@ def _sampling_mode(settings: SystemSettings, loader: object) -> str:
     uses_weighted_sampler = _uses_weighted_sampler(loader)
     if not uses_weighted_sampler:
         return "sequential"
-    if settings.dataset.classes and settings.tile_preparation.class_balance:
+    if bool(_dataset_attr(getattr(loader, "dataset", None), "class_balance_enabled")):
         return "weighted_class_balance"
     return "weighted_category_factor"
 
@@ -738,7 +776,10 @@ def _train_request(
     model,
     train_loader: object,
     val_loader: object,
+    dataset: PreparedDataset | None = None,
 ) -> TrainRequest:
+    prepared_classes = list(dataset.classes) if dataset is not None else []
+    prepared_annotations = list(dataset.class_annotations) if dataset is not None else []
     return TrainRequest(
         model=model,
         train_loader=train_loader,
@@ -762,11 +803,63 @@ def _train_request(
             max_train_batches_per_epoch=settings.train.max_train_batches_per_epoch,
             max_val_batches_per_epoch=settings.train.max_val_batches_per_epoch,
             max_training_time_sec=settings.train.max_training_time_sec,
-            class_slugs=[item.slug for item in settings.dataset.classes],
+            class_schema=[
+                TrainClassDefinition(
+                    id=item.id,
+                    slug=item.slug,
+                    name=item.name,
+                    color=item.color,
+                    priority=item.priority,
+                )
+                for item in prepared_classes
+            ]
+            or [
+                TrainClassDefinition(
+                    id=item.class_id,
+                    slug=item.slug,
+                    name=item.name,
+                    color="#808080",
+                    priority=item.priority,
+                )
+                for item in prepared_annotations
+            ]
+            or [
+                TrainClassDefinition(
+                    id=index,
+                    slug=item.slug,
+                    name=item.name,
+                    color="#808080",
+                    priority=item.priority,
+                )
+                for index, item in enumerate(settings.dataset.classes, start=1)
+            ],
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
         sample_size=settings.tile_preparation.tile_size,
     )
+
+
+def _validate_prepared_dataset_train_consistency(
+    dataset: PreparedDataset,
+    settings: SystemSettings,
+) -> None:
+    dataset_is_multiclass = bool(dataset.classes or dataset.class_annotations)
+    expected_task = "multiclass" if dataset_is_multiclass else "binary"
+    if settings.train.task != expected_task:
+        raise TrainPipelineError(
+            f"Подготовленный датасет имеет task={expected_task}, "
+            f"но настройки обучения задают task={settings.train.task}."
+        )
+    expected_channels = (
+        len(dataset.classes or dataset.class_annotations) + 1
+        if dataset_is_multiclass
+        else 1
+    )
+    if settings.train.output_channels != expected_channels:
+        raise TrainPipelineError(
+            "Число выходных каналов не соответствует схеме датасета: "
+            f"ожидается {expected_channels}, получено {settings.train.output_channels}."
+        )
 
 
 def _timing_report(

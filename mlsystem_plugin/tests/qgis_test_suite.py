@@ -258,6 +258,45 @@ class QGISPluginTests(unittest.TestCase):
         session.set_thresholds(0.0, 0.8)
         self.assertEqual(session.feature_ids(), [second_id])
 
+    # Проверяет одну очередь и синхронные цветные представления двух типов.
+    def test_multiclass_review_supports_categorized_and_group_modes(self) -> None:
+        session = self._multiclass_session()
+        self.assertEqual(
+            [item["slug"] for item in session.object_types()],
+            ["flooding", "waterlogging"],
+        )
+        renderer = session.layer.renderer()
+        self.assertIsInstance(renderer, QgsRuleBasedRenderer)
+        colors = {
+            rule.label(): rule.symbol().color().name().upper()
+            for rule in renderer.rootRule().children()
+        }
+        self.assertEqual(colors["Переувлажнения"], "#3B82F6")
+        self.assertEqual(colors["Заболачивание"], "#22C55E")
+
+        views = session.set_display_mode("group")
+        view_ids = [view.id() for view in views]
+        self.assertEqual(len(views), 2)
+        self.assertEqual([view.featureCount() for view in views], [1, 1])
+        canonical_node = QgsProject.instance().layerTreeRoot().findLayer(session.layer_id)
+        self.assertFalse(canonical_node.itemVisibilityChecked())
+
+        session.set_object_type_filter("flooding")
+        self.assertEqual(len(session.feature_ids()), 1)
+        by_slug = {
+            str(view.customProperty("mlsystem2/object_type_slug")): view
+            for view in views
+        }
+        self.assertEqual(by_slug["flooding"].featureCount(), 1)
+        self.assertEqual(by_slug["waterlogging"].featureCount(), 0)
+        session._set_review_status(session.feature_ids()[0], "accepted")
+        self.assertEqual(by_slug["flooding"].featureCount(), 0)
+
+        categorized = session.set_display_mode("categorized")
+        self.assertEqual(categorized, [session.layer])
+        self.assertTrue(canonical_node.itemVisibilityChecked())
+        self.assertTrue(all(QgsProject.instance().mapLayer(view_id) is None for view_id in view_ids))
+
     # Проверяет цветную подсветку текущего кандидата и её снятие фильтром.
     def test_plugin_highlights_current_candidate(self) -> None:
         iface = _FakeIface()
@@ -397,26 +436,86 @@ class QGISPluginTests(unittest.TestCase):
             Path(self.temp_dir.name),
         )
 
+    def _multiclass_session(self) -> ReviewSession:
+        schema = [
+            {
+                "id": 1,
+                "slug": "flooding",
+                "name": "Переувлажнения",
+                "color": "#3B82F6",
+                "priority": 100,
+            },
+            {
+                "id": 2,
+                "slug": "waterlogging",
+                "name": "Заболачивание",
+                "color": "#22C55E",
+                "priority": 0,
+            },
+        ]
+        features = [
+            self._feature(
+                "candidate-flooding",
+                30.0,
+                60.0,
+                0.01,
+                object_type=schema[0],
+            ),
+            self._feature(
+                "candidate-waterlogging",
+                30.02,
+                60.0,
+                0.01,
+                object_type=schema[1],
+            ),
+        ]
+        return ReviewSession.from_geojson(
+            {
+                "type": "FeatureCollection",
+                "features": features,
+                "metadata": {"task": "multiclass", "class_schema": schema},
+            },
+            "22222222-2222-2222-2222-222222222222",
+            Path(self.temp_dir.name),
+        )
+
     # Formiruet odin GeoJSON-kandidat.
     @staticmethod
-    def _feature(candidate_id: str, x: float, y: float, size: float) -> dict[str, object]:
+    def _feature(
+        candidate_id: str,
+        x: float,
+        y: float,
+        size: float,
+        *,
+        object_type: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         geometry = QgsGeometry.fromWkt(
             f"POLYGON(({x} {y}, {x + size} {y}, {x + size} {y - size}, {x} {y - size}, {x} {y}))"
         )
+        properties = {
+            "candidate_id": candidate_id,
+            "job_id": "job-1",
+            "class_id": "class-1",
+            "class_name": "Опустынивание",
+            "confidence": 0.75,
+            "model_id": "model-1",
+            "model_version": "run-1",
+            "source_image_ids": ["scene-1"],
+            "area_m2": 1_000_000.0,
+        }
+        if object_type is not None:
+            properties.update(
+                {
+                    "object_type_id": object_type["id"],
+                    "object_type_slug": object_type["slug"],
+                    "object_type_name": object_type["name"],
+                    "object_type_color": object_type["color"],
+                }
+            )
         return {
             "type": "Feature",
             "geometry": json.loads(geometry.asJson()),
-            "properties": {
-                "candidate_id": candidate_id,
-                "job_id": "job-1",
-                "class_id": "class-1",
-                "class_name": "Опустынивание",
-                "confidence": 0.75,
-                "model_id": "model-1",
-                "model_version": "run-1",
-                "source_image_ids": ["scene-1"],
-                "area_m2": 1_000_000.0,
-            },
+            "properties": properties,
         }
 
 class _FakeIface:

@@ -557,6 +557,14 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
     () => templateFor(bootstrap.training_templates, architecture, datasetKey),
     [architecture, bootstrap.training_templates, datasetKey],
   );
+  const selectedDataset = useMemo(
+    () => bootstrap.datasets.find((item) => item.key === datasetKey),
+    [bootstrap.datasets, datasetKey],
+  );
+  const trainingSchema = useMemo(
+    () => trainingConfigSchema(template?.config_schema, selectedDataset?.task || "binary"),
+    [selectedDataset?.task, template?.config_schema],
+  );
 
   useEffect(() => {
     void run(() => apiJson<MLflowExperimentInfo[]>("/mlflow/experiments")).then((payload) => {
@@ -567,8 +575,12 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   }, [run]);
 
   useEffect(() => {
-    setConfig({ ...(template?.default_config || {}) });
-  }, [template?.id]);
+    const next = { ...(template?.default_config || {}) };
+    if (selectedDataset?.task === "multiclass") {
+      next["train.loss"] = "cross_entropy_dice";
+    }
+    setConfig(next);
+  }, [datasetKey, selectedDataset?.task, template?.id]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -714,8 +726,8 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
             subtitle={template ? template.display_name : "Шаблон не найден"}
             aside={template ? <span className="badge neutral">version={template.version}</span> : null}
           />
-          {template ? (
-            <ConfigEditor schema={template.config_schema} value={config} onChange={setConfig} />
+          {template && trainingSchema ? (
+            <ConfigEditor schema={trainingSchema} value={config} onChange={setConfig} />
           ) : (
             <div className="error-box">Нет шаблона для выбранной модели.</div>
           )}
@@ -3701,6 +3713,32 @@ function navigate(path: string) {
 
 function byId<T extends { id: string }>(items: T[], id: string): T | undefined {
   return items.find((item) => item.id === id);
+}
+
+export function trainingConfigSchema(
+  schema: ConfigSchema | undefined,
+  task: DatasetInfo["task"],
+): ConfigSchema | undefined {
+  if (!schema) return undefined;
+  const allowedLosses =
+    task === "multiclass"
+      ? ["cross_entropy", "cross_entropy_dice"]
+      : ["bce_dice", "focal_dice", "focal_tversky"];
+  return {
+    ...schema,
+    fields: schema.fields.map((field) =>
+      field.key === "train.loss"
+        ? {
+            ...field,
+            options: allowedLosses,
+            tooltip:
+              task === "multiclass"
+                ? "Multiclass loss: cross entropy, отдельно или вместе с Dice."
+                : field.tooltip,
+          }
+        : field,
+    ),
+  };
 }
 
 function templateFor(templates: TrainingTemplate[], architecture: string, datasetKey: string | null): TrainingTemplate | undefined {

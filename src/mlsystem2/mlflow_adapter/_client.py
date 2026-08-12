@@ -422,6 +422,31 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                 metrics.val_best_threshold_object_f1,
                 step=metrics.epoch,
             )
+        multiclass_scalars = {
+            "val/macro_pixel_f1": metrics.val_macro_pixel_f1,
+            "val/macro_pixel_precision": metrics.val_macro_pixel_precision,
+            "val/macro_pixel_recall": metrics.val_macro_pixel_recall,
+            "val/macro_pixel_iou": metrics.val_macro_pixel_iou,
+            "val/micro_pixel_f1": metrics.val_micro_pixel_f1,
+            "val/micro_pixel_precision": metrics.val_micro_pixel_precision,
+            "val/micro_pixel_recall": metrics.val_micro_pixel_recall,
+            "val/foreground_pixel_f1": metrics.val_foreground_pixel_f1,
+            "val/foreground_pixel_precision": metrics.val_foreground_pixel_precision,
+            "val/foreground_pixel_recall": metrics.val_foreground_pixel_recall,
+        }
+        for metric_name, value in multiclass_scalars.items():
+            if value is not None:
+                mlflow.log_metric(metric_name, value, step=metrics.epoch)
+        for item in metrics.val_per_class_metrics:
+            slug = str(item.get("slug", "unknown")).replace("/", "_")
+            for field in ("precision", "recall", "f1", "iou"):
+                value = item.get(field)
+                if value is not None:
+                    mlflow.log_metric(
+                        f"val/class/{slug}/{field}",
+                        float(value),
+                        step=metrics.epoch,
+                    )
             mlflow.log_metric(
                 "val/best_threshold_object_precision",
                 metrics.val_best_threshold_object_precision or 0.0,
@@ -464,6 +489,15 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
                 "train/best_threshold_pixel_f1",
                 max(item.val_best_threshold_pixel_f1 for item in result.history),
             )
+            macro_values = [
+                item.val_macro_pixel_f1
+                for item in result.history
+                if item.val_macro_pixel_f1 is not None
+            ]
+            if macro_values:
+                mlflow.log_metric("train/best_macro_pixel_f1", max(macro_values))
+        if result.best_threshold is not None:
+            mlflow.log_metric("train/best_confidence_threshold", result.best_threshold)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
 
@@ -475,6 +509,14 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
     _log_dict(
         {"history": [_model_dump(item) for item in result.history]},
         "reports/training_history_full.json",
+    )
+    _log_dict(
+        {
+            "task": result.task,
+            "class_schema": [_model_dump(item) for item in result.class_schema],
+            "confidence_threshold": result.best_threshold,
+        },
+        "reports/model_schema.json",
     )
     for path in (result.best_checkpoint_path, result.final_checkpoint_path):
         if path is not None and Path(path).exists():

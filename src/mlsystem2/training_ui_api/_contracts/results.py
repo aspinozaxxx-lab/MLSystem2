@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +38,9 @@ class PseudoMarkupResultInfo(BaseModel):
     created_at: datetime
     runtime_minutes: int | None = None
     progress: RuntimeProgress | None = None
+    task: Literal["binary", "multiclass"] = "binary"
+    class_schema: list[dict[str, Any]] = Field(default_factory=list)
+    by_type_download_url: str | None = None
 
 
 class TrainingResultTestF1Info(BaseModel):
@@ -63,6 +66,7 @@ class TrainingResultTestF1Info(BaseModel):
     object_true_positive: int | None = Field(default=None, ge=0)
     object_false_positive: int | None = Field(default=None, ge=0)
     object_false_negative: int | None = Field(default=None, ge=0)
+    metrics: dict[str, Any] = Field(default_factory=dict)
     sample_id: UUID | None = None
     sample_name: str | None = None
     sample_revision: int | None = Field(default=None, ge=1)
@@ -95,6 +99,9 @@ class TrainingResultInfo(BaseModel):
     is_primary: bool = False
     input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
+    task: Literal["binary", "multiclass"] = "binary"
+    class_schema: list[dict[str, object]] = Field(default_factory=list)
+    training_metrics: dict[str, object] = Field(default_factory=dict)
     f1_score: float | None = None
     epoch: int | None = None
     trained_at: datetime | None = None

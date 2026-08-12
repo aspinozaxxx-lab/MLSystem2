@@ -213,6 +213,8 @@ def create_pseudolabel_job(
                 "model_id": str(selected.result.id),
                 "model_version": selected.result.mlflow_run_id,
                 "model_name": selected.result.model_name,
+                "task": selected.result.task,
+                "object_types": list(selected.result.class_schema or []),
                 "architecture": selected.result.architecture,
                 "training_result_id": str(selected.result.id),
                 "mlflow_run_id": selected.result.mlflow_run_id,
@@ -619,6 +621,8 @@ def _class_info(selected: _SelectedModel) -> PseudolabelClassInfo:
         model_imagery_type=selected.imagery_type,
         input_channels=selected.input_channels,
         target_resolution_m=selected.target_resolution_m,
+        task=selected.result.task,
+        object_types=list(selected.result.class_schema or []),
     )
 
 
@@ -676,6 +680,12 @@ def _job_info(row: JobRow) -> PseudolabelJobInfo:
         or _string_list([state.get("source_attribution")]),
         source_license_url=str(state.get("source_license_url") or ""),
         performance=(state.get("performance") if isinstance(state.get("performance"), dict) else {}),
+        task=str(state.get("task") or "binary"),
+        object_types=(
+            [item for item in state.get("object_types", []) if isinstance(item, dict)]
+            if isinstance(state.get("object_types"), list)
+            else []
+        ),
     )
 
 

@@ -9,6 +9,7 @@ EXPECTED_API = {
         "prepare_dataset",
         "resolve_scene_images",
         "per_image_annotation_name",
+        "load_dataset_manifest",
     ],
     "tile_preparation.api": ["create_tile_dataloader"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],

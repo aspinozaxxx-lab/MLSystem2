@@ -126,6 +126,7 @@ class GeneratedMarkupTile:
     source_name: str
     territory: str
     object_count: int
+    class_object_counts: dict[str, int]
     preview_filename: str
 
 
@@ -137,6 +138,9 @@ class GeneratedMarkupFiles:
     dataset_version: str | None
     class_key: str
     class_name: str
+    task: str
+    class_schema: tuple[dict[str, Any], ...]
+    class_object_counts: dict[str, int]
     tile_width: int
     tile_height: int
     requested_object_count: int
@@ -185,6 +189,17 @@ class _Candidate:
     @property
     def object_count(self) -> int:
         return len(self.feature_positions)
+
+    @property
+    def class_object_counts(self) -> dict[str, int]:
+        if self.annotations is None:
+            return {}
+        counts: dict[str, int] = {}
+        for position in self.feature_positions:
+            slug = self.annotations.features[position].properties.get("_mlsystem2_class")
+            if isinstance(slug, str) and slug:
+                counts[slug] = counts.get(slug, 0) + 1
+        return counts
 
 
 def find_intersecting_images(
@@ -558,6 +573,8 @@ def generate_markup_files(
     )
     warnings = _source_annotation_warnings(sources)
     actual_object_count = sum(item.object_count for item in selected)
+    class_schema = tuple(item.model_dump(mode="json") for item in dataset.object_types)
+    class_object_counts = _selected_class_object_counts(selected, class_schema)
     if actual_object_count != request.object_count:
         warnings.append(
             "Точное число объектов недостижимо: "
@@ -568,12 +585,16 @@ def generate_markup_files(
             "Для формирования полного набора разрешено касание границ тайлов; "
             "перекрытий между тайлами нет."
         )
+    warnings.extend(
+        _class_quota_warnings(class_object_counts, class_schema, actual_object_count)
+    )
 
     tile_files = _write_selected_tiles(
         output_root=output_root,
         selected=selected,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
+        class_schema=class_schema,
     )
     class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
     dataset_short_name = dataset.dataset_name or "main"
@@ -584,6 +605,9 @@ def generate_markup_files(
         dataset_version=dataset.version,
         class_key=dataset.class_key or class_name,
         class_name=class_name,
+        task=dataset.task,
+        class_schema=class_schema,
+        class_object_counts=class_object_counts,
         tile_width=request.tile_width,
         tile_height=request.tile_height,
         requested_object_count=request.object_count,
@@ -678,6 +702,8 @@ def generate_markup_pool_files(
     )
     actual_object_count = sum(item.object_count for item in selected)
     warnings = _source_annotation_warnings(sources)
+    class_schema = tuple(item.model_dump(mode="json") for item in dataset.object_types)
+    class_object_counts = _selected_class_object_counts(selected, class_schema)
     selected_pool_count = len(selected_indices)
     if selected_pool_count < requested_pool_count:
         warnings.append(
@@ -693,12 +719,16 @@ def generate_markup_pool_files(
         warnings.append(
             "Для формирования пула разрешено касание границ тайлов; перекрытий между тайлами нет."
         )
+    warnings.extend(
+        _class_quota_warnings(class_object_counts, class_schema, actual_object_count)
+    )
 
     tile_files = _write_selected_tiles(
         output_root=output_root,
         selected=selected,
         tile_width=tile_size,
         tile_height=tile_size,
+        class_schema=class_schema,
     )
     class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
     dataset_short_name = dataset.dataset_name or "main"
@@ -709,6 +739,9 @@ def generate_markup_pool_files(
         dataset_version=dataset.version,
         class_key=dataset.class_key or class_name,
         class_name=class_name,
+        task=dataset.task,
+        class_schema=class_schema,
+        class_object_counts=class_object_counts,
         tile_width=tile_size,
         tile_height=tile_size,
         requested_object_count=min_object_count,
@@ -946,6 +979,40 @@ def _source_annotation_warnings(
             for warning in annotations.warnings
         )
     )
+
+
+def _selected_class_object_counts(
+    selected: list[_Candidate],
+    class_schema: tuple[dict[str, Any], ...],
+) -> dict[str, int]:
+    counts = {str(item["slug"]): 0 for item in class_schema}
+    for candidate in selected:
+        for slug, count in candidate.class_object_counts.items():
+            if slug in counts:
+                counts[slug] += int(count)
+    return counts
+
+
+def _class_quota_warnings(
+    counts: dict[str, int],
+    class_schema: tuple[dict[str, Any], ...],
+    total: int,
+) -> list[str]:
+    if not class_schema:
+        return []
+    target = total // len(class_schema)
+    warnings_output: list[str] = []
+    for item in class_schema:
+        count = int(counts.get(str(item["slug"]), 0))
+        if count == 0:
+            warnings_output.append(
+                f"В тестовую разметку не попал обязательный тип «{item['name']}»."
+            )
+        elif count < target:
+            warnings_output.append(
+                f"Дефицит типа «{item['name']}»: целевая квота {target}, выбрано {count}."
+            )
+    return warnings_output
 
 
 def _geojson_crs(payload: dict[str, Any]) -> PyprojCRS:
@@ -1475,7 +1542,15 @@ def _select_candidates(
     territory_offset = candidate_count
     source_offset = territory_offset + len(territories)
     deviation_index = source_offset + len(sources)
-    variable_count = deviation_index + 1
+    class_slugs = sorted(
+        {
+            slug
+            for candidate in candidates
+            for slug in candidate.class_object_counts
+        }
+    )
+    balance_deviation_index = deviation_index + 1 if len(class_slugs) == 2 else None
+    variable_count = deviation_index + (2 if balance_deviation_index is not None else 1)
 
     rows: list[int] = []
     columns: list[int] = []
@@ -1552,6 +1627,33 @@ def _select_candidates(
         + [(deviation_index, -1.0)],
         maximum=float(-request.object_count),
     )
+    class_count_vectors: dict[str, np.ndarray] = {
+        slug: np.asarray(
+            [candidate.class_object_counts.get(slug, 0) for candidate in candidates],
+            dtype=float,
+        )
+        for slug in class_slugs
+    }
+    for values_by_candidate in class_count_vectors.values():
+        if np.any(values_by_candidate > 0):
+            add_constraint(
+                [(index, values_by_candidate[index]) for index in range(candidate_count)],
+                minimum=1.0,
+            )
+    if balance_deviation_index is not None:
+        left = class_count_vectors[class_slugs[0]]
+        right = class_count_vectors[class_slugs[1]]
+        difference = left - right
+        add_constraint(
+            [(index, difference[index]) for index in range(candidate_count)]
+            + [(balance_deviation_index, -1.0)],
+            maximum=0.0,
+        )
+        add_constraint(
+            [(index, -difference[index]) for index in range(candidate_count)]
+            + [(balance_deviation_index, -1.0)],
+            maximum=0.0,
+        )
 
     matrix = coo_matrix(
         (values, (rows, columns)),
@@ -1566,8 +1668,14 @@ def _select_candidates(
     upper_bounds[deviation_index] = float(
         request.object_count + sum(sorted(object_counts, reverse=True)[: request.image_count]) + 1
     )
+    if balance_deviation_index is not None:
+        upper_bounds[balance_deviation_index] = float(
+            sum(sorted(object_counts, reverse=True)[: request.image_count]) + 1
+        )
     integrality = np.ones(variable_count, dtype=int)
     integrality[deviation_index] = 0
+    if balance_deviation_index is not None:
+        integrality[balance_deviation_index] = 0
     bounds = Bounds(lower_bounds, upper_bounds)
 
     territory_objective = np.zeros(variable_count, dtype=float)
@@ -1627,6 +1735,33 @@ def _select_candidates(
         maximum=float(deviation_optimum) + 1e-6,
     )
 
+    balance_constraints: list[LinearConstraint] = []
+    if balance_deviation_index is not None:
+        balance_objective = np.zeros(variable_count, dtype=float)
+        balance_objective[balance_deviation_index] = 1.0
+        balance_result = _run_milp(
+            balance_objective,
+            integrality=integrality,
+            bounds=bounds,
+            constraints=[
+                *common_constraints,
+                territory_constraint,
+                source_constraint,
+                deviation_constraint,
+            ],
+        )
+        if balance_result is None:
+            return None
+        balance_optimum = float(balance_result[balance_deviation_index])
+        balance_constraints.append(
+            _single_constraint(
+                variable_count,
+                [(balance_deviation_index, 1.0)],
+                minimum=0.0,
+                maximum=balance_optimum + 1e-6,
+            )
+        )
+
     density_objective = np.zeros(variable_count, dtype=float)
     density_objective[:candidate_count] = -object_counts
     density_result = _run_milp(
@@ -1638,6 +1773,7 @@ def _select_candidates(
             territory_constraint,
             deviation_constraint,
             source_constraint,
+            *balance_constraints,
         ],
     )
     if density_result is None:
@@ -1669,6 +1805,7 @@ def _select_candidates(
             deviation_constraint,
             source_constraint,
             object_constraint,
+            *balance_constraints,
         ],
     )
     if stable_result is None:
@@ -1868,6 +2005,7 @@ def _write_selected_tiles(
     selected: list[_Candidate],
     tile_width: int,
     tile_height: int,
+    class_schema: tuple[dict[str, Any], ...] = (),
 ) -> list[GeneratedMarkupTile]:
     tile_infos: list[GeneratedMarkupTile] = []
     for index, candidate in enumerate(selected, start=1):
@@ -1895,25 +2033,44 @@ def _write_selected_tiles(
                 f"Не удалось сохранить все объекты разметки для тайла {base_name}."
             )
         _write_geojson(geojson_path, annotations.payload, clipped_features)
-        raster_geometries = [
-            _transform_between_crs(
+        schema_by_slug = {str(item["slug"]): item for item in class_schema}
+        raster_geometries: list[tuple[BaseGeometry, int, int]] = []
+        for position in candidate.feature_positions:
+            feature = annotations.features[position]
+            geometry = _transform_between_crs(
                 feature.geometry.intersection(candidate.annotation_footprint),
                 annotations.crs,
                 candidate.raster_crs,
             )
-            for feature in (
-                annotations.features[position] for position in candidate.feature_positions
-            )
-        ]
+            if geometry.is_empty:
+                continue
+            if class_schema:
+                slug = feature.properties.get("_mlsystem2_class")
+                item = schema_by_slug.get(str(slug))
+                if item is None:
+                    raise TrainingUIAPIError(
+                        f"У объекта тестовой разметки отсутствует известный класс: {slug!r}."
+                    )
+                raster_geometries.append(
+                    (geometry, int(item["id"]), int(item.get("priority") or 0))
+                )
+            else:
+                raster_geometries.append((geometry, 255, 0))
         mask = rasterize(
-            [(geometry, 255) for geometry in raster_geometries if not geometry.is_empty],
+            [
+                (geometry, class_id)
+                for geometry, class_id, _priority in sorted(
+                    raster_geometries,
+                    key=lambda value: (value[2], -value[1]),
+                )
+            ],
             out_shape=(tile_height, tile_width),
             transform=transform,
             fill=0,
             dtype="uint8",
             all_touched=False,
         )
-        overlay = _overlay_image(image, mask)
+        overlay = _overlay_image(image, mask, class_schema=class_schema)
         _write_png(mask_path, mask[np.newaxis, :, :])
         _write_png(preview_path, overlay.transpose(2, 0, 1))
         tile_infos.append(
@@ -1922,6 +2079,7 @@ def _write_selected_tiles(
                 source_name=candidate.source_name,
                 territory=candidate.territory,
                 object_count=candidate.object_count,
+                class_object_counts=candidate.class_object_counts,
                 preview_filename=preview_path.name,
             )
         )
@@ -2043,6 +2201,9 @@ def _write_geojson(
     payload: dict[str, Any] = {"type": "FeatureCollection", "features": features}
     if "crs" in source_payload:
         payload["crs"] = source_payload["crs"]
+    for key in ("_mlsystem2_schema_version", "_mlsystem2_task", "_mlsystem2_classes"):
+        if key in source_payload:
+            payload[key] = source_payload[key]
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -2064,12 +2225,37 @@ def _write_png(path: Path, data: np.ndarray) -> None:
             dataset.write(data.astype(np.uint8, copy=False))
 
 
-def _overlay_image(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def _overlay_image(
+    image: np.ndarray,
+    mask: np.ndarray,
+    *,
+    class_schema: tuple[dict[str, Any], ...] = (),
+) -> np.ndarray:
     preview = _preview_rgb(image)
-    edge = _mask_edge(mask)
     result = preview.copy()
-    result[edge] = np.asarray([255, 255, 0], dtype=np.uint8)
+    if not class_schema:
+        result[_mask_edge(mask)] = np.asarray([255, 255, 0], dtype=np.uint8)
+        return result
+    for item in class_schema:
+        class_mask = mask == int(item["id"])
+        if not np.any(class_mask):
+            continue
+        color = np.asarray(_hex_rgb(str(item["color"])), dtype=np.float32)
+        result[class_mask] = np.rint(
+            result[class_mask].astype(np.float32) * 0.72 + color * 0.28
+        ).astype(np.uint8)
+        result[_mask_edge(class_mask.astype(np.uint8))] = color.astype(np.uint8)
     return result
+
+
+def _hex_rgb(color: str) -> tuple[int, int, int]:
+    value = color.removeprefix("#")
+    if len(value) != 6:
+        raise TrainingUIAPIError(f"Некорректный цвет класса: {color}")
+    try:
+        return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError as exc:
+        raise TrainingUIAPIError(f"Некорректный цвет класса: {color}") from exc
 
 
 def _preview_rgb(image: np.ndarray) -> np.ndarray:

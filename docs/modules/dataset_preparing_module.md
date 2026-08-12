@@ -6,7 +6,7 @@
 
 ## Публичный интерфейс
 
-- `prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult` — подготовить legacy binary, per-image binary или legacy multiclass датасет.
+- `prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult` — подготовить legacy binary, per-image binary, legacy multiclass или manifest-backed per-image multiclass датасет.
 - `resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageResolution` — сопоставить legacy TXT либо per-image GeoJSON с TIFF.
 - `per_image_annotation_name(image_path: str) -> str` — получить имя `<родительская_папка>_<stem>.geojson`.
 
@@ -17,7 +17,8 @@
 - `DatasetPreparationRequest` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, optional `classes`, `val_fraction`, `expected_band_count`, `expected_dtype`; задаётся ровно один из трёх режимов.
 - `DatasetClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `PreparedScene` — `scene_id`, `image_path`, optional локальный `annotation_file`.
-- `PreparedDataset` — `format=legacy_binary|per_image_binary|legacy_multiclass`, непустой `scenes`, optional общие `annotation_file`, `hard_negative_annotation_file`, список `class_annotations`.
+- `DatasetManifest`, `DatasetClassDefinition`, `DatasetSourceRevision` — строгая схема `.mlsystem2-dataset.json`, классы, ревизии исходных папок, идентификатор сборки и baseline-хеши.
+- `PreparedDataset` — `format=legacy_binary|per_image_binary|legacy_multiclass|per_image_multiclass`, непустой `scenes`, optional общие `annotation_file`, `hard_negative_annotation_file`, `class_annotations` либо manifest-классы `classes`.
 - `DatasetSceneReport` — `scene_id`, optional `image_path`, `positive_objects`, `hard_negative_objects`, `object_count`.
 - `DatasetPreparationReport` — `status`, счётчики сцен и объектов, `band_count`, `dtypes`, `scenes`, `missing_files`, `errors`.
 - `DatasetPreparationResult` — `dataset`, `report`.
@@ -31,4 +32,4 @@
 
 ## Алгоритм работы и его особенности
 
-Legacy binary читает TXT, включая записи-папки и старые scene id, разрешает неоднозначность по геометрии и возвращает каждый TIFF отдельной сценой. Legacy multiclass объединяет сцены классов и назначает `class_id=1..N`. Per-image binary индексирует прямые GeoJSON в `annotations_dir` и TIFF рекурсивно; имя сопоставляется строго как `<parent>_<stem>.geojson`, коллизия, отсутствующий или неоднозначный TIFF являются ошибкой. GeoJSON обязан быть `FeatureCollection` в CRS TIFF с валидными `Polygon/MultiPolygon`; роль `_mlsystem2_role` равна `positive` или `hard_negative`, отсутствие роли означает `positive`. Пустой `FeatureCollection` допустим, пустой датасет не готов к обучению. Все TIFF проверяются по CRS, каналам, dtype и nodata/mask; общие VRT не создаются.
+Legacy binary читает TXT, включая записи-папки и старые scene id, разрешает неоднозначность по геометрии и возвращает каждый TIFF отдельной сценой. Legacy multiclass объединяет сцены классов и назначает `class_id=1..N`. Per-image режим индексирует прямые GeoJSON в `annotations_dir` и TIFF рекурсивно; имя сопоставляется строго как `<parent>_<stem>.geojson`, коллизия, отсутствующий или неоднозначный TIFF являются ошибкой. Если рядом находится `.mlsystem2-dataset.json`, формат становится `per_image_multiclass`: manifest и повторённые в каждом GeoJSON `_mlsystem2_schema_version`, `_mlsystem2_task`, `_mlsystem2_classes` проверяются строго, positive требует известный `_mlsystem2_class`, hard negative не может иметь класс, а feature ID и `_mlsystem2_origin_key` обязательны и уникальны. Без manifest сохраняется прежняя binary-семантика, включая отсутствие роли как `positive`. GeoJSON обязан быть `FeatureCollection` в CRS TIFF с валидными `Polygon/MultiPolygon`. Пустой `FeatureCollection` допустим, пустой датасет не готов к обучению. Все TIFF проверяются по CRS, каналам, dtype и nodata/mask; общие VRT не создаются.

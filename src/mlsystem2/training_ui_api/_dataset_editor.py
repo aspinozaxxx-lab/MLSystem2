@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import shutil
 import uuid
 from contextlib import contextmanager
 from functools import lru_cache
@@ -24,20 +25,34 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from sqlalchemy.orm import Session
 
-from mlsystem2.dataset_preparing.api import per_image_annotation_name, resolve_scene_images
+from mlsystem2.dataset_preparing.api import (
+    load_dataset_manifest,
+    per_image_annotation_name,
+    resolve_scene_images,
+)
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from ._config import TrainingUIAPIConfig
+from ._combined_dataset import (
+    build_combined_dataset,
+    feature_hash,
+    folder_file_hashes,
+    tree_revision,
+)
 from ._dataset_catalog import find_managed_dataset, list_managed_datasets
 from ._datasets import RASTER_SUFFIXES
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
+    DatasetEditorObjectType,
     DatasetEditorMutationResult,
     DatasetEditorPublicationInfo,
     DatasetEditorRasterBrowserResponse,
     DatasetEditorRasterFolderInfo,
     DatasetEditorRasterInfo,
+    DatasetEditorRebuildChange,
+    DatasetEditorRebuildPreview,
+    DatasetEditorRebuildResult,
     DatasetEditorSceneDetail,
     DatasetEditorSceneInfo,
     DatasetEditorSceneListResponse,
@@ -47,6 +62,7 @@ from .contracts import (
 
 
 _ROLE_PROPERTY = "_mlsystem2_role"
+_CLASS_PROPERTY = "_mlsystem2_class"
 _ROLES = {"positive", "hard_negative"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40,64}")
 _SERVICE_AUTHOR_NAME = "MLSystem2 Dataset Editor"
@@ -233,7 +249,7 @@ def add_editor_scenes(
         relative_files: list[PurePosixPath] = []
         try:
             for annotation_name, image_path in names.values():
-                payload = _empty_annotation_payload(image_path)
+                payload = _empty_annotation_payload(image_path, dataset)
                 target = source_dir / annotation_name
                 _write_geojson_atomic(target, payload)
                 created.append(target)
@@ -326,11 +342,22 @@ def publish_editor_scenes(
         prepared: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         for annotation_name, revision, geojson, annotation_path, relative_path in resolved:
             image_path = _matched_image_path(dataset, source_dir, annotation_name)
-            _validate_editor_geojson(geojson, image_path)
             previous_payload = _read_geojson(annotation_path)
-            _validate_preserved_properties(previous_payload, geojson)
+            normalized_geojson = _normalize_editor_geojson(
+                geojson,
+                previous_payload,
+                dataset,
+            )
+            _validate_editor_geojson(normalized_geojson, image_path, dataset)
+            _validate_preserved_properties(previous_payload, normalized_geojson)
             prepared.append(
-                (annotation_name, revision, geojson, annotation_path, relative_path)
+                (
+                    annotation_name,
+                    revision,
+                    normalized_geojson,
+                    annotation_path,
+                    relative_path,
+                )
             )
 
         relative_paths = [item[4] for item in prepared]
@@ -438,6 +465,483 @@ def editor_publication_info(
         )
 
 
+def preview_editor_dataset_rebuild(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+) -> DatasetEditorRebuildPreview:
+    with _editor_lock(config):
+        _synchronize_editor_clone(config)
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        manifest = load_dataset_manifest(source_dir)
+        if manifest is None or not manifest.combined:
+            raise TrainingUIAPIError(
+                "Пересборка доступна только датасету с combined-манифестом."
+            )
+        build = build_combined_dataset(
+            manifest=manifest,
+            repo_root=config.mlmarkup_editor_root,
+            images_root=_dataset_images_root(dataset),
+            code_revision=_project_git_head(config.project_root),
+        )
+        current_payloads = _target_geojson_payloads(source_dir)
+        local_changes = _local_rebuild_changes(manifest, current_payloads)
+        source_changes = _source_rebuild_changes(
+            manifest,
+            config.mlmarkup_editor_root,
+        )
+        conflicts = _rebuild_conflicts(
+            manifest,
+            current_payloads,
+            build.files,
+            local_changes,
+        )
+        token = uuid.uuid4().hex
+        state = {
+            "dataset_key": dataset_key,
+            "target_tree": tree_revision(folder_file_hashes(source_dir)),
+            "target_git_tree": _tree_object_revision(
+                config,
+                "HEAD",
+                _repo_relative(config, source_dir),
+            ),
+            "source_trees": {
+                source.path: tree_revision(
+                    folder_file_hashes(
+                        config.mlmarkup_editor_root.joinpath(
+                            *PurePosixPath(source.path).parts
+                        )
+                    )
+                )
+                for source in manifest.sources
+            },
+            "source_git_trees": {
+                source.path: _tree_object_revision(
+                    config,
+                    "HEAD",
+                    PurePosixPath(source.path),
+                )
+                for source in manifest.sources
+            },
+            "files": build.files,
+            "manifest": build.manifest.model_dump(mode="json"),
+            "class_counts": build.class_counts,
+            "hard_negative_count": build.hard_negative_count,
+            "warnings": list(build.warnings),
+            "local_changes": [item.model_dump(mode="json") for item in local_changes],
+            "conflicts": [item.model_dump(mode="json") for item in conflicts],
+        }
+        preview_path = _rebuild_preview_path(config, token)
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json_atomic(preview_path, state)
+        return DatasetEditorRebuildPreview(
+            preview_token=token,
+            dataset_key=dataset_key,
+            source_status=("stale" if source_changes else "current"),
+            source_changes=source_changes,
+            local_changes=local_changes,
+            conflicts=conflicts,
+            replacement_scene_count=len(build.files),
+            replacement_class_counts=build.class_counts,
+            replacement_hard_negative_count=build.hard_negative_count,
+            warnings=list(build.warnings),
+        )
+
+
+def rebuild_editor_dataset(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    preview_token: str,
+    mode: str,
+    username: str,
+) -> DatasetEditorRebuildResult:
+    if mode not in {"merge", "replace"}:
+        raise TrainingUIAPIError("mode должен быть merge или replace")
+    if not re.fullmatch(r"[0-9a-f]{32}", preview_token):
+        raise DatasetEditorConflict("Некорректный или устаревший preview_token")
+    with _editor_lock(config):
+        _synchronize_editor_clone(config)
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        preview_path = _rebuild_preview_path(config, preview_token)
+        try:
+            state = json.loads(preview_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DatasetEditorConflict("Preview пересборки не найден или устарел") from exc
+        if state.get("dataset_key") != dataset_key:
+            raise DatasetEditorConflict("preview_token создан для другого датасета")
+        if tree_revision(folder_file_hashes(source_dir)) != state.get("target_tree"):
+            raise DatasetEditorConflict("Target-датасет изменился после preview")
+        manifest = load_dataset_manifest(source_dir)
+        if manifest is None:
+            raise DatasetEditorConflict("Манифест target-датасета изменился после preview")
+        for source in manifest.sources:
+            source_path = config.mlmarkup_editor_root.joinpath(
+                *PurePosixPath(source.path).parts
+            )
+            current_tree = tree_revision(folder_file_hashes(source_path))
+            if current_tree != (state.get("source_trees") or {}).get(source.path):
+                raise DatasetEditorConflict(
+                    f"Исходная папка {source.path} изменилась после preview"
+                )
+        candidate_files = {
+            str(name): payload for name, payload in (state.get("files") or {}).items()
+        }
+        candidate_manifest = state.get("manifest")
+        if not isinstance(candidate_manifest, dict):
+            raise DatasetEditorConflict("Preview пересборки повреждён")
+        output_files = (
+            candidate_files
+            if mode == "replace"
+            else _merge_rebuild_payloads(
+                manifest,
+                _target_geojson_payloads(source_dir),
+                candidate_files,
+            )
+        )
+        tracked_paths = _rebuild_tracked_paths(
+            config,
+            source_dir,
+            manifest,
+            candidate_files,
+        )
+        expected_revisions = {
+            path: _blob_revision(config, "HEAD", path) for path in tracked_paths
+        }
+        _replace_dataset_files_atomically(
+            source_dir,
+            output_files,
+            candidate_manifest,
+        )
+        target_relative = _repo_relative(config, source_dir)
+        try:
+            _git(config, "add", "-A", "--", target_relative.as_posix())
+            commit = _commit(
+                config,
+                (
+                    f"Пересобрать датасет {dataset.dataset_name or dataset.name} "
+                    f"в режиме {mode}"
+                ),
+                username,
+            )
+            commit = _push_with_retry(
+                config,
+                expected_revisions=expected_revisions,
+                expected_tree_revisions={
+                    _repo_relative(config, source_dir): state.get("target_git_tree"),
+                    **{
+                        PurePosixPath(source.path): tree
+                        for source, tree in (
+                            (
+                                source,
+                                (state.get("source_git_trees") or {}).get(source.path),
+                            )
+                            for source in manifest.sources
+                        )
+                        if isinstance(tree, str)
+                    },
+                },
+            )
+        except Exception:
+            _git_optional(
+                config,
+                "restore",
+                "--staged",
+                "--worktree",
+                "--",
+                target_relative.as_posix(),
+            )
+            raise
+        preview_path.unlink(missing_ok=True)
+        scenes = _scene_infos(config, dataset, source_dir)
+        return DatasetEditorRebuildResult(
+            commit=commit,
+            publication_status=_publication_status(config, commit),
+            scenes=scenes,
+            mode=mode,
+            conflicts=[
+                DatasetEditorRebuildChange.model_validate(item)
+                for item in state.get("conflicts") or []
+            ],
+            warnings=[str(item) for item in state.get("warnings") or []],
+        )
+
+
+def _target_geojson_payloads(source_dir: Path) -> dict[str, dict[str, Any]]:
+    return {
+        path.name: _read_geojson(path) for path in _direct_files(source_dir, ".geojson")
+    }
+
+
+def _source_rebuild_changes(
+    manifest,
+    repo_root: Path,
+) -> list[str]:
+    changes: list[str] = []
+    for source in manifest.sources:
+        folder = repo_root.joinpath(*PurePosixPath(source.path).parts)
+        current = folder_file_hashes(folder)
+        previous = dict(source.file_hashes or {})
+        if not previous:
+            if tree_revision(current) != source.tree_revision:
+                changes.append(f"Изменена исходная папка: {source.path}")
+            continue
+        for name in sorted(set(previous) | set(current)):
+            if name not in previous:
+                changes.append(f"Добавлен исходный файл: {source.path}/{name}")
+            elif name not in current:
+                changes.append(f"Удалён исходный файл: {source.path}/{name}")
+            elif previous[name] != current[name]:
+                changes.append(f"Изменён исходный файл: {source.path}/{name}")
+    return changes
+
+
+def _local_rebuild_changes(
+    manifest,
+    current_payloads: dict[str, dict[str, Any]],
+) -> list[DatasetEditorRebuildChange]:
+    changes: list[DatasetEditorRebuildChange] = []
+    baseline = dict(manifest.baseline_hashes or {})
+    for annotation_name in sorted(set(baseline) | set(current_payloads)):
+        if annotation_name not in current_payloads:
+            changes.append(
+                DatasetEditorRebuildChange(
+                    kind="deleted",
+                    annotation_name=annotation_name,
+                    detail="Локально удалён весь per-image файл.",
+                )
+            )
+            continue
+        current = _features_by_origin(current_payloads[annotation_name])
+        base = baseline.get(annotation_name, {})
+        if annotation_name not in baseline:
+            changes.append(
+                DatasetEditorRebuildChange(
+                    kind="added",
+                    annotation_name=annotation_name,
+                    detail="Локально добавлен per-image файл.",
+                )
+            )
+            continue
+        for origin_key in sorted(set(base) | set(current)):
+            if origin_key not in base:
+                changes.append(
+                    DatasetEditorRebuildChange(
+                        kind="added",
+                        annotation_name=annotation_name,
+                        origin_key=origin_key,
+                    )
+                )
+            elif origin_key not in current:
+                changes.append(
+                    DatasetEditorRebuildChange(
+                        kind="deleted",
+                        annotation_name=annotation_name,
+                        origin_key=origin_key,
+                    )
+                )
+            elif feature_hash(current[origin_key]) != base[origin_key]:
+                changes.append(
+                    DatasetEditorRebuildChange(
+                        kind="edited",
+                        annotation_name=annotation_name,
+                        origin_key=origin_key,
+                    )
+                )
+    return changes
+
+
+def _rebuild_conflicts(
+    manifest,
+    current_payloads: dict[str, dict[str, Any]],
+    candidate_payloads: dict[str, dict[str, Any]],
+    local_changes: list[DatasetEditorRebuildChange],
+) -> list[DatasetEditorRebuildChange]:
+    del current_payloads
+    baseline = dict(manifest.baseline_hashes or {})
+    candidate = {
+        name: {
+            origin: feature_hash(feature)
+            for origin, feature in _features_by_origin(payload).items()
+        }
+        for name, payload in candidate_payloads.items()
+    }
+    conflicts: list[DatasetEditorRebuildChange] = []
+    for change in local_changes:
+        base_file = baseline.get(change.annotation_name, {})
+        candidate_file = candidate.get(change.annotation_name, {})
+        if change.origin_key is None:
+            source_changed = candidate_file != base_file
+        else:
+            source_changed = candidate_file.get(change.origin_key) != base_file.get(
+                change.origin_key
+            )
+        if source_changed:
+            conflicts.append(
+                change.model_copy(
+                    update={
+                        "detail": (
+                            "Источник и ручная версия изменили один объект; "
+                            "в merge побеждает ручная версия."
+                        )
+                    }
+                )
+            )
+    return conflicts
+
+
+def _merge_rebuild_payloads(
+    manifest,
+    current_payloads: dict[str, dict[str, Any]],
+    candidate_payloads: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    baseline = dict(manifest.baseline_hashes or {})
+    output: dict[str, dict[str, Any]] = {}
+    for annotation_name in sorted(set(current_payloads) | set(candidate_payloads) | set(baseline)):
+        current_payload = current_payloads.get(annotation_name)
+        candidate_payload = candidate_payloads.get(annotation_name)
+        base = baseline.get(annotation_name)
+        if current_payload is None and base is not None:
+            continue
+        if current_payload is not None and base is None:
+            output[annotation_name] = current_payload
+            continue
+        if current_payload is None:
+            if candidate_payload is not None:
+                output[annotation_name] = candidate_payload
+            continue
+        current_features = _features_by_origin(current_payload)
+        candidate_features = (
+            _features_by_origin(candidate_payload) if candidate_payload is not None else {}
+        )
+        base_hashes = base or {}
+        merged_features = dict(candidate_features)
+        for origin_key in set(base_hashes) | set(current_features):
+            if origin_key not in current_features:
+                merged_features.pop(origin_key, None)
+            elif origin_key not in base_hashes:
+                merged_features[origin_key] = current_features[origin_key]
+            elif feature_hash(current_features[origin_key]) != base_hashes[origin_key]:
+                merged_features[origin_key] = current_features[origin_key]
+        template = dict(candidate_payload or current_payload)
+        template["_mlsystem2_schema_version"] = manifest.schema_version
+        template["_mlsystem2_task"] = manifest.task
+        template["_mlsystem2_classes"] = [
+            item.model_dump(mode="json") for item in manifest.classes
+        ]
+        template["features"] = sorted(
+            merged_features.values(),
+            key=lambda feature: str(feature.get("id") or ""),
+        )
+        if template["features"]:
+            output[annotation_name] = template
+    return output
+
+
+def _features_by_origin(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    for feature in payload.get("features") or []:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        origin_key = properties.get("_mlsystem2_origin_key")
+        if not isinstance(origin_key, str) or not origin_key:
+            feature_id = feature.get("id")
+            origin_key = f"manual:{feature_id}" if feature_id is not None else feature_hash(feature)
+        output[origin_key] = feature
+    return output
+
+
+def _replace_dataset_files_atomically(
+    source_dir: Path,
+    payloads: dict[str, dict[str, Any]],
+    manifest_payload: dict[str, Any],
+) -> None:
+    parent = source_dir.parent
+    temporary = parent / f".{source_dir.name}.rebuild-{uuid.uuid4().hex}"
+    backup = parent / f".{source_dir.name}.backup-{uuid.uuid4().hex}"
+    temporary.mkdir(parents=False)
+    try:
+        if source_dir.is_dir():
+            for item in source_dir.iterdir():
+                if item.name == ".mlsystem2-dataset.json" or item.suffix.casefold() == ".geojson":
+                    continue
+                destination = temporary / item.name
+                if item.is_dir():
+                    shutil.copytree(item, destination)
+                else:
+                    shutil.copy2(item, destination)
+        for name, payload in payloads.items():
+            _write_geojson_atomic(temporary / _safe_annotation_name(name), payload)
+        _write_json_atomic(temporary / ".mlsystem2-dataset.json", manifest_payload)
+        if source_dir.exists():
+            os.replace(source_dir, backup)
+        try:
+            os.replace(temporary, source_dir)
+        except Exception:
+            if backup.exists() and not source_dir.exists():
+                os.replace(backup, source_dir)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _rebuild_tracked_paths(
+    config: TrainingUIAPIConfig,
+    source_dir: Path,
+    manifest,
+    candidate_payloads: dict[str, dict[str, Any]],
+) -> set[PurePosixPath]:
+    paths: set[PurePosixPath] = set()
+    for folder in [
+        source_dir,
+        *[
+            config.mlmarkup_editor_root.joinpath(*PurePosixPath(item.path).parts)
+            for item in manifest.sources
+        ],
+    ]:
+        if folder.is_dir():
+            for path in folder.rglob("*"):
+                if path.is_file():
+                    paths.add(_repo_relative(config, path))
+    target_relative = _repo_relative(config, source_dir)
+    paths.add(target_relative / ".mlsystem2-dataset.json")
+    for name in candidate_payloads:
+        paths.add(target_relative / _safe_annotation_name(name))
+    return paths
+
+
+def _rebuild_preview_path(config: TrainingUIAPIConfig, token: str) -> Path:
+    return config.mlmarkup_editor_root.parent / ".mlsystem2-rebuild-previews" / f"{token}.json"
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _project_git_head(root: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def _managed_editor_dataset(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -492,6 +996,22 @@ def _editor_dataset_info(dataset: DatasetInfo, scene_count: int) -> DatasetEdito
         dataset_name=dataset.dataset_name or "main",
         imagery_type=dataset.imagery_type.value,
         scene_count=scene_count,
+        task=dataset.task,
+        object_types=[
+            DatasetEditorObjectType(
+                id=item.id,
+                slug=item.slug,
+                name=item.name,
+                color=item.color,
+                priority=item.priority,
+            )
+            for item in dataset.object_types
+        ],
+        combined=dataset.combined,
+        source_status=dataset.source_status,
+        source_changes=list(dataset.source_changes),
+        class_counts=dict(dataset.class_counts),
+        hard_negative_count=dataset.hard_negative_count,
     )
 
 
@@ -527,7 +1047,10 @@ def _scene_infos(
             raise DatasetEditorGitError(
                 f"GeoJSON не зафиксирован в Git: {annotation_path.name}"
             )
-        positive, hard_negative = _role_counts(_read_geojson(annotation_path))
+        positive, hard_negative, class_counts = _editor_counts(
+            _read_geojson(annotation_path),
+            dataset,
+        )
         image_path = Path(item.image_path).resolve()
         image_relative = image_path.relative_to(root).as_posix()
         result.append(
@@ -543,6 +1066,7 @@ def _scene_infos(
                 positive_count=positive,
                 hard_negative_count=hard_negative,
                 revision=revision,
+                class_counts=class_counts,
             )
         )
     result.sort(key=lambda item: item.scene_id.casefold())
@@ -634,7 +1158,10 @@ def _safe_annotation_name(value: str) -> str:
     return name
 
 
-def _empty_annotation_payload(image_path: Path) -> dict[str, Any]:
+def _empty_annotation_payload(
+    image_path: Path,
+    dataset: DatasetInfo,
+) -> dict[str, Any]:
     try:
         with rasterio.open(image_path) as source:
             if source.crs is None:
@@ -642,14 +1169,29 @@ def _empty_annotation_payload(image_path: Path) -> dict[str, Any]:
             crs_name = source.crs.to_string()
     except rasterio.errors.RasterioError as exc:
         raise TrainingUIAPIError(f"Не удалось открыть TIFF {image_path.name}: {exc}") from exc
-    return {
+    payload: dict[str, Any] = {
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": crs_name}},
         "features": [],
     }
+    if dataset.task == "multiclass":
+        payload.update(
+            {
+                "_mlsystem2_schema_version": 1,
+                "_mlsystem2_task": "multiclass",
+                "_mlsystem2_classes": [
+                    item.model_dump(mode="json") for item in dataset.object_types
+                ],
+            }
+        )
+    return payload
 
 
-def _validate_editor_geojson(payload: dict[str, Any], image_path: Path) -> None:
+def _validate_editor_geojson(
+    payload: dict[str, Any],
+    image_path: Path,
+    dataset: DatasetInfo,
+) -> None:
     if payload.get("type") != "FeatureCollection" or not isinstance(
         payload.get("features"), list
     ):
@@ -668,6 +1210,16 @@ def _validate_editor_geojson(payload: dict[str, Any], image_path: Path) -> None:
             f"CRS GeoJSON ({geojson_crs.to_string()}) не совпадает с CRS TIFF "
             f"({raster_crs.to_string()})"
         )
+    known_slugs = {item.slug for item in dataset.object_types}
+    if dataset.task == "multiclass":
+        if payload.get("_mlsystem2_schema_version") != 1:
+            raise TrainingUIAPIError("Некорректная версия схемы multiclass-разметки")
+        if payload.get("_mlsystem2_task") != "multiclass":
+            raise TrainingUIAPIError("Некорректный task multiclass-разметки")
+        actual_classes = payload.get("_mlsystem2_classes")
+        expected_classes = [item.model_dump(mode="json") for item in dataset.object_types]
+        if actual_classes != expected_classes:
+            raise TrainingUIAPIError("Схема классов GeoJSON не совпадает с датасетом")
     for index, feature in enumerate(payload["features"], start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
@@ -675,6 +1227,17 @@ def _validate_editor_geojson(payload: dict[str, Any], image_path: Path) -> None:
         if not isinstance(properties, dict) or properties.get(_ROLE_PROPERTY) not in _ROLES:
             raise TrainingUIAPIError(
                 f"У объекта {index} должна быть явная роль positive или hard_negative"
+            )
+        role = str(properties[_ROLE_PROPERTY])
+        class_slug = properties.get(_CLASS_PROPERTY)
+        if dataset.task == "multiclass" and role == "positive":
+            if class_slug not in known_slugs:
+                raise TrainingUIAPIError(
+                    f"У positive-объекта {index} должен быть один из классов датасета"
+                )
+        elif _CLASS_PROPERTY in properties:
+            raise TrainingUIAPIError(
+                f"У hard negative или binary-объекта {index} не должно быть класса"
             )
         try:
             geometry = shape(feature.get("geometry"))
@@ -855,7 +1418,11 @@ def _validate_preserved_properties(
 def _non_system_properties(feature: dict[str, Any]) -> str:
     properties = feature.get("properties")
     cleaned = (
-        {key: value for key, value in properties.items() if key != _ROLE_PROPERTY}
+        {
+            key: value
+            for key, value in properties.items()
+            if not key.startswith("_mlsystem2_")
+        }
         if isinstance(properties, dict)
         else {}
     )
@@ -897,6 +1464,71 @@ def _role_counts(payload: dict[str, Any]) -> tuple[int, int]:
         else:
             raise TrainingUIAPIError(f"Неизвестная роль объекта: {role}")
     return positive, hard_negative
+
+
+def _editor_counts(
+    payload: dict[str, Any],
+    dataset: DatasetInfo,
+) -> tuple[int, int, dict[str, int]]:
+    positive, hard_negative = _role_counts(payload)
+    class_counts = {item.slug: 0 for item in dataset.object_types}
+    for feature in payload.get("features", []):
+        properties = feature.get("properties") if isinstance(feature, dict) else None
+        if not isinstance(properties, dict) or properties.get(_ROLE_PROPERTY) != "positive":
+            continue
+        slug = properties.get(_CLASS_PROPERTY)
+        if slug in class_counts:
+            class_counts[str(slug)] += 1
+    return positive, hard_negative, class_counts
+
+
+def _normalize_editor_geojson(
+    payload: dict[str, Any],
+    previous: dict[str, Any],
+    dataset: DatasetInfo,
+) -> dict[str, Any]:
+    normalized = {**payload}
+    if dataset.task == "multiclass":
+        normalized["_mlsystem2_schema_version"] = 1
+        normalized["_mlsystem2_task"] = "multiclass"
+        normalized["_mlsystem2_classes"] = [
+            item.model_dump(mode="json") for item in dataset.object_types
+        ]
+    previous_by_id = {
+        str(feature.get("id")): feature
+        for feature in previous.get("features", [])
+        if isinstance(feature, dict) and feature.get("id") is not None
+    }
+    features: list[dict[str, Any]] = []
+    for raw_feature in payload.get("features", []):
+        if not isinstance(raw_feature, dict):
+            features.append(raw_feature)
+            continue
+        feature = dict(raw_feature)
+        feature_id = feature.get("id")
+        if feature_id is None or not str(feature_id):
+            feature_id = str(uuid.uuid4())
+            feature["id"] = feature_id
+        previous_feature = previous_by_id.get(str(feature_id))
+        properties = dict(feature.get("properties") or {})
+        if previous_feature is not None:
+            previous_properties = previous_feature.get("properties")
+            if isinstance(previous_properties, dict):
+                for key, value in previous_properties.items():
+                    if key.startswith("_mlsystem2_") and key not in {
+                        _ROLE_PROPERTY,
+                        _CLASS_PROPERTY,
+                    }:
+                        properties[key] = value
+        else:
+            properties.setdefault("_mlsystem2_origin_key", f"manual:{feature_id}")
+            properties.setdefault("_mlsystem2_source_path", "manual")
+        if properties.get(_ROLE_PROPERTY) == "hard_negative":
+            properties.pop(_CLASS_PROPERTY, None)
+        feature["properties"] = properties
+        features.append(feature)
+    normalized["features"] = features
+    return normalized
 
 
 def _read_geojson(path: Path) -> dict[str, Any]:
@@ -1106,6 +1738,7 @@ def _push_with_retry(
     config: TrainingUIAPIConfig,
     *,
     expected_revisions: dict[PurePosixPath, str | None],
+    expected_tree_revisions: dict[PurePosixPath, str | None] | None = None,
 ) -> str:
     branch = config.mlmarkup_editor_branch
     first = _git_optional(config, "push", "origin", f"HEAD:{branch}")
@@ -1118,6 +1751,12 @@ def _push_with_retry(
         for path, expected in expected_revisions.items()
         if _blob_revision(config, remote_ref, path) != expected
     ]
+    tree_changes = [
+        path.as_posix()
+        for path, expected in (expected_tree_revisions or {}).items()
+        if _tree_object_revision(config, remote_ref, path) != expected
+    ]
+    changed.extend(tree_changes)
     if changed:
         _discard_local_commit(config)
         raise DatasetEditorConflict(
@@ -1145,6 +1784,15 @@ def _discard_local_commit(config: TrainingUIAPIConfig) -> None:
 
 
 def _blob_revision(
+    config: TrainingUIAPIConfig,
+    ref: str,
+    relative_path: PurePosixPath,
+) -> str | None:
+    result = _git_optional(config, "rev-parse", f"{ref}:{relative_path.as_posix()}")
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _tree_object_revision(
     config: TrainingUIAPIConfig,
     ref: str,
     relative_path: PurePosixPath,
@@ -1183,6 +1831,8 @@ __all__ = [
     "list_editor_datasets",
     "list_editor_scenes",
     "publish_editor_scenes",
+    "preview_editor_dataset_rebuild",
+    "rebuild_editor_dataset",
     "resolve_editor_raster",
     "save_editor_scene",
 ]

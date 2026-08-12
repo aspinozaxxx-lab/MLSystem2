@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import uuid
 from pathlib import Path, PurePosixPath
@@ -9,8 +11,12 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mlsystem2.dataset_preparing.api import resolve_scene_images
-from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
+from mlsystem2.dataset_preparing.api import load_dataset_manifest, resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import (
+    DatasetManifest,
+    DatasetPreparationError,
+    SceneImageResolutionRequest,
+)
 
 from ._config import TrainingUIAPIConfig
 from ._datasets import (
@@ -47,6 +53,7 @@ from .contracts import (
     DatasetClassUpdate,
     DatasetFormat,
     DatasetInfo,
+    DatasetObjectType,
     DatasetPrimaryDatasetUpdate,
     DatasetSourceInfo,
     ImageryTypeInfo,
@@ -614,6 +621,11 @@ def _dataset_info(
     updated_at = None
     source_version = None
     source_available = source_inside_root and source_path.is_dir()
+    manifest: DatasetManifest | None = None
+    source_status = "unknown"
+    source_changes: list[str] = []
+    class_counts: dict[str, int] = {}
+    hard_negative_count = 0
     if not source_inside_root:
         diagnostics.append(
             f"Источник MLMarkup выходит за пределы разрешённого каталога: {dataset.source_path}"
@@ -631,8 +643,26 @@ def _dataset_info(
             if annotation_file is None and not source_diagnostics:
                 diagnostics.append("В legacy-датасете не найден positive GeoJSON.")
         else:
-            dataset_format = DatasetFormat.PER_IMAGE
+            try:
+                manifest = load_dataset_manifest(source_path)
+            except DatasetPreparationError as exc:
+                diagnostics.append(str(exc))
+            dataset_format = (
+                DatasetFormat.PER_IMAGE_MULTICLASS
+                if manifest is not None
+                else DatasetFormat.PER_IMAGE
+            )
             annotations_dir = source_path
+            if manifest is not None:
+                source_status, source_changes = _manifest_source_status(
+                    manifest,
+                    Path(config.mlmarkup_root),
+                )
+                class_counts, hard_negative_count = _per_image_object_counts(
+                    source_path,
+                    manifest,
+                    diagnostics,
+                )
         updated_at, source_version = _path_metadata(source_path, config.mlmarkup_root)
     if not images_inside_root:
         diagnostics.append("Каталог снимков выходит за пределы MLSYSTEM2_IMAGES_ROOT.")
@@ -687,7 +717,121 @@ def _dataset_info(
         source_available=source_available,
         is_primary=class_row.primary_dataset_id == dataset.id,
         diagnostics=diagnostics,
+        task="multiclass" if manifest is not None else "binary",
+        object_types=(
+            [
+                DatasetObjectType(
+                    id=item.id,
+                    slug=item.slug,
+                    name=item.name,
+                    color=item.color,
+                    priority=item.priority,
+                )
+                for item in manifest.classes
+            ]
+            if manifest is not None
+            else []
+        ),
+        combined=bool(manifest and manifest.combined),
+        source_status=("unavailable" if not source_available else source_status),
+        source_changes=source_changes,
+        class_counts=class_counts,
+        hard_negative_count=hard_negative_count,
+        manifest_path=(
+            str(source_path / ".mlsystem2-dataset.json")
+            if manifest is not None
+            else None
+        ),
     )
+
+
+def _manifest_source_status(
+    manifest: DatasetManifest,
+    mlmarkup_root: Path,
+) -> tuple[str, list[str]]:
+    if not manifest.sources:
+        return "unknown", []
+    changes: list[str] = []
+    unavailable = False
+    root = mlmarkup_root.resolve()
+    for source in manifest.sources:
+        raw_path = Path(source.path)
+        source_path = raw_path if raw_path.is_absolute() else root / raw_path
+        try:
+            resolved = source_path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            unavailable = True
+            changes.append(f"Исходная папка выходит за пределы MLMarkup: {source.path}")
+            continue
+        if not resolved.is_dir():
+            unavailable = True
+            changes.append(f"Исходная папка недоступна: {source.path}")
+            continue
+        current_hashes = _folder_file_hashes(resolved)
+        if source.file_hashes:
+            all_names = sorted(set(source.file_hashes) | set(current_hashes))
+            for name in all_names:
+                if name not in source.file_hashes:
+                    changes.append(f"Добавлен исходный файл: {source.path}/{name}")
+                elif name not in current_hashes:
+                    changes.append(f"Удалён исходный файл: {source.path}/{name}")
+                elif source.file_hashes[name] != current_hashes[name]:
+                    changes.append(f"Изменён исходный файл: {source.path}/{name}")
+        elif _tree_revision(current_hashes) != source.tree_revision:
+            changes.append(f"Изменена исходная папка: {source.path}")
+    if unavailable:
+        return "unavailable", changes
+    return ("stale", changes) if changes else ("current", [])
+
+
+def _folder_file_hashes(folder: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in sorted(
+        (item for item in folder.rglob("*") if item.is_file()),
+        key=lambda item: item.relative_to(folder).as_posix().casefold(),
+    ):
+        relative = path.relative_to(folder).as_posix()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        hashes[relative] = digest.hexdigest()
+    return hashes
+
+
+def _tree_revision(file_hashes: dict[str, str]) -> str:
+    digest = hashlib.sha256()
+    for name, value in sorted(file_hashes.items()):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(value.encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _per_image_object_counts(
+    folder: Path,
+    manifest: DatasetManifest,
+    diagnostics: list[str],
+) -> tuple[dict[str, int], int]:
+    counts = {item.slug: 0 for item in manifest.classes}
+    hard_negative = 0
+    try:
+        for path in folder.glob("*.geojson"):
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            for feature in payload.get("features", []):
+                properties = feature.get("properties") or {}
+                role = properties.get("_mlsystem2_role")
+                if role == "hard_negative":
+                    hard_negative += 1
+                elif role == "positive":
+                    slug = properties.get("_mlsystem2_class")
+                    if slug in counts:
+                        counts[str(slug)] += 1
+    except (OSError, json.JSONDecodeError, AttributeError) as exc:
+        diagnostics.append(f"Не удалось посчитать объекты multiclass-датасета: {exc}")
+    return counts, hard_negative
 
 
 def _custom_dataset_info(config: TrainingUIAPIConfig) -> DatasetInfo:

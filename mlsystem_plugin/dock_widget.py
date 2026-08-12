@@ -183,6 +183,13 @@ class MLSystemDockWidget(QDockWidget):
         ):
             self.sort_combo.addItem(text, value)
         self.sort_combo.currentIndexChanged.connect(self._review_sort_changed)
+        self.object_type_combo = QComboBox()
+        self.object_type_combo.addItem("Все типы", None)
+        self.object_type_combo.currentIndexChanged.connect(self._review_object_type_changed)
+        self.display_mode_combo = QComboBox()
+        self.display_mode_combo.addItem("Один категоризированный слой", "categorized")
+        self.display_mode_combo.addItem("Группа представлений по типам", "group")
+        self.display_mode_combo.currentIndexChanged.connect(self._review_display_mode_changed)
         self.counter_label = QLabel("0 из 0")
         self.candidate_label = QLabel("Текущий объект: —")
         self.candidate_label.setWordWrap(True)
@@ -214,20 +221,24 @@ class MLSystemDockWidget(QDockWidget):
         self.export_button.clicked.connect(self._export_filtered_layer)
         review_layout.addWidget(QLabel("Сортировка"), 0, 0)
         review_layout.addWidget(self.sort_combo, 0, 1, 1, 2)
-        review_layout.addWidget(self.counter_label, 1, 0, 1, 3)
-        review_layout.addWidget(self.candidate_label, 2, 0, 1, 3)
-        review_layout.addWidget(previous_button, 3, 0)
-        review_layout.addWidget(next_button, 3, 1)
-        review_layout.addWidget(zoom_button, 3, 2)
-        review_layout.addWidget(split_button, 4, 0, 1, 2)
-        review_layout.addWidget(split_all_button, 4, 2)
-        review_layout.addWidget(QLabel("Макс. площадь части"), 5, 0)
-        review_layout.addWidget(self.max_area, 5, 1, 1, 2)
-        review_layout.addWidget(QLabel("Мин. площадь"), 6, 0)
-        review_layout.addWidget(self.min_area, 6, 1, 1, 2)
-        review_layout.addWidget(QLabel("Мин. уверенность"), 7, 0)
-        review_layout.addWidget(self.min_confidence, 7, 1, 1, 2)
-        review_layout.addWidget(self.export_button, 8, 0, 1, 3)
+        review_layout.addWidget(QLabel("Тип объекта"), 1, 0)
+        review_layout.addWidget(self.object_type_combo, 1, 1, 1, 2)
+        review_layout.addWidget(QLabel("Отображение"), 2, 0)
+        review_layout.addWidget(self.display_mode_combo, 2, 1, 1, 2)
+        review_layout.addWidget(self.counter_label, 3, 0, 1, 3)
+        review_layout.addWidget(self.candidate_label, 4, 0, 1, 3)
+        review_layout.addWidget(previous_button, 5, 0)
+        review_layout.addWidget(next_button, 5, 1)
+        review_layout.addWidget(zoom_button, 5, 2)
+        review_layout.addWidget(split_button, 6, 0, 1, 2)
+        review_layout.addWidget(split_all_button, 6, 2)
+        review_layout.addWidget(QLabel("Макс. площадь части"), 7, 0)
+        review_layout.addWidget(self.max_area, 7, 1, 1, 2)
+        review_layout.addWidget(QLabel("Мин. площадь"), 8, 0)
+        review_layout.addWidget(self.min_area, 8, 1, 1, 2)
+        review_layout.addWidget(QLabel("Мин. уверенность"), 9, 0)
+        review_layout.addWidget(self.min_confidence, 9, 1, 1, 2)
+        review_layout.addWidget(self.export_button, 10, 0, 1, 3)
         root.addWidget(review)
         root.addStretch(1)
 
@@ -591,6 +602,14 @@ class MLSystemDockWidget(QDockWidget):
         session.current_changed.connect(self._highlight_current_candidate)
         session.set_sort(str(self.sort_combo.currentData()))
         session.set_thresholds(self.min_area.value(), self.min_confidence.value())
+        self.object_type_combo.blockSignals(True)
+        self.object_type_combo.clear()
+        self.object_type_combo.addItem("Все типы", None)
+        for item in session.object_types():
+            self.object_type_combo.addItem(str(item["name"]), str(item["slug"]))
+        self.object_type_combo.blockSignals(False)
+        session.set_object_type_filter(None)
+        session.set_display_mode(str(self.display_mode_combo.currentData()))
         self._update_review_ui()
         self._highlight_current_candidate(session.current_feature())
         self.session_active_changed.emit(self.isVisible())
@@ -652,6 +671,18 @@ class MLSystemDockWidget(QDockWidget):
         if self.session:
             self.session.set_thresholds(self.min_area.value(), self.min_confidence.value())
 
+    def _review_object_type_changed(self) -> None:
+        if self.session:
+            value = self.object_type_combo.currentData()
+            self.session.set_object_type_filter(str(value) if value else None)
+
+    def _review_display_mode_changed(self) -> None:
+        if self.session:
+            try:
+                self.session.set_display_mode(str(self.display_mode_combo.currentData()))
+            except ReviewSessionError as exc:
+                self._show_error(str(exc))
+
     def _highlight_current_candidate(self, feature) -> None:
         """Подсветить текущий кандидат поверх карты независимо от масштаба."""
 
@@ -689,9 +720,15 @@ class MLSystemDockWidget(QDockWidget):
             return
         confidence = feature["confidence"]
         confidence_text = "—" if confidence is None else f"{float(confidence):.3f}"
+        type_name = (
+            str(feature["object_type_name"] or "—")
+            if self.session.layer.fields().indexOf("object_type_name") >= 0
+            else "—"
+        )
         self.candidate_label.setText(
             f"ID: {feature['candidate_id']}\n"
             f"Класс: {feature['class_id']}; версия: {feature['model_version']}\n"
+            f"Тип: {type_name}\n"
             f"Confidence: {confidence_text}; площадь: {float(feature['area_m2'] or 0):.1f} м²"
         )
 

@@ -17,6 +17,17 @@ class ImageryType(StrEnum):
 class DatasetFormat(StrEnum):
     LEGACY = "legacy"
     PER_IMAGE = "per_image"
+    PER_IMAGE_MULTICLASS = "per_image_multiclass"
+
+
+class DatasetObjectType(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(gt=0)
+    slug: str
+    name: str
+    color: str
+    priority: int = 0
 
 
 class AppLink(BaseModel):
@@ -73,6 +84,14 @@ class DatasetInfo(BaseModel):
     source_available: bool = True
     is_primary: bool = False
     diagnostics: list[str] = Field(default_factory=list)
+    task: Literal["binary", "multiclass"] = "binary"
+    object_types: list[DatasetObjectType] = Field(default_factory=list)
+    combined: bool = False
+    source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
+    source_changes: list[str] = Field(default_factory=list)
+    class_counts: dict[str, int] = Field(default_factory=dict)
+    hard_negative_count: int = Field(default=0, ge=0)
+    manifest_path: str | None = None
 
 
 class DatasetListResponse(BaseModel):
@@ -219,6 +238,7 @@ __all__ = [
     "DatasetFormat",
     "DatasetInfo",
     "DatasetListResponse",
+    "DatasetObjectType",
     "DatasetPrimaryDatasetUpdate",
     "DatasetSourceInfo",
     "ImageryType",

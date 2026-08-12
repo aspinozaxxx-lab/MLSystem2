@@ -304,6 +304,9 @@ class TrainingResultRow(Base):
     architecture: Mapped[str] = mapped_column(String(96))
     model_name: Mapped[str] = mapped_column(String(160))
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
+    task: Mapped[str] = mapped_column(String(32), default="binary")
+    class_schema: Mapped[list[dict[str, Any]]] = mapped_column(_json_type(), default=list)
+    training_metrics: Mapped[dict[str, Any]] = mapped_column(_json_type(), default=dict)
     f1_score: Mapped[float | None] = mapped_column(nullable=True)
     epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -388,6 +391,9 @@ class TestSampleRow(Base):
     class_name: Mapped[str] = mapped_column(String(240))
     dataset_short_name: Mapped[str] = mapped_column(String(240))
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
+    task: Mapped[str] = mapped_column(String(32), default="binary")
+    class_schema: Mapped[list[dict[str, Any]]] = mapped_column(_json_type(), default=list)
+    evaluation_metrics: Mapped[dict[str, Any]] = mapped_column(_json_type(), default=dict)
     tile_width: Mapped[int] = mapped_column(Integer)
     tile_height: Mapped[int] = mapped_column(Integer)
     image_count: Mapped[int] = mapped_column(Integer)
@@ -455,6 +461,8 @@ class TestSampleTileRow(Base):
     source_name: Mapped[str] = mapped_column(String(512))
     territory: Mapped[str] = mapped_column(String(512))
     object_count: Mapped[int] = mapped_column(Integer)
+    class_object_counts: Mapped[dict[str, int]] = mapped_column(_json_type(), default=dict)
+    evaluation_metrics: Mapped[dict[str, Any]] = mapped_column(_json_type(), default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     pixel_f1: Mapped[float | None] = mapped_column(nullable=True)
     object_f1: Mapped[float | None] = mapped_column(nullable=True)
@@ -577,6 +585,7 @@ class TrainingResultTestMetricRow(Base):
     object_true_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     object_false_positive: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     object_false_negative: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(_json_type(), default=dict)
     inference_template_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("inference_templates.id", ondelete="SET NULL"),

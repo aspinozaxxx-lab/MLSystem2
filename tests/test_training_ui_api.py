@@ -1854,7 +1854,13 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         loss_field = next(
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
         )
-        assert loss_field["options"] == ["bce_dice", "focal_dice", "focal_tversky"]
+        assert loss_field["options"] == [
+            "bce_dice",
+            "focal_dice",
+            "focal_tversky",
+            "cross_entropy",
+            "cross_entropy_dice",
+        ]
         hard_weight_field = next(
             item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.hard_negative_weight"
         )

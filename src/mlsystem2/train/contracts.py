@@ -13,6 +13,16 @@ class TrainError(RuntimeError):
     """Ошибка обучения."""
 
 
+class TrainClassDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(gt=0)
+    slug: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    priority: int = 0
+
+
 class TrainConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -35,6 +45,7 @@ class TrainConfig(BaseModel):
     max_val_batches_per_epoch: int | None = Field(default=None, gt=0)
     max_training_time_sec: int | None = Field(default=None, gt=0)
     class_slugs: list[str] = Field(default_factory=list)
+    class_schema: list[TrainClassDefinition] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
@@ -45,6 +56,29 @@ class TrainConfig(BaseModel):
             raise ValueError("binary train не поддерживает multiclass loss")
         if self.task != "binary" and self.quality_metric == "objects":
             raise ValueError("Объектовая метрика качества поддерживается только для binary train")
+        if self.task == "multiclass":
+            if not self.class_schema and self.class_slugs:
+                self.class_schema = [
+                    TrainClassDefinition(
+                        id=index,
+                        slug=slug,
+                        name=slug,
+                        color="#808080",
+                    )
+                    for index, slug in enumerate(self.class_slugs, start=1)
+                ]
+            if not self.class_schema:
+                raise ValueError("multiclass train требует непустую схему классов")
+            ids = sorted(item.id for item in self.class_schema)
+            if ids != list(range(1, len(self.class_schema) + 1)):
+                raise ValueError("class_schema должен использовать последовательные id от 1")
+            if len({item.slug for item in self.class_schema}) != len(self.class_schema):
+                raise ValueError("class_schema должен содержать уникальные slug")
+            self.class_slugs = [
+                item.slug for item in sorted(self.class_schema, key=lambda item: item.id)
+            ]
+        elif self.class_schema or self.class_slugs:
+            raise ValueError("binary train не должен содержать class_schema")
         return self
 
 
@@ -100,6 +134,19 @@ class EpochMetrics(BaseModel):
     val_best_threshold_object_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     val_best_threshold_object_precision: float | None = Field(default=None, ge=0.0, le=1.0)
     val_best_threshold_object_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_macro_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_macro_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_macro_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_macro_pixel_iou: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_micro_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_micro_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_micro_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_foreground_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_foreground_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_foreground_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_per_class_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    val_multiclass_threshold_sweep: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    val_metric_warnings: list[str] = Field(default_factory=list)
     epoch_time_sec: float = Field(ge=0.0)
 
 
@@ -143,12 +190,16 @@ class TrainResult(BaseModel):
     best_checkpoint_path: str | None = None
     final_checkpoint_path: str | None = None
     artifacts: list[CheckpointArtifact] = Field(default_factory=list)
+    task: Literal["binary", "multiclass"] = "binary"
+    class_schema: list[TrainClassDefinition] = Field(default_factory=list)
+    best_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 __all__ = [
     "CheckpointArtifact",
     "EpochMetrics",
     "TrainConfig",
+    "TrainClassDefinition",
     "TrainError",
     "TrainProgressEvent",
     "TrainProgressSink",

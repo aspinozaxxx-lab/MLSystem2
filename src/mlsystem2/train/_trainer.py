@@ -22,6 +22,7 @@ from .contracts import TrainProgressSink, TrainRequest, TrainResult
 MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH = 1
 OBJECT_METRIC_MAX_WORKERS = 8
 THRESHOLD_CANDIDATES = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
+MULTICLASS_THRESHOLD_CANDIDATES = (0.0, *THRESHOLD_CANDIDATES)
 
 
 def train_model(
@@ -51,6 +52,7 @@ def train_model(
     total_started = perf_counter()
     history: list[EpochMetrics] = []
     best_score = -1.0
+    best_metrics: EpochMetrics | None = None
     patience = 0
     checkpoint_dir = _checkpoint_dir(request.checkpoint_dir)
     best_checkpoint_path = checkpoint_dir / "best.pt"
@@ -97,6 +99,19 @@ def train_model(
                 val_best_threshold_object_recall=val.get(
                     "best_threshold_object_recall"
                 ),
+                val_macro_pixel_f1=val.get("macro_pixel_f1"),
+                val_macro_pixel_precision=val.get("macro_pixel_precision"),
+                val_macro_pixel_recall=val.get("macro_pixel_recall"),
+                val_macro_pixel_iou=val.get("macro_pixel_iou"),
+                val_micro_pixel_f1=val.get("micro_pixel_f1"),
+                val_micro_pixel_precision=val.get("micro_pixel_precision"),
+                val_micro_pixel_recall=val.get("micro_pixel_recall"),
+                val_foreground_pixel_f1=val.get("foreground_pixel_f1"),
+                val_foreground_pixel_precision=val.get("foreground_pixel_precision"),
+                val_foreground_pixel_recall=val.get("foreground_pixel_recall"),
+                val_per_class_metrics=val.get("per_class_metrics", []),
+                val_multiclass_threshold_sweep=val.get("threshold_sweep", {}),
+                val_metric_warnings=val.get("metric_warnings", []),
                 epoch_time_sec=perf_counter() - epoch_started,
             )
             history.append(metrics)
@@ -104,6 +119,7 @@ def train_model(
             score = _checkpoint_score(metrics)
             if score > best_score:
                 best_score = score
+                best_metrics = metrics
                 patience = 0
                 _save_training_checkpoint(request, str(best_checkpoint_path), metrics, "best")
             else:
@@ -129,6 +145,11 @@ def train_model(
                 CheckpointArtifact(uri=str(best_checkpoint_path), label="best"),
                 CheckpointArtifact(uri=str(final_checkpoint_path), label="final"),
             ],
+            task=config.task,
+            class_schema=list(config.class_schema),
+            best_threshold=(
+                best_metrics.val_best_threshold if best_metrics is not None else None
+            ),
         )
     except TrainError:
         raise
@@ -369,13 +390,18 @@ def _validate_multiclass_epoch(
     device: object,
     config,
     epoch: int,
-) -> dict[str, float | None]:
+) -> dict[str, Any]:
     model.eval()
     total_loss = 0.0
     batches = 0
-    true_positive = 0
-    false_positive = 0
-    false_negative = 0
+    threshold_stats: dict[float, dict[int, dict[str, int]]] = {
+        threshold: {} for threshold in MULTICLASS_THRESHOLD_CANDIDATES
+    }
+    foreground_stats: dict[float, dict[str, int]] = {
+        threshold: {"tp": 0, "fp": 0, "fn": 0}
+        for threshold in MULTICLASS_THRESHOLD_CANDIDATES
+    }
+    expected_num_classes = len(config.class_schema) + 1
 
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
@@ -390,17 +416,49 @@ def _validate_multiclass_epoch(
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
             num_classes = int(logits.shape[1])
             _validate_multiclass_targets(torch, masks, num_classes, epoch, batch_index, "val")
+            if num_classes != expected_num_classes:
+                raise TrainError(
+                    "Число каналов multiclass-модели не соответствует class_schema: "
+                    f"ожидается {expected_num_classes}, получено {num_classes}."
+                )
             loss = _loss(torch, logits, masks, config, hard_negative_pixels)
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
 
-            preds = torch.argmax(logits, dim=1)
-            pred_foreground = preds > 0
-            true_foreground = masks > 0
-            true_positive += int((pred_foreground & true_foreground).sum().item())
-            false_positive += int((pred_foreground & ~true_foreground).sum().item())
-            false_negative += int((~pred_foreground & true_foreground).sum().item())
+            probabilities = torch.softmax(logits, dim=1)
+            confidence, raw_labels = torch.max(probabilities, dim=1)
+            for threshold in MULTICLASS_THRESHOLD_CANDIDATES:
+                labels = torch.where(
+                    (raw_labels > 0) & (confidence < threshold),
+                    torch.zeros_like(raw_labels),
+                    raw_labels,
+                )
+                stats_by_class = threshold_stats[threshold]
+                for class_id in range(1, num_classes):
+                    predicted = labels == class_id
+                    expected = masks == class_id
+                    stats = stats_by_class.setdefault(
+                        class_id,
+                        {"tp": 0, "fp": 0, "fn": 0, "support": 0, "predicted": 0},
+                    )
+                    stats["tp"] += int((predicted & expected).sum().item())
+                    stats["fp"] += int((predicted & ~expected).sum().item())
+                    stats["fn"] += int((~predicted & expected).sum().item())
+                    stats["support"] += int(expected.sum().item())
+                    stats["predicted"] += int(predicted.sum().item())
+                predicted_foreground = labels > 0
+                expected_foreground = masks > 0
+                foreground = foreground_stats[threshold]
+                foreground["tp"] += int(
+                    (predicted_foreground & expected_foreground).sum().item()
+                )
+                foreground["fp"] += int(
+                    (predicted_foreground & ~expected_foreground).sum().item()
+                )
+                foreground["fn"] += int(
+                    (~predicted_foreground & expected_foreground).sum().item()
+                )
 
             if (
                 config.max_val_batches_per_epoch is not None
@@ -411,29 +469,152 @@ def _validate_multiclass_epoch(
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
-    foreground_precision = _safe_div(true_positive, true_positive + false_positive)
-    foreground_recall = _safe_div(true_positive, true_positive + false_negative)
+    evaluated: dict[float, dict[str, Any]] = {}
+    for threshold in MULTICLASS_THRESHOLD_CANDIDATES:
+        evaluated[threshold] = _multiclass_metrics(
+            threshold_stats[threshold],
+            foreground_stats[threshold],
+            config,
+        )
+    best_threshold = max(
+        MULTICLASS_THRESHOLD_CANDIDATES,
+        key=lambda threshold: (
+            evaluated[threshold]["macro_f1"],
+            evaluated[threshold]["macro_precision"],
+            threshold,
+        ),
+    )
+    best = evaluated[best_threshold]
+
+    return {
+        "loss": total_loss / batches,
+        "best_threshold": best_threshold,
+        "best_pixel_threshold": best_threshold,
+        "best_threshold_pixel_f1": best["macro_f1"],
+        "best_threshold_pixel_precision": best["macro_precision"],
+        "best_threshold_pixel_recall": best["macro_recall"],
+        "best_threshold_precision": best["macro_precision"],
+        "best_threshold_recall": best["macro_recall"],
+        "best_threshold_object_f1": None,
+        "best_threshold_object_precision": None,
+        "best_threshold_object_recall": None,
+        "quality_f1": best["macro_f1"],
+        "quality_precision": best["macro_precision"],
+        "quality_recall": best["macro_recall"],
+        "macro_pixel_f1": best["macro_f1"],
+        "macro_pixel_precision": best["macro_precision"],
+        "macro_pixel_recall": best["macro_recall"],
+        "macro_pixel_iou": best["macro_iou"],
+        "micro_pixel_f1": best["micro_f1"],
+        "micro_pixel_precision": best["micro_precision"],
+        "micro_pixel_recall": best["micro_recall"],
+        "foreground_pixel_f1": best["foreground_f1"],
+        "foreground_pixel_precision": best["foreground_precision"],
+        "foreground_pixel_recall": best["foreground_recall"],
+        "per_class_metrics": best["per_class"],
+        "metric_warnings": best["warnings"],
+        "threshold_sweep": {
+            str(threshold): {
+                "macro_f1": values["macro_f1"],
+                "macro_precision": values["macro_precision"],
+                "macro_recall": values["macro_recall"],
+                "macro_iou": values["macro_iou"],
+                "micro_f1": values["micro_f1"],
+                "foreground_f1": values["foreground_f1"],
+            }
+            for threshold, values in evaluated.items()
+        },
+    }
+
+
+def _multiclass_metrics(
+    class_stats: dict[int, dict[str, int]],
+    foreground_stats: dict[str, int],
+    config,
+) -> dict[str, Any]:
+    per_class: list[dict[str, Any]] = []
+    warnings_list: list[str] = []
+    relevant: list[dict[str, Any]] = []
+    schema_by_id = {item.id: item for item in config.class_schema}
+    for class_id in sorted(class_stats):
+        stats = class_stats[class_id]
+        schema = schema_by_id[class_id]
+        support = stats["support"]
+        predicted = stats["predicted"]
+        if support == 0 and predicted == 0:
+            precision = recall = f1 = iou = None
+            warnings_list.append(
+                f"Класс {schema.slug} отсутствует и в разметке, и в предсказаниях validation."
+            )
+        else:
+            precision = _safe_div(stats["tp"], stats["tp"] + stats["fp"])
+            recall = _safe_div(stats["tp"], stats["tp"] + stats["fn"])
+            f1 = _safe_div(2.0 * precision * recall, precision + recall)
+            iou = _safe_div(stats["tp"], stats["tp"] + stats["fp"] + stats["fn"])
+        item = {
+            "id": class_id,
+            "slug": schema.slug,
+            "name": schema.name,
+            "color": schema.color,
+            "priority": schema.priority,
+            "true_positive": stats["tp"],
+            "false_positive": stats["fp"],
+            "false_negative": stats["fn"],
+            "support_pixels": support,
+            "predicted_pixels": predicted,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "iou": iou,
+        }
+        per_class.append(item)
+        if support > 0 or predicted > 0:
+            relevant.append(item)
+
+    macro_precision = _mean_metric(relevant, "precision")
+    macro_recall = _mean_metric(relevant, "recall")
+    macro_f1 = _mean_metric(relevant, "f1")
+    macro_iou = _mean_metric(relevant, "iou")
+    total_tp = sum(item["true_positive"] for item in per_class)
+    total_fp = sum(item["false_positive"] for item in per_class)
+    total_fn = sum(item["false_negative"] for item in per_class)
+    micro_precision = _safe_div(total_tp, total_tp + total_fp)
+    micro_recall = _safe_div(total_tp, total_tp + total_fn)
+    micro_f1 = _safe_div(
+        2.0 * micro_precision * micro_recall,
+        micro_precision + micro_recall,
+    )
+    foreground_precision = _safe_div(
+        foreground_stats["tp"],
+        foreground_stats["tp"] + foreground_stats["fp"],
+    )
+    foreground_recall = _safe_div(
+        foreground_stats["tp"],
+        foreground_stats["tp"] + foreground_stats["fn"],
+    )
     foreground_f1 = _safe_div(
         2.0 * foreground_precision * foreground_recall,
         foreground_precision + foreground_recall,
     )
-
     return {
-        "loss": total_loss / batches,
-        "best_threshold": 0.0,
-        "best_pixel_threshold": 0.0,
-        "best_threshold_pixel_f1": foreground_f1,
-        "best_threshold_pixel_precision": foreground_precision,
-        "best_threshold_pixel_recall": foreground_recall,
-        "best_threshold_precision": foreground_precision,
-        "best_threshold_recall": foreground_recall,
-        "best_threshold_object_f1": None,
-        "best_threshold_object_precision": None,
-        "best_threshold_object_recall": None,
-        "quality_f1": foreground_f1,
-        "quality_precision": foreground_precision,
-        "quality_recall": foreground_recall,
+        "per_class": per_class,
+        "warnings": warnings_list,
+        "macro_precision": macro_precision,
+        "macro_recall": macro_recall,
+        "macro_f1": macro_f1,
+        "macro_iou": macro_iou,
+        "micro_precision": micro_precision,
+        "micro_recall": micro_recall,
+        "micro_f1": micro_f1,
+        "foreground_precision": foreground_precision,
+        "foreground_recall": foreground_recall,
+        "foreground_f1": foreground_f1,
     }
+
+
+def _mean_metric(values: list[dict[str, Any]], key: str) -> float:
+    defined = [float(item[key]) for item in values if item.get(key) is not None]
+    return sum(defined) / len(defined) if defined else 0.0
 
 
 def _split_batch(batch: object, epoch: int, batch_index: int, stage: str):
@@ -770,6 +951,20 @@ def _save_training_checkpoint(
                 "val_best_threshold_object_f1": metrics.val_best_threshold_object_f1,
                 "val_best_threshold_object_precision": metrics.val_best_threshold_object_precision,
                 "val_best_threshold_object_recall": metrics.val_best_threshold_object_recall,
+                "task": request.config.task,
+                "class_schema": [
+                    item.model_dump(mode="json") for item in request.config.class_schema
+                ],
+                "confidence_threshold": metrics.val_best_threshold,
+                "val_macro_pixel_f1": metrics.val_macro_pixel_f1,
+                "val_macro_pixel_precision": metrics.val_macro_pixel_precision,
+                "val_macro_pixel_recall": metrics.val_macro_pixel_recall,
+                "val_macro_pixel_iou": metrics.val_macro_pixel_iou,
+                "val_micro_pixel_f1": metrics.val_micro_pixel_f1,
+                "val_foreground_pixel_f1": metrics.val_foreground_pixel_f1,
+                "val_per_class_metrics": metrics.val_per_class_metrics,
+                "val_multiclass_threshold_sweep": metrics.val_multiclass_threshold_sweep,
+                "val_metric_warnings": metrics.val_metric_warnings,
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
                 "sample_size": request.sample_size,
@@ -780,6 +975,8 @@ def _save_training_checkpoint(
 
 
 def _checkpoint_score(metrics: EpochMetrics) -> float:
+    if metrics.val_macro_pixel_f1 is not None:
+        return metrics.val_macro_pixel_f1
     return metrics.val_quality_f1
 
 

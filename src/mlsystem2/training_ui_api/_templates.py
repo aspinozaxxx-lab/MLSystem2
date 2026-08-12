@@ -99,6 +99,8 @@ CONFIG_SCHEMA: dict[str, Any] = {
                 "bce_dice",
                 "focal_dice",
                 "focal_tversky",
+                "cross_entropy",
+                "cross_entropy_dice",
             ],
         },
         {

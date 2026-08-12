@@ -19,6 +19,7 @@ from ._valid_footprint import filter_valid_windows
 from ._windows import TileWindow, build_tile_windows
 from .contracts import (
     TileClassAnnotation,
+    TileClassDefinition,
     TilePreparationError,
     TileSceneSource,
     TileSplitRequest,
@@ -46,6 +47,7 @@ class TileDataset:
         annotation_file: str | Path | None = None,
         hard_negative_annotation_file: str | Path | None = None,
         class_annotations: list[TileClassAnnotation] | None = None,
+        classes: list[TileClassDefinition] | None = None,
         tile_size: int,
         stride: int,
         mode: str,
@@ -71,6 +73,14 @@ class TileDataset:
             list(class_annotations or []),
             key=lambda item: (item.priority, item.class_id),
         )
+        self._classes = sorted(
+            list(classes or []),
+            key=lambda item: (item.priority, item.class_id),
+        )
+        if self._class_annotations and self._classes:
+            raise TilePreparationError(
+                "Нельзя одновременно задавать legacy class_annotations и per-image classes."
+            )
         self._tile_size = tile_size
         self._mode = mode
         self._seed = seed
@@ -87,7 +97,9 @@ class TileDataset:
         self._pool_window_count = 0
         self._split_window_count = 0
         self._datasets: OrderedDict[int, DatasetReader] = OrderedDict()
-        self._annotation_indexes: dict[tuple[Path, str | None, str | None], AnnotationIndex] = {}
+        self._annotation_indexes: dict[
+            tuple[Path, str | None, str | None, str | None], AnnotationIndex
+        ] = {}
         self._positive_hint_by_index: list[bool] | None = None
         self._hard_negative_hint_by_index: list[bool] | None = None
         self._category_hint_by_index: list[str] | None = None
@@ -245,7 +257,7 @@ class TileDataset:
 
     @property
     def uses_multiclass_masks(self) -> bool:
-        return bool(self._class_annotations)
+        return bool(self._class_definitions())
 
     @property
     def includes_object_instances(self) -> bool:
@@ -325,7 +337,7 @@ class TileDataset:
 
     @property
     def class_balance_enabled(self) -> bool:
-        return bool(self._class_balance and self._class_annotations)
+        return bool(self._class_balance and self._class_definitions())
 
     @property
     def class_balance_warnings(self) -> list[str]:
@@ -437,14 +449,20 @@ class TileDataset:
         scene_index: int,
         *,
         role: str | None = None,
+        class_slug: str | None = None,
     ) -> AnnotationIndex:
         path = Path(annotation_file)
         crs = self._scene_crs[scene_index]
-        key = (path, crs, role)
+        key = (path, crs, role, class_slug)
         index = self._annotation_indexes.get(key)
         if index is None:
             if role == "positive":
-                index = load_annotation_index(path, crs, role="positive")
+                index = load_annotation_index(
+                    path,
+                    crs,
+                    role="positive",
+                    class_slug=class_slug,
+                )
             elif role == "hard_negative":
                 index = load_annotation_index(path, crs, role="hard_negative")
             else:
@@ -496,7 +514,7 @@ class TileDataset:
             transform=dataset.window_transform(window),
             nodata_pixels=nodata_pixels,
         )
-        if self._class_annotations:
+        if self.uses_multiclass_masks:
             return mask.astype(np.int64, copy=False)
         return mask.astype(np.float32, copy=False)[None, :, :]
 
@@ -544,6 +562,24 @@ class TileDataset:
                 )
                 for annotation in self._class_annotations
             ]
+        if self._classes:
+            scene = self._scenes[scene_index]
+            if scene.annotation_file is None:
+                raise TilePreparationError(
+                    "Для per-image multiclass mask не задан annotation_file сцены."
+                )
+            return [
+                (
+                    definition.class_id,
+                    self._annotation_index(
+                        scene.annotation_file,
+                        scene_index,
+                        role="positive",
+                        class_slug=definition.slug,
+                    ).query_bounds(bounds),
+                )
+                for definition in self._classes
+            ]
         return [(1, self._positive_index(scene_index).query_bounds(bounds))]
 
     def _hard_negative_geometries(
@@ -580,21 +616,18 @@ class TileDataset:
     def _build_hints(self) -> None:
         positive_hints: list[bool] = []
         hard_negative_hints: list[bool] = []
-        class_hints: list[frozenset[int]] | None = [] if self._class_annotations else None
+        class_hints: list[frozenset[int]] | None = [] if self.uses_multiclass_masks else None
         for scene_window in self._windows:
             scene_index = scene_window.scene_index
             dataset = self._open_dataset(scene_index)
             item = scene_window.window
             window = Window(item.x, item.y, item.width, item.height)
             bounds = dataset.window_bounds(window)
-            if self._class_annotations:
+            if self.uses_multiclass_masks:
                 class_ids = {
-                    annotation.class_id
-                    for annotation in self._class_annotations
-                    if self._annotation_index(
-                        annotation.annotation_file,
-                        scene_index,
-                    ).query_bounds(bounds)
+                    class_id
+                    for class_id, geometries in self._positive_layers(scene_index, bounds)
+                    if geometries
                 }
                 assert class_hints is not None
                 class_hints.append(frozenset(class_ids))
@@ -671,7 +704,7 @@ class TileDataset:
             return None
         if factor == 0.0:
             return [0.0 for _ in self._class_hints_by_index]
-        counts_by_id = {annotation.class_id: 0 for annotation in self._class_annotations}
+        counts_by_id = {item.class_id: 0 for item in self._class_definitions()}
         for hints in self._class_hints_by_index:
             for class_id in hints:
                 if class_id in counts_by_id:
@@ -699,14 +732,20 @@ class TileDataset:
     def _class_positive_tile_counts(self) -> dict[str, int] | None:
         if self._class_hints_by_index is None:
             return None
-        counts = {annotation.slug: 0 for annotation in self._class_annotations}
-        slug_by_id = {annotation.class_id: annotation.slug for annotation in self._class_annotations}
+        counts = {item.slug: 0 for item in self._class_definitions()}
+        slug_by_id = {item.class_id: item.slug for item in self._class_definitions()}
         for hints in self._class_hints_by_index:
             for class_id in hints:
                 slug = slug_by_id.get(class_id)
                 if slug is not None:
                     counts[slug] += 1
         return counts
+
+    def _class_definitions(self) -> list[TileClassAnnotation | TileClassDefinition]:
+        classes = getattr(self, "_classes", [])
+        if classes:
+            return list(classes)
+        return list(getattr(self, "_class_annotations", []))
 
     def _sample_meta(
         self,

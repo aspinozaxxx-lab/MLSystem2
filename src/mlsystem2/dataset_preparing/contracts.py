@@ -76,6 +76,69 @@ class DatasetClassAnnotation(BaseModel):
     priority: int = 0
 
 
+class DatasetClassDefinition(BaseModel):
+    """Класс объектов в per-image multiclass-датасете."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(gt=0)
+    slug: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    priority: int = 0
+
+
+class DatasetSourceRevision(BaseModel):
+    """Зафиксированное состояние исходной папки комбинированного датасета."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    class_slug: str = Field(min_length=1)
+    git_revision: str = Field(min_length=1)
+    tree_revision: str = Field(min_length=1)
+    file_hashes: dict[str, str] = Field(default_factory=dict)
+
+
+class DatasetManifest(BaseModel):
+    """Содержимое `.mlsystem2-dataset.json`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    task: Literal["multiclass"]
+    combined: bool = False
+    classes: list[DatasetClassDefinition] = Field(min_length=2)
+    sources: list[DatasetSourceRevision] = Field(default_factory=list)
+    build_id: str | None = None
+    built_at: str | None = None
+    code_revision: str | None = None
+    scene_ids: list[str] = Field(default_factory=list)
+    source_warnings: list[str] = Field(default_factory=list)
+    baseline_hashes: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_classes(self) -> Self:
+        _validate_unique_values([str(item.id) for item in self.classes], "id")
+        _validate_unique_values([item.slug for item in self.classes], "slug")
+        _validate_unique_values([item.name for item in self.classes], "name")
+        expected_ids = list(range(1, len(self.classes) + 1))
+        actual_ids = sorted(item.id for item in self.classes)
+        if actual_ids != expected_ids:
+            raise ValueError(
+                "classes должен использовать последовательные id от 1 до количества классов"
+            )
+        if self.combined:
+            source_slugs = [item.class_slug for item in self.sources]
+            _validate_unique_values(source_slugs, "source class_slug")
+            unknown = sorted(set(source_slugs) - {item.slug for item in self.classes})
+            if unknown:
+                raise ValueError(
+                    "sources содержит неизвестные class_slug: " + ", ".join(unknown)
+                )
+        return self
+
+
 class PreparedScene(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,11 +150,18 @@ class PreparedScene(BaseModel):
 class PreparedDataset(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    format: Literal["legacy_binary", "per_image_binary", "legacy_multiclass"]
+    format: Literal[
+        "legacy_binary",
+        "per_image_binary",
+        "legacy_multiclass",
+        "per_image_multiclass",
+    ]
     scenes: list[PreparedScene] = Field(min_length=1)
     annotation_file: str | None = None
     hard_negative_annotation_file: str | None = None
     class_annotations: list[DatasetClassAnnotation] = Field(default_factory=list)
+    classes: list[DatasetClassDefinition] = Field(default_factory=list)
+    manifest_file: str | None = None
 
 
 class DatasetSceneReport(BaseModel):
@@ -102,6 +172,7 @@ class DatasetSceneReport(BaseModel):
     positive_objects: int = Field(ge=0)
     hard_negative_objects: int = Field(ge=0)
     object_count: int = Field(ge=0)
+    class_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class DatasetPreparationReport(BaseModel):
@@ -113,6 +184,7 @@ class DatasetPreparationReport(BaseModel):
     positive_objects: int = Field(ge=0)
     hard_negative_objects: int = Field(ge=0)
     objects_total: int = Field(ge=0)
+    class_counts: dict[str, int] = Field(default_factory=dict)
     band_count: int | None = Field(default=None, gt=0)
     dtypes: list[str] = Field(default_factory=list)
     scenes: list[DatasetSceneReport]
@@ -178,9 +250,12 @@ def _validate_unique_values(values: list[str], field_name: str) -> None:
 
 __all__ = [
     "DatasetClassAnnotation",
+    "DatasetClassDefinition",
     "DatasetClassRequest",
+    "DatasetManifest",
     "DatasetPreparationError",
     "DatasetPreparationRequest",
+    "DatasetSourceRevision",
     "PreparedDataset",
     "DatasetSceneReport",
     "DatasetPreparationReport",

@@ -247,6 +247,8 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "object_false_positive": 0,
         "object_false_negative": 0,
     }
+    class_pixel_counts: dict[int, dict[str, int]] = {}
+    class_object_counts: dict[int, dict[str, int]] = {}
     reports: list[dict[str, Any]] = []
     torch = None
     loaded = None
@@ -264,8 +266,6 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 else None
             )
         )
-        if external_manifest is None and threshold is None:
-            raise RuntimeError("Для нативной модели не задан порог распознавания.")
         checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
         if external_manifest is not None:
             external_loaded = load_external_model(
@@ -282,11 +282,27 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
+            task, object_types, checkpoint_threshold = _native_model_contract(loaded, config)
+            if threshold is None:
+                threshold = checkpoint_threshold
+            if threshold is None:
+                raise RuntimeError("В checkpoint нативной модели отсутствует confidence threshold.")
+            config = {
+                **config,
+                "task": task,
+                "object_types": object_types,
+                "threshold": threshold,
+            }
             model = loaded.model.model
             input_channels = _loaded_input_channels(loaded, config)
             _validate_configured_input_channels(config, input_channels)
             model.to(torch.device(device))
             model.eval()
+        task = str(config.get("task") or "binary")
+        object_types = list(config.get("object_types") or [])
+        class_ids = [int(item["id"]) for item in object_types] if task == "multiclass" else []
+        class_pixel_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
+        class_object_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
         for number, tile in enumerate(tiles, start=1):
             tile_started = time.time()
             if external_loaded is not None:
@@ -309,40 +325,119 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     threshold=threshold,
                     device=device,
                     postprocess_profile=profile,
+                    object_types=list(config.get("object_types") or []),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", NotGeoreferencedWarning)
                 with rasterio.open(Path(str(tile["mask_path"]))) as mask_dataset:
-                    ground_truth = mask_dataset.read(1) > 0
-            if ground_truth.shape != prediction.shape:
+                    ground_truth_labels = mask_dataset.read(1).astype(np.uint8, copy=False)
+            if ground_truth_labels.shape != prediction.shape:
                 raise RuntimeError(
                     f"Размер эталонной маски тайла {tile.get('index')} не совпадает с TIFF."
                 )
-            predicted = prediction > 0
-            geojson_path = tile.get("geojson_path")
-            ground_truth_instances = (
-                _test_tile_instance_mask(
-                    Path(str(geojson_path)),
-                    Path(str(tile["image_path"])),
-                    predicted.shape,
+            tile_metrics: dict[str, Any] | None = None
+            if task == "multiclass":
+                unknown_values = set(np.unique(ground_truth_labels).tolist()) - {0, *class_ids}
+                if unknown_values:
+                    raise RuntimeError(
+                        "Эталонная маска содержит неизвестные class ID: "
+                        + ", ".join(str(value) for value in sorted(unknown_values))
+                    )
+                tile_pixel = _multiclass_pixel_counts(
+                    ground_truth_labels,
+                    prediction.astype(np.uint8, copy=False),
+                    class_ids,
                 )
-                if geojson_path
-                else label_components(ground_truth, structure=np.ones((3, 3), dtype=np.uint8))[0]
-            )
-            objects = compute_object_f1(
-                ObjectF1Request(
-                    y_true_instances=ground_truth_instances,
-                    **(
-                        {"y_pred_instances": predicted_instances}
-                        if predicted_instances is not None
-                        else {"y_pred_mask": predicted}
-                    ),
+                for class_id, values in tile_pixel.items():
+                    _add_metric_counts(class_pixel_counts[class_id], values)
+                geojson_path = tile.get("geojson_path")
+                ground_truth_by_class = (
+                    _test_tile_class_instance_masks(
+                        Path(str(geojson_path)),
+                        Path(str(tile["image_path"])),
+                        prediction.shape,
+                        object_types,
+                    )
+                    if geojson_path
+                    else {
+                        class_id: label_components(
+                            ground_truth_labels == class_id,
+                            structure=np.ones((3, 3), dtype=np.uint8),
+                        )[0]
+                        for class_id in class_ids
+                    }
                 )
-            )
-            true_positive = int(np.count_nonzero(ground_truth & predicted))
-            false_positive = int(np.count_nonzero(~ground_truth & predicted))
-            false_negative = int(np.count_nonzero(ground_truth & ~predicted))
+                tile_objects: dict[int, dict[str, int]] = {}
+                for class_id in class_ids:
+                    class_objects = compute_object_f1(
+                        ObjectF1Request(
+                            y_true_instances=ground_truth_by_class[class_id],
+                            y_pred_mask=prediction == class_id,
+                        )
+                    )
+                    values = {
+                        "true_positive": int(class_objects.true_positive),
+                        "false_positive": int(class_objects.false_positive),
+                        "false_negative": int(class_objects.false_negative),
+                    }
+                    tile_objects[class_id] = values
+                    _add_metric_counts(class_object_counts[class_id], values)
+                ground_truth = ground_truth_labels > 0
+                predicted = prediction > 0
+                objects = compute_object_f1(
+                    ObjectF1Request(
+                        y_true_instances=_combine_class_instance_masks(ground_truth_by_class),
+                        y_pred_mask=predicted,
+                    )
+                )
+                true_positive = int(np.count_nonzero(ground_truth & predicted))
+                false_positive = int(np.count_nonzero(~ground_truth & predicted))
+                false_negative = int(np.count_nonzero(ground_truth & ~predicted))
+                tile_metrics = _structured_multiclass_metrics(
+                    tile_pixel,
+                    tile_objects,
+                    object_types,
+                    foreground_pixel={
+                        "true_positive": true_positive,
+                        "false_positive": false_positive,
+                        "false_negative": false_negative,
+                    },
+                    foreground_objects={
+                        "true_positive": int(objects.true_positive),
+                        "false_positive": int(objects.false_positive),
+                        "false_negative": int(objects.false_negative),
+                    },
+                )
+            else:
+                ground_truth = ground_truth_labels > 0
+                predicted = prediction > 0
+                geojson_path = tile.get("geojson_path")
+                ground_truth_instances = (
+                    _test_tile_instance_mask(
+                        Path(str(geojson_path)),
+                        Path(str(tile["image_path"])),
+                        predicted.shape,
+                    )
+                    if geojson_path
+                    else label_components(
+                        ground_truth,
+                        structure=np.ones((3, 3), dtype=np.uint8),
+                    )[0]
+                )
+                objects = compute_object_f1(
+                    ObjectF1Request(
+                        y_true_instances=ground_truth_instances,
+                        **(
+                            {"y_pred_instances": predicted_instances}
+                            if predicted_instances is not None
+                            else {"y_pred_mask": predicted}
+                        ),
+                    )
+                )
+                true_positive = int(np.count_nonzero(ground_truth & predicted))
+                false_positive = int(np.count_nonzero(~ground_truth & predicted))
+                false_negative = int(np.count_nonzero(ground_truth & ~predicted))
             counts["true_positive"] += true_positive
             counts["false_positive"] += false_positive
             counts["false_negative"] += false_negative
@@ -358,6 +453,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     "object_true_positive": objects.true_positive,
                     "object_false_positive": objects.false_positive,
                     "object_false_negative": objects.false_negative,
+                    **({"metrics": tile_metrics} if tile_metrics is not None else {}),
                     "elapsed_sec": round(time.time() - tile_started, 3),
                 }
             )
@@ -395,6 +491,21 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             pass
         _release_cuda_cache(torch, device)
 
+    structured_metrics = (
+        _structured_multiclass_metrics(
+            class_pixel_counts,
+            class_object_counts,
+            list(config.get("object_types") or []),
+            foreground_pixel=counts,
+            foreground_objects={
+                "true_positive": object_counts["object_true_positive"],
+                "false_positive": object_counts["object_false_positive"],
+                "false_negative": object_counts["object_false_negative"],
+            },
+        )
+        if str(config.get("task") or "binary") == "multiclass"
+        else None
+    )
     return {
         "status": "ok" if reports else "error",
         "operation": "test_sample_f1",
@@ -411,6 +522,9 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "postprocess_level": profile.level,
         "postprocess_params": _postprocess_profile_params(profile),
         "preserve_boundary_components": True,
+        "task": str(config.get("task") or "binary"),
+        "class_schema": list(config.get("object_types") or []),
+        **({"metrics": structured_metrics} if structured_metrics is not None else {}),
         "tiles": reports,
         "elapsed_sec": round(time.time() - started, 3),
     }
@@ -458,6 +572,181 @@ def _test_tile_instance_mask(
         dtype="int32",
         all_touched=False,
     ).astype(np.int64, copy=False)
+
+
+def _test_tile_class_instance_masks(
+    geojson_path: Path,
+    image_path: Path,
+    out_shape: tuple[int, int],
+    object_types: list[dict[str, Any]],
+) -> dict[int, np.ndarray]:
+    """Растеризует независимые instance-ID маски для каждого типа объекта."""
+
+    try:
+        payload = json.loads(geojson_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Не удалось прочитать GeoJSON тестового тайла: {geojson_path}") from exc
+    features = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(features, list):
+        raise RuntimeError("GeoJSON тестового тайла должен быть FeatureCollection.")
+    type_by_slug = {str(item["slug"]): int(item["id"]) for item in object_types}
+    source_crs = _payload_crs(payload)
+    with rasterio.open(image_path) as dataset:
+        target_crs = PyprojCRS.from_user_input(dataset.crs) if dataset.crs is not None else source_crs
+        transform = dataset.transform
+    transformer = (
+        Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        if source_crs != target_crs
+        else None
+    )
+    geometries: dict[int, list[tuple[BaseGeometry, int]]] = {
+        int(item["id"]): [] for item in object_types
+    }
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        if properties.get("_mlsystem2_role") == "hard_negative":
+            continue
+        slug = (
+            properties.get("_mlsystem2_class")
+            or properties.get("object_type_slug")
+            or properties.get("slug")
+        )
+        class_id = type_by_slug.get(str(slug))
+        geometry_payload = feature.get("geometry")
+        if class_id is None or not isinstance(geometry_payload, dict):
+            continue
+        try:
+            geometry = shape(geometry_payload)
+            if transformer is not None:
+                geometry = shapely_transform(transformer.transform, geometry)
+        except Exception:
+            continue
+        if geometry.is_empty:
+            continue
+        geometries[class_id].append((geometry, len(geometries[class_id]) + 1))
+    return {
+        class_id: rasterio_features.rasterize(
+            items,
+            out_shape=out_shape,
+            transform=transform,
+            fill=0,
+            dtype="int32",
+            all_touched=False,
+        ).astype(np.int64, copy=False)
+        for class_id, items in geometries.items()
+    }
+
+
+def _empty_metric_counts() -> dict[str, int]:
+    return {"true_positive": 0, "false_positive": 0, "false_negative": 0}
+
+
+def _add_metric_counts(target: dict[str, int], values: dict[str, int]) -> None:
+    for key in ("true_positive", "false_positive", "false_negative"):
+        target[key] = int(target.get(key, 0)) + int(values.get(key, 0))
+
+
+def _multiclass_pixel_counts(
+    ground_truth: np.ndarray,
+    prediction: np.ndarray,
+    class_ids: list[int],
+) -> dict[int, dict[str, int]]:
+    return {
+        class_id: {
+            "true_positive": int(np.count_nonzero((ground_truth == class_id) & (prediction == class_id))),
+            "false_positive": int(np.count_nonzero((ground_truth != class_id) & (prediction == class_id))),
+            "false_negative": int(np.count_nonzero((ground_truth == class_id) & (prediction != class_id))),
+        }
+        for class_id in class_ids
+    }
+
+
+def _metric_values(counts: dict[str, int]) -> dict[str, Any]:
+    true_positive = int(counts.get("true_positive", 0))
+    false_positive = int(counts.get("false_positive", 0))
+    false_negative = int(counts.get("false_negative", 0))
+    precision_denominator = true_positive + false_positive
+    recall_denominator = true_positive + false_negative
+    precision = true_positive / precision_denominator if precision_denominator else 0.0
+    recall = true_positive / recall_denominator if recall_denominator else 0.0
+    f1_denominator = precision + recall
+    iou_denominator = true_positive + false_positive + false_negative
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": 2.0 * precision * recall / f1_denominator if f1_denominator else 0.0,
+        "iou": true_positive / iou_denominator if iou_denominator else 0.0,
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+    }
+
+
+def _structured_multiclass_metrics(
+    pixel_counts: dict[int, dict[str, int]],
+    object_counts: dict[int, dict[str, int]],
+    object_types: list[dict[str, Any]],
+    *,
+    foreground_pixel: dict[str, int],
+    foreground_objects: dict[str, int],
+) -> dict[str, Any]:
+    warnings_output: list[str] = []
+
+    def aggregate(counts_by_class: dict[int, dict[str, int]]) -> dict[str, Any]:
+        per_class: dict[str, dict[str, Any]] = {}
+        values: list[dict[str, Any]] = []
+        micro = _empty_metric_counts()
+        for item in object_types:
+            class_id = int(item["id"])
+            counts = counts_by_class.get(class_id, _empty_metric_counts())
+            metric = _metric_values(counts)
+            metric.update(
+                {
+                    "id": class_id,
+                    "slug": str(item["slug"]),
+                    "name": str(item["name"]),
+                    "color": str(item["color"]),
+                }
+            )
+            per_class[str(item["slug"])] = metric
+            values.append(metric)
+            _add_metric_counts(micro, counts)
+            if metric["true_positive"] + metric["false_negative"] == 0:
+                warnings_output.append(f"В тестовой разметке отсутствует тип {item['name']}.")
+        macro = {
+            key: sum(float(value[key]) for value in values) / len(values) if values else 0.0
+            for key in ("precision", "recall", "f1", "iou")
+        }
+        return {"per_class": per_class, "macro": macro, "micro": _metric_values(micro)}
+
+    pixel = aggregate(pixel_counts)
+    objects = aggregate(object_counts)
+    pixel["foreground"] = _metric_values(foreground_pixel)
+    objects["foreground"] = _metric_values(foreground_objects)
+    return {
+        "pixel": pixel,
+        "objects": objects,
+        "object_iou_threshold": 0.5,
+        "warnings": list(dict.fromkeys(warnings_output)),
+    }
+
+
+def _combine_class_instance_masks(masks: dict[int, np.ndarray]) -> np.ndarray:
+    first = next(iter(masks.values()), None)
+    if first is None:
+        return np.zeros((0, 0), dtype=np.int64)
+    combined = np.zeros(first.shape, dtype=np.int64)
+    offset = 0
+    for class_id in sorted(masks):
+        mask = masks[class_id]
+        maximum = int(mask.max(initial=0))
+        occupied = (combined == 0) & (mask > 0)
+        combined[occupied] = mask[occupied] + offset
+        offset += maximum
+    return combined
 
 
 def _payload_crs(payload: dict[str, Any]) -> PyprojCRS:
@@ -655,9 +944,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     model = None
     try:
         external_manifest = external_model_manifest(config)
-        if external_manifest is None and threshold is None:
-            threshold = 0.5
-        elif external_manifest is not None:
+        if external_manifest is not None:
             threshold = external_manifest.score_threshold
             tile_size = external_manifest.tile_size
             stride = external_manifest.stride
@@ -678,6 +965,17 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
+            task, object_types, checkpoint_threshold = _native_model_contract(loaded, config)
+            if threshold is None:
+                threshold = checkpoint_threshold
+            if threshold is None:
+                threshold = 0.5
+            config = {
+                **config,
+                "task": task,
+                "object_types": object_types,
+                "threshold": threshold,
+            }
             model = loaded.model.model
             input_channels = _loaded_input_channels(loaded, config)
             _validate_configured_input_channels(config, input_channels)
@@ -854,6 +1152,10 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 if is_aoi
                 else _merge_overlapping_features(all_features)
             )
+        merged_features = _resolve_feature_type_conflicts(
+            merged_features,
+            list(config.get("object_types") or []),
+        )
         merged_features = _filter_compact_features(merged_features, postprocess_profile)
         if is_aoi:
             assert aoi_wgs84 is not None
@@ -872,7 +1174,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 object_count=len(merged_features),
             )
             if is_aoi
-            else None
+            else _model_schema_metadata(config)
         )
         _write_feature_collection(output_geojson, merged_features, metadata=metadata)
         status = _final_status(scene_reports, failures, missing)
@@ -964,6 +1266,92 @@ def _loaded_input_channels(loaded: object, config: dict[str, Any]) -> int:
     if parsed <= 0:
         raise RuntimeError("Число входных каналов checkpoint должно быть положительным.")
     return parsed
+
+
+def _native_model_contract(
+    loaded: object,
+    config: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], float | None]:
+    model_handle = getattr(loaded, "model", None)
+    spec = getattr(model_handle, "spec", None)
+    output_channels = int(getattr(spec, "output_channels", 1))
+    artifact = getattr(loaded, "artifact", None)
+    metadata = getattr(artifact, "metadata", None)
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    train_config = metadata.get("train_config")
+    train_config = dict(train_config) if isinstance(train_config, dict) else {}
+    task = str(metadata.get("task") or train_config.get("task") or "")
+    if not task:
+        task = "multiclass" if output_channels > 1 else "binary"
+    if task not in {"binary", "multiclass"}:
+        raise RuntimeError(f"Checkpoint содержит неизвестный task={task!r}.")
+    if task == "binary":
+        if output_channels != 1:
+            raise RuntimeError("Binary checkpoint должен иметь один выходной канал.")
+        object_types: list[dict[str, Any]] = []
+    else:
+        raw_schema = metadata.get("class_schema") or train_config.get("class_schema")
+        if not isinstance(raw_schema, list) or not raw_schema:
+            raw_slugs = train_config.get("class_slugs")
+            if isinstance(raw_slugs, list) and raw_slugs:
+                raw_schema = [
+                    {
+                        "id": index,
+                        "slug": str(slug),
+                        "name": str(slug),
+                        "color": "#808080",
+                        "priority": 0,
+                    }
+                    for index, slug in enumerate(raw_slugs, start=1)
+                ]
+            else:
+                raise RuntimeError("Multiclass checkpoint не содержит class schema.")
+        object_types = _normalize_object_types(raw_schema)
+        if output_channels != len(object_types) + 1:
+            raise RuntimeError(
+                "Число каналов checkpoint не соответствует class schema: "
+                f"{output_channels} != {len(object_types)} + 1."
+            )
+    configured_schema = config.get("class_schema") or config.get("object_types")
+    if configured_schema:
+        normalized_configured = _normalize_object_types(configured_schema)
+        if normalized_configured != object_types:
+            raise RuntimeError("Схема классов задания не совпадает со схемой checkpoint.")
+    raw_threshold = metadata.get("confidence_threshold", metadata.get("val_best_threshold"))
+    threshold = float(raw_threshold) if raw_threshold is not None else None
+    return task, object_types, threshold
+
+
+def _normalize_object_types(raw_schema: object) -> list[dict[str, Any]]:
+    if not isinstance(raw_schema, list):
+        raise RuntimeError("class schema должна быть массивом.")
+    result: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_schema, start=1):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Элемент class schema #{index} должен быть объектом.")
+        class_id = int(raw.get("id", raw.get("class_id", index)))
+        slug = str(raw.get("slug") or "").strip()
+        name = str(raw.get("name") or slug).strip()
+        color = str(raw.get("color") or "#808080").upper()
+        if class_id <= 0 or not slug or not name:
+            raise RuntimeError(f"Некорректный элемент class schema #{index}.")
+        if len(color) != 7 or not color.startswith("#"):
+            raise RuntimeError(f"Некорректный цвет класса {slug}: {color!r}.")
+        result.append(
+            {
+                "id": class_id,
+                "slug": slug,
+                "name": name,
+                "color": color,
+                "priority": int(raw.get("priority") or 0),
+            }
+        )
+    result.sort(key=lambda item: int(item["id"]))
+    if [item["id"] for item in result] != list(range(1, len(result) + 1)):
+        raise RuntimeError("class schema должна использовать последовательные id от 1.")
+    if len({item["slug"] for item in result}) != len(result):
+        raise RuntimeError("class schema содержит повторяющиеся slug.")
+    return result
 
 
 def _validate_raster_input_channels(
@@ -1181,6 +1569,7 @@ def _infer_scene(
                 read_workers=int(config.get("tile_read_workers") or 1),
                 prefetch_batches=int(config.get("prefetch_batches") or 1),
                 metrics=performance,
+                object_types=list(config.get("object_types") or []),
             )
             if prediction is None:
                 return []
@@ -1207,9 +1596,14 @@ def _infer_scene(
                 read_workers=int(config.get("tile_read_workers") or 1),
                 prefetch_batches=int(config.get("prefetch_batches") or 1),
                 metrics=performance,
+                object_types=list(config.get("object_types") or []),
             )
         postprocess_started = time.perf_counter()
-        mask = _postprocess_mask(mask, postprocess_profile)
+        mask = _postprocess_prediction_mask(
+            mask,
+            postprocess_profile,
+            list(config.get("object_types") or []),
+        )
         features = _features_from_mask(
             mask,
             dataset.window_transform(mask_window),
@@ -1243,6 +1637,7 @@ def _infer_aoi_scene_mask(
     read_workers: int = 1,
     prefetch_batches: int = 1,
     metrics: dict[str, Any] | None = None,
+    object_types: list[dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, Window] | None:
     """Распознать AOI и расширить контекст до окончания связных объектов."""
 
@@ -1321,6 +1716,7 @@ def _infer_aoi_scene_mask(
             read_workers=read_workers,
             prefetch_batches=prefetch_batches,
             metrics=metrics,
+            object_types=object_types,
         )
         processed_keys.update(pending_keys)
         coverage_mask = _window_keys_coverage_mask(
@@ -1370,6 +1766,7 @@ def _infer_windows_into_mask(
     read_workers: int = 1,
     prefetch_batches: int = 1,
     metrics: dict[str, Any] | None = None,
+    object_types: list[dict[str, Any]] | None = None,
 ) -> None:
     """Добавить предсказания окон в общую маску без повторной обработки."""
 
@@ -1421,6 +1818,7 @@ def _infer_windows_into_mask(
                 tile_size=tile_size,
                 tile_mask=tile_mask,
                 tile_confidence=tile_confidence,
+                object_types=object_types,
             )
         performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
         pending.clear()
@@ -1558,19 +1956,43 @@ def _merge_tile_prediction(
     tile_size: int,
     tile_mask: np.ndarray,
     tile_confidence: np.ndarray,
+    object_types: list[dict[str, Any]] | None = None,
 ) -> None:
-        crop_h = min(tile_size, dataset.height - int(window.row_off))
-        crop_w = min(tile_size, dataset.width - int(window.col_off))
-        y0 = int(window.row_off - mask_window.row_off)
-        x0 = int(window.col_off - mask_window.col_off)
-        mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
-            mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
-            tile_mask[:crop_h, :crop_w],
+    crop_h = min(tile_size, dataset.height - int(window.row_off))
+    crop_w = min(tile_size, dataset.width - int(window.col_off))
+    y0 = int(window.row_off - mask_window.row_off)
+    x0 = int(window.col_off - mask_window.col_off)
+    target_mask = mask[y0 : y0 + crop_h, x0 : x0 + crop_w]
+    target_confidence = confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w]
+    incoming_mask = tile_mask[:crop_h, :crop_w]
+    incoming_confidence = tile_confidence[:crop_h, :crop_w]
+    if not object_types:
+        target_mask[:] = np.maximum(target_mask, incoming_mask)
+        target_confidence[:] = np.maximum(target_confidence, incoming_confidence)
+        return
+    wins = incoming_confidence > target_confidence
+    ties = np.isclose(incoming_confidence, target_confidence, rtol=0.0, atol=1e-7)
+    if np.any(ties):
+        priority_by_id = {
+            int(item["id"]): int(item.get("priority") or 0) for item in object_types
+        }
+        incoming_priority = _label_priority(incoming_mask, priority_by_id)
+        target_priority = _label_priority(target_mask, priority_by_id)
+        tie_wins = (incoming_priority > target_priority) | (
+            (incoming_priority == target_priority)
+            & (incoming_mask > 0)
+            & ((target_mask == 0) | (incoming_mask < target_mask))
         )
-        confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
-            confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w],
-            tile_confidence[:crop_h, :crop_w],
-        )
+        wins |= ties & tie_wins
+    target_mask[wins] = incoming_mask[wins]
+    target_confidence[wins] = incoming_confidence[wins]
+
+
+def _label_priority(labels: np.ndarray, priority_by_id: dict[int, int]) -> np.ndarray:
+    result = np.full(labels.shape, -2**31, dtype=np.int64)
+    for class_id, priority in priority_by_id.items():
+        result[labels == class_id] = priority
+    return result
 
 
 def _window_keys_envelope(
@@ -1677,11 +2099,13 @@ def _infer_test_tile_mask(
     threshold: float,
     device: str,
     postprocess_profile: _PostprocessProfile,
+    object_types: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
+        confidence_map = np.zeros(mask.shape, dtype=np.float32)
         for window in _windows(dataset.width, dataset.height, tile_size, stride):
             image = dataset.read(
                 indexes=input_indexes,
@@ -1693,24 +2117,28 @@ def _infer_test_tile_mask(
             )
             if np.all(_nodata_pixels(image, nodata)):
                 continue
-            predicted, _ = _predict_tile(
+            predicted, confidence = _predict_tile(
                 torch,
                 model,
                 image.astype(np.float32, copy=False),
                 threshold=threshold,
                 device=device,
             )
-            crop_h = min(tile_size, dataset.height - int(window.row_off))
-            crop_w = min(tile_size, dataset.width - int(window.col_off))
-            y0 = int(window.row_off)
-            x0 = int(window.col_off)
-            mask[y0 : y0 + crop_h, x0 : x0 + crop_w] = np.maximum(
-                mask[y0 : y0 + crop_h, x0 : x0 + crop_w],
-                predicted[:crop_h, :crop_w],
+            _merge_tile_prediction(
+                dataset=dataset,
+                window=window,
+                mask_window=Window(0, 0, dataset.width, dataset.height),
+                mask=mask,
+                confidence_map=confidence_map,
+                tile_size=tile_size,
+                tile_mask=predicted,
+                tile_confidence=confidence,
+                object_types=object_types,
             )
-        mask = _postprocess_mask(
+        mask = _postprocess_prediction_mask(
             mask,
             postprocess_profile,
+            list(object_types or []),
             preserve_border_objects=True,
         )
         if not _has_vector_postprocess(postprocess_profile) or not np.any(mask):
@@ -1719,14 +2147,15 @@ def _infer_test_tile_mask(
             raise RuntimeError(
                 "Для профильной постобработки тестового тайла нужен CRS снимка."
             )
-        geometries: list[BaseGeometry] = []
+        geometries: list[tuple[BaseGeometry, int]] = []
         raster_boundary = box(*dataset.bounds).boundary
         for geometry, value in rasterio_features.shapes(
             mask,
             mask=mask > 0,
             transform=dataset.transform,
         ):
-            if int(value) != 1:
+            class_id = int(value)
+            if class_id <= 0:
                 continue
             source_geometry = shape(geometry)
             processed = _postprocess_geometry(
@@ -1736,11 +2165,14 @@ def _infer_test_tile_mask(
                 preserve_boundary_fragment=source_geometry.intersects(raster_boundary),
             )
             if not processed.is_empty:
-                geometries.append(processed)
+                geometries.append((processed, class_id))
         if not geometries:
             return np.zeros_like(mask)
         return rasterio_features.rasterize(
-            [(geometry, 1) for geometry in geometries],
+            sorted(
+                geometries,
+                key=lambda item: _object_type_sort_key(item[1], object_types or []),
+            ),
             out_shape=mask.shape,
             transform=dataset.transform,
             fill=0,
@@ -1790,14 +2222,28 @@ def _predict_tiles(
                     mode="bilinear",
                     align_corners=False,
                 )
-            probabilities_tensor = torch.sigmoid(logits[:, :1, :, :])
-            probabilities = (
-                probabilities_tensor[:, 0]
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32, copy=False)
-            )
+            if int(logits.shape[1]) == 1:
+                probabilities_tensor = torch.sigmoid(logits[:, :1, :, :])
+                probabilities = (
+                    probabilities_tensor[:, 0]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32, copy=False)
+                )
+                labels = (probabilities >= threshold).astype(np.uint8)
+            else:
+                probabilities_tensor = torch.softmax(logits, dim=1)
+                confidence_tensor, labels_tensor = torch.max(probabilities_tensor, dim=1)
+                labels_tensor = torch.where(
+                    (labels_tensor > 0) & (confidence_tensor < threshold),
+                    torch.zeros_like(labels_tensor),
+                    labels_tensor,
+                )
+                probabilities = (
+                    confidence_tensor.detach().cpu().numpy().astype(np.float32, copy=False)
+                )
+                labels = labels_tensor.detach().cpu().numpy().astype(np.uint8, copy=False)
         except Exception as exc:  # noqa: BLE001
             if not _is_cuda_oom(torch, exc, device) or images.shape[0] <= 1:
                 raise
@@ -1834,7 +2280,7 @@ def _predict_tiles(
     performance["gpu_sec"] = float(performance.get("gpu_sec", 0.0)) + (
         time.perf_counter() - started
     )
-    return (probabilities >= threshold).astype(np.uint8), probabilities
+    return labels, probabilities
 
 
 def _is_cuda_oom(torch, exc: BaseException, device: str) -> bool:
@@ -1858,46 +2304,50 @@ def _features_from_mask(
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     source_crs = str(crs) if crs is not None else None
+    object_types = list(config.get("object_types") or [])
+    object_type_by_id = {int(item["id"]): item for item in object_types}
     if confidence_map is not None and confidence_map.shape != mask.shape:
         raise RuntimeError("Размер карты уверенности не совпадает с маской результата.")
-    labels, component_count = label_components(mask > 0, structure=_label_structure())
-    component_confidence: dict[int, float] = {}
-    if confidence_map is not None and component_count:
-        means = ndimage.mean(
-            confidence_map,
-            labels=labels,
-            index=np.arange(1, component_count + 1),
-        )
-        component_confidence = {
-            index: min(1.0, max(0.0, float(value)))
-            for index, value in enumerate(np.atleast_1d(means), start=1)
-            if np.isfinite(value)
-        }
-    for geometry, value in rasterio_features.shapes(
-        labels.astype(np.int32, copy=False),
-        mask=labels > 0,
-        transform=transform,
-    ):
-        component_id = int(value)
-        if component_id <= 0:
-            continue
-        if _has_vector_postprocess(postprocess_profile):
-            if crs is None:
-                raise RuntimeError(
-                    "Для профильной постобработки нужен CRS снимка, "
-                    "иначе нельзя применить пороги площади в м²."
-                )
-            processed_geometry = _postprocess_geometry(shape(geometry), crs, postprocess_profile)
-            if processed_geometry.is_empty:
+    class_ids = sorted(object_type_by_id) if object_type_by_id else [1]
+    for class_id in class_ids:
+        binary_mask = mask == class_id if object_type_by_id else mask > 0
+        labels, component_count = label_components(binary_mask, structure=_label_structure())
+        component_confidence: dict[int, float] = {}
+        if confidence_map is not None and component_count:
+            means = ndimage.mean(
+                confidence_map,
+                labels=labels,
+                index=np.arange(1, component_count + 1),
+            )
+            component_confidence = {
+                index: min(1.0, max(0.0, float(value)))
+                for index, value in enumerate(np.atleast_1d(means), start=1)
+                if np.isfinite(value)
+            }
+        object_type = object_type_by_id.get(class_id)
+        for geometry, value in rasterio_features.shapes(
+            labels.astype(np.int32, copy=False),
+            mask=labels > 0,
+            transform=transform,
+        ):
+            component_id = int(value)
+            if component_id <= 0:
                 continue
-            geometry = mapping(processed_geometry)
-        if source_crs:
-            geometry = transform_geom(source_crs, "EPSG:4326", geometry)
-        output.append(
-            {
-                "type": "Feature",
-                "geometry": geometry,
-                "properties": {
+            if _has_vector_postprocess(postprocess_profile):
+                if crs is None:
+                    raise RuntimeError(
+                        "Для профильной постобработки нужен CRS снимка, "
+                        "иначе нельзя применить пороги площади в м²."
+                    )
+                processed_geometry = _postprocess_geometry(
+                    shape(geometry), crs, postprocess_profile
+                )
+                if processed_geometry.is_empty:
+                    continue
+                geometry = mapping(processed_geometry)
+            if source_crs:
+                geometry = transform_geom(source_crs, "EPSG:4326", geometry)
+            properties = {
                     "_x_res": abs(float(resolution[0])),
                     "_y_res": abs(float(resolution[1])),
                     "_crs": source_crs,
@@ -1913,13 +2363,31 @@ def _features_from_mask(
                     "confidence": component_confidence.get(component_id),
                     "postprocess_profile": postprocess_profile.name,
                     "postprocess_level": postprocess_profile.level,
-                },
             }
-        )
+            if object_type is not None:
+                properties.update(
+                    {
+                        "object_type_id": int(object_type["id"]),
+                        "object_type_slug": str(object_type["slug"]),
+                        "object_type_name": str(object_type["name"]),
+                        "object_type_color": str(object_type["color"]),
+                    }
+                )
+            output.append(
+                {"type": "Feature", "geometry": geometry, "properties": properties}
+            )
     return output
 
 
 def _merge_overlapping_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if (
+        any((feature.get("properties") or {}).get("object_type_id") for feature in features)
+        and not all(
+            (feature.get("properties") or {}).get("_mlsystem2_merge_guard")
+            for feature in features
+        )
+    ):
+        return _merge_features_by_object_type(features, connected=False)
     indexed_features: list[dict[str, Any]] = []
     geometries: list[BaseGeometry] = []
     for feature in features:
@@ -1968,6 +2436,15 @@ def _merge_overlapping_features(features: list[dict[str, Any]]) -> list[dict[str
 
 def _merge_connected_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Obedinit obekty tolko vnutri svyaznyh grupp."""
+
+    if (
+        any((feature.get("properties") or {}).get("object_type_id") for feature in features)
+        and not all(
+            (feature.get("properties") or {}).get("_mlsystem2_merge_guard")
+            for feature in features
+        )
+    ):
+        return _merge_features_by_object_type(features, connected=True)
 
     indexed_features: list[dict[str, Any]] = []
     geometries: list[BaseGeometry] = []
@@ -2025,6 +2502,107 @@ def _merge_connected_features(features: list[dict[str, Any]]) -> list[dict[str, 
     return output
 
 
+def _merge_features_by_object_type(
+    features: list[dict[str, Any]],
+    *,
+    connected: bool,
+) -> list[dict[str, Any]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for feature in features:
+        raw_id = (feature.get("properties") or {}).get("object_type_id")
+        if raw_id is None:
+            continue
+        grouped.setdefault(int(raw_id), []).append(feature)
+    output: list[dict[str, Any]] = []
+    for class_id in sorted(grouped):
+        class_features = grouped[class_id]
+        if connected:
+            output.extend(_merge_connected_features_binary(class_features))
+        else:
+            output.extend(_merge_overlapping_features_binary(class_features))
+    return output
+
+
+def _resolve_feature_type_conflicts(
+    features: list[dict[str, Any]],
+    object_types: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not object_types:
+        return features
+    type_by_id = {int(item["id"]): item for item in object_types}
+    candidates: list[tuple[tuple[float, int, int, str], BaseGeometry, dict[str, Any]]] = []
+    for feature in features:
+        properties = dict(feature.get("properties") or {})
+        raw_id = properties.get("object_type_id")
+        geometry_payload = feature.get("geometry")
+        if raw_id is None or geometry_payload is None:
+            continue
+        class_id = int(raw_id)
+        object_type = type_by_id.get(class_id)
+        if object_type is None:
+            continue
+        geometry = _make_valid(shape(geometry_payload))
+        confidence = _normalized_confidence(properties.get("confidence")) or 0.0
+        rank = (
+            confidence,
+            int(object_type.get("priority") or 0),
+            -class_id,
+            geometry.wkb_hex,
+        )
+        candidates.append((rank, geometry, properties))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    occupied: BaseGeometry = GeometryCollection()
+    result: list[dict[str, Any]] = []
+    for _rank, geometry, properties in candidates:
+        remaining = _make_valid(geometry.difference(occupied))
+        for polygon in _iter_polygons(remaining):
+            if polygon.is_empty or polygon.area <= 0:
+                continue
+            result.append(
+                {
+                    "type": "Feature",
+                    "geometry": mapping(polygon),
+                    "properties": dict(properties),
+                }
+            )
+        occupied = _make_valid(unary_union([occupied, geometry]))
+    return result
+
+
+def _merge_overlapping_features_binary(
+    features: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return _guarded_type_merge(features, _merge_overlapping_features)
+
+
+def _merge_connected_features_binary(
+    features: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return _guarded_type_merge(features, _merge_connected_features)
+
+
+def _guarded_type_merge(
+    features: list[dict[str, Any]],
+    merge: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    guarded = [
+        {
+            **feature,
+            "properties": {
+                **(feature.get("properties") or {}),
+                "_mlsystem2_merge_guard": True,
+            },
+        }
+        for feature in features
+    ]
+    merged = merge(guarded)
+    for feature in merged:
+        properties = dict(feature.get("properties") or {})
+        properties.pop("_mlsystem2_merge_guard", None)
+        feature["properties"] = properties
+    return merged
+
+
 def _finalize_aoi_features(
     features: list[dict[str, Any]],
     aoi_wgs84: BaseGeometry,
@@ -2033,7 +2611,7 @@ def _finalize_aoi_features(
 ) -> list[dict[str, Any]]:
     """Оставить целые пересекающие AOI полигоны и присвоить стабильные ID."""
 
-    selected: list[tuple[Polygon, list[str], float | None]] = []
+    selected: list[tuple[Polygon, list[str], float | None, dict[str, Any]]] = []
     for feature in features:
         geometry_data = feature.get("geometry")
         if geometry_data is None:
@@ -2055,15 +2633,26 @@ def _finalize_aoi_features(
             overlap = _make_valid(polygon.intersection(aoi_wgs84))
             if overlap.is_empty or overlap.area <= 0:
                 continue
-            selected.append((polygon, normalized_sources, confidence))
+            selected.append((polygon, normalized_sources, confidence, dict(properties)))
     selected.sort(key=lambda item: item[0].wkb_hex)
     output: list[dict[str, Any]] = []
     job_id = str(config.get("job_id") or "")
-    for polygon, feature_sources, confidence in selected:
+    for polygon, feature_sources, confidence, source_properties in selected:
+        object_type_slug = str(source_properties.get("object_type_slug") or "")
         candidate_id = uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"mlsystem2:pseudolabel:{job_id}:{polygon.wkb_hex}",
+            f"mlsystem2:pseudolabel:{job_id}:{object_type_slug}:{polygon.wkb_hex}",
         )
+        object_type_properties = {
+            key: source_properties[key]
+            for key in (
+                "object_type_id",
+                "object_type_slug",
+                "object_type_name",
+                "object_type_color",
+            )
+            if key in source_properties
+        }
         output.append(
             {
                 "type": "Feature",
@@ -2071,6 +2660,8 @@ def _finalize_aoi_features(
                 "properties": {
                     "candidate_id": str(candidate_id),
                     "class_id": str(config.get("class_key") or ""),
+                    "class_name": str(config.get("class_name") or ""),
+                    **object_type_properties,
                     "model_id": str(config.get("model_id") or ""),
                     "model_version": str(config.get("model_version") or ""),
                     "job_id": job_id,
@@ -2115,6 +2706,7 @@ def _aoi_metadata(
     """Sobrat publichnye metadannye FeatureCollection."""
 
     return {
+        **_model_schema_metadata(config),
         "job_id": str(config.get("job_id") or ""),
         "class_id": str(config.get("class_key") or ""),
         "model_id": str(config.get("model_id") or ""),
@@ -2136,6 +2728,14 @@ def _aoi_metadata(
             str(config.get("source_attribution"))
         ] if config.get("source_attribution") else [],
         "license_url": config.get("source_license_url"),
+    }
+
+
+def _model_schema_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task": str(config.get("task") or "binary"),
+        "class_schema": list(config.get("object_types") or []),
+        "confidence_threshold": config.get("threshold"),
     }
 
 
@@ -2381,6 +2981,47 @@ def _postprocess_mask(
             structure=_disk_structure(profile.binary_closing_radius),
         )
     return processed.astype(np.uint8)
+
+
+def _postprocess_prediction_mask(
+    mask: np.ndarray,
+    profile: _PostprocessProfile,
+    object_types: list[dict[str, Any]],
+    *,
+    preserve_border_objects: bool = False,
+) -> np.ndarray:
+    if not object_types:
+        return _postprocess_mask(
+            mask,
+            profile,
+            preserve_border_objects=preserve_border_objects,
+        )
+    result = np.zeros(mask.shape, dtype=np.uint8)
+    for item in sorted(
+        object_types,
+        key=lambda value: (int(value.get("priority") or 0), -int(value["id"])),
+    ):
+        class_id = int(item["id"])
+        processed = _postprocess_mask(
+            mask == class_id,
+            profile,
+            preserve_border_objects=preserve_border_objects,
+        )
+        result[processed > 0] = class_id
+    return result
+
+
+def _object_type_sort_key(
+    class_id: int,
+    object_types: list[dict[str, Any]],
+) -> tuple[int, int]:
+    item = next(
+        (value for value in object_types if int(value.get("id") or 0) == class_id),
+        None,
+    )
+    if item is None:
+        return (0, -class_id)
+    return (int(item.get("priority") or 0), -class_id)
 
 
 def _remove_small_mask_objects(
@@ -2824,6 +3465,7 @@ def _summary(
         "triton_model": None,
         "class_key": config.get("class_key"),
         "class_name": config.get("class_name"),
+        **_model_schema_metadata(config),
         "input_scene_count": input_scene_count,
         "unique_image_count": unique_image_count,
         "scene_count": len(scene_reports),

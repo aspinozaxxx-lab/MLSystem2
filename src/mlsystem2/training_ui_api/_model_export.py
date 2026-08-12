@@ -52,6 +52,7 @@ def build_triton_model_export_zip(
         checkpoint_path = temp_root / "checkpoint.pt"
         checkpoint_path.write_bytes(checkpoint_bytes)
         loaded = _load_binary_checkpoint(checkpoint_path)
+        task, class_schema = _checkpoint_task_schema(loaded)
         effective_threshold = _threshold_from_metadata(loaded.artifact.metadata)
         parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
             loaded.artifact.metadata,
@@ -70,17 +71,39 @@ def build_triton_model_export_zip(
         service_zip_dir.mkdir(parents=True)
 
         onnx_path = version_dir / "model.onnx"
-        _export_binary_mask_onnx(
-            model=loaded.model.model,
-            input_channels=input_channels,
-            sample_size=parsed_sample_size,
-            threshold=effective_threshold,
-            onnx_path=onnx_path,
+        if task == "binary":
+            _export_binary_mask_onnx(
+                model=loaded.model.model,
+                input_channels=input_channels,
+                sample_size=parsed_sample_size,
+                threshold=effective_threshold,
+                onnx_path=onnx_path,
+            )
+        else:
+            _export_segmentation_mask_onnx(
+                model=loaded.model.model,
+                input_channels=input_channels,
+                output_channels=int(loaded.model.spec.output_channels),
+                sample_size=parsed_sample_size,
+                threshold=effective_threshold,
+                onnx_path=onnx_path,
+            )
+        _write_text(
+            model_dir / "config.pbtxt",
+            _triton_config(
+                parsed_model_name,
+                input_channels,
+                foreground_channels=(len(class_schema) if task == "multiclass" else 1),
+            ),
         )
-        _write_text(model_dir / "config.pbtxt", _triton_config(parsed_model_name, input_channels))
         _write_text(
             pipeline_dir / f"{parsed_model_name}_triton.yaml",
-            _pipeline_yaml(parsed_model_name, parsed_sample_size, input_channels),
+            _pipeline_yaml(
+                parsed_model_name,
+                parsed_sample_size,
+                input_channels,
+                class_schema=class_schema,
+            ),
         )
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
         _zip_directory(service_root, service_zip_path)
@@ -98,6 +121,8 @@ def build_triton_model_export_zip(
                 "sample_size_source": sample_size_source,
                 "threshold": effective_threshold,
                 "threshold_source": "checkpoint_metadata",
+                "task": task,
+                "class_schema": class_schema,
                 "onnx_opset": ONNX_OPSET,
                 "onnx_ir_version": ONNX_IR_VERSION,
                 "checkpoint_filename": checkpoint_filename,
@@ -440,6 +465,10 @@ def _validate_optional_sample_size(value: int | None) -> int | None:
 
 
 def _load_binary_checkpoint(checkpoint_path: Path) -> Any:
+    return _load_native_checkpoint(checkpoint_path)
+
+
+def _load_native_checkpoint(checkpoint_path: Path) -> Any:
     try:
         from mlsystem2.models.api import load_checkpoint
 
@@ -451,18 +480,72 @@ def _load_binary_checkpoint(checkpoint_path: Path) -> Any:
         )
     except ModelsError as exc:
         raise TrainingUIAPIError(str(exc)) from exc
-    if loaded.model.spec.output_channels != 1:
-        raise TrainingUIAPIError("Экспорт поддерживает только binary segmentation checkpoint с output_channels=1.")
     return loaded
 
 
-def _threshold_from_metadata(metadata: dict[str, object]) -> float:
-    if "val_best_threshold" not in metadata:
+def _checkpoint_task_schema(loaded: Any) -> tuple[str, list[dict[str, object]]]:
+    metadata = dict(loaded.artifact.metadata or {})
+    train_config = metadata.get("train_config")
+    train_config = dict(train_config) if isinstance(train_config, dict) else {}
+    output_channels = int(loaded.model.spec.output_channels)
+    task = str(metadata.get("task") or train_config.get("task") or "")
+    if not task:
+        task = "binary" if output_channels == 1 else "multiclass"
+    if task == "binary":
+        if output_channels != 1:
+            raise TrainingUIAPIError("Binary checkpoint должен иметь output_channels=1.")
+        return task, []
+    if task != "multiclass":
+        raise TrainingUIAPIError(f"Checkpoint содержит неизвестный task={task!r}.")
+    raw_schema = metadata.get("class_schema") or train_config.get("class_schema")
+    if not isinstance(raw_schema, list) or not raw_schema:
+        slugs = train_config.get("class_slugs")
+        if not isinstance(slugs, list) or not slugs:
+            raise TrainingUIAPIError("Multiclass checkpoint не содержит class schema.")
+        raw_schema = [
+            {
+                "id": index,
+                "slug": str(slug),
+                "name": str(slug),
+                "color": "#808080",
+                "priority": 0,
+            }
+            for index, slug in enumerate(slugs, start=1)
+        ]
+    schema: list[dict[str, object]] = []
+    for index, raw in enumerate(raw_schema, start=1):
+        if not isinstance(raw, dict):
+            raise TrainingUIAPIError(f"Элемент class schema #{index} должен быть объектом.")
+        item = {
+            "id": int(raw.get("id", raw.get("class_id", index))),
+            "slug": str(raw.get("slug") or "").strip(),
+            "name": str(raw.get("name") or raw.get("slug") or "").strip(),
+            "color": str(raw.get("color") or "#808080").upper(),
+            "priority": int(raw.get("priority") or 0),
+        }
+        if not item["slug"] or not item["name"]:
+            raise TrainingUIAPIError(f"Некорректный элемент class schema #{index}.")
+        schema.append(item)
+    schema.sort(key=lambda item: int(item["id"]))
+    if [item["id"] for item in schema] != list(range(1, len(schema) + 1)):
+        raise TrainingUIAPIError("class schema должна использовать последовательные id от 1.")
+    if output_channels != len(schema) + 1:
         raise TrainingUIAPIError(
-            "Checkpoint не содержит metadata.val_best_threshold. "
-            "Автоматический экспорт невозможен: выберите checkpoint, сохраненный после validation с best threshold."
+            "output_channels checkpoint не соответствует class schema: "
+            f"{output_channels} != {len(schema)} + 1."
         )
-    raw_threshold = metadata["val_best_threshold"]
+    return task, schema
+
+
+def _threshold_from_metadata(metadata: dict[str, object]) -> float:
+    raw_threshold = metadata.get(
+        "confidence_threshold",
+        metadata.get("val_best_threshold"),
+    )
+    if raw_threshold is None:
+        raise TrainingUIAPIError(
+            "Checkpoint не содержит metadata.confidence_threshold или metadata.val_best_threshold."
+        )
     try:
         threshold = float(raw_threshold)
     except (TypeError, ValueError) as exc:
@@ -483,10 +566,11 @@ def _sample_size_from_metadata_or_request(metadata: dict[str, object], request_s
     )
 
 
-def _export_binary_mask_onnx(
+def _export_segmentation_mask_onnx(
     *,
     model: object,
     input_channels: int,
+    output_channels: int,
     sample_size: int,
     threshold: float,
     onnx_path: Path,
@@ -498,7 +582,7 @@ def _export_binary_mask_onnx(
             "Для экспорта ONNX требуется optional dependency torch. Установите пакет через `pip install -e .[torch]`."
         ) from exc
 
-    class BinaryMaskWrapper(torch.nn.Module):
+    class SegmentationMaskWrapper(torch.nn.Module):
         def __init__(self, wrapped_model: object, threshold_value: float) -> None:
             super().__init__()
             self.wrapped_model = wrapped_model
@@ -517,12 +601,25 @@ def _export_binary_mask_onnx(
                     mode="bilinear",
                     align_corners=False,
                 )
-            return (torch.sigmoid(logits) > self.threshold_value).to(torch.uint8)
+            if output_channels == 1:
+                return (torch.sigmoid(logits) > self.threshold_value).to(torch.uint8)
+            probabilities = torch.softmax(logits, dim=1)
+            confidence, labels = torch.max(probabilities, dim=1)
+            labels = torch.where(
+                (labels > 0) & (confidence < self.threshold_value),
+                torch.zeros_like(labels),
+                labels,
+            )
+            one_hot = torch.nn.functional.one_hot(
+                labels,
+                num_classes=output_channels,
+            ).permute(0, 3, 1, 2)
+            return one_hot[:, 1:, :, :].to(torch.uint8)
 
     if not hasattr(model, "eval"):
         raise TrainingUIAPIError("Checkpoint содержит модель без метода eval().")
     model.eval()
-    wrapper = BinaryMaskWrapper(model, threshold).eval()
+    wrapper = SegmentationMaskWrapper(model, threshold).eval()
     dummy = torch.zeros((1, input_channels, sample_size, sample_size), dtype=torch.float32)
     try:
         with torch.no_grad():
@@ -549,6 +646,24 @@ def _export_binary_mask_onnx(
     if not onnx_path.is_file():
         raise TrainingUIAPIError("ONNX exporter не создал model.onnx.")
     _normalize_onnx_for_triton(onnx_path)
+
+
+def _export_binary_mask_onnx(
+    *,
+    model: object,
+    input_channels: int,
+    sample_size: int,
+    threshold: float,
+    onnx_path: Path,
+) -> None:
+    _export_segmentation_mask_onnx(
+        model=model,
+        input_channels=input_channels,
+        output_channels=1,
+        sample_size=sample_size,
+        threshold=threshold,
+        onnx_path=onnx_path,
+    )
 
 
 def _normalize_onnx_for_triton(onnx_path: Path) -> None:
@@ -582,7 +697,11 @@ def _normalize_onnx_for_triton(onnx_path: Path) -> None:
         ) from exc
 
 
-def _triton_config(model_name: str, input_channels: int) -> str:
+def _triton_config(
+    model_name: str,
+    input_channels: int,
+    foreground_channels: int = 1,
+) -> str:
     return f"""name: "{model_name}"
 platform: "onnxruntime_onnx"
 max_batch_size: 0
@@ -597,7 +716,7 @@ output [
   {{
     name: "mask"
     data_type: TYPE_UINT8
-    dims: [ -1, 1, -1, -1 ]
+    dims: [ -1, {foreground_channels}, -1, -1 ]
   }}
 ]
 instance_group [
@@ -609,7 +728,12 @@ instance_group [
 """
 
 
-def _pipeline_yaml(model_name: str, sample_size: int, input_channels: int) -> str:
+def _pipeline_yaml(
+    model_name: str,
+    sample_size: int,
+    input_channels: int,
+    class_schema: list[dict[str, object]] | None = None,
+) -> str:
     if input_channels == 3:
         bands = ("RED", "GRN", "BLU")
     elif input_channels == 4:
@@ -619,13 +743,19 @@ def _pipeline_yaml(model_name: str, sample_size: int, input_channels: int) -> st
             f"Экспорт поддерживает только 3- и 4-канальные модели, получено {input_channels}."
         )
     bands_yaml = "\n".join(f"        - {band}" for band in bands)
+    schema = list(class_schema or [])
+    labels = [str(item["slug"]) for item in schema] or ["mask"]
+    outputs = [f"{label}.geojson" for label in labels] if schema else ["output.geojson"]
+    labels_yaml = "\n".join(f"        - {label}" for label in labels)
+    outputs_yaml = "\n".join(f"    - {output}" for output in outputs)
+    vector_outputs_yaml = "\n".join(f"        - {Path(output).stem}" for output in outputs)
     return f"""version: 0.1.4
 config:
   _class: Compose
   inputs:
     - input.tif
   outputs:
-    - output.geojson
+{outputs_yaml}
   bricks:
     - _class: SplitRaster
       input: input
@@ -640,7 +770,7 @@ config:
       input_rasters:
 {bands_yaml}
       output_labels:
-        - mask
+{labels_yaml}
       nodata: 0
       adapter:
         _class: TritonAdapter
@@ -654,9 +784,9 @@ config:
         output_ndim: 3
     - _class: VectorizeMasks
       input_rasters:
-        - mask
+{labels_yaml}
       output_fcs:
-        - output
+{vector_outputs_yaml}
 """
 
 

@@ -284,6 +284,10 @@ def _ensure_training_for_rule(
     job_config = sanitize_template_config(template.default_config)
     job_config["train.quality_metric"] = dataset.quality_metric
     job_config["train.input_channels"] = dataset.input_channels or 4
+    job_config["dataset.task"] = dataset.task
+    job_config["dataset.object_types"] = [
+        item.model_dump(mode="json") for item in dataset.object_types
+    ]
     job_config["dataset.imagery_type"] = (
         dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
     )
@@ -321,6 +325,8 @@ def _ensure_training_for_rule(
             architecture=rule.architecture,
             model_name=model_name,
             quality_metric=dataset.quality_metric,
+            task=dataset.task,
+            class_schema=[item.model_dump(mode="json") for item in dataset.object_types],
             status=ResultStatus.RUNNING.value,
             job_id=row.id,
         )

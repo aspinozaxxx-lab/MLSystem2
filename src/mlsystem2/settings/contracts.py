@@ -197,6 +197,11 @@ class SystemSettings(BaseModel):
                     "multiclass output_channels должен быть равен "
                     f"len(dataset.classes) + 1: ожидается {expected_channels}"
                 )
+        elif self.dataset.annotations_dir is not None:
+            if self.train.task == "binary" and self.train.output_channels != 1:
+                raise ValueError("binary per-image dataset требует output_channels=1")
+            if self.train.task == "multiclass" and self.train.output_channels < 3:
+                raise ValueError("multiclass per-image dataset требует минимум 3 output_channels")
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
         return self

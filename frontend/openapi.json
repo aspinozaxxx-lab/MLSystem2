@@ -985,6 +985,94 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild/preview": {
+      "post": {
+        "summary": "Rebuild Preview",
+        "operationId": "rebuild_preview_api_v1_dataset_editor_datasets__dataset_key__rebuild_preview_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorRebuildPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/rebuild": {
+      "post": {
+        "summary": "Rebuild",
+        "operationId": "rebuild_api_v1_dataset_editor_datasets__dataset_key__rebuild_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorRebuildRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorRebuildResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}": {
       "get": {
         "summary": "Raster",
@@ -3541,6 +3629,44 @@
           }
         }
       }
+    },
+    "/api/v1/files/{file_id}/download-by-type": {
+      "get": {
+        "summary": "Download File By Type",
+        "operationId": "download_file_by_type_api_v1_files__file_id__download_by_type_get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4350,6 +4476,58 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Scene Count"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "object_types": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorObjectType"
+            },
+            "type": "array",
+            "title": "Object Types"
+          },
+          "combined": {
+            "type": "boolean",
+            "title": "Combined",
+            "default": false
+          },
+          "source_status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "unknown",
+              "unavailable"
+            ],
+            "title": "Source Status",
+            "default": "unknown"
+          },
+          "source_changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Changes"
+          },
+          "class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Counts"
+          },
+          "hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hard Negative Count",
+            "default": 0
           }
         },
         "additionalProperties": false,
@@ -4427,6 +4605,41 @@
           "publication_status"
         ],
         "title": "DatasetEditorMutationResult"
+      },
+      "DatasetEditorObjectType": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "color"
+        ],
+        "title": "DatasetEditorObjectType"
       },
       "DatasetEditorPublicationInfo": {
         "properties": {
@@ -4599,6 +4812,210 @@
         ],
         "title": "DatasetEditorRasterInfo"
       },
+      "DatasetEditorRebuildChange": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "added",
+              "edited",
+              "deleted",
+              "source_added",
+              "source_edited",
+              "source_deleted"
+            ],
+            "title": "Kind"
+          },
+          "annotation_name": {
+            "type": "string",
+            "title": "Annotation Name"
+          },
+          "origin_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Key"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "annotation_name"
+        ],
+        "title": "DatasetEditorRebuildChange"
+      },
+      "DatasetEditorRebuildPreview": {
+        "properties": {
+          "preview_token": {
+            "type": "string",
+            "title": "Preview Token"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "source_status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "unknown",
+              "unavailable"
+            ],
+            "title": "Source Status"
+          },
+          "source_changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Changes"
+          },
+          "local_changes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorRebuildChange"
+            },
+            "type": "array",
+            "title": "Local Changes"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorRebuildChange"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          },
+          "replacement_scene_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Replacement Scene Count"
+          },
+          "replacement_class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Replacement Class Counts"
+          },
+          "replacement_hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Replacement Hard Negative Count"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preview_token",
+          "dataset_key",
+          "source_status",
+          "replacement_scene_count",
+          "replacement_hard_negative_count"
+        ],
+        "title": "DatasetEditorRebuildPreview"
+      },
+      "DatasetEditorRebuildRequest": {
+        "properties": {
+          "preview_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Preview Token"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "replace"
+            ],
+            "title": "Mode"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preview_token",
+          "mode"
+        ],
+        "title": "DatasetEditorRebuildRequest"
+      },
+      "DatasetEditorRebuildResult": {
+        "properties": {
+          "commit": {
+            "type": "string",
+            "title": "Commit"
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "publishing",
+              "published"
+            ],
+            "title": "Publication Status"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorSceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "replace"
+            ],
+            "title": "Mode"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorRebuildChange"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commit",
+          "publication_status",
+          "mode"
+        ],
+        "title": "DatasetEditorRebuildResult"
+      },
       "DatasetEditorSaveSceneRequest": {
         "properties": {
           "revision": {
@@ -4682,6 +5099,13 @@
           "revision": {
             "type": "string",
             "title": "Revision"
+          },
+          "class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Counts"
           }
         },
         "additionalProperties": false,
@@ -4723,7 +5147,8 @@
         "type": "string",
         "enum": [
           "legacy",
-          "per_image"
+          "per_image",
+          "per_image_multiclass"
         ],
         "title": "DatasetFormat"
       },
@@ -4954,6 +5379,69 @@
             },
             "type": "array",
             "title": "Diagnostics"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "object_types": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetObjectType"
+            },
+            "type": "array",
+            "title": "Object Types"
+          },
+          "combined": {
+            "type": "boolean",
+            "title": "Combined",
+            "default": false
+          },
+          "source_status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "stale",
+              "unknown",
+              "unavailable"
+            ],
+            "title": "Source Status",
+            "default": "unknown"
+          },
+          "source_changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Changes"
+          },
+          "class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Counts"
+          },
+          "hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hard Negative Count",
+            "default": 0
+          },
+          "manifest_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Path"
           }
         },
         "additionalProperties": false,
@@ -4980,6 +5468,41 @@
           "datasets"
         ],
         "title": "DatasetListResponse"
+      },
+      "DatasetObjectType": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "color"
+        ],
+        "title": "DatasetObjectType"
       },
       "DatasetPrimaryDatasetUpdate": {
         "properties": {
@@ -6252,6 +6775,34 @@
                 "type": "null"
               }
             ]
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "by_type_download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Type Download Url"
           }
         },
         "additionalProperties": false,
@@ -6319,6 +6870,23 @@
               }
             ],
             "title": "Target Resolution M"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "object_types": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Object Types"
           }
         },
         "additionalProperties": false,
@@ -6607,6 +7175,23 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Performance"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "object_types": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Object Types"
           }
         },
         "additionalProperties": false,
@@ -7716,6 +8301,30 @@
             "type": "string",
             "title": "Class Name"
           },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "class_object_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Object Counts"
+          },
           "quality_metric": {
             "type": "string",
             "enum": [
@@ -7976,6 +8585,11 @@
               }
             ],
             "title": "Error"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
           }
         },
         "additionalProperties": false,
@@ -8135,6 +8749,30 @@
             "type": "string",
             "title": "Class Name"
           },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "class_object_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Object Counts"
+          },
           "quality_metric": {
             "type": "string",
             "enum": [
@@ -8221,6 +8859,18 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Object Count"
+          },
+          "class_object_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Object Counts"
+          },
+          "evaluation_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evaluation Metrics"
           },
           "f1_score": {
             "anyOf": [
@@ -8496,6 +9146,28 @@
             ],
             "title": "Quality Metric",
             "default": "pixel"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "training_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Training Metrics"
           },
           "f1_score": {
             "anyOf": [
@@ -8878,6 +9550,11 @@
               }
             ],
             "title": "Object False Negative"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
           },
           "sample_id": {
             "anyOf": [

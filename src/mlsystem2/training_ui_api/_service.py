@@ -806,6 +806,10 @@ def create_training_job(
     )
     job_config["train.quality_metric"] = dataset.quality_metric
     job_config["train.input_channels"] = dataset.input_channels or 4
+    job_config["dataset.task"] = dataset.task
+    job_config["dataset.object_types"] = [
+        item.model_dump(mode="json") for item in dataset.object_types
+    ]
     job_config["dataset.imagery_type"] = (
         dataset.imagery_type.value if dataset.imagery_type is not None else "kanopus"
     )
@@ -843,6 +847,8 @@ def create_training_job(
             architecture=request.architecture,
             model_name=model_name,
             quality_metric=dataset.quality_metric,
+            task=dataset.task,
+            class_schema=[item.model_dump(mode="json") for item in dataset.object_types],
             status=ResultStatus.RUNNING.value,
             job_id=row.id,
         )
@@ -2425,6 +2431,9 @@ def _training_result_info(
         is_primary=is_primary,
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
+        task=row.task,
+        class_schema=list(row.class_schema or []),
+        training_metrics=dict(row.training_metrics or {}),
         f1_score=row.f1_score,
         epoch=row.epoch,
         trained_at=row.trained_at,
@@ -2464,6 +2473,19 @@ def _pseudo_markup_info(
         created_at=row.created_at,
         runtime_minutes=_job_runtime_minutes(session, row.job_id, jobs_by_id),
         progress=_pseudo_result_progress(session, row, jobs_by_id),
+        task=(row.training_result.task if row.training_result is not None else "binary"),
+        class_schema=(
+            list(row.training_result.class_schema or [])
+            if row.training_result is not None
+            else []
+        ),
+        by_type_download_url=(
+            f"/api/v1/files/{row.geojson_file_id}/download-by-type"
+            if row.geojson_file_id is not None
+            and row.training_result is not None
+            and row.training_result.task == "multiclass"
+            else None
+        ),
     )
 
 

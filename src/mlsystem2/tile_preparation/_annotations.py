@@ -49,6 +49,7 @@ def load_annotation_index(
     raster_crs: str | None,
     *,
     role: Literal["positive", "hard_negative"] | None = None,
+    class_slug: str | None = None,
 ) -> AnnotationIndex:
     path = Path(annotation_file)
     try:
@@ -70,6 +71,10 @@ def load_annotation_index(
         if role is not None:
             feature_role = _feature_role(feature, path, feature_index)
             if feature_role != role:
+                continue
+        if class_slug is not None:
+            properties = feature.get("properties") if isinstance(feature, dict) else None
+            if not isinstance(properties, dict) or properties.get("_mlsystem2_class") != class_slug:
                 continue
         geometry_payload = feature.get("geometry") if isinstance(feature, dict) else None
         if geometry_payload is None:

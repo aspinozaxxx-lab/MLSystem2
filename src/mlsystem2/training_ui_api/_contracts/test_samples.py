@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -115,6 +115,7 @@ class TestSampleEvaluationInfo(BaseModel):
     markup_created_at: datetime | None = None
     evaluated_at: datetime | None = None
     error: str | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class TestSampleSummary(BaseModel):
@@ -127,6 +128,9 @@ class TestSampleSummary(BaseModel):
     dataset_version: str | None = None
     class_key: str
     class_name: str
+    task: Literal["binary", "multiclass"] = "binary"
+    class_schema: list[dict[str, Any]] = Field(default_factory=list)
+    class_object_counts: dict[str, int] = Field(default_factory=dict)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     image_count: int = Field(gt=0)
     enabled_image_count: int = Field(ge=0)
@@ -167,6 +171,8 @@ class TestSampleTileInfo(BaseModel):
     source_name: str
     territory: str
     object_count: int = Field(gt=0)
+    class_object_counts: dict[str, int] = Field(default_factory=dict)
+    evaluation_metrics: dict[str, Any] = Field(default_factory=dict)
     f1_score: float | None = Field(default=None, ge=0.0, le=1.0)
     enabled: bool
     preview_url: str

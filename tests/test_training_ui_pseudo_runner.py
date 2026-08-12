@@ -23,15 +23,45 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _geometry_postprocessor,
     _infer_test_tile_mask,
     _merge_overlapping_features,
+    _multiclass_pixel_counts,
     _postprocess_mask,
     _postprocess_profile_from_config,
     _resolve_scene_inputs,
     _select_postprocess_profile,
     _summary,
+    _structured_multiclass_metrics,
     _write_pseudo_progress,
     run_pseudo_markup,
     run_test_sample_f1,
 )
+
+
+def test_multiclass_wrong_type_is_fp_and_fn_but_foreground_match() -> None:
+    truth = np.asarray([[1, 2]], dtype=np.uint8)
+    predicted = np.asarray([[2, 1]], dtype=np.uint8)
+    pixel = _multiclass_pixel_counts(truth, predicted, [1, 2])
+    schema = [
+        {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B", "priority": 100},
+        {"id": 2, "slug": "second", "name": "Второй", "color": "#8B5CF6", "priority": 0},
+    ]
+    metrics = _structured_multiclass_metrics(
+        pixel,
+        {
+            1: {"true_positive": 0, "false_positive": 1, "false_negative": 1},
+            2: {"true_positive": 0, "false_positive": 1, "false_negative": 1},
+        },
+        schema,
+        foreground_pixel={"true_positive": 2, "false_positive": 0, "false_negative": 0},
+        foreground_objects={"true_positive": 2, "false_positive": 0, "false_negative": 0},
+    )
+
+    assert pixel[1] == {"true_positive": 0, "false_positive": 1, "false_negative": 1}
+    assert pixel[2] == {"true_positive": 0, "false_positive": 1, "false_negative": 1}
+    assert metrics["pixel"]["macro"]["f1"] == 0.0
+    assert metrics["pixel"]["micro"]["false_positive"] == 2
+    assert metrics["pixel"]["micro"]["false_negative"] == 2
+    assert metrics["pixel"]["foreground"]["f1"] == 1.0
+    assert metrics["objects"]["macro"]["f1"] == 0.0
 
 
 def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:

@@ -62,6 +62,8 @@ class PseudolabelClassInfo(BaseModel):
     model_imagery_type: Literal["kanopus", "ortho"]
     input_channels: Literal[3, 4]
     target_resolution_m: float | None = Field(default=None, gt=0)
+    task: Literal["binary", "multiclass"] = "binary"
+    object_types: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PseudolabelSourceInfo(BaseModel):
@@ -127,6 +129,8 @@ class PseudolabelJobInfo(BaseModel):
     source_attributions: list[str] = Field(default_factory=list)
     source_license_url: str = ""
     performance: dict[str, Any] = Field(default_factory=dict)
+    task: Literal["binary", "multiclass"] = "binary"
+    object_types: list[dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [

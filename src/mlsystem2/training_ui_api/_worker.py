@@ -23,6 +23,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from mlsystem2.dataset_preparing.api import load_dataset_manifest
 from mlsystem2.mlflow_adapter.api import (
     get_best_training_checkpoint,
     get_finished_run_artifact,
@@ -437,6 +438,26 @@ def _build_training_config(
         "tile_preparation.background_factor": background_factor,
     }
     normalize_tile_factors(tile_factors)
+    dataset_config = _dataset_config(session, row, config, run_dir)
+    manifest = (
+        load_dataset_manifest(str(dataset_config["annotations_dir"]))
+        if dataset_config.get("annotations_dir")
+        else None
+    )
+    task = "multiclass" if manifest is not None else "binary"
+    raw_loss = str(_flat_value(flat, "train.loss", "bce_dice"))
+    if task == "multiclass":
+        loss = (
+            raw_loss
+            if raw_loss in {"cross_entropy", "cross_entropy_dice"}
+            else "cross_entropy_dice"
+        )
+    else:
+        loss = (
+            raw_loss
+            if raw_loss in {"bce_dice", "focal_dice", "focal_tversky"}
+            else "bce_dice"
+        )
     return {
         "runtime": {
             "project_root": str(config.project_root),
@@ -445,7 +466,7 @@ def _build_training_config(
             "cleanup_scratch_after_mlflow_log": True,
         },
         "dataset": {
-            **_dataset_config(session, row, config, run_dir),
+            **dataset_config,
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
@@ -455,11 +476,18 @@ def _build_training_config(
             "positive_factor": tile_factors["tile_preparation.positive_factor"],
             "hard_negative_factor": tile_factors["tile_preparation.hard_negative_factor"],
             "background_factor": tile_factors["tile_preparation.background_factor"],
+            "class_balance": task == "multiclass",
         },
         "train": {
-            "quality_metric": str(_flat_value(flat, "train.quality_metric", "pixel")),
+            "task": task,
+            "quality_metric": (
+                "pixel"
+                if task == "multiclass"
+                else str(_flat_value(flat, "train.quality_metric", "pixel"))
+            ),
             "model_name": row.architecture,
             "input_channels": _int_value(flat, "train.input_channels", 4),
+            "output_channels": len(manifest.classes) + 1 if manifest is not None else 1,
             "initial_checkpoint_uri": _blank_to_none(
                 _flat_value(flat, "train.initial_checkpoint_uri", None)
             ),
@@ -467,7 +495,7 @@ def _build_training_config(
             "batch_size": _int_value(flat, "train.batch_size", 1),
             "learning_rate": _float_value(flat, "train.learning_rate", 0.0001),
             "weight_decay": _float_value(flat, "train.weight_decay", 0.0),
-            "loss": str(_flat_value(flat, "train.loss", "bce_dice")),
+            "loss": loss,
             "focal_alpha": _float_value(flat, "train.focal_alpha", 0.6),
             "pos_weight": _float_value(flat, "train.pos_weight", 1.0),
             "hard_negative_weight": _float_value(flat, "train.hard_negative_weight", 1.0),
@@ -750,6 +778,9 @@ def _build_test_sample_f1_config(
         "report_path": str(run_dir / "scratch" / "report.json"),
         "class_key": training_result.class_key,
         "class_name": training_result.class_display_name,
+        "task": training_result.task,
+        "class_schema": list(training_result.class_schema or []),
+        "object_types": list(training_result.class_schema or []),
         "source_model": training_result.model_name,
         "training_result_id": str(training_result.id),
         "test_sample_id": str(sample.id),
@@ -832,6 +863,9 @@ def _dataset_config(
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         for source_file in annotation_files:
             shutil.copy2(source_file, snapshot_dir / source_file.name)
+        manifest_file = source_dir / ".mlsystem2-dataset.json"
+        if manifest_file.is_file():
+            shutil.copy2(manifest_file, snapshot_dir / manifest_file.name)
         return {
             "images_dir": images_dir,
             "annotations_dir": str(snapshot_dir),
@@ -971,6 +1005,7 @@ def _finish_training_job(
         if succeeded and mlflow_run_id
         else None
     )
+    checkpoint_metadata = _local_training_checkpoint_metadata(row) if succeeded else {}
     training_results = _training_results(session, row)
     for result in training_results:
         result.status = ResultStatus.OK.value if succeeded else ResultStatus.ERROR.value
@@ -979,6 +1014,19 @@ def _finish_training_job(
         if best_checkpoint is not None:
             result.f1_score = best_checkpoint.f1_score
             result.epoch = best_checkpoint.epoch
+        task = checkpoint_metadata.get("task")
+        class_schema = checkpoint_metadata.get("class_schema")
+        if task in {"binary", "multiclass"}:
+            result.task = str(task)
+        if isinstance(class_schema, list):
+            result.class_schema = [item for item in class_schema if isinstance(item, dict)]
+        if checkpoint_metadata:
+            result.training_metrics = {
+                key: value
+                for key, value in checkpoint_metadata.items()
+                if key.startswith("val_")
+                or key in {"quality_metric", "confidence_threshold", "epoch"}
+            }
         result.mlflow_run_url = (
             _mlflow_run_url(config, mlflow_experiment_id, mlflow_run_id)
             if mlflow_run_id
@@ -1007,6 +1055,23 @@ def _finish_training_job(
                 )
         session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
+
+
+def _local_training_checkpoint_metadata(row: JobRow) -> dict[str, Any]:
+    if not row.tmp_path:
+        return {}
+    path = Path(row.tmp_path) / "scratch" / "checkpoints" / "best.pt"
+    if not path.is_file():
+        return {}
+    try:
+        import torch
+
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("Не удалось прочитать metadata локального checkpoint %s", path)
+        return {}
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def _sync_training_run_id(session: Session, row: JobRow, config: TrainingUIAPIConfig) -> None:
@@ -1250,6 +1315,7 @@ def _finish_test_sample_f1_job(
             metric.threshold = (
                 float(report_threshold) if report_threshold is not None else None
             )
+            metric.metrics = dict(report.get("metrics") or {})
             metric.status = "current"
             metric.evaluated_at = row.finished_at
             metric.error = None

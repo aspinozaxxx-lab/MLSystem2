@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ._manifest import (
+    load_dataset_manifest,
+    manifest_path,
+    validate_multiclass_annotation,
+)
 from ._object_counts import (
     ImageGeometryScore,
     SceneObjectCount,
@@ -184,6 +189,11 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         raise AssertionError("annotations_dir должен быть провалидирован до подготовки")
     annotations_dir = Path(request.annotations_dir)
     errors: list[str] = []
+    manifest = None
+    try:
+        manifest = load_dataset_manifest(annotations_dir)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Не удалось загрузить схему per-image датасета: {exc}")
     try:
         resolution = resolve_per_image_annotations(images_dir, annotations_dir)
     except Exception as exc:  # noqa: BLE001
@@ -223,12 +233,18 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         )
     if not resolution.matches:
         errors.append("В per-image датасете не найдено ни одной сопоставленной сцены.")
-
     scene_to_image = {item.scene_id: item.image_path for item in resolution.matches}
     positive_rows: list[SceneObjectCount] = []
     hard_negative_rows: list[SceneObjectCount] = []
+    class_counts_by_scene: dict[str, dict[str, int]] = {}
     for item in resolution.matches:
         try:
+            if manifest is not None:
+                multiclass_counts = validate_multiclass_annotation(
+                    item.annotation_file,
+                    manifest,
+                )
+                class_counts_by_scene[item.scene_id] = multiclass_counts.by_class
             positive_count, hard_negative_count = count_per_image_annotation_roles(
                 item.annotation_file,
                 item.image_path,
@@ -264,7 +280,7 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
             item.scene_id: item.annotation_file for item in resolution.matches
         }
         dataset = PreparedDataset(
-            format="per_image_binary",
+            format=("per_image_multiclass" if manifest is not None else "per_image_binary"),
             scenes=[
                 PreparedScene(
                     scene_id=raster.scene_id,
@@ -275,6 +291,12 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
                 )
                 for raster in validation.rasters
             ],
+            classes=(list(manifest.classes) if manifest is not None else []),
+            manifest_file=(
+                manifest_path(annotations_dir).resolve().as_posix()
+                if manifest is not None
+                else None
+            ),
         )
 
     report = _build_report(
@@ -285,6 +307,7 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         missing_files=missing_files,
         errors=errors,
         validation=validation,
+        class_counts_by_scene=class_counts_by_scene,
     )
     return DatasetPreparationResult(dataset=dataset, report=report)
 
@@ -683,9 +706,11 @@ def _build_report(
     missing_files: list[str],
     errors: list[str],
     validation: RasterValidationResult | None = None,
+    class_counts_by_scene: dict[str, dict[str, int]] | None = None,
 ) -> DatasetPreparationReport:
     positive_by_scene = {row.scene_name: row.object_count for row in positive_rows}
     hard_negative_by_scene = {row.scene_name: row.object_count for row in hard_negative_rows}
+    resolved_class_counts = class_counts_by_scene or {}
     scene_reports = [
         DatasetSceneReport(
             scene_id=scene,
@@ -694,11 +719,19 @@ def _build_report(
             hard_negative_objects=max(0, int(hard_negative_by_scene.get(scene, 0))),
             object_count=max(0, int(positive_by_scene.get(scene, 0)))
             + max(0, int(hard_negative_by_scene.get(scene, 0))),
+            class_counts={
+                slug: max(0, int(count))
+                for slug, count in resolved_class_counts.get(scene, {}).items()
+            },
         )
         for scene in scenes
     ]
     positive_objects = sum(item.positive_objects for item in scene_reports)
     hard_negative_objects = sum(item.hard_negative_objects for item in scene_reports)
+    class_counts: dict[str, int] = {}
+    for item in scene_reports:
+        for slug, count in item.class_counts.items():
+            class_counts[slug] = class_counts.get(slug, 0) + count
     first_raster = validation.rasters[0] if validation and validation.rasters else None
     return DatasetPreparationReport(
         status="error" if errors else "ok",
@@ -707,6 +740,7 @@ def _build_report(
         positive_objects=positive_objects,
         hard_negative_objects=hard_negative_objects,
         objects_total=positive_objects + hard_negative_objects,
+        class_counts=class_counts,
         band_count=first_raster.band_count if first_raster is not None else None,
         dtypes=list(first_raster.dtypes) if first_raster is not None else [],
         scenes=scene_reports,

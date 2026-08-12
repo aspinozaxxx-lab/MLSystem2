@@ -41,6 +41,15 @@ def validate_feature_collection(payload: object) -> dict[str, Any]:
     if not isinstance(features, list):
         raise PluginContractError("В GeoJSON отсутствует массив features.")
     candidate_ids: set[str] = set()
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    schema = metadata.get("class_schema")
+    schema = schema if isinstance(schema, list) else []
+    known_types = {
+        str(item.get("slug")): item
+        for item in schema
+        if isinstance(item, dict) and item.get("slug")
+    }
     for index, feature in enumerate(features, start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise PluginContractError(f"Объект {index} не является GeoJSON Feature.")
@@ -67,6 +76,17 @@ def validate_feature_collection(payload: object) -> dict[str, Any]:
                 )
         if not isinstance(feature.get("geometry"), dict):
             raise PluginContractError(f"У объекта {index} отсутствует геометрия.")
+        object_type_slug = properties.get("object_type_slug")
+        if known_types:
+            if str(object_type_slug or "") not in known_types:
+                raise PluginContractError(
+                    f"У объекта {index} отсутствует известный object_type_slug."
+                )
+            expected = known_types[str(object_type_slug)]
+            if int(properties.get("object_type_id") or 0) != int(expected.get("id") or 0):
+                raise PluginContractError(f"У объекта {index} не совпадает object_type_id.")
+            if str(properties.get("object_type_color") or "") != str(expected.get("color") or ""):
+                raise PluginContractError(f"У объекта {index} не совпадает object_type_color.")
     return payload
 
 
