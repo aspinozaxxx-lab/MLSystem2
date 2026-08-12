@@ -437,6 +437,8 @@ def test_log_dataset_artifacts_writes_files_under_dataset(tmp_path: Path, monkey
     scenes.write_text("scene-1\n", encoding="utf-8")
     annotation = tmp_path / "source-annotation.geojson"
     annotation.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    manifest = tmp_path / ".mlsystem2-dataset.json"
+    manifest.write_text('{"task":"multiclass"}', encoding="utf-8")
     logged: list[tuple[str, str, str]] = []
 
     class MLflow:
@@ -452,12 +454,14 @@ def test_log_dataset_artifacts_writes_files_under_dataset(tmp_path: Path, monkey
         {
             "scenes.txt": scenes,
             "annotation.geojson": annotation,
+            "per_image/.mlsystem2-dataset.json": manifest,
         },
     )
 
     assert logged == [
         ("scenes.txt", "scene-1\n", "dataset"),
         ("annotation.geojson", '{"type":"FeatureCollection","features":[]}', "dataset"),
+        (".mlsystem2-dataset.json", '{"task":"multiclass"}', "dataset/per_image"),
     ]
 
 

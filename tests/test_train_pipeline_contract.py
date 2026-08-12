@@ -162,6 +162,8 @@ def test_train_pipeline_builds_per_image_requests_and_logs_all_geojson(
     second_annotation = annotations_dir / "Olskij_SCN07.geojson"
     first_annotation.write_text("{}", encoding="utf-8")
     second_annotation.write_text("{}", encoding="utf-8")
+    manifest = annotations_dir / ".mlsystem2-dataset.json"
+    manifest.write_text("{}", encoding="utf-8")
     (annotations_dir / "README.md").write_text("описание", encoding="utf-8")
     settings = _settings(initial_checkpoint_uri=None)
     settings.dataset = DatasetSettings(
@@ -199,6 +201,7 @@ def test_train_pipeline_builds_per_image_requests_and_logs_all_geojson(
     assert _runner._dataset_artifact_files(settings) == {
         "per_image/Olskij_SCN06.geojson": first_annotation.as_posix(),
         "per_image/Olskij_SCN07.geojson": second_annotation.as_posix(),
+        "per_image/.mlsystem2-dataset.json": manifest.as_posix(),
     }
     assert mlflow_request.dataset == "test"
     assert mlflow_request.tags["class"] == "реки_test"

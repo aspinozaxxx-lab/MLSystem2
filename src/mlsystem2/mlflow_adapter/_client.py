@@ -676,8 +676,12 @@ def _safe_dataset_artifact_name(value: str) -> Path:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise MLflowAdapterError(f"Некорректное имя артефакта датасета: {value}")
     suffix = path.suffix.lower()
-    if suffix not in {".txt", ".geojson"}:
-        raise MLflowAdapterError(f"Файл датасета должен быть .txt или .geojson: {value}")
+    is_multiclass_manifest = path.name == ".mlsystem2-dataset.json"
+    if suffix not in {".txt", ".geojson"} and not is_multiclass_manifest:
+        raise MLflowAdapterError(
+            "Файл датасета должен быть .txt, .geojson или "
+            f".mlsystem2-dataset.json: {value}"
+        )
     return path
 
 
