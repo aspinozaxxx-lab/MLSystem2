@@ -177,6 +177,7 @@ class TileDataset:
             self._read_invalid_data_pixels(dataset, window),
         )
         image = image_raw.astype(np.float32, copy=False)
+        image[:, nodata_pixels] = nodata
         mask = self._read_supervision_mask(
             scene_window.scene_index,
             dataset,
@@ -193,6 +194,8 @@ class TileDataset:
             image, mask, augmented = apply_augmentations(
                 image,
                 mask,
+                nodata_pixels=nodata_pixels,
+                nodata=nodata,
                 level=self._augmentation_level,
                 seed=self._seed,
                 sample_index=index,

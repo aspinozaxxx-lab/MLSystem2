@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from mlsystem2.models.contracts import ModelHandle, ModelSpec
-from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL, NODATA_LABEL
+from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import EpochMetrics, TrainConfig, TrainError, TrainRequest
 
@@ -290,7 +290,7 @@ def test_validation_pixel_f1_counts_known_confusion_matrix() -> None:
     assert result["best_threshold_recall"] == 0.5
 
 
-def test_validation_pixel_f1_ignores_nodata_false_positive() -> None:
+def test_validation_pixel_f1_counts_background_false_positive() -> None:
     torch = pytest.importorskip("torch")
 
     class IdentityModel(torch.nn.Module):
@@ -301,7 +301,7 @@ def test_validation_pixel_f1_ignores_nodata_false_positive() -> None:
 
     logits = torch.tensor([[[[20.0, -20.0], [20.0, -20.0]]]], dtype=torch.float32)
     masks = torch.tensor(
-        [[[[NODATA_LABEL, 0.0], [1.0, 0.0]]]],
+        [[[[0.0, 0.0], [1.0, 0.0]]]],
         dtype=torch.float32,
     )
     config = TrainConfig(
@@ -324,8 +324,8 @@ def test_validation_pixel_f1_ignores_nodata_false_positive() -> None:
         1,
     )
 
-    assert result["best_threshold_pixel_f1"] == 1.0
-    assert result["best_threshold_precision"] == 1.0
+    assert result["best_threshold_pixel_f1"] == pytest.approx(2.0 / 3.0)
+    assert result["best_threshold_precision"] == 0.5
     assert result["best_threshold_recall"] == 1.0
 
 
@@ -701,7 +701,7 @@ def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() ->
         early_stopping_patience=1,
     )
     hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         hard_config,
@@ -745,7 +745,7 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
         class_slugs=["class_a"],
     )
     hard_config = base_config.model_copy(update={"hard_negative_weight": 3.0})
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         hard_config,
@@ -815,7 +815,7 @@ def test_positive_pixels_do_not_receive_hard_negative_weight() -> None:
         early_stopping_patience=1,
     )
 
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -850,7 +850,7 @@ def test_hard_negative_weight_one_matches_base_loss() -> None:
         threshold=0.5,
         early_stopping_patience=1,
     )
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -886,7 +886,7 @@ def test_binary_losses_support_pixel_hard_negative_weight(loss_name: str) -> Non
         threshold=0.5,
         early_stopping_patience=1,
     )
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -921,7 +921,7 @@ def test_multiclass_losses_support_pixel_hard_negative_weight(loss_name: str) ->
         early_stopping_patience=1,
         class_slugs=["class_a", "class_b"],
     )
-    masks, hard_negative_pixels, _valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -1036,13 +1036,13 @@ def test_train_model_fails_after_second_nonfinite_gradient_batch(tmp_path: Path)
 
 
 @pytest.mark.parametrize("loss_name", ["bce_dice", "focal_dice", "focal_tversky"])
-def test_binary_losses_ignore_nodata_pixels(loss_name: str) -> None:
+def test_binary_losses_penalize_false_positive_on_nodata_background(loss_name: str) -> None:
     torch = pytest.importorskip("torch")
 
     from mlsystem2.train import _trainer
 
     supervision = torch.tensor(
-        [[[[NODATA_LABEL, 0.0], [1.0, 0.0]]]],
+        [[[[0.0, 0.0], [1.0, 0.0]]]],
         dtype=torch.float32,
     )
     config = TrainConfig(
@@ -1056,7 +1056,7 @@ def test_binary_losses_ignore_nodata_pixels(loss_name: str) -> None:
         threshold=0.5,
         early_stopping_patience=1,
     )
-    masks, hard_negative_pixels, valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -1067,27 +1067,25 @@ def test_binary_losses_ignore_nodata_pixels(loss_name: str) -> None:
     low.data[0, 0, 0, 0] = -20.0
     high.data[0, 0, 0, 0] = 20.0
 
-    low_loss = _trainer._loss(
-        torch, low, masks, config, hard_negative_pixels, valid_pixels
-    )
-    high_loss = _trainer._loss(
-        torch, high, masks, config, hard_negative_pixels, valid_pixels
-    )
+    low_loss = _trainer._loss(torch, low, masks, config, hard_negative_pixels)
+    high_loss = _trainer._loss(torch, high, masks, config, hard_negative_pixels)
 
-    assert torch.allclose(low_loss, high_loss)
+    assert high_loss > low_loss
     high_loss.backward()
     assert high.grad is not None
-    assert high.grad[0, 0, 0, 0].item() == pytest.approx(0.0)
+    assert abs(high.grad[0, 0, 0, 0].item()) > 0.0
 
 
 @pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
-def test_multiclass_losses_ignore_nodata_pixels(loss_name: str) -> None:
+def test_multiclass_losses_penalize_false_positive_on_nodata_background(
+    loss_name: str,
+) -> None:
     torch = pytest.importorskip("torch")
 
     from mlsystem2.train import _trainer
 
     supervision = torch.tensor(
-        [[[NODATA_LABEL, 0], [1, 2]]],
+        [[[0, 0], [1, 2]]],
         dtype=torch.long,
     )
     config = TrainConfig(
@@ -1102,7 +1100,7 @@ def test_multiclass_losses_ignore_nodata_pixels(loss_name: str) -> None:
         early_stopping_patience=1,
         class_slugs=["class_a", "class_b"],
     )
-    masks, hard_negative_pixels, valid_pixels = _trainer._prepare_supervision_masks(
+    masks, hard_negative_pixels = _trainer._prepare_supervision_masks(
         torch,
         supervision,
         config,
@@ -1111,19 +1109,15 @@ def test_multiclass_losses_ignore_nodata_pixels(loss_name: str) -> None:
     first = torch.zeros((1, 3, 2, 2), dtype=torch.float32, requires_grad=True)
     second = first.detach().clone().requires_grad_(True)
     first.data[0, :, 0, 0] = torch.tensor([20.0, -20.0, -20.0])
-    second.data[0, :, 0, 0] = torch.tensor([-20.0, 20.0, 20.0])
+    second.data[0, :, 0, 0] = torch.tensor([-20.0, 20.0, -20.0])
 
-    first_loss = _trainer._loss(
-        torch, first, masks, config, hard_negative_pixels, valid_pixels
-    )
-    second_loss = _trainer._loss(
-        torch, second, masks, config, hard_negative_pixels, valid_pixels
-    )
+    first_loss = _trainer._loss(torch, first, masks, config, hard_negative_pixels)
+    second_loss = _trainer._loss(torch, second, masks, config, hard_negative_pixels)
 
-    assert torch.allclose(first_loss, second_loss)
+    assert second_loss > first_loss
     second_loss.backward()
     assert second.grad is not None
-    assert torch.count_nonzero(second.grad[0, :, 0, 0]).item() == 0
+    assert torch.sum(torch.abs(second.grad[0, :, 0, 0])).item() > 0.0
 
 
 def _fake_loader(torch, *, with_meta: bool = False):

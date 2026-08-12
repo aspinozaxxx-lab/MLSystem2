@@ -9,6 +9,8 @@ def apply_augmentations(
     image: np.ndarray,
     mask: np.ndarray,
     *,
+    nodata_pixels: np.ndarray,
+    nodata: object,
     level: int,
     seed: int,
     sample_index: int,
@@ -17,37 +19,47 @@ def apply_augmentations(
         return np.ascontiguousarray(image), np.ascontiguousarray(mask), False
 
     rng = np.random.default_rng(seed + sample_index)
-    image, mask, augmented = _geometric(image, mask, rng)
+    image, mask, nodata_pixels, augmented = _geometric(
+        image,
+        mask,
+        nodata_pixels,
+        rng,
+    )
 
     if level >= 2:
         image = _photometric(image, rng)
         augmented = True
 
     image = np.clip(image, 0.0, 255.0)
+    image[:, nodata_pixels] = nodata
     return np.ascontiguousarray(image), np.ascontiguousarray(mask), augmented
 
 
 def _geometric(
     image: np.ndarray,
     mask: np.ndarray,
+    nodata_pixels: np.ndarray,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, bool]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
     augmented = False
     if rng.random() < 0.5:
         image = np.flip(image, axis=2)
         mask = np.flip(mask, axis=_mask_horizontal_axis(mask))
+        nodata_pixels = np.flip(nodata_pixels, axis=1)
         augmented = True
     if rng.random() < 0.5:
         image = np.flip(image, axis=1)
         mask = np.flip(mask, axis=_mask_vertical_axis(mask))
+        nodata_pixels = np.flip(nodata_pixels, axis=0)
         augmented = True
 
     rotations = int(rng.integers(0, 4))
     if rotations:
         image = np.rot90(image, rotations, axes=(1, 2))
         mask = np.rot90(mask, rotations, axes=_mask_rotation_axes(mask))
+        nodata_pixels = np.rot90(nodata_pixels, rotations, axes=(0, 1))
         augmented = True
-    return image, mask, augmented
+    return image, mask, nodata_pixels, augmented
 
 
 def _photometric(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
