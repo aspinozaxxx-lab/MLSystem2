@@ -2551,9 +2551,26 @@ def _resolve_feature_type_conflicts(
         )
         candidates.append((rank, geometry, properties))
     candidates.sort(key=lambda item: item[0], reverse=True)
-    occupied: BaseGeometry = GeometryCollection()
+    geometries = [item[1] for item in candidates]
+    tree = STRtree(geometries)
+    index_by_id = {id(geometry): index for index, geometry in enumerate(geometries)}
     result: list[dict[str, Any]] = []
-    for _rank, geometry, properties in candidates:
+    for index, (_rank, geometry, properties) in enumerate(candidates):
+        higher_ranked = [
+            candidate_index
+            for candidate_index in _intersecting_geometry_indexes(
+                tree,
+                geometries,
+                index_by_id,
+                geometry,
+            )
+            if candidate_index < index
+        ]
+        occupied = (
+            _make_valid(unary_union([geometries[item] for item in higher_ranked]))
+            if higher_ranked
+            else GeometryCollection()
+        )
         remaining = _make_valid(geometry.difference(occupied))
         for polygon in _iter_polygons(remaining):
             if polygon.is_empty or polygon.area <= 0:
@@ -2565,7 +2582,6 @@ def _resolve_feature_type_conflicts(
                     "properties": dict(properties),
                 }
             )
-        occupied = _make_valid(unary_union([occupied, geometry]))
     return result
 
 

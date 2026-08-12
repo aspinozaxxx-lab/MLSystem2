@@ -26,6 +26,7 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _multiclass_pixel_counts,
     _postprocess_mask,
     _postprocess_profile_from_config,
+    _resolve_feature_type_conflicts,
     _resolve_scene_inputs,
     _select_postprocess_profile,
     _summary,
@@ -592,6 +593,59 @@ def test_merge_overlapping_features_keeps_disjoint_polygons_separate() -> None:
     assert [item["properties"]["merged_feature_count"] for item in merged] == [1, 1]
 
 
+def test_multiclass_conflicts_use_confidence_then_priority() -> None:
+    schema = [
+        {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B", "priority": 100},
+        {"id": 2, "slug": "second", "name": "Второй", "color": "#8B5CF6", "priority": 0},
+    ]
+    features = [
+        _typed_geojson_feature(box(0, 0, 2, 2), class_id=1, confidence=0.8),
+        _typed_geojson_feature(box(1, 0, 3, 2), class_id=2, confidence=0.9),
+        _typed_geojson_feature(box(4, 0, 6, 2), class_id=1, confidence=0.7),
+        _typed_geojson_feature(box(5, 0, 7, 2), class_id=2, confidence=0.7),
+    ]
+
+    resolved = _resolve_feature_type_conflicts(features, schema)
+
+    areas_by_id: dict[int, float] = {1: 0.0, 2: 0.0}
+    for feature in resolved:
+        areas_by_id[int(feature["properties"]["object_type_id"])] += shape(
+            feature["geometry"]
+        ).area
+    assert areas_by_id == {1: 6.0, 2: 6.0}
+
+
+def test_multiclass_conflict_resolution_does_not_union_disjoint_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = [
+        {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B", "priority": 100},
+        {"id": 2, "slug": "second", "name": "Второй", "color": "#8B5CF6", "priority": 0},
+    ]
+    features = [
+        _typed_geojson_feature(
+            box(index * 3, 0, index * 3 + 1, 1),
+            class_id=(index % 2) + 1,
+            confidence=0.5,
+        )
+        for index in range(250)
+    ]
+    calls = 0
+    real_unary_union = _pseudo_runner.unary_union
+
+    def counted_unary_union(geometries):
+        nonlocal calls
+        calls += 1
+        return real_unary_union(geometries)
+
+    monkeypatch.setattr(_pseudo_runner, "unary_union", counted_unary_union)
+
+    resolved = _resolve_feature_type_conflicts(features, schema)
+
+    assert len(resolved) == len(features)
+    assert calls == 0
+
+
 def test_filter_compact_features_removes_lake_like_objects() -> None:
     profile = _postprocess_profile_from_config(
         _select_postprocess_profile(51),
@@ -1035,6 +1089,22 @@ def _geojson_feature(geometry, scene_id: str) -> dict:
             "source_model": "model",
             "postprocess_profile": "none",
             "postprocess_level": 1,
+        },
+    }
+
+
+def _typed_geojson_feature(
+    geometry,
+    *,
+    class_id: int,
+    confidence: float,
+) -> dict:
+    return {
+        "type": "Feature",
+        "geometry": geometry.__geo_interface__,
+        "properties": {
+            "object_type_id": class_id,
+            "confidence": confidence,
         },
     }
 
