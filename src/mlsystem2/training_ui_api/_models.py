@@ -71,6 +71,7 @@ class DatasetRow(Base):
         UniqueConstraint("source_type", "source_path", name="uq_datasets_source"),
         UniqueConstraint("class_id", "name", name="uq_datasets_class_name"),
         Index("ix_datasets_class_id", "class_id"),
+        Index("ix_datasets_deleted_at", "deleted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -84,6 +85,7 @@ class DatasetRow(Base):
     source_path: Mapped[str] = mapped_column(String(1024))
     config_revision: Mapped[int] = mapped_column(Integer, default=1)
     legacy_version: Mapped[bool] = mapped_column(Boolean, default=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

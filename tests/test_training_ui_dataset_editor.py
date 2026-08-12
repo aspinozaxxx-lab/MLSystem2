@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import shutil
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,8 @@ class _EditorEnvironment:
     empty_dataset_key: str
     live_annotation: Path
     editor_root: Path
+    editor_dataset: Path
+    database_path: Path
     release_marker: Path
 
 
@@ -98,9 +101,10 @@ def editor_environment(
     )
 
     release_marker = tmp_path / "release-marker"
+    database_path = tmp_path / "ui.db"
     monkeypatch.setenv(
         "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
-        f"sqlite:///{tmp_path / 'ui.db'}",
+        f"sqlite:///{database_path}",
     )
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(live_root))
@@ -141,6 +145,8 @@ def editor_environment(
             empty_dataset_key=empty_dataset["key"],
             live_annotation=live_annotation,
             editor_root=editor_root,
+            editor_dataset=editor_root / source_relative,
+            database_path=database_path,
             release_marker=release_marker,
         )
 
@@ -427,6 +433,48 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
         "Olskij_SCN01.geojson",
         "batch_SCN03.geojson",
     }
+
+
+def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    live_before = env.live_annotation.read_bytes()
+    response = env.client.delete(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    )
+
+    assert response.status_code == 200
+    commit = response.json()["commit"]
+    assert response.json()["publication_status"] == "publishing"
+    assert not env.editor_dataset.exists()
+    assert env.live_annotation.read_bytes() == live_before
+    assert _git(env.editor_root, "show", "-s", "--format=%B", commit).stdout.endswith(
+        "MLSystem2-User: editor\n\n"
+    )
+
+    catalog = env.client.get("/api/v1/dataset-catalog")
+    assert catalog.status_code == 200
+    active_keys = {
+        dataset["key"]
+        for class_info in catalog.json()["classes"]
+        for dataset in class_info["datasets"]
+    }
+    assert env.dataset_key not in active_keys
+    assert env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    ).status_code == 400
+
+    with sqlite3.connect(env.database_path) as connection:
+        source_path, deleted_at = connection.execute(
+            "SELECT source_path, deleted_at FROM datasets WHERE key = ?",
+            (env.dataset_key,),
+        ).fetchone()
+    assert source_path
+    assert deleted_at
+    assert "delete" in env.client.get("/openapi.json").json()["paths"][
+        "/api/v1/dataset-editor/datasets/{dataset_key}"
+    ]
 
 
 def test_dataset_editor_returns_service_unavailable_for_missing_clone(

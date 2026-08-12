@@ -14,6 +14,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     DatasetEditorGitError,
     add_editor_scenes,
     browse_editor_rasters,
+    delete_editor_dataset,
     delete_editor_scene,
     editor_publication_info,
     editor_scene_detail,
@@ -68,6 +69,23 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> DatasetEditorSceneListResponse:
         return _git_call(list_editor_scenes, db, ctx.config, dataset_key)
+
+    @app.delete(
+        "/api/v1/dataset-editor/datasets/{dataset_key}",
+        response_model=DatasetEditorMutationResult,
+    )
+    def delete_dataset(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorMutationResult:
+        return _git_call(
+            delete_editor_dataset,
+            db,
+            ctx.config,
+            dataset_key,
+            username=username,
+        )
 
     @app.get(
         "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}",

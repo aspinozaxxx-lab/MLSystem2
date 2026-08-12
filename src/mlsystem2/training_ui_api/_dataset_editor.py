@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import shutil
+import subprocess
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
@@ -23,6 +24,7 @@ from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mlsystem2.dataset_preparing.api import (
@@ -41,6 +43,7 @@ from ._combined_dataset import (
 )
 from ._dataset_catalog import find_managed_dataset, list_managed_datasets
 from ._datasets import RASTER_SUFFIXES
+from ._models import DatasetClassRow, DatasetRow, JobRow
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
@@ -432,6 +435,100 @@ def delete_editor_scene(
                 relative_path.as_posix(),
             )
             raise
+        return DatasetEditorMutationResult(
+            commit=commit,
+            publication_status=_publication_status(config, commit),
+        )
+
+
+def delete_editor_dataset(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    username: str,
+) -> DatasetEditorMutationResult:
+    active_job = session.scalar(
+        select(JobRow.id)
+        .where(
+            JobRow.dataset_key == dataset_key,
+            JobRow.status.in_(("queued", "running")),
+        )
+        .limit(1)
+    )
+    if active_job is not None:
+        raise TrainingUIAPIError(
+            "Перед удалением датасета завершите или удалите его активные задания."
+        )
+
+    with _editor_lock(config):
+        _synchronize_editor_clone(config)
+        dataset = _managed_editor_dataset(session, config, dataset_key)
+        row = session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.key == dataset_key,
+                DatasetRow.deleted_at.is_(None),
+            )
+        )
+        if row is None:
+            raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
+        source_dir = _editor_source_dir(config, dataset)
+        source_relative = _repo_relative(config, source_dir)
+        if len(source_relative.parts) < 2:
+            raise TrainingUIAPIError(
+                "Удалять можно только отдельную папку датасета внутри папки класса."
+            )
+        nested_sources = [
+            candidate.source_path
+            for candidate in session.scalars(
+                select(DatasetRow).where(
+                    DatasetRow.id != row.id,
+                    DatasetRow.deleted_at.is_(None),
+                )
+            )
+            if source_relative in PurePosixPath(candidate.source_path).parents
+        ]
+        if nested_sources:
+            raise TrainingUIAPIError(
+                "Папка содержит другие управляемые датасеты: "
+                + ", ".join(sorted(nested_sources, key=str.casefold))
+            )
+        tree_revision = _tree_object_revision(config, "HEAD", source_relative)
+        if tree_revision is None or not source_dir.is_dir():
+            raise TrainingUIAPIError(
+                "Папка датасета отсутствует или не зафиксирована в Git editor-клона."
+            )
+
+        _git(config, "rm", "-r", "--", source_relative.as_posix())
+        try:
+            commit = _commit(
+                config,
+                f"Удалить датасет {dataset.name}",
+                username,
+            )
+            commit = _push_with_retry(
+                config,
+                expected_revisions={},
+                expected_tree_revisions={source_relative: tree_revision},
+            )
+        except Exception:
+            _git_optional(
+                config,
+                "restore",
+                "--staged",
+                "--worktree",
+                "--",
+                source_relative.as_posix(),
+            )
+            raise
+
+        class_row = session.get(DatasetClassRow, row.class_id)
+        if class_row is not None and class_row.primary_dataset_id == row.id:
+            class_row.primary_dataset_id = None
+        row.deleted_at = datetime.now(timezone.utc)
+        row.config_revision += 1
+        row.legacy_version = False
+        session.flush()
         return DatasetEditorMutationResult(
             commit=commit,
             publication_status=_publication_status(config, commit),
@@ -1825,6 +1922,7 @@ __all__ = [
     "DatasetEditorGitError",
     "add_editor_scenes",
     "browse_editor_rasters",
+    "delete_editor_dataset",
     "delete_editor_scene",
     "editor_publication_info",
     "editor_scene_detail",

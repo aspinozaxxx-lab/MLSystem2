@@ -48,6 +48,7 @@
 - `POST /api/v1/managed-datasets`
 - `PATCH /api/v1/managed-datasets/{dataset_key}`
 - `GET /api/v1/dataset-editor/datasets`
+- `DELETE /api/v1/dataset-editor/datasets/{dataset_key}`
 - `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes`
 - `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}`
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/scenes`

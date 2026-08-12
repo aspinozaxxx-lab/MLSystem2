@@ -22,6 +22,7 @@ export type CountedScene = {
   total_count: number;
   positive_count: number;
   hard_negative_count: number;
+  class_counts?: Record<string, number>;
 };
 
 export type PublishableDraft = DraftState & {
@@ -124,6 +125,21 @@ export function featureCounts(geojson: JsonObject): {
   return { total: positive + hardNegative, positive, hardNegative };
 }
 
+export function featureClassCounts(geojson: JsonObject): Record<string, number> {
+  const result: Record<string, number> = {};
+  const features = Array.isArray(geojson.features) ? geojson.features : [];
+  for (const feature of features) {
+    if (!feature || typeof feature !== "object") continue;
+    const properties = (feature as JsonObject).properties;
+    if (!properties || typeof properties !== "object") continue;
+    const values = properties as JsonObject;
+    if (values._mlsystem2_role === "hard_negative") continue;
+    const slug = values._mlsystem2_class;
+    if (typeof slug === "string" && slug) result[slug] = (result[slug] || 0) + 1;
+  }
+  return result;
+}
+
 export function draftChanged(draft: DraftState): boolean {
   return canonicalJson(draft.baseline.geojson) !== canonicalJson(draft.current.geojson);
 }
@@ -179,6 +195,15 @@ export function sceneCounts(
         positive: scene.positive_count,
         hardNegative: scene.hard_negative_count,
       };
+}
+
+export function sceneClassCounts(
+  scene: CountedScene,
+  draft: DraftState | undefined,
+): Record<string, number> {
+  return draft
+    ? featureClassCounts(draft.current.geojson)
+    : { ...(scene.class_counts || {}) };
 }
 
 export function sortEditorScenes<T extends CountedScene>(

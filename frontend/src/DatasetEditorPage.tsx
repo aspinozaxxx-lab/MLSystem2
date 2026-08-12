@@ -40,10 +40,12 @@ import {
   cloneSnapshot,
   draftChanged,
   extendRasterResolutions,
+  featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
   publishScenes as buildPublishScenes,
   RASTER_CONTRAST,
+  sceneClassCounts,
   sceneCounts,
   sortEditorScenes,
   undoDraft,
@@ -150,6 +152,7 @@ type RebuildResult = MutationResult & {
 
 const ROLE_PROPERTY = "_mlsystem2_role";
 const CLASS_PROPERTY = "_mlsystem2_class";
+const POSITIVE_COLOR = "#F3C623";
 const HARD_NEGATIVE_COLOR = "#EF4444";
 const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
   RGB: [1, 2, 3],
@@ -989,17 +992,41 @@ export function DatasetEditorPage({
               {sortedScenes.map((scene) => {
                 const draft = drafts[scene.annotation_name];
                 const counts = sceneCounts(scene, draft);
+                const classCounts = sceneClassCounts(scene, draft);
                 const changed = Boolean(draft && draftChanged(draft));
+                const countDescription = selectedDataset?.task === "multiclass"
+                  ? objectTypeChoices
+                    .map((item) => `${item.name}: ${classCounts[item.slug] || 0}`)
+                    .join(", ")
+                  : `positive: ${counts.positive}`;
                 return (
                   <button
                     className={scene.annotation_name === annotationName ? "active" : ""}
                     type="button"
                     key={scene.annotation_name}
-                    title={`Открыть снимок ${scene.image_name}. ${counts.total} объектов: ${counts.positive} positive, ${counts.hardNegative} hard negative${changed ? ". Есть неопубликованные изменения" : ""}`}
+                    title={`Открыть снимок ${scene.image_name}. ${counts.total} объектов: ${countDescription}, hard negative: ${counts.hardNegative}${changed ? ". Есть неопубликованные изменения" : ""}`}
                     onClick={() => selectScene(scene.annotation_name)}
                   >
-                    {changed ? <span className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
-                    <span>{counts.total} · +{counts.positive} / −{counts.hardNegative}</span>
+                    <span className="dataset-editor-scene-name">
+                      <strong>{scene.image_name}</strong>
+                      {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
+                    </span>
+                    <span className="dataset-editor-scene-counts">
+                      {selectedDataset?.task === "multiclass"
+                        ? objectTypeChoices.map((item) => (
+                          <i key={item.slug} style={{ color: item.color }}>
+                            {item.name}: <strong>{classCounts[item.slug] || 0}</strong>
+                          </i>
+                        ))
+                        : (
+                          <i style={{ color: POSITIVE_COLOR }}>
+                            Разметка: <strong>{counts.positive}</strong>
+                          </i>
+                        )}
+                      <i style={{ color: HARD_NEGATIVE_COLOR }}>
+                        Hard negative: <strong>{counts.hardNegative}</strong>
+                      </i>
+                    </span>
                   </button>
                 );
               })}
@@ -1403,21 +1430,6 @@ function applyObjectSelection(
   }
 }
 
-function featureClassCounts(geojson: JsonObject): Record<string, number> {
-  const result: Record<string, number> = {};
-  const features = Array.isArray(geojson.features) ? geojson.features : [];
-  for (const raw of features) {
-    if (!raw || typeof raw !== "object") continue;
-    const properties = (raw as JsonObject).properties;
-    if (!properties || typeof properties !== "object") continue;
-    const values = properties as JsonObject;
-    if (values[ROLE_PROPERTY] === "hard_negative") continue;
-    const slug = values[CLASS_PROPERTY];
-    if (typeof slug === "string" && slug) result[slug] = (result[slug] || 0) + 1;
-  }
-  return result;
-}
-
 function formatRebuildChange(change: RebuildChange): string {
   const origin = change.origin_key ? ` · ${change.origin_key}` : "";
   const detail = change.detail ? ` · ${change.detail}` : "";
@@ -1444,7 +1456,7 @@ function featureStyle(
   const classSlug = typeof feature.get(CLASS_PROPERTY) === "string" ? String(feature.get(CLASS_PROPERTY)) : "";
   const semanticColor = role === "hard_negative"
     ? HARD_NEGATIVE_COLOR
-    : objectTypes.find((item) => item.slug === classSlug)?.color || "#F3C623";
+    : objectTypes.find((item) => item.slug === classSlug)?.color || POSITIVE_COLOR;
   const isNew = newFeatures.has(feature);
   const key = `${selected ? "selected" : role}:${semanticColor}:${isNew ? "new" : "saved"}:${filled ? "filled" : "outline"}`;
   const cached = styleCache.get(key);

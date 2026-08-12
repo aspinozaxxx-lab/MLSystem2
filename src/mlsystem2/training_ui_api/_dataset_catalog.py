@@ -142,7 +142,7 @@ def list_managed_datasets(
         select(DatasetRow, DatasetClassRow).join(
             DatasetClassRow,
             DatasetClassRow.id == DatasetRow.class_id,
-        )
+        ).where(DatasetRow.deleted_at.is_(None))
     ).all()
     image_indexes: dict[Path, dict[str, list[Path]]] = {}
     datasets = [
@@ -212,7 +212,10 @@ def find_managed_dataset(
     row = session.execute(
         select(DatasetRow, DatasetClassRow)
         .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
-        .where(DatasetRow.key == dataset_key)
+        .where(
+            DatasetRow.key == dataset_key,
+            DatasetRow.deleted_at.is_(None),
+        )
     ).one_or_none()
     if row is None:
         return None
@@ -366,6 +369,7 @@ def create_managed_dataset(
             previous_class.primary_dataset_id = None
         source_owner.class_id = class_row.id
         source_owner.name = name
+        source_owner.deleted_at = None
         source_owner.config_revision += 1
         source_owner.legacy_version = False
         dataset = source_owner
@@ -1075,7 +1079,12 @@ def _class_row(session: Session, key: str) -> DatasetClassRow:
 
 
 def _dataset_row(session: Session, key: str) -> DatasetRow:
-    row = session.scalar(select(DatasetRow).where(DatasetRow.key == key))
+    row = session.scalar(
+        select(DatasetRow).where(
+            DatasetRow.key == key,
+            DatasetRow.deleted_at.is_(None),
+        )
+    )
     if row is None:
         raise TrainingUIAPIError(f"Датасет не найден: {key}")
     return row

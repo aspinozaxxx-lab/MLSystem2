@@ -364,6 +364,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Dataset */
+        delete: operations["delete_dataset_api_v1_dataset_editor_datasets__dataset_key__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
         parameters: {
             query?: never;
@@ -4227,6 +4244,37 @@ export interface operations {
                 "application/json": components["schemas"]["DatasetEditorAddScenesRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dataset_api_v1_dataset_editor_datasets__dataset_key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

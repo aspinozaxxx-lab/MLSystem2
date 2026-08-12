@@ -6,9 +6,11 @@ import {
   appendHistory,
   draftChanged,
   extendRasterResolutions,
+  featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
   publishScenes,
+  sceneClassCounts,
   sortEditorScenes,
   undoDraft,
   type DraftSnapshot,
@@ -103,6 +105,33 @@ describe("черновики редактора датасетов", () => {
       positive: 2,
       hardNegative: 1,
     });
+  });
+
+  it("считает типы объектов снимка из сохранённого состояния и черновика", () => {
+    const scene = {
+      annotation_name: "scene.geojson",
+      total_count: 3,
+      positive_count: 2,
+      hard_negative_count: 1,
+      class_counts: { river: 2, lake: 0 },
+    };
+    expect(sceneClassCounts(scene, undefined)).toEqual({ river: 2, lake: 0 });
+
+    const geojson = {
+      type: "FeatureCollection",
+      features: [
+        { properties: { _mlsystem2_role: "positive", _mlsystem2_class: "river" } },
+        { properties: { _mlsystem2_role: "positive", _mlsystem2_class: "lake" } },
+        { properties: { _mlsystem2_role: "hard_negative" } },
+      ],
+    };
+    const currentDraft = {
+      baseline: { geojson, newFeatureIndexes: [] },
+      current: { geojson, newFeatureIndexes: [] },
+      history: [],
+    };
+    expect(featureClassCounts(geojson)).toEqual({ river: 1, lake: 1 });
+    expect(sceneClassCounts(scene, currentDraft)).toEqual({ river: 1, lake: 1 });
   });
 
   it("не считает изменением только другой порядок полей GeoJSON", () => {

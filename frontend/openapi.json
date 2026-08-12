@@ -737,6 +737,45 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}": {
+      "delete": {
+        "summary": "Delete Dataset",
+        "operationId": "delete_dataset_api_v1_dataset_editor_datasets__dataset_key__delete",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
       "get": {
         "summary": "Scene",

@@ -44,6 +44,7 @@ import type {
   ConfigSchema,
   CustomDatasetInfo,
   DatasetCatalogInfo,
+  DatasetEditorMutationResult,
   DatasetInfo,
   ImageryType,
   ImageFolderInfo,
@@ -2337,6 +2338,57 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     });
   };
 
+  const confirmDatasetDeletion = (dataset: DatasetInfo) => {
+    showModal({
+      title: `Удалить датасет «${dataset.dataset_name || dataset.name}»?`,
+      body: (
+        <div className="form-stack">
+          <p>
+            Папка <strong>{dataset.source_path}</strong> будет удалена из MLMarkup отдельным Git-коммитом.
+          </p>
+          <div className="notice warning">
+            Запись датасета, задания и результаты останутся в PostgreSQL и MLflow. Восстановления через
+            интерфейс нет.
+          </div>
+          {dataset.is_primary ? (
+            <p>После удаления у класса не будет основного датасета, пока вы не выберете другой.</p>
+          ) : null}
+        </div>
+      ),
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button
+            className="danger"
+            type="button"
+            onClick={async () => {
+              const result = await run(() =>
+                apiJson<DatasetEditorMutationResult>(
+                  `/dataset-editor/datasets/${encodeURIComponent(dataset.key)}`,
+                  { method: "DELETE" },
+                ),
+              );
+              if (!result) return;
+              await loadCatalog();
+              await reloadBootstrap();
+              showModal({
+                title: "Датасет удалён",
+                body: (
+                  <p>
+                    Git-коммит <strong>{result.commit.slice(0, 8)}</strong> создан. Публикация MLMarkup:
+                    {result.publication_status === "published" ? " завершена" : " выполняется"}.
+                  </p>
+                ),
+              });
+            }}
+          >
+            <Trash2 size={15} /> Удалить датасет
+          </button>
+        </>
+      ),
+    });
+  };
+
   const synchronize = async () => {
     await applyCatalog(await run(() =>
       apiJson<DatasetCatalogInfo>("/dataset-catalog/sync", { method: "POST" }),
@@ -2438,6 +2490,15 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                         onClick={() => openDatasetEditor(classInfo.key, dataset)}
                       >
                         Параметры
+                      </button>
+                      <button
+                        className="danger icon-button"
+                        type="button"
+                        aria-label={`Удалить датасет ${dataset.dataset_name || dataset.name}`}
+                        title="Удалить папку датасета из MLMarkup"
+                        onClick={() => confirmDatasetDeletion(dataset)}
+                      >
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   </div>
