@@ -447,27 +447,18 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                         float(value),
                         step=metrics.epoch,
                     )
-            mlflow.log_metric(
-                "val/best_threshold_object_precision",
-                metrics.val_best_threshold_object_precision or 0.0,
-                step=metrics.epoch,
-            )
-            mlflow.log_metric(
-                "val/best_threshold_object_recall",
-                metrics.val_best_threshold_object_recall or 0.0,
-                step=metrics.epoch,
-            )
-            mlflow.log_metric("val/object_f1", metrics.val_best_threshold_object_f1, step=metrics.epoch)
-            mlflow.log_metric(
-                "val/object_precision",
-                metrics.val_best_threshold_object_precision or 0.0,
-                step=metrics.epoch,
-            )
-            mlflow.log_metric(
-                "val/object_recall",
-                metrics.val_best_threshold_object_recall or 0.0,
-                step=metrics.epoch,
-            )
+        object_scalars = {
+            "val/best_threshold_object_precision": (
+                metrics.val_best_threshold_object_precision
+            ),
+            "val/best_threshold_object_recall": metrics.val_best_threshold_object_recall,
+            "val/object_f1": metrics.val_best_threshold_object_f1,
+            "val/object_precision": metrics.val_best_threshold_object_precision,
+            "val/object_recall": metrics.val_best_threshold_object_recall,
+        }
+        for metric_name, value in object_scalars.items():
+            if value is not None:
+                mlflow.log_metric(metric_name, value, step=metrics.epoch)
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc

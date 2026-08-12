@@ -559,6 +559,59 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
     ]
 
 
+def test_log_training_epoch_multiclass_skips_empty_object_metrics(monkeypatch) -> None:
+    logged: list[tuple[str, float, int]] = []
+
+    class MLflow:
+        @staticmethod
+        def log_metric(name: str, value: float, step: int = 0) -> None:
+            assert value is not None
+            logged.append((name, value, step))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    run = MLflowRunRef(
+        run_id="run",
+        experiment_name="test",
+        tracking_uri="file://mlruns",
+        active=True,
+    )
+
+    _client.log_training_epoch(
+        run,
+        EpochMetrics(
+            epoch=1,
+            train_loss=1.0,
+            val_loss=1.0,
+            val_macro_pixel_f1=0.4,
+            val_micro_pixel_f1=0.5,
+            val_per_class_metrics=[
+                {
+                    "slug": "flooding",
+                    "precision": 0.3,
+                    "recall": 0.4,
+                    "f1": 0.34,
+                    "iou": 0.2,
+                },
+                {
+                    "slug": "waterlogging",
+                    "precision": 0.5,
+                    "recall": 0.6,
+                    "f1": 0.54,
+                    "iou": 0.37,
+                },
+            ],
+            epoch_time_sec=1.0,
+        ),
+    )
+
+    names = {name for name, _value, _step in logged}
+    assert "val/macro_pixel_f1" in names
+    assert "val/micro_pixel_f1" in names
+    assert "val/class/flooding/f1" in names
+    assert "val/class/waterlogging/iou" in names
+    assert not any("object" in name for name in names)
+
+
 def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
     logged: list[tuple[str, float, int | None]] = []
 
