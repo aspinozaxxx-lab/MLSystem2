@@ -7,6 +7,7 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
+from shapely.ops import unary_union
 
 from mlsystem2.dataset_preparing.contracts import (
     DatasetClassDefinition,
@@ -129,6 +130,63 @@ def test_combined_builder_applies_priority_background_and_stable_ids(
     assert first_build.manifest.baseline_hashes
 
 
+def test_source_features_disambiguate_duplicate_source_ids(tmp_path: Path) -> None:
+    repo = tmp_path / "markup"
+    source = repo / "first" / "main" / "first.geojson"
+    source.parent.mkdir(parents=True)
+    _write_geojson(
+        source,
+        [
+            _feature("duplicate", box(0, 0, 1, 1)),
+            _feature("duplicate", box(2, 0, 3, 1)),
+            _feature("duplicate", box(4, 0, 5, 1)),
+        ],
+    )
+
+    first = _combined_dataset._load_source_features(
+        source,
+        repo,
+        role="positive",
+        class_slug="first",
+        warnings_list=[],
+    )
+    second = _combined_dataset._load_source_features(
+        source,
+        repo,
+        role="positive",
+        class_slug="first",
+        warnings_list=[],
+    )
+
+    assert len({item.origin_key for item in first}) == 3
+    assert [item.origin_key for item in first] == [item.origin_key for item in second]
+
+
+def test_target_priorities_remove_reprojection_overlap() -> None:
+    high = _source_feature("high", "first", "positive")
+    low = _source_feature("low", "second", "positive")
+    hard_negative = _source_feature("hard", None, "hard_negative")
+    classes = [
+        DatasetClassDefinition(id=1, slug="first", name="Первый", color="#F59E0B", priority=100),
+        DatasetClassDefinition(id=2, slug="second", name="Второй", color="#8B5CF6", priority=0),
+    ]
+
+    resolved = _combined_dataset._apply_target_priorities(
+        [
+            (high, box(0, 0, 2, 2)),
+            (low, box(1, 1, 3, 3)),
+            (hard_negative, box(0, 0, 4, 4)),
+        ],
+        classes,
+    )
+    by_key = {item.origin_key: geometry for item, geometry in resolved}
+
+    assert by_key["high"].intersection(by_key["low"]).area == 0.0
+    assert unary_union([by_key["high"], by_key["low"]]).intersection(by_key["hard"]).area == 0.0
+    assert by_key["low"].area == 3.0
+    assert by_key["hard"].area == 9.0
+
+
 def test_rebuild_merge_preserves_manual_edits_additions_and_deletions() -> None:
     original = _origin_feature("source:a", "original", box(0, 0, 2, 2))
     deleted = _origin_feature("source:deleted", "deleted", box(3, 0, 4, 1))
@@ -219,6 +277,23 @@ def _feature(feature_id: str, geometry) -> dict[str, object]:
         "properties": {"name": feature_id},
         "geometry": mapping(geometry),
     }
+
+
+def _source_feature(
+    origin_key: str,
+    class_slug: str | None,
+    role: str,
+) -> _combined_dataset._SourceFeature:
+    return _combined_dataset._SourceFeature(
+        geometry_wgs84=box(0, 0, 1, 1),
+        properties={},
+        feature_id=origin_key,
+        origin_key=origin_key,
+        origin_hash=f"hash:{origin_key}",
+        source_path="source.geojson",
+        role=role,
+        class_slug=class_slug,
+    )
 
 
 def _origin_feature(origin_key: str, feature_id: str, geometry) -> dict[str, object]:

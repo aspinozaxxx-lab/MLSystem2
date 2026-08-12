@@ -146,13 +146,19 @@ def build_combined_dataset(
 
             footprint = _valid_data_footprint(image.path)
             transformer = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
-            target_features: list[dict[str, Any]] = []
-            target_hashes: dict[str, str] = {}
+            transformed_features: list[tuple[_SourceFeature, BaseGeometry]] = []
             for item in all_features:
                 transformed = transform_geometry(transformer.transform, item.geometry_wgs84)
                 clipped = _polygonal(transformed.intersection(footprint))
                 if clipped.is_empty or clipped.area <= 0:
                     continue
+                transformed_features.append((item, clipped))
+            target_features: list[dict[str, Any]] = []
+            target_hashes: dict[str, str] = {}
+            for item, clipped in _apply_target_priorities(
+                transformed_features,
+                manifest.classes,
+            ):
                 target_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
@@ -251,6 +257,7 @@ def _load_source_features(
     transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
     relative = path.resolve().relative_to(repo_root).as_posix()
     output: list[_SourceFeature] = []
+    used_origin_keys: set[str] = set()
     for index, feature in enumerate(payload.get("features") or [], start=1):
         if not isinstance(feature, dict):
             warnings_list.append(f"Пропущен некорректный объект {relative}#{index}")
@@ -291,6 +298,14 @@ def _load_source_features(
                 "properties": clean_properties,
             }
         origin_key = hashlib.sha256(_canonical_json(origin_payload).encode("utf-8")).hexdigest()
+        duplicate_index = 1
+        while origin_key in used_origin_keys:
+            duplicate_index += 1
+            origin_payload["duplicate_index"] = duplicate_index
+            origin_key = hashlib.sha256(
+                _canonical_json(origin_payload).encode("utf-8")
+            ).hexdigest()
+        used_origin_keys.add(origin_key)
         origin_hash = hashlib.sha256(
             _canonical_json(
                 {"geometry": mapping(geometry), "properties": clean_properties}
@@ -334,6 +349,45 @@ def _apply_positive_priorities(
             occupied = _polygonal(
                 unary_union([occupied, *(item.geometry_wgs84 for item in class_features)])
             )
+    return output
+
+
+def _apply_target_priorities(
+    features: list[tuple[_SourceFeature, BaseGeometry]],
+    classes: list[DatasetClassDefinition],
+) -> list[tuple[_SourceFeature, BaseGeometry]]:
+    """Повторно разрешить приоритеты после reprojection в CRS конкретного TIFF."""
+
+    positives_by_slug: dict[str, list[tuple[_SourceFeature, BaseGeometry]]] = {
+        item.slug: [] for item in classes
+    }
+    hard_negatives: list[tuple[_SourceFeature, BaseGeometry]] = []
+    for feature, geometry in features:
+        if feature.role == "positive" and feature.class_slug in positives_by_slug:
+            positives_by_slug[str(feature.class_slug)].append((feature, geometry))
+        elif feature.role == "hard_negative":
+            hard_negatives.append((feature, geometry))
+
+    occupied: BaseGeometry = Polygon()
+    output: list[tuple[_SourceFeature, BaseGeometry]] = []
+    for definition in sorted(classes, key=lambda item: (-item.priority, item.id)):
+        current_class: list[tuple[_SourceFeature, BaseGeometry]] = []
+        for feature, geometry in positives_by_slug[definition.slug]:
+            resolved = _polygonal(geometry.difference(occupied))
+            if resolved.is_empty or resolved.area <= 0:
+                continue
+            current_class.append((feature, resolved))
+        output.extend(current_class)
+        if current_class:
+            occupied = _polygonal(
+                unary_union([occupied, *(geometry for _, geometry in current_class)])
+            )
+
+    for feature, geometry in hard_negatives:
+        resolved = _polygonal(geometry.difference(occupied))
+        if resolved.is_empty or resolved.area <= 0:
+            continue
+        output.append((feature, resolved))
     return output
 
 
