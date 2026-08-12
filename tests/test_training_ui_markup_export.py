@@ -31,9 +31,10 @@ from mlsystem2.dataset_preparing.contracts import (
     DatasetPreparationRequest,
     SceneImageResolutionRequest,
 )
-from mlsystem2.training_ui_api import _markup_export, _test_samples
+from mlsystem2.training_ui_api import _markup_export, _test_samples, _worker
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
+from mlsystem2.training_ui_api._dataset_catalog import dataset_class_row
 from mlsystem2.training_ui_api._models import (
     JobRow,
     PseudoMarkupResultRow,
@@ -58,7 +59,9 @@ from mlsystem2.training_ui_api._test_samples import (
     mark_test_samples_stale_for_pseudo_markup,
     optimize_test_sample,
     optimize_test_sample_preview,
+    queue_test_sample_evaluation,
     queue_training_result_test_f1,
+    reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
     test_sample_detail as _test_sample_detail,
     training_result_test_f1_info,
@@ -66,9 +69,11 @@ from mlsystem2.training_ui_api._test_samples import (
     update_test_sample_tile,
     update_test_sample,
 )
+from mlsystem2.training_ui_api._worker import _finish_test_sample_f1_job
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import (
     ImageryType,
+    JobSource,
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
@@ -1560,6 +1565,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             "properties"
         ]
         assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
+        assert "/api/v1/test-samples/reconcile" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
@@ -1628,6 +1634,11 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert catalog["classes"][0]["datasets"][0]["samples"][0]["name"] == (
             "Контрольная выборка"
         )
+        reconciled = client.post("/api/v1/test-samples/reconcile")
+        assert reconciled.status_code == 200
+        assert reconciled.json()["classes"][0]["datasets"][0]["samples"][0][
+            "evaluation"
+        ]["status"] == "unavailable"
 
         preview = client.get(sample["tiles"][0]["preview_url"])
         assert preview.status_code == 200
@@ -1926,24 +1937,33 @@ def test_persistent_test_sample_metrics_and_stale_revision(
 
         evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
         detail = _test_sample_detail(session, sample_id)
-        assert detail.evaluation.status == "current"
-        assert detail.evaluation.pixel is not None
-        assert detail.evaluation.objects is not None
-        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
-        assert detail.evaluation.objects.f1 == pytest.approx(1.0)
+        assert detail.evaluation.status == "unavailable"
+        assert detail.evaluation.pixel is None
+        assert detail.evaluation.objects is None
+        assert detail.evaluation.pseudo_markup_result_id == pseudo.id
+        assert all(tile.f1_score == pytest.approx(1.0) for tile in detail.tiles)
+
+        full_preview = evaluate_test_sample_preview(
+            session,
+            sample_id,
+            _TestSampleEvaluationPreviewRequest(enabled_tile_indices=[1, 2]),
+            config,
+        )
+        assert full_preview.evaluation.pixel is not None
+        assert full_preview.evaluation.objects is not None
+        assert full_preview.evaluation.pixel.f1 == pytest.approx(1.0)
+        assert full_preview.evaluation.objects.f1 == pytest.approx(1.0)
         expected_pixels = 0
         source_root = config.stored_files_root / "test-samples" / str(sample_id)
         for mask_path in source_root.glob("tile_*_mask.png"):
             with rasterio.open(mask_path) as mask_dataset:
                 expected_pixels += int((mask_dataset.read(1) > 0).sum())
-        assert detail.evaluation.pixel.true_positive == expected_pixels
-        assert detail.evaluation.pixel.false_positive == 0
-        assert detail.evaluation.pixel.false_negative == 0
-        assert detail.evaluation.objects.true_positive == detail.actual_object_count
-        assert detail.evaluation.objects.false_positive == 0
-        assert detail.evaluation.objects.false_negative == 0
-        assert detail.evaluation.pseudo_markup_result_id == pseudo.id
-        assert all(tile.f1_score == pytest.approx(1.0) for tile in detail.tiles)
+        assert full_preview.evaluation.pixel.true_positive == expected_pixels
+        assert full_preview.evaluation.pixel.false_positive == 0
+        assert full_preview.evaluation.pixel.false_negative == 0
+        assert full_preview.evaluation.objects.true_positive == detail.actual_object_count
+        assert full_preview.evaluation.objects.false_positive == 0
+        assert full_preview.evaluation.objects.false_negative == 0
 
         sample_row = session.get(_TestSampleRow, sample_id)
         assert sample_row is not None
@@ -2024,9 +2044,8 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         )
         assert optimized.enabled_image_count == 2
         assert all(tile.enabled for tile in optimized.tiles)
-        assert optimized.evaluation.status == "current"
-        assert optimized.evaluation.objects is not None
-        assert optimized.evaluation.objects.f1 == pytest.approx(1.0)
+        assert optimized.evaluation.status == "unavailable"
+        assert optimized.evaluation.objects is None
 
         detail = update_test_sample_tile(
             session,
@@ -2034,14 +2053,12 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             1,
             _TestSampleTileUpdate(enabled=False),
         )
-        assert detail.evaluation.status == "stale"
-        assert detail.evaluation.pixel is not None
-        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+        assert detail.evaluation.status == "unavailable"
+        assert detail.evaluation.pixel is None
 
         detail = evaluate_test_sample_by_id(session, sample_id, config)
-        assert detail.evaluation.status == "current"
-        assert detail.evaluation.pixel is not None
-        assert detail.evaluation.pixel.f1 == pytest.approx(1.0)
+        assert detail.evaluation.status == "unavailable"
+        assert detail.evaluation.pixel is None
         assert detail.tiles[0].enabled is False
         assert all(tile.f1_score == pytest.approx(1.0) for tile in detail.tiles)
 
@@ -2068,7 +2085,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
 
         mark_test_samples_stale_for_pseudo_markup(session, pseudo.id)
         detail = _test_sample_detail(session, sample_id)
-        assert detail.evaluation.status == "stale"
+        assert detail.evaluation.status == "unavailable"
         assert detail.evaluation.pseudo_markup_result_id is None
 
 
@@ -2080,6 +2097,308 @@ def test_object_f1_matching_uses_inclusive_half_iou() -> None:
 
     assert matched == _test_samples_metric_counts(1, 0, 0)
     assert missed == _test_samples_metric_counts(0, 1, 1)
+
+
+def test_saved_test_samples_are_evaluated_by_current_primary_network(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        first = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Основная",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        second = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Другой датасет класса",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=2,
+                object_count=4,
+            ),
+            config,
+        )
+        second_row = session.get(_TestSampleRow, second.id)
+        assert second_row is not None
+        second_row.dataset_key = "Вырубки\\strict"
+        second_row.dataset_name = "Вырубки\\strict"
+        second_row.dataset_short_name = "strict"
+
+        first_result = TrainingResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="Основная сеть 1",
+            mlflow_run_id="run-primary-1",
+            status="ok",
+        )
+        session.add(first_result)
+        session.flush()
+        class_row = dataset_class_row(session, first.class_key)
+        assert class_row is not None
+        class_row.primary_training_result_id = first_result.id
+        session.flush()
+
+        assert reconcile_test_sample_evaluations(session, config) == 2
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        direct_jobs = [
+            job
+            for job in session.scalars(select(JobRow)).all()
+            if (job.config or {}).get("metric_target") == "test_sample"
+        ]
+        assert len(direct_jobs) == 2
+        assert all(job.source == "automation" for job in direct_jobs)
+        assert {job.dataset_key for job in direct_jobs} == {
+            "Вырубки\\main",
+            "Вырубки\\strict",
+        }
+        strict_job = next(job for job in direct_jobs if job.dataset_key == "Вырубки\\strict")
+        monkeypatch.setattr(
+            _worker,
+            "_best_training_checkpoint",
+            lambda _config, _run_id: SimpleNamespace(
+                artifact_uri="file:///checkpoint.pt",
+                artifact_path="checkpoints/best.pt",
+                f1_score=0.8,
+                epoch=20,
+                threshold=0.5,
+            ),
+        )
+        worker_config = _worker._build_test_sample_f1_config(
+            session,
+            strict_job,
+            config,
+            tmp_path / "strict-worker-config",
+        )
+        assert worker_config["metric_target"] == "test_sample"
+        assert worker_config["test_sample_id"] == str(second.id)
+        assert [tile["index"] for tile in worker_config["tiles"]] == [1, 2]
+        queued = _test_sample_detail(session, first.id)
+        assert queued.evaluation.status == "queued"
+        assert queued.evaluation.training_result_id is None
+        assert queued.evaluation.target_training_result_id == first_result.id
+        assert queued.evaluation.target_model_name == "Основная сеть 1"
+
+        first_job = next(
+            job
+            for job in direct_jobs
+            if (job.config or {}).get("test_sample_id") == str(first.id)
+        )
+        run_root = tmp_path / "direct-evaluation-1"
+        (run_root / "scratch").mkdir(parents=True)
+        (run_root / "scratch" / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "processed": 2,
+                    "threshold": 0.61,
+                    "true_positive": 90,
+                    "false_positive": 10,
+                    "false_negative": 20,
+                    "object_true_positive": 7,
+                    "object_false_positive": 2,
+                    "object_false_negative": 1,
+                    "metrics": {"task": "binary"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        first_job.tmp_path = str(run_root)
+        first_job.status = "running"
+        _finish_test_sample_f1_job(
+            session,
+            first_job,
+            config,
+            succeeded=True,
+        )
+        current = _test_sample_detail(session, first.id)
+        assert current.evaluation.status == "current"
+        assert current.evaluation.training_result_id == first_result.id
+        assert current.evaluation.model_name == "Основная сеть 1"
+        assert current.evaluation.threshold == pytest.approx(0.61)
+        assert current.evaluation.pixel is not None
+        assert current.evaluation.pixel.true_positive == 90
+        assert current.evaluation.objects is not None
+        assert current.evaluation.objects.true_positive == 7
+
+        second_result = TrainingResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="Основная сеть 2",
+            mlflow_run_id="run-primary-2",
+            status="ok",
+        )
+        session.add(second_result)
+        session.flush()
+        class_row.primary_training_result_id = second_result.id
+        session.flush()
+        assert reconcile_test_sample_evaluations(
+            session,
+            config,
+            class_keys={first.class_key},
+        ) == 2
+        pending = _test_sample_detail(session, first.id)
+        assert pending.evaluation.status == "queued"
+        assert pending.evaluation.training_result_id == first_result.id
+        assert pending.evaluation.model_name == "Основная сеть 1"
+        assert pending.evaluation.target_training_result_id == second_result.id
+        assert pending.evaluation.target_model_name == "Основная сеть 2"
+
+        failed_job = session.get(JobRow, pending.evaluation.job_id)
+        assert failed_job is not None
+        failed_root = tmp_path / "direct-evaluation-failed"
+        (failed_root / "scratch").mkdir(parents=True)
+        failed_job.tmp_path = str(failed_root)
+        failed_job.status = "running"
+        _finish_test_sample_f1_job(
+            session,
+            failed_job,
+            config,
+            succeeded=False,
+        )
+        failed = _test_sample_detail(session, first.id)
+        assert failed.evaluation.status == "error"
+        assert failed.evaluation.pixel is not None
+        assert reconcile_test_sample_evaluations(
+            session,
+            config,
+            sample_ids={first.id},
+        ) == 0
+        first_row = session.get(_TestSampleRow, first.id)
+        assert first_row is not None
+        assert queue_test_sample_evaluation(
+            session,
+            first_row,
+            config,
+            source=JobSource.MANUAL,
+            force=True,
+        )
+        retry = _test_sample_detail(session, first.id)
+        assert retry.evaluation.status == "queued"
+        retry_job = session.get(JobRow, retry.evaluation.job_id)
+        assert retry_job is not None and retry_job.source == "manual"
+        first_row.content_revision += 1
+        race_root = tmp_path / "direct-evaluation-race"
+        (race_root / "scratch").mkdir(parents=True)
+        (race_root / "scratch" / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "processed": 2,
+                    "true_positive": 999,
+                    "false_positive": 0,
+                    "false_negative": 0,
+                    "object_true_positive": 999,
+                    "object_false_positive": 0,
+                    "object_false_negative": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        retry_job.tmp_path = str(race_root)
+        retry_job.status = "running"
+        _finish_test_sample_f1_job(
+            session,
+            retry_job,
+            config,
+            succeeded=True,
+        )
+        raced = _test_sample_detail(session, first.id)
+        assert raced.evaluation.status == "queued"
+        assert raced.evaluation.pixel is not None
+        assert raced.evaluation.pixel.true_positive == 90
+        assert raced.evaluation.job_id != retry_job.id
+
+
+def test_direct_test_sample_evaluation_requires_primary_and_compatible_schema(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        detail = create_test_sample(
+            session,
+            _TestSampleCreate(
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                object_count=1,
+            ),
+            config,
+        )
+        sample = session.get(_TestSampleRow, detail.id)
+        assert sample is not None
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        assert _test_sample_detail(session, detail.id).evaluation.status == "unavailable"
+
+        result = TrainingResultRow(
+            source="manual",
+            dataset_key="Вырубки\\main",
+            class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main",
+            architecture="segformer_b2",
+            model_name="Основная сеть",
+            mlflow_run_id="run-primary",
+            task="binary",
+            status="ok",
+        )
+        session.add(result)
+        session.flush()
+        class_row = dataset_class_row(session, detail.class_key)
+        assert class_row is not None
+        class_row.primary_training_result_id = result.id
+        sample.task = "multiclass"
+        sample.class_schema = [
+            {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B"},
+            {"id": 2, "slug": "second", "name": "Второй", "color": "#8B5CF6"},
+        ]
+        session.flush()
+
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        incompatible_task = _test_sample_detail(session, detail.id)
+        assert incompatible_task.evaluation.status == "error"
+        assert "Тип задачи" in (incompatible_task.evaluation.error or "")
+
+        result.task = "multiclass"
+        result.class_schema = [{"id": 1, "slug": "first"}]
+        session.flush()
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        incompatible_schema = _test_sample_detail(session, detail.id)
+        assert incompatible_schema.evaluation.status == "error"
+        assert "Схема типов" in (incompatible_schema.evaluation.error or "")
+
+        result.class_schema = list(sample.class_schema)
+        session.flush()
+        assert reconcile_test_sample_evaluations(session, config) == 1
+        compatible = _test_sample_detail(session, detail.id)
+        assert compatible.evaluation.status == "queued"
 
 
 def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
@@ -2144,6 +2463,7 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         job = session.get(JobRow, metric.job_id)
         assert job is not None
         assert job.config["operation"] == "test_sample_f1"
+        assert job.config["metric_target"] == "training_result"
         assert job.config["test_sample_tile_indices"] == [1, 2]
         assert job.config["postprocess_profile"] == "strong"
         assert job.config["test_f1_evaluator_version"] == 3

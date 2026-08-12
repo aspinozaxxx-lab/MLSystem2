@@ -100,6 +100,7 @@ from ._test_samples import (
     mark_test_samples_stale_for_pseudo_markup,
     primary_test_sample,
     queue_class_test_f1,
+    reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
     training_result_test_f1_info,
 )
@@ -668,6 +669,7 @@ def create_inference_template(
     )
     session.add(row)
     session.flush()
+    reconcile_test_sample_evaluations(session, config)
     reconcile_training_result_test_f1(session, config)
     return _inference_template_info(row)
 
@@ -700,6 +702,7 @@ def update_inference_template_by_id(
             row.is_active = request.is_active
     row.updated_at = _now()
     session.flush()
+    reconcile_test_sample_evaluations(session, config)
     reconcile_training_result_test_f1(session, config)
     return _inference_template_info(row)
 
@@ -718,6 +721,7 @@ def delete_inference_template(
     info = _inference_template_info(row)
     session.delete(row)
     session.flush()
+    reconcile_test_sample_evaluations(session, config)
     reconcile_training_result_test_f1(session, config)
     return info
 
@@ -746,6 +750,7 @@ def apply_inference_template_field_to_all(
         template.version += 1
         template.updated_at = _now()
     session.flush()
+    reconcile_test_sample_evaluations(session, config)
     reconcile_training_result_test_f1(session, config)
     return inference_templates(session)
 
@@ -1107,6 +1112,11 @@ def set_primary_training_result(
     class_row.primary_training_result_id = row.id
     class_row.updated_at = datetime.now(timezone.utc)
     session.flush()
+    reconcile_test_sample_evaluations(
+        session,
+        config,
+        class_keys={class_row.key},
+    )
     try:
         queue_class_test_f1(session, row.class_key, config)
     except TrainingUIAPIError:

@@ -40,7 +40,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
-from ._dataset_catalog import find_managed_dataset, primary_training_result
+from ._dataset_catalog import (
+    dataset_class_row,
+    find_managed_dataset,
+    primary_training_result,
+)
 from ._markup_export import (
     _mask_edge,
     _run_milp,
@@ -50,6 +54,7 @@ from ._markup_export import (
     generate_markup_pool_files,
 )
 from ._models import (
+    DatasetRow,
     InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -97,6 +102,8 @@ TEST_SAMPLE_ROOT_NAME = "test-samples"
 TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
+TEST_SAMPLE_EVALUATION_TARGET = "test_sample"
+TRAINING_RESULT_TEST_METRIC_TARGET = "training_result"
 OBJECT_IOU_THRESHOLD = 0.5
 _DOWNLOAD_BASE_TILE_SUFFIXES = (".tif", ".geojson")
 _DOWNLOAD_PREVIEW_SOURCE_SUFFIXES = ("_mask.png",)
@@ -219,6 +226,12 @@ def create_test_sample(
         session.add(row)
         session.flush()
         evaluate_test_sample(session, row, config)
+        queue_test_sample_evaluation(
+            session,
+            row,
+            config,
+            source=JobSource.AUTOMATION,
+        )
         session.flush()
         return _detail(row)
     except Exception:
@@ -527,6 +540,12 @@ def _create_grouped_test_sample(
             source,
             source_path,
         )
+        queue_test_sample_evaluation(
+            session,
+            row,
+            config,
+            source=JobSource.AUTOMATION,
+        )
         session.flush()
         return _detail(row)
     except Exception:
@@ -659,9 +678,7 @@ def _backfill_test_sample_tile_f1(
     ):
         return
     if (
-        row.metric_status not in {"current", "stale"}
-        or not _has_metrics(row)
-        or row.evaluation_pseudo_result_id is None
+        row.evaluation_pseudo_result_id is None
     ):
         return
     source = session.get(PseudoMarkupResultRow, row.evaluation_pseudo_result_id)
@@ -709,7 +726,11 @@ def update_test_sample(
         if content_changed:
             row.content_revision += 1
             row.updated_at = now
-        evaluate_test_sample(session, row, config)
+            _mark_test_sample_evaluation_stale(
+                session,
+                row,
+                "Состав тестовой разметки изменён; требуется пересчёт основной сетью.",
+            )
 
     if request.is_primary is not None:
         primary_changed = _set_test_sample_primary(session, row, request.is_primary)
@@ -730,6 +751,13 @@ def update_test_sample(
             session,
             config,
             dataset_keys={row.dataset_key},
+        )
+    if content_changed:
+        queue_test_sample_evaluation(
+            session,
+            row,
+            config,
+            source=JobSource.AUTOMATION,
         )
     session.flush()
     return _detail(row)
@@ -808,8 +836,11 @@ def update_test_sample_tile(
         tile.enabled = request.enabled
         tile.updated_at = _utc_now()
         row.content_revision += 1
-        row.metric_status = "stale" if _has_metrics(row) else "unavailable"
-        row.evaluation_error = None
+        _mark_test_sample_evaluation_stale(
+            session,
+            row,
+            "Состав тестовой разметки изменён; требуется пересчёт основной сетью.",
+        )
         row.updated_at = _utc_now()
         if row.is_primary:
             _refresh_training_metrics_after_primary_change(
@@ -817,6 +848,13 @@ def update_test_sample_tile(
                 row.dataset_key,
                 config,
                 reason="Состав основной тестовой разметки изменён; требуется пересчёт.",
+            )
+        if config is not None:
+            queue_test_sample_evaluation(
+                session,
+                row,
+                config,
+                source=JobSource.AUTOMATION,
             )
         session.flush()
     return _detail(row)
@@ -828,6 +866,7 @@ def delete_test_sample(
     config: TrainingUIAPIConfig,
 ) -> None:
     row = _sample_row(session, sample_id)
+    _cancel_test_sample_evaluation_job(session, row)
     sample_root = _sample_root(config, row.id)
     deleting_root = sample_root.with_name(f".deleting-{row.id}")
     if deleting_root.exists():
@@ -857,13 +896,13 @@ def evaluate_test_sample_by_id(
     config: TrainingUIAPIConfig,
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
-    evaluate_test_sample(session, row, config)
-    if row.is_primary:
-        reconcile_training_result_test_f1(
-            session,
-            config,
-            dataset_keys={row.dataset_key},
-        )
+    queue_test_sample_evaluation(
+        session,
+        row,
+        config,
+        source=JobSource.MANUAL,
+        force=True,
+    )
     session.flush()
     return _detail(row)
 
@@ -1004,12 +1043,24 @@ def optimize_test_sample(
 
     previous_revision = row.content_revision
     _optimize_test_sample_row(row, request, config, source, source_path)
-    if row.is_primary and row.content_revision != previous_revision:
-        _refresh_training_metrics_after_primary_change(
+    if row.content_revision != previous_revision:
+        _mark_test_sample_evaluation_stale(
             session,
-            row.dataset_key,
+            row,
+            "Состав тестовой разметки оптимизирован; требуется пересчёт основной сетью.",
+        )
+        if row.is_primary:
+            _refresh_training_metrics_after_primary_change(
+                session,
+                row.dataset_key,
+                config,
+                reason="Состав основной тестовой разметки оптимизирован; требуется пересчёт.",
+            )
+        queue_test_sample_evaluation(
+            session,
+            row,
             config,
-            reason="Состав основной тестовой разметки оптимизирован; требуется пересчёт.",
+            source=JobSource.AUTOMATION,
         )
     session.flush()
     return _detail(row)
@@ -1048,7 +1099,8 @@ def _optimize_test_sample_row(
     if changed:
         row.content_revision += 1
     row.updated_at = now
-    _apply_evaluation(row, source, pixel_counts, object_counts)
+    row.evaluation_pseudo_result_id = source.id
+    row.evaluation_markup_created_at = source.updated_at or source.created_at
 
 
 def _optimized_selection_and_metrics(
@@ -1081,81 +1133,30 @@ def evaluate_test_sample(
     *,
     pseudo_result: PseudoMarkupResultRow | None = None,
 ) -> None:
-    if not any(tile.enabled for tile in row.tiles):
-        _evaluation_unavailable(row, "В тестовой разметке нет включённых тайлов.")
-        return
+    """Обновить поснимочный кэш оптимизатора по псевдоразметке."""
+
     source = pseudo_result or _latest_pseudo_markup(session, row.dataset_key)
     if source is None or source.geojson_file is None:
         _clear_test_sample_tile_f1(row)
-        _evaluation_unavailable(
-            row,
-            "Нет успешной разметки для этого датасета.",
-        )
+        row.evaluation_pseudo_result_id = None
+        row.evaluation_markup_created_at = None
         return
     source_path = Path(source.geojson_file.path)
     if not source_path.is_file():
         _clear_test_sample_tile_f1(row)
-        _evaluation_error(row, "Файл последней разметки не найден на сервере.")
+        row.evaluation_pseudo_result_id = None
+        row.evaluation_markup_created_at = None
         return
     try:
         tile_metrics = _calculate_tile_metrics(row, source_path, config)
-        enabled = {tile.tile_index for tile in row.tiles if tile.enabled}
-        pixel_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=0)
-        object_counts = _sum_tile_metrics(tile_metrics, enabled, metric_index=1)
-        structured_metrics = _aggregate_tile_structured_metrics(
-            tile_metrics,
-            enabled,
-            list(row.class_schema or []),
-        )
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         _clear_test_sample_tile_f1(row)
-        _evaluation_error(row, f"Не удалось рассчитать F1: {exc}")
+        row.evaluation_pseudo_result_id = None
+        row.evaluation_markup_created_at = None
         return
     _apply_test_sample_tile_f1(row, tile_metrics)
-    _apply_evaluation(
-        row,
-        source,
-        pixel_counts,
-        object_counts,
-        structured_metrics=structured_metrics,
-    )
-
-
-def _apply_evaluation(
-    row: TestSampleRow,
-    source: PseudoMarkupResultRow,
-    pixel_counts: _MetricCounts,
-    object_counts: _MetricCounts,
-    *,
-    structured_metrics: dict[str, Any] | None = None,
-) -> None:
-    pixel = pixel_counts.info()
-    objects = object_counts.info()
-    row.pixel_precision = pixel.precision
-    row.pixel_recall = pixel.recall
-    row.pixel_f1 = pixel.f1
-    row.pixel_true_positive = pixel.true_positive
-    row.pixel_false_positive = pixel.false_positive
-    row.pixel_false_negative = pixel.false_negative
-    row.object_precision = objects.precision
-    row.object_recall = objects.recall
-    row.object_f1 = objects.f1
-    row.object_true_positive = objects.true_positive
-    row.object_false_positive = objects.false_positive
-    row.object_false_negative = objects.false_negative
-    if structured_metrics is not None:
-        row.evaluation_metrics = structured_metrics
     row.evaluation_pseudo_result_id = source.id
-    row.evaluation_model_name = (
-        source.training_result.model_name
-        if source.training_result is not None
-        else "псевдоразметка"
-    )
     row.evaluation_markup_created_at = source.updated_at or source.created_at
-    row.evaluated_revision = row.content_revision
-    row.metric_status = "current"
-    row.evaluated_at = _utc_now()
-    row.evaluation_error = None
     row.updated_at = _utc_now()
 
 
@@ -1514,9 +1515,18 @@ def mark_test_samples_stale_for_pseudo_markup(
     ).all()
     for row in rows:
         _clear_test_sample_tile_f1(row)
-        row.metric_status = "stale" if _has_metrics(row) else "unavailable"
         row.evaluation_pseudo_result_id = None
-        row.evaluation_error = "Использованная разметка удалена; требуется пересчёт."
+        row.evaluation_markup_created_at = None
+        if (
+            row.evaluation_training_result_id is None
+            and row.evaluation_job_id is None
+            and _has_metrics(row)
+        ):
+            row.metric_status = "stale" if _has_metrics(row) else "unavailable"
+            row.evaluation_error = (
+                "Устаревшая оценка была получена по удалённой псевдоразметке; "
+                "требуется прямой пересчёт основной сетью."
+            )
         row.updated_at = _utc_now()
     session.flush()
 
@@ -2460,6 +2470,320 @@ def _mark_training_test_metrics_stale(
         row.updated_at = _utc_now()
 
 
+def reconcile_test_sample_evaluations(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    *,
+    class_keys: set[str] | None = None,
+    sample_ids: set[uuid.UUID] | None = None,
+) -> int:
+    """Поставить отсутствующие и устаревшие прямые оценки в общую очередь."""
+
+    conditions = []
+    if class_keys is not None:
+        if not class_keys:
+            return 0
+        sample_class_keys = set(class_keys)
+        class_ids: set[uuid.UUID] = set()
+        for class_key in class_keys:
+            class_row = dataset_class_row(session, class_key)
+            if class_row is None:
+                continue
+            class_ids.add(class_row.id)
+            sample_class_keys.add(class_row.key)
+        if class_ids:
+            sample_class_keys.update(
+                session.scalars(
+                    select(DatasetRow.key).where(DatasetRow.class_id.in_(class_ids))
+                ).all()
+            )
+        conditions.append(TestSampleRow.class_key.in_(sample_class_keys))
+    if sample_ids is not None:
+        if not sample_ids:
+            return 0
+        conditions.append(TestSampleRow.id.in_(sample_ids))
+    rows = session.scalars(
+        select(TestSampleRow)
+        .where(*conditions)
+        .options(selectinload(TestSampleRow.tiles))
+        .order_by(TestSampleRow.created_at, TestSampleRow.id)
+    ).all()
+    created = 0
+    for row in rows:
+        if queue_test_sample_evaluation(
+            session,
+            row,
+            config,
+            source=JobSource.AUTOMATION,
+        ):
+            created += 1
+    session.flush()
+    return created
+
+
+def queue_test_sample_evaluation(
+    session: Session,
+    sample: TestSampleRow,
+    config: TrainingUIAPIConfig,
+    *,
+    source: JobSource,
+    force: bool = False,
+) -> bool:
+    """Поставить прямую оценку одной разметки текущей основной сетью класса."""
+
+    enabled_indices = sorted(tile.tile_index for tile in sample.tiles if tile.enabled)
+    if not enabled_indices:
+        _cancel_test_sample_evaluation_job(session, sample)
+        _set_test_sample_evaluation_unavailable(
+            sample,
+            "В тестовой разметке нет включённых тайлов.",
+        )
+        return False
+
+    result = current_primary_training_result(session, sample.class_key)
+    if result is None or result.status != "ok":
+        _cancel_test_sample_evaluation_job(session, sample)
+        _set_test_sample_evaluation_unavailable(
+            sample,
+            "Для класса не назначена успешная основная сеть.",
+        )
+        return False
+
+    compatibility_error = test_sample_model_compatibility_error(
+        session,
+        sample,
+        result,
+    )
+    if compatibility_error is not None:
+        _cancel_test_sample_evaluation_job(session, sample)
+        sample.metric_status = "error"
+        sample.evaluation_error = compatibility_error
+        sample.updated_at = _utc_now()
+        return False
+
+    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
+    template, template_config, config_hash = _effective_inference_template(
+        session,
+        result.architecture,
+        result.class_key,
+        postprocess_profile,
+    )
+    active_job = (
+        session.get(JobRow, sample.evaluation_job_id)
+        if sample.evaluation_job_id is not None
+        else None
+    )
+    if not force and _saved_test_sample_evaluation_matches(
+        sample,
+        result,
+        template,
+        config_hash,
+    ) and sample.metric_status == "current":
+        return False
+    if not force and active_job is not None and _test_sample_evaluation_job_matches(
+        active_job,
+        sample,
+        result,
+        template,
+        config_hash,
+        enabled_indices,
+    ):
+        if active_job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+            sample.metric_status = active_job.status
+            return False
+        if active_job.status == JobStatus.FAILED.value and sample.metric_status == "error":
+            return False
+
+    _cancel_test_sample_evaluation_job(session, sample)
+    if not result.mlflow_run_id:
+        sample.metric_status = "error"
+        sample.evaluation_error = (
+            "У основной сети отсутствует MLflow run id с checkpoint."
+        )
+        sample.updated_at = _utc_now()
+        return False
+
+    job = JobRow(
+        type=JobType.INFERENCE.value,
+        source=source.value,
+        status=JobStatus.QUEUED.value,
+        queue_position=next_queue_position(session, JobType.INFERENCE, source),
+        dataset_key=sample.dataset_key,
+        dataset_version=sample.dataset_version,
+        dataset_name=sample.dataset_name,
+        training_dataset_name=result.class_display_name,
+        inference_dataset_name=sample.name,
+        model_name=result.model_name,
+        architecture=result.architecture,
+        tile_size=sample.tile_width,
+        config={
+            "operation": TEST_SAMPLE_F1_OPERATION,
+            "metric_target": TEST_SAMPLE_EVALUATION_TARGET,
+            "class_key": sample.class_key,
+            "model_dataset_key": result.class_key,
+            "training_result_id": str(result.id),
+            "test_sample_id": str(sample.id),
+            "test_sample_revision": sample.content_revision,
+            "test_sample_tile_indices": enabled_indices,
+            "inference_template_id": str(template.id) if template is not None else None,
+            "inference_template_version": template.version if template is not None else None,
+            "inference_template_config": template_config,
+            "inference_config_hash": config_hash,
+            "postprocess_profile": postprocess_profile,
+            "test_f1_evaluator_version": TEST_SAMPLE_F1_EVALUATOR_VERSION,
+            "mlflow_run_id": result.mlflow_run_id,
+        },
+    )
+    session.add(job)
+    session.flush()
+    sample.metric_status = "queued"
+    sample.evaluation_job_id = job.id
+    sample.evaluation_job = job
+    sample.evaluation_error = None
+    sample.updated_at = _utc_now()
+    session.flush()
+    return True
+
+
+def current_primary_training_result(
+    session: Session,
+    class_key: str,
+) -> TrainingResultRow | None:
+    """Вернуть только явно назначенную успешную основную сеть класса."""
+
+    class_row = dataset_class_row(session, class_key)
+    if class_row is None or class_row.primary_training_result_id is None:
+        return None
+    result = session.get(TrainingResultRow, class_row.primary_training_result_id)
+    return result if result is not None and result.status == "ok" else None
+
+
+def test_sample_model_compatibility_error(
+    session: Session,
+    sample: TestSampleRow,
+    result: TrainingResultRow,
+) -> str | None:
+    sample_class = dataset_class_row(session, sample.class_key)
+    result_class = dataset_class_row(
+        session,
+        result.dataset_key or result.class_key,
+    )
+    if (
+        sample_class is None
+        or result_class is None
+        or sample_class.id != result_class.id
+    ):
+        return "Основная сеть относится к другому классу датасетов."
+    if sample.task != result.task:
+        return (
+            "Тип задачи основной сети не совпадает с типом тестовой разметки: "
+            f"{result.task} вместо {sample.task}."
+        )
+    if sample.task == "multiclass" and _class_schema_signature(
+        sample.class_schema
+    ) != _class_schema_signature(result.class_schema):
+        return "Схема типов основной сети не совпадает со схемой тестовой разметки."
+    return None
+
+
+def _class_schema_signature(values: list[dict[str, Any]] | None) -> tuple[tuple[int, str], ...]:
+    try:
+        return tuple(
+            sorted((int(item["id"]), str(item["slug"])) for item in (values or []))
+        )
+    except (KeyError, TypeError, ValueError):
+        return ()
+
+
+def _saved_test_sample_evaluation_matches(
+    sample: TestSampleRow,
+    result: TrainingResultRow,
+    template: InferenceTemplateRow | None,
+    config_hash: str,
+) -> bool:
+    return (
+        sample.evaluation_training_result_id == result.id
+        and sample.evaluated_revision == sample.content_revision
+        and sample.evaluation_inference_template_id
+        == (template.id if template is not None else None)
+        and sample.evaluation_inference_template_version
+        == (template.version if template is not None else None)
+        and sample.evaluation_inference_config_hash == config_hash
+        and sample.evaluation_evaluator_version == TEST_SAMPLE_F1_EVALUATOR_VERSION
+    )
+
+
+def _test_sample_evaluation_job_matches(
+    job: JobRow,
+    sample: TestSampleRow,
+    result: TrainingResultRow,
+    template: InferenceTemplateRow | None,
+    config_hash: str,
+    enabled_indices: list[int],
+) -> bool:
+    state = job.config or {}
+    return (
+        state.get("operation") == TEST_SAMPLE_F1_OPERATION
+        and state.get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET
+        and state.get("training_result_id") == str(result.id)
+        and state.get("test_sample_id") == str(sample.id)
+        and int(state.get("test_sample_revision") or 0) == sample.content_revision
+        and [int(value) for value in state.get("test_sample_tile_indices") or []]
+        == enabled_indices
+        and state.get("inference_template_id")
+        == (str(template.id) if template is not None else None)
+        and state.get("inference_template_version")
+        == (template.version if template is not None else None)
+        and state.get("inference_config_hash") == config_hash
+        and state.get("test_f1_evaluator_version")
+        == TEST_SAMPLE_F1_EVALUATOR_VERSION
+    )
+
+
+def _cancel_test_sample_evaluation_job(
+    session: Session,
+    sample: TestSampleRow,
+) -> None:
+    if sample.evaluation_job_id is None:
+        return
+    job = session.get(JobRow, sample.evaluation_job_id)
+    if job is not None and (
+        (job.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION
+        and (job.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET
+    ):
+        if job.status == JobStatus.RUNNING.value:
+            terminate_job_process(job)
+            if job.tmp_path:
+                shutil.rmtree(job.tmp_path, ignore_errors=True)
+                job.tmp_path = None
+        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+            job.status = JobStatus.CANCELLED.value
+            job.finished_at = _utc_now()
+            job.process_pid = None
+    sample.evaluation_job_id = None
+    sample.evaluation_job = None
+
+
+def _mark_test_sample_evaluation_stale(
+    session: Session,
+    sample: TestSampleRow,
+    reason: str,
+) -> None:
+    _cancel_test_sample_evaluation_job(session, sample)
+    sample.metric_status = "stale" if _has_metrics(sample) else "unavailable"
+    sample.evaluation_error = reason
+    sample.updated_at = _utc_now()
+
+
+def _set_test_sample_evaluation_unavailable(
+    sample: TestSampleRow,
+    reason: str,
+) -> None:
+    sample.metric_status = "stale" if _has_metrics(sample) else "unavailable"
+    sample.evaluation_error = reason
+    sample.updated_at = _utc_now()
+
+
 def queue_class_test_f1(
     session: Session,
     dataset_key: str,
@@ -2633,6 +2957,7 @@ def queue_training_result_test_f1(
         tile_size=sample.tile_width,
         config={
             "operation": TEST_SAMPLE_F1_OPERATION,
+            "metric_target": TRAINING_RESULT_TEST_METRIC_TARGET,
             "class_key": result.class_key,
             "training_result_id": str(result.id),
             "test_sample_id": str(sample.id),
@@ -2946,8 +3271,29 @@ def _detail(row: TestSampleRow) -> TestSampleDetail:
 
 def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
     status = row.metric_status
-    if _has_metrics(row) and row.evaluated_revision != row.content_revision:
+    if (
+        status not in {"queued", "running"}
+        and _has_metrics(row)
+        and row.evaluated_revision != row.content_revision
+    ):
         status = "stale"
+    job = row.evaluation_job
+    if status in {"queued", "running"} and (
+        job is None
+        or job.status not in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+    ):
+        status = "stale" if _has_metrics(row) else "error"
+    target_result_id: uuid.UUID | None = None
+    target_model_name: str | None = None
+    if job is not None and (job.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET:
+        try:
+            target_result_id = uuid.UUID(str((job.config or {}).get("training_result_id")))
+        except (TypeError, ValueError):
+            target_result_id = None
+        target_model_name = job.model_name
+    elif status == "current":
+        target_result_id = row.evaluation_training_result_id
+        target_model_name = row.evaluation_model_name
     return TestSampleEvaluationInfo(
         status=status,
         pixel=_metric_info(
@@ -2967,9 +3313,23 @@ def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
             row.object_false_negative,
         ),
         object_iou_threshold=row.object_iou_threshold,
-        pseudo_markup_result_id=row.evaluation_pseudo_result_id,
+        pseudo_markup_result_id=(
+            row.evaluation_pseudo_result_id
+            if row.evaluation_training_result_id is None
+            else None
+        ),
+        training_result_id=row.evaluation_training_result_id,
+        target_training_result_id=target_result_id,
         model_name=row.evaluation_model_name,
-        markup_created_at=row.evaluation_markup_created_at,
+        target_model_name=target_model_name,
+        threshold=row.evaluation_threshold,
+        job_id=row.evaluation_job_id,
+        progress=_test_f1_progress(job),
+        markup_created_at=(
+            row.evaluation_markup_created_at
+            if row.evaluation_training_result_id is None
+            else None
+        ),
         evaluated_at=row.evaluated_at,
         error=row.evaluation_error,
         metrics=dict(row.evaluation_metrics or {}),
@@ -3057,6 +3417,7 @@ __all__ = [
     "cleanup_test_sample_storage",
     "create_test_sample",
     "create_test_sample_batch",
+    "current_primary_training_result",
     "delete_test_sample",
     "evaluate_test_sample_by_id",
     "evaluate_test_sample_preview",
@@ -3068,7 +3429,9 @@ __all__ = [
     "primary_test_sample",
     "process_test_sample_batch_once",
     "queue_class_test_f1",
+    "queue_test_sample_evaluation",
     "queue_training_result_test_f1",
+    "reconcile_test_sample_evaluations",
     "reconcile_training_result_test_f1",
     "recover_test_sample_batches",
     "run_test_sample_batch_worker",
@@ -3077,6 +3440,7 @@ __all__ = [
     "test_sample_detail",
     "test_sample_preview_path",
     "training_result_test_f1_info",
+    "test_sample_model_compatibility_error",
     "update_test_sample",
     "update_test_sample_primary",
     "update_test_sample_tile",

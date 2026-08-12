@@ -1255,16 +1255,28 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
   const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
 
-  const loadCatalog = useCallback(async () => {
-    const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
+  const loadCatalog = useCallback(async (reconcile = false) => {
+    const payload = await run(() => apiJson<TestSampleCatalogResponse>(
+      reconcile ? "/test-samples/reconcile" : "/test-samples",
+      reconcile ? { method: "POST" } : undefined,
+    ));
     if (payload) setCatalog(payload);
   }, [run]);
 
   useEffect(() => {
-    void loadCatalog();
+    void loadCatalog(true);
   }, [loadCatalog]);
 
   const samples = flattenTestMarkups(catalog);
+  const evaluationActive = samples.some(
+    (sample) => sample.evaluation.status === "queued" || sample.evaluation.status === "running",
+  );
+
+  useEffect(() => {
+    if (!evaluationActive) return undefined;
+    const timer = window.setTimeout(() => void loadCatalog(), PROGRESS_REFRESH_MS);
+    return () => window.clearTimeout(timer);
+  }, [evaluationActive, loadCatalog, catalog]);
 
   const downloadSelected = async (sampleIds: string[], includePreviews: boolean): Promise<boolean> => {
     const request: TestSampleBulkDownloadRequest = {
@@ -1610,7 +1622,12 @@ function TestSampleCatalog({
           </a>
           <div className="test-markup-card-footer">
             <TestSampleEvaluationBadge evaluation={sample.evaluation} />
-            <span className="muted">{formatDateTime(sample.created_at)}</span>
+            <span className="muted">
+              {sample.evaluation.status !== "current" && (sample.evaluation.pixel || sample.evaluation.objects)
+                ? "предыдущие значения · "
+                : ""}
+              {formatDateTime(sample.created_at)}
+            </span>
           </div>
         </article>
       ))}
@@ -1631,6 +1648,7 @@ function TestSampleEditorPage({
   const [previewPending, setPreviewPending] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -1640,6 +1658,10 @@ function TestSampleEditorPage({
 
   const loadSample = useCallback(async () => {
     setLoaded(false);
+    await run(() => apiJson<TestSampleCatalogResponse>(
+      "/test-samples/reconcile",
+      { method: "POST" },
+    ));
     const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
     if (payload) {
       setSample(payload);
@@ -1662,6 +1684,19 @@ function TestSampleEditorPage({
   useEffect(() => {
     void loadSample();
   }, [loadSample]);
+
+  const refreshSample = useCallback(async () => {
+    const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
+    if (payload) setSample(payload);
+  }, [run, sampleId]);
+
+  const evaluationActive = sample?.evaluation.status === "queued"
+    || sample?.evaluation.status === "running";
+  useEffect(() => {
+    if (!evaluationActive) return undefined;
+    const timer = window.setTimeout(() => void refreshSample(), PROGRESS_REFRESH_MS);
+    return () => window.clearTimeout(timer);
+  }, [evaluationActive, refreshSample, sample]);
 
   const changed = Boolean(sample && draft && testMarkupDraftChanged(sample, draft));
   const dirty = changed || previewPending;
@@ -1707,6 +1742,20 @@ function TestSampleEditorPage({
       }
     } finally {
       setEvaluating(false);
+    }
+  };
+
+  const recalculatePrimary = async () => {
+    setRecalculating(true);
+    try {
+      const payload = await run(() =>
+        apiJson<TestSampleDetail>(`/test-samples/${sampleId}/evaluate`, {
+          method: "POST",
+        }),
+      );
+      if (payload) setSample(payload);
+    } finally {
+      setRecalculating(false);
     }
   };
 
@@ -1900,11 +1949,6 @@ function TestSampleEditorPage({
   const enabledObjectCount = enabledTiles.reduce((total, tile) => total + tile.object_count, 0);
   const savedEnabledIndices = testMarkupDraft(sample).enabledTileIndices;
   const compositionChanged = savedEnabledIndices.join(",") !== draft.enabledTileIndices.join(",");
-  const evaluation: TestSampleEvaluationInfo = draftEvaluation || (
-    compositionChanged
-      ? { ...sample.evaluation, status: "stale", error: "F1 чернового состава ещё не рассчитан." }
-      : sample.evaluation
-  );
   const optimizationValid =
     minTileCount > 0 &&
     maxTileCount >= minTileCount &&
@@ -1940,7 +1984,7 @@ function TestSampleEditorPage({
             <div className="button-row">
               <button className="secondary" type="button" disabled={evaluating || saving || !hasEnabledTiles} onClick={() => void evaluate()}>
                 <RefreshCw size={16} />
-                {evaluating ? "Расчёт..." : "Пересчитать F1"}
+                {evaluating ? "Расчёт..." : "Оценить состав по псевдоразметке"}
               </button>
               <button className="primary" type="button" disabled={downloading || !hasEnabledTiles} onClick={openDownload}>
                 <Download size={16} />
@@ -1968,7 +2012,7 @@ function TestSampleEditorPage({
       <section className="panel test-sample-optimizer">
         <PanelHeader
           title="Оптимизация состава"
-          subtitle="Оптимизатор рассматривает все тайлы разметки, включая выключенные, и подбирает состав с максимальным агрегированным F1"
+          subtitle="Оптимизатор использует псевдоразметку основной сети, рассматривает все тайлы и подбирает состав с максимальным агрегированным F1"
         />
         <form className="form-stack" onSubmit={optimize}>
           <div className="form-grid">
@@ -2024,7 +2068,19 @@ function TestSampleEditorPage({
         </form>
       </section>
 
-      <TestSampleEvaluationPanel evaluation={evaluation} />
+      {draftEvaluation ? (
+        <TestSampleEvaluationPanel evaluation={draftEvaluation} mode="pseudo" />
+      ) : compositionChanged ? (
+        <div className="info-box">Черновой состав ещё не оценён по псевдоразметке. Итоговые метрики ниже относятся к сохранённому составу.</div>
+      ) : null}
+
+      <TestSampleEvaluationPanel
+        evaluation={sample.evaluation}
+        mode="direct"
+        recalculating={recalculating}
+        recalculateDisabled={dirty || recalculating || evaluationActive || !hasEnabledTiles}
+        onRecalculate={() => void recalculatePrimary()}
+      />
 
       <section className="panel">
         <PanelHeader
@@ -2054,9 +2110,9 @@ function TestSampleEditorPage({
                   <span className="badge neutral">Объектов: {tile.object_count}</span>
                   <span
                     className="badge neutral"
-                    title={`${qualityMetricLabel(sample.quality_metric)} для этого тайла`}
+                    title={`${qualityMetricLabel(sample.quality_metric)} по псевдоразметке для оптимизации состава`}
                   >
-                    {qualityMetricShort(sample.quality_metric)}: {formatF1Score(tile.f1_score)}
+                    {qualityMetricShort(sample.quality_metric)} псевдо: {formatF1Score(tile.f1_score)}
                   </span>
                 </div>
               </div>
@@ -2104,13 +2160,44 @@ function RenameTestSampleForm({
   );
 }
 
-function TestSampleEvaluationPanel({ evaluation }: { evaluation: TestSampleEvaluationInfo }) {
+function TestSampleEvaluationPanel({
+  evaluation,
+  mode,
+  recalculating = false,
+  recalculateDisabled = false,
+  onRecalculate,
+}: {
+  evaluation: TestSampleEvaluationInfo;
+  mode: "direct" | "pseudo";
+  recalculating?: boolean;
+  recalculateDisabled?: boolean;
+  onRecalculate?: () => void;
+}) {
+  const direct = mode === "direct";
+  const progress = evaluation.progress;
   return (
     <section className="panel test-sample-evaluation">
       <PanelHeader
-        title="Качество разметки"
-        subtitle="Пиксельная и объектная метрики рассчитаны по последней разметке этого датасета"
-        aside={<TestSampleEvaluationBadge evaluation={evaluation} />}
+        title={direct ? "Контрольные метрики" : "Предварительная оценка состава"}
+        subtitle={direct
+          ? "Итоговые метрики сохранённого состава рассчитываются прямым инференсом текущей основной сети класса"
+          : "Оценка получена по существующей псевдоразметке основной сети и используется только для подбора состава"}
+        aside={(
+          <div className="button-row">
+            <TestSampleEvaluationBadge evaluation={evaluation} />
+            {direct && onRecalculate ? (
+              <button
+                className="secondary compact-action"
+                type="button"
+                disabled={recalculateDisabled}
+                onClick={onRecalculate}
+              >
+                <RefreshCw size={15} />
+                {recalculating ? "Постановка..." : "Пересчитать основной сетью"}
+              </button>
+            ) : null}
+          </div>
+        )}
       />
       <div className="test-sample-metric-grid">
         <TestSampleMetricCard title="Пиксельная метрика" metric={evaluation.pixel} />
@@ -2120,10 +2207,26 @@ function TestSampleEvaluationPanel({ evaluation }: { evaluation: TestSampleEvalu
         />
       </div>
       <div className="test-sample-evaluation-source">
-        <span><strong>Источник:</strong> {evaluation.model_name || "нет подходящей разметки"}</span>
-        {evaluation.markup_created_at ? <span><strong>Разметка:</strong> {formatDateTime(evaluation.markup_created_at)}</span> : null}
+        <span>
+          <strong>{direct ? "Рассчитано сетью:" : "Псевдоразметка сети:"}</strong>{" "}
+          {evaluation.model_name || (direct ? "ещё не рассчитано" : "нет подходящей псевдоразметки")}
+        </span>
+        {direct && evaluation.target_model_name && evaluation.target_model_name !== evaluation.model_name ? (
+          <span><strong>Текущая основная сеть:</strong> {evaluation.target_model_name}</span>
+        ) : null}
+        {!direct && evaluation.markup_created_at ? <span><strong>Псевдоразметка:</strong> {formatDateTime(evaluation.markup_created_at)}</span> : null}
+        {direct && evaluation.threshold != null ? <span><strong>Порог:</strong> {evaluation.threshold.toFixed(3)}</span> : null}
         {evaluation.evaluated_at ? <span><strong>Расчёт:</strong> {formatDateTime(evaluation.evaluated_at)}</span> : null}
       </div>
+      {direct && progress?.total ? (
+        <div className="info-box">
+          Обработано тайлов: {progress.current ?? 0} / {progress.total}
+          {progress.elapsed_minutes != null ? ` · прошло ${progress.elapsed_minutes} мин` : ""}
+        </div>
+      ) : null}
+      {direct && evaluation.status !== "current" && (evaluation.pixel || evaluation.objects) ? (
+        <div className="info-box">Показаны последние сохранённые значения; они относятся к предыдущей сети или ревизии состава.</div>
+      ) : null}
       {evaluation.error ? <div className="info-box">{evaluation.error}</div> : null}
     </section>
   );
@@ -2149,12 +2252,16 @@ function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvalu
   const labels: Record<TestSampleEvaluationInfo["status"], string> = {
     current: "актуально",
     stale: "требует пересчёта",
-    unavailable: "нет разметки",
+    queued: "в очереди",
+    running: "рассчитывается",
+    unavailable: "оценка недоступна",
     error: "ошибка расчёта",
   };
   const classes: Record<TestSampleEvaluationInfo["status"], string> = {
     current: "ok",
     stale: "warning",
+    queued: "neutral",
+    running: "neutral",
     unavailable: "neutral",
     error: "error",
   };

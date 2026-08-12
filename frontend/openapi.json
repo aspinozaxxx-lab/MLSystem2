@@ -1616,6 +1616,24 @@
         }
       }
     },
+    "/api/v1/test-samples/reconcile": {
+      "post": {
+        "summary": "Post Test Samples Reconcile",
+        "operationId": "post_test_samples_reconcile_api_v1_test_samples_reconcile_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleCatalogResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples/download": {
       "post": {
         "summary": "Download Test Samples",
@@ -8557,6 +8575,8 @@
             "enum": [
               "current",
               "stale",
+              "queued",
+              "running",
               "unavailable",
               "error"
             ],
@@ -8601,6 +8621,30 @@
             ],
             "title": "Pseudo Markup Result Id"
           },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
+          "target_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Training Result Id"
+          },
           "model_name": {
             "anyOf": [
               {
@@ -8611,6 +8655,50 @@
               }
             ],
             "title": "Model Name"
+          },
+          "target_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Model Name"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "markup_created_at": {
             "anyOf": [
