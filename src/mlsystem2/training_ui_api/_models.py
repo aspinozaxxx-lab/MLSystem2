@@ -425,6 +425,36 @@ class TestSampleRow(Base):
         ForeignKey("pseudo_markup_results.id", ondelete="SET NULL"),
         nullable=True,
     )
+    evaluation_training_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    evaluation_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    evaluation_inference_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("inference_templates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    evaluation_inference_template_version: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    evaluation_inference_config_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    evaluation_evaluator_version: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    evaluation_threshold: Mapped[float | None] = mapped_column(nullable=True)
     evaluation_model_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     evaluation_markup_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -440,6 +470,13 @@ class TestSampleRow(Base):
     )
 
     evaluation_pseudo_result: Mapped[PseudoMarkupResultRow | None] = relationship()
+    evaluation_training_result: Mapped[TrainingResultRow | None] = relationship(
+        foreign_keys=[evaluation_training_result_id]
+    )
+    evaluation_job: Mapped[JobRow | None] = relationship(foreign_keys=[evaluation_job_id])
+    evaluation_inference_template: Mapped[InferenceTemplateRow | None] = relationship(
+        foreign_keys=[evaluation_inference_template_id]
+    )
     tiles: Mapped[list["TestSampleTileRow"]] = relationship(
         back_populates="sample",
         cascade="all, delete-orphan",

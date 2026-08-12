@@ -68,7 +68,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET /api/v1/test-samples` и `POST /api/v1/test-samples` - иерархический каталог и создание постоянной тестовой разметки.
 - `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, атомарное сохранение имени, основного статуса и полного состава либо удаление разметки.
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
-- `POST /api/v1/test-samples/{sample_id}/evaluate` - пересчитывает пиксельный и объектный F1.
+- `POST /api/v1/test-samples/reconcile` - идемпотентно ставит в inference-очередь отсутствующие и устаревшие прямые оценки всех сохранённых разметок текущими основными сетями классов.
+- `POST /api/v1/test-samples/{sample_id}/evaluate` - принудительно ставит прямой пересчёт pixel/object F1 текущей основной сетью класса.
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов по основной метрике класса; request-поле старого клиента принимается, но не меняет выбор метрики.
 - `POST /api/v1/test-samples/{sample_id}/evaluate-preview` и `POST /api/v1/test-samples/{sample_id}/optimize-preview` - рассчитывают F1 или оптимальный состав черновика без записи в БД.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP сохранённых включённых тайлов.
@@ -79,6 +80,12 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET /api/v1/results/datasets/{dataset_key}`, `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup` и `POST /api/v1/results/datasets/{dataset_key}/test-f1` - результаты датасета, ручная псевдоразметка и постановка недостающих либо устаревших оценок в inference-очередь.
 - `POST /api/v1/results/training/{result_id}/primary` - назначение успешной сети основной для её класса; этот выбор используется QGIS, групповым экспортом и публичным F1.
 - `GET /api/v1/pseudolabel/classes`, `POST /api/v1/pseudolabel/jobs`, `GET|DELETE /api/v1/pseudolabel/jobs/{job_id}` и `GET /api/v1/pseudolabel/jobs/{job_id}/result` - серверное распознавание AOI без передачи клиентских растров; полный контракт описан в `docs/pseudolabel_api.md`.
+
+Сохранённая контрольная метрика каждой тестовой разметки получается прямым инференсом явно назначенной основной
+сети класса и фиксирует сеть, ревизию состава, effective inference-шаблон, профиль и версию evaluator. Псевдоразметка
+точного датасета используется отдельно для создания набора, черновых `evaluate-preview`/`optimize-preview` и
+поснимочного кэша оптимизатора. Матрица `training_result_test_metrics` остаётся независимым контуром: все успешные
+сети оцениваются только на основной тестовой разметке своего точного датасета.
 
 ## Список используемых данным модулем модулей и с какой целью
 

@@ -673,6 +673,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Samples Reconcile */
+        post: operations["post_test_samples_reconcile_api_v1_test_samples_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/download": {
         parameters: {
             query?: never;
@@ -3186,7 +3203,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "current" | "stale" | "unavailable" | "error";
+            status: "current" | "stale" | "queued" | "running" | "unavailable" | "error";
             pixel?: components["schemas"]["TestSampleMetric"] | null;
             objects?: components["schemas"]["TestSampleMetric"] | null;
             /**
@@ -3196,8 +3213,19 @@ export interface components {
             object_iou_threshold: number;
             /** Pseudo Markup Result Id */
             pseudo_markup_result_id?: string | null;
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Target Training Result Id */
+            target_training_result_id?: string | null;
             /** Model Name */
             model_name?: string | null;
+            /** Target Model Name */
+            target_model_name?: string | null;
+            /** Threshold */
+            threshold?: number | null;
+            /** Job Id */
+            job_id?: string | null;
+            progress?: components["schemas"]["RuntimeProgress"] | null;
             /** Markup Created At */
             markup_created_at?: string | null;
             /** Evaluated At */
@@ -4928,6 +4956,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_samples_reconcile_api_v1_test_samples_reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleCatalogResponse"];
                 };
             };
         };

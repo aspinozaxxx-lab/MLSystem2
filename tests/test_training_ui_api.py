@@ -143,7 +143,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             dataset_key=dataset.key,
             class_key=dataset.key,
             class_display_name="Лес\\main",
-            architecture="segformer_b2",
+            architecture="smp_segformer_b2",
             model_name="первая",
             mlflow_run_id="first-run",
             status="ok",
@@ -153,7 +153,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             dataset_key=dataset.key,
             class_key=dataset.key,
             class_display_name="Лес\\main",
-            architecture="segformer_b2",
+            architecture="smp_segformer_b2",
             model_name="вторая",
             mlflow_run_id="second-run",
             status="ok",
@@ -206,6 +206,48 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert after_by_id[first.id].is_primary is False
         assert after_by_id[second.id].is_primary is True
         assert after_by_id[first.id].test_f1 is not None
+        session.refresh(sample)
+        direct_job = session.get(JobRow, sample.evaluation_job_id)
+        assert sample.metric_status == JobStatus.QUEUED.value
+        assert direct_job is not None
+        assert direct_job.config["metric_target"] == "test_sample"
+        assert direct_job.config["training_result_id"] == str(second.id)
+
+        inference_template = _service.create_inference_template(
+            session,
+            TrainingTemplateCreate(
+                architecture="smp_segformer_b2",
+                dataset_key=dataset.key,
+            ),
+            config,
+        )
+        session.refresh(sample)
+        templated_job = session.get(JobRow, sample.evaluation_job_id)
+        assert direct_job.status == JobStatus.CANCELLED.value
+        assert templated_job is not None
+        assert templated_job.id != direct_job.id
+        assert templated_job.config["metric_target"] == "test_sample"
+        assert templated_job.config["inference_template_id"] == str(inference_template.id)
+        assert templated_job.config["inference_template_version"] == 1
+
+        updated_template = _service.update_inference_template_by_id(
+            session,
+            inference_template.id,
+            TrainingTemplateUpdate(
+                default_config={
+                    **inference_template.default_config,
+                    "postprocess.min_area_m2": 321.0,
+                }
+            ),
+            config,
+        )
+        session.refresh(sample)
+        updated_template_job = session.get(JobRow, sample.evaluation_job_id)
+        assert templated_job.status == JobStatus.CANCELLED.value
+        assert updated_template_job is not None
+        assert updated_template_job.id != templated_job.id
+        assert updated_template_job.config["inference_template_id"] == str(updated_template.id)
+        assert updated_template_job.config["inference_template_version"] == 2
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(
@@ -1656,7 +1698,8 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "Создать список сцен" in app_tsx
     assert "Каталог тестовых разметок" in app_tsx
     assert "Создание тестовых разметок" in app_tsx
-    assert "Пересчитать F1" in app_tsx
+    assert "Пересчитать основной сетью" in app_tsx
+    assert "Оценить состав по псевдоразметке" in app_tsx
     assert "Оптимизация состава" in app_tsx
     assert "/optimize-preview" in app_tsx
     assert "/evaluate-preview" in app_tsx

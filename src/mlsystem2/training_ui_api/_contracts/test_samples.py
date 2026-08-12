@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .common import RuntimeProgress
+
 
 class TestSampleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -106,12 +108,18 @@ class TestSampleMetric(BaseModel):
 class TestSampleEvaluationInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["current", "stale", "unavailable", "error"]
+    status: Literal["current", "stale", "queued", "running", "unavailable", "error"]
     pixel: TestSampleMetric | None = None
     objects: TestSampleMetric | None = None
     object_iou_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     pseudo_markup_result_id: UUID | None = None
+    training_result_id: UUID | None = None
+    target_training_result_id: UUID | None = None
     model_name: str | None = None
+    target_model_name: str | None = None
+    threshold: float | None = None
+    job_id: UUID | None = None
+    progress: RuntimeProgress | None = None
     markup_created_at: datetime | None = None
     evaluated_at: datetime | None = None
     error: str | None = None

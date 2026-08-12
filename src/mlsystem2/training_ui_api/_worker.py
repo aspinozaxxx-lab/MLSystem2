@@ -34,7 +34,11 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
-from ._dataset_catalog import dataset_class_row, find_managed_dataset, list_managed_datasets
+from ._dataset_catalog import (
+    dataset_class_row,
+    find_managed_dataset,
+    list_managed_datasets,
+)
 from ._datasets import (
     CUSTOM_KEY,
     count_scenes_file_images,
@@ -63,9 +67,13 @@ from ._queueing import dispatch_sort_key, ensure_queue_positions
 from ._templates import normalize_tile_factors
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
+    TEST_SAMPLE_EVALUATION_TARGET,
+    current_primary_training_result,
     evaluate_test_samples_for_pseudo_markup,
     queue_training_result_test_f1,
+    reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
+    test_sample_model_compatibility_error,
 )
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
 
@@ -84,6 +92,13 @@ ProcessLauncher = Callable[..., _StartedProcess]
 
 def _is_test_sample_f1_job(row: JobRow) -> bool:
     return (row.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION
+
+
+def _is_saved_test_sample_evaluation_job(row: JobRow) -> bool:
+    return (
+        _is_test_sample_f1_job(row)
+        and (row.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET
+    )
 
 
 def _is_pseudolabel_aoi_job(row: JobRow) -> bool:
@@ -406,10 +421,16 @@ def _start_inference_job(
     row.finished_at = None
     row.process_pid = process.pid
     if is_test_f1:
-        metric = _test_sample_f1_metric(session, row)
-        if metric is not None:
-            metric.status = "running"
-            metric.updated_at = _now()
+        if _is_saved_test_sample_evaluation_job(row):
+            sample = _saved_test_sample_evaluation(session, row)
+            if sample is not None and sample.evaluation_job_id == row.id:
+                sample.metric_status = "running"
+                sample.updated_at = _now()
+        else:
+            metric = _test_sample_f1_metric(session, row)
+            if metric is not None:
+                metric.status = "running"
+                metric.updated_at = _now()
     elif not is_pseudolabel_aoi:
         for result in _pseudo_markup_results(session, row):
             result.status = ResultStatus.RUNNING.value
@@ -706,7 +727,21 @@ def _build_test_sample_f1_config(
     sample = session.get(TestSampleRow, sample_id)
     if training_result is None or training_result.status != ResultStatus.OK.value:
         raise RuntimeError("Успешный результат обучения для расчёта F1 не найден.")
-    if sample is None or not sample.is_primary or sample.dataset_key != training_result.class_key:
+    saved_evaluation = _is_saved_test_sample_evaluation_job(row)
+    if sample is None:
+        raise RuntimeError("Тестовая разметка была удалена.")
+    if saved_evaluation:
+        primary = current_primary_training_result(session, sample.class_key)
+        if primary is None or primary.id != training_result.id:
+            raise RuntimeError("Основная сеть класса была заменена.")
+        compatibility_error = test_sample_model_compatibility_error(
+            session,
+            sample,
+            training_result,
+        )
+        if compatibility_error is not None:
+            raise RuntimeError(compatibility_error)
+    elif not sample.is_primary or sample.dataset_key != training_result.class_key:
         raise RuntimeError("Основная тестовая разметка была заменена или удалена.")
     expected_revision = int(row.config.get("test_sample_revision") or 0)
     if sample.content_revision != expected_revision:
@@ -796,8 +831,9 @@ def _build_test_sample_f1_config(
         "operation": TEST_SAMPLE_F1_OPERATION,
         "run_root": str(run_dir / "scratch"),
         "report_path": str(run_dir / "scratch" / "report.json"),
-        "class_key": training_result.class_key,
-        "class_name": training_result.class_display_name,
+        "metric_target": row.config.get("metric_target"),
+        "class_key": sample.class_key if saved_evaluation else training_result.class_key,
+        "class_name": sample.class_name if saved_evaluation else training_result.class_display_name,
         "task": training_result.task,
         "class_schema": list(training_result.class_schema or []),
         "object_types": list(training_result.class_schema or []),
@@ -1056,11 +1092,13 @@ def _finish_training_job(
         result.updated_at = _now()
     session.flush()
     if succeeded:
+        newly_primary_class_keys: set[str] = set()
         for result in training_results:
             class_row = dataset_class_row(session, result.dataset_key or result.class_key)
             if class_row is not None and class_row.primary_training_result_id is None:
                 class_row.primary_training_result_id = result.id
                 class_row.updated_at = _now()
+                newly_primary_class_keys.add(class_row.key)
                 session.flush()
             try:
                 queue_training_result_test_f1(
@@ -1073,6 +1111,17 @@ def _finish_training_job(
                 LOGGER.exception(
                     "Не удалось поставить автоматический расчёт тестового F1 для сети %s",
                     result.id,
+                )
+        if newly_primary_class_keys:
+            try:
+                reconcile_test_sample_evaluations(
+                    session,
+                    config,
+                    class_keys=newly_primary_class_keys,
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception(
+                    "Не удалось поставить прямые оценки тестовых разметок после назначения основной сети"
                 )
         session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
@@ -1123,7 +1172,7 @@ def _finish_inference_job(
     succeeded: bool,
 ) -> None:
     if _is_test_sample_f1_job(row):
-        _finish_test_sample_f1_job(session, row, succeeded=succeeded)
+        _finish_test_sample_f1_job(session, row, config, succeeded=succeeded)
         return
     if _is_pseudolabel_aoi_job(row):
         _finish_pseudolabel_aoi_job(session, row, config, succeeded=succeeded)
@@ -1270,9 +1319,18 @@ def _finish_pseudolabel_aoi_job(
 def _finish_test_sample_f1_job(
     session: Session,
     row: JobRow,
+    config: TrainingUIAPIConfig,
     *,
     succeeded: bool,
 ) -> None:
+    if _is_saved_test_sample_evaluation_job(row):
+        _finish_saved_test_sample_evaluation_job(
+            session,
+            row,
+            config,
+            succeeded=succeeded,
+        )
+        return
     row.finished_at = _now()
     row.process_pid = None
     report = _pseudo_report(row)
@@ -1292,46 +1350,22 @@ def _finish_test_sample_f1_job(
             and metric.job_id == row.id
         )
         if succeeded and still_current and report is not None:
-            true_positive = int(report.get("true_positive") or 0)
-            false_positive = int(report.get("false_positive") or 0)
-            false_negative = int(report.get("false_negative") or 0)
-            precision_denominator = true_positive + false_positive
-            recall_denominator = true_positive + false_negative
-            precision = true_positive / precision_denominator if precision_denominator else 0.0
-            recall = true_positive / recall_denominator if recall_denominator else 0.0
-            denominator = precision + recall
-            metric.precision = precision
-            metric.recall = recall
-            metric.f1 = 2.0 * precision * recall / denominator if denominator else 0.0
-            metric.true_positive = true_positive
-            metric.false_positive = false_positive
-            metric.false_negative = false_negative
-            object_true_positive = int(report.get("object_true_positive") or 0)
-            object_false_positive = int(report.get("object_false_positive") or 0)
-            object_false_negative = int(report.get("object_false_negative") or 0)
-            object_precision_denominator = object_true_positive + object_false_positive
-            object_recall_denominator = object_true_positive + object_false_negative
-            object_precision = (
-                object_true_positive / object_precision_denominator
-                if object_precision_denominator
-                else 0.0
-            )
-            object_recall = (
-                object_true_positive / object_recall_denominator
-                if object_recall_denominator
-                else 0.0
-            )
-            object_denominator = object_precision + object_recall
-            metric.object_precision = object_precision
-            metric.object_recall = object_recall
-            metric.object_f1 = (
-                2.0 * object_precision * object_recall / object_denominator
-                if object_denominator
-                else 0.0
-            )
-            metric.object_true_positive = object_true_positive
-            metric.object_false_positive = object_false_positive
-            metric.object_false_negative = object_false_negative
+            (
+                metric.precision,
+                metric.recall,
+                metric.f1,
+                metric.true_positive,
+                metric.false_positive,
+                metric.false_negative,
+            ) = _report_metric_values(report)
+            (
+                metric.object_precision,
+                metric.object_recall,
+                metric.object_f1,
+                metric.object_true_positive,
+                metric.object_false_positive,
+                metric.object_false_negative,
+            ) = _report_metric_values(report, prefix="object_")
             report_threshold = report.get("threshold")
             metric.threshold = (
                 float(report_threshold) if report_threshold is not None else None
@@ -1356,6 +1390,172 @@ def _finish_test_sample_f1_job(
         row.status,
         report,
     )
+
+
+def _finish_saved_test_sample_evaluation_job(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    *,
+    succeeded: bool,
+) -> None:
+    row.finished_at = _now()
+    row.process_pid = None
+    report = _pseudo_report(row)
+    succeeded = succeeded and _test_sample_f1_report_allows_success(report)
+    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    sample = _saved_test_sample_evaluation(session, row)
+    training_result = _test_sample_f1_training_result(session, row)
+    expected_revision = int((row.config or {}).get("test_sample_revision") or 0)
+    expected_indices = {
+        int(value) for value in (row.config or {}).get("test_sample_tile_indices") or []
+    }
+    current_primary = (
+        current_primary_training_result(session, sample.class_key)
+        if sample is not None
+        else None
+    )
+    compatibility_error = (
+        test_sample_model_compatibility_error(session, sample, training_result)
+        if sample is not None and training_result is not None
+        else "Основная сеть или тестовая разметка больше не существуют."
+    )
+    still_current = bool(
+        sample is not None
+        and training_result is not None
+        and sample.evaluation_job_id == row.id
+        and sample.content_revision == expected_revision
+        and {tile.tile_index for tile in sample.tiles if tile.enabled} == expected_indices
+        and current_primary is not None
+        and current_primary.id == training_result.id
+        and compatibility_error is None
+    )
+    reconcile_sample_id: uuid.UUID | None = None
+    if sample is not None and sample.evaluation_job_id == row.id:
+        if succeeded and still_current and report is not None and training_result is not None:
+            pixel = _report_metric_values(report)
+            objects = _report_metric_values(report, prefix="object_")
+            (
+                sample.pixel_precision,
+                sample.pixel_recall,
+                sample.pixel_f1,
+                sample.pixel_true_positive,
+                sample.pixel_false_positive,
+                sample.pixel_false_negative,
+            ) = pixel
+            (
+                sample.object_precision,
+                sample.object_recall,
+                sample.object_f1,
+                sample.object_true_positive,
+                sample.object_false_positive,
+                sample.object_false_negative,
+            ) = objects
+            sample.evaluation_metrics = dict(report.get("metrics") or {})
+            sample.evaluation_training_result_id = training_result.id
+            sample.evaluation_model_name = training_result.model_name
+            sample.evaluated_revision = sample.content_revision
+            sample.evaluation_inference_template_id = _optional_uuid(
+                (row.config or {}).get("inference_template_id")
+            )
+            sample.evaluation_inference_template_version = _optional_scalar_int(
+                (row.config or {}).get("inference_template_version")
+            )
+            sample.evaluation_inference_config_hash = str(
+                (row.config or {}).get("inference_config_hash") or ""
+            ) or None
+            sample.evaluation_evaluator_version = _optional_scalar_int(
+                (row.config or {}).get("test_f1_evaluator_version")
+            )
+            sample.evaluation_threshold = _optional_number(report.get("threshold"))
+            sample.metric_status = "current"
+            sample.evaluated_at = row.finished_at
+            sample.evaluation_error = None
+            row.error = None
+        elif not still_current:
+            sample.evaluation_job_id = None
+            sample.metric_status = (
+                "stale"
+                if sample.pixel_f1 is not None and sample.object_f1 is not None
+                else "unavailable"
+            )
+            sample.evaluation_error = (
+                "Основная сеть или состав тестовой разметки изменились во время расчёта."
+            )
+            reconcile_sample_id = sample.id
+        else:
+            sample.metric_status = "error"
+            sample.evaluation_error = _test_sample_f1_error(report, row)
+            row.error = sample.evaluation_error
+        sample.updated_at = _now()
+    session.flush()
+    if reconcile_sample_id is not None:
+        reconcile_test_sample_evaluations(
+            session,
+            config,
+            sample_ids={reconcile_sample_id},
+        )
+    _cleanup_inference_scratch(row)
+    LOGGER.info(
+        "Finished saved test-sample evaluation job %s with status %s report=%s",
+        row.id,
+        row.status,
+        report,
+    )
+
+
+def _report_metric_values(
+    report: dict[str, Any],
+    *,
+    prefix: str = "",
+) -> tuple[float, float, float, int, int, int]:
+    true_positive = int(report.get(f"{prefix}true_positive") or 0)
+    false_positive = int(report.get(f"{prefix}false_positive") or 0)
+    false_negative = int(report.get(f"{prefix}false_negative") or 0)
+    precision_denominator = true_positive + false_positive
+    recall_denominator = true_positive + false_negative
+    precision = true_positive / precision_denominator if precision_denominator else 0.0
+    recall = true_positive / recall_denominator if recall_denominator else 0.0
+    denominator = precision + recall
+    f1 = 2.0 * precision * recall / denominator if denominator else 0.0
+    return (
+        precision,
+        recall,
+        f1,
+        true_positive,
+        false_positive,
+        false_negative,
+    )
+
+
+def _saved_test_sample_evaluation(
+    session: Session,
+    row: JobRow,
+) -> TestSampleRow | None:
+    sample_id = _optional_uuid((row.config or {}).get("test_sample_id"))
+    return session.get(TestSampleRow, sample_id) if sample_id is not None else None
+
+
+def _test_sample_f1_training_result(
+    session: Session,
+    row: JobRow,
+) -> TrainingResultRow | None:
+    result_id = _optional_uuid((row.config or {}).get("training_result_id"))
+    return session.get(TrainingResultRow, result_id) if result_id is not None else None
+
+
+def _optional_uuid(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_scalar_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _test_sample_f1_metric(

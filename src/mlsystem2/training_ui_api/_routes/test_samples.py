@@ -22,6 +22,7 @@ from mlsystem2.training_ui_api._test_samples import (
     latest_test_sample_batch,
     optimize_test_sample,
     optimize_test_sample_preview,
+    reconcile_test_sample_evaluations,
     test_sample_batch_detail,
     test_sample_catalog,
     test_sample_detail,
@@ -80,6 +81,15 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleCatalogResponse:
+        return test_sample_catalog(db)
+
+    @app.post("/api/v1/test-samples/reconcile", response_model=TestSampleCatalogResponse)
+    def post_test_samples_reconcile(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleCatalogResponse:
+        reconcile_test_sample_evaluations(db, ctx.config)
+        db.commit()
         return test_sample_catalog(db)
 
     @app.post("/api/v1/test-samples", response_model=TestSampleDetail)
