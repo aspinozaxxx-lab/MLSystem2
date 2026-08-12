@@ -122,6 +122,7 @@ class TrainingResultExportItem(BaseModel):
     result_id: UUID
     model_name: str
     sample_size: int | None = None
+    context: int | None = Field(default=None, ge=0)
 
 
 class TrainingResultBatchExportRequest(BaseModel):

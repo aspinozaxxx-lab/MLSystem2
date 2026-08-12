@@ -194,6 +194,64 @@ def test_window_grid_rejects_stride_that_would_leave_internal_gaps() -> None:
         list(_pseudo_runner._windows(100, 100, tile_size=16, stride=17))
 
 
+def test_context_windows_start_outside_all_raster_edges() -> None:
+    windows = list(
+        _pseudo_runner._windows(
+            8,
+            8,
+            tile_size=8,
+            stride=4,
+            context=2,
+        )
+    )
+
+    assert [
+        (int(window.col_off), int(window.row_off)) for window in windows
+    ] == [(-2, -2), (2, -2), (-2, 2), (2, 2)]
+
+
+def test_pseudo_markup_discards_predictions_from_input_context_frame(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "context.tif"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=4,
+        dtype="uint8",
+        nodata=0,
+        crs="EPSG:3857",
+        transform=from_origin(0, 8, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((4, 8, 8), dtype=np.uint8))
+
+    def predict_only_frame(_torch, _model, image, **_kwargs):
+        frame = np.ones(image.shape[-2:], dtype=np.uint8)
+        frame[2:-2, 2:-2] = 0
+        return frame, frame.astype(np.float32)
+
+    monkeypatch.setattr(_pseudo_runner, "_predict_tile", predict_only_frame)
+
+    result = _infer_test_tile_mask(
+        torch=object(),
+        model=object(),
+        input_channels=4,
+        image_path=image_path,
+        tile_size=8,
+        stride=4,
+        context=2,
+        threshold=0.5,
+        device="cpu",
+        postprocess_profile=_select_postprocess_profile(0),
+    )
+
+    assert np.count_nonzero(result) == 0
+
+
 def test_pseudo_runner_accepts_only_rgb_or_rgba_for_three_channel_checkpoint(tmp_path: Path) -> None:
     image_path = tmp_path / "rgb.tif"
     with rasterio.open(

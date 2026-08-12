@@ -3930,6 +3930,17 @@
             ],
             "title": "Sample Size"
           },
+          "context": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
           "checkpoint": {
             "anyOf": [
               {
@@ -4037,6 +4048,17 @@
               }
             ],
             "title": "Sample Size"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
           }
         },
         "type": "object",
@@ -9064,6 +9086,18 @@
               }
             ],
             "title": "Sample Size"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
           }
         },
         "additionalProperties": false,

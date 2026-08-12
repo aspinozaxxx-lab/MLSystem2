@@ -472,6 +472,7 @@ def _build_training_config(
         "tile_preparation": {
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
+            "context": _int_value(flat, "tile_preparation.context", 0),
             "augmentation_level": _int_value(flat, "tile_preparation.augmentation_level", 0),
             "positive_factor": tile_factors["tile_preparation.positive_factor"],
             "hard_negative_factor": tile_factors["tile_preparation.hard_negative_factor"],
@@ -546,6 +547,14 @@ def _build_pseudo_markup_config(
         if external_manifest is not None
         else _int_value(flat, "tile_preparation.tile_size", 768)
     )
+    context = (
+        external_manifest.context
+        if external_manifest is not None
+        else _int_value(flat, "tile_preparation.context", 0)
+    )
+    core_size = tile_size - 2 * context
+    if context < 0 or core_size <= 0:
+        raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
     threshold = _optional_float(row.config, "checkpoint_threshold")
     if threshold is None and training_result is not None and external_manifest is None:
         raise RuntimeError(
@@ -594,10 +603,11 @@ def _build_pseudo_markup_config(
         "postprocess_config": row.config.get("inference_template_config") or {},
         "threshold": threshold,
         "tile_size": tile_size,
+        "context": context,
         "stride": (
             external_manifest.stride
             if external_manifest is not None
-            else _int_value(flat, "tile_preparation.stride", tile_size)
+            else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
         ),
         "batch_size": (
             1
@@ -670,6 +680,7 @@ def _build_pseudolabel_aoi_config(
         "postprocess_config": state.get("inference_template_config") or {},
         "threshold": float(threshold) if threshold is not None else None,
         "tile_size": _int_value(state, "tile_size", 768),
+        "context": _int_value(state, "context", 0),
         "stride": _int_value(state, "stride", 768),
         "batch_size": _int_value(state, "batch_size", 1),
         "image_scan_workers": config.pseudolabel_image_scan_workers,
@@ -735,6 +746,7 @@ def _build_test_sample_f1_config(
         checkpoint_epoch = None
         checkpoint_threshold = external_manifest.score_threshold
         inference_tile_size = external_manifest.tile_size
+        inference_context = external_manifest.context
         inference_stride = external_manifest.stride
         input_channels = external_manifest.input_channels
         batch_size = 1
@@ -750,7 +762,15 @@ def _build_test_sample_f1_config(
         checkpoint_epoch = checkpoint.epoch
         checkpoint_threshold = checkpoint.threshold
         inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
-        inference_stride = _int_value(flat, "tile_preparation.stride", inference_tile_size)
+        inference_context = _int_value(flat, "tile_preparation.context", 0)
+        inference_core_size = inference_tile_size - 2 * inference_context
+        if inference_context < 0 or inference_core_size <= 0:
+            raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
+        inference_stride = (
+            inference_core_size
+            if inference_context
+            else _int_value(flat, "tile_preparation.stride", inference_tile_size)
+        )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
     sample_root = Path(config.stored_files_root) / "test-samples" / str(sample.id)
@@ -799,6 +819,7 @@ def _build_test_sample_f1_config(
         "test_f1_evaluator_version": row.config.get("test_f1_evaluator_version"),
         "threshold": checkpoint_threshold,
         "tile_size": inference_tile_size,
+        "context": inference_context,
         "stride": inference_stride,
         "batch_size": batch_size,
         "device": "cuda",

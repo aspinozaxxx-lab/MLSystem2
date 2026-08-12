@@ -1487,6 +1487,8 @@ export interface components {
             model_name: string;
             /** Sample Size */
             sample_size?: number | null;
+            /** Context */
+            context?: number | null;
             /** Checkpoint */
             checkpoint?: string | null;
         };
@@ -1524,6 +1526,8 @@ export interface components {
             model_name: string;
             /** Sample Size */
             sample_size?: number | null;
+            /** Context */
+            context?: number | null;
         };
         /** BootstrapInfo */
         BootstrapInfo: {
@@ -3366,6 +3370,8 @@ export interface components {
             model_name: string;
             /** Sample Size */
             sample_size?: number | null;
+            /** Context */
+            context?: number | null;
         };
         /** TrainingResultInfo */
         TrainingResultInfo: {

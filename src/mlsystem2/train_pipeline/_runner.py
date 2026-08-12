@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -232,6 +233,7 @@ def run_train_pipeline(
             sampling_mode=val_sampling_mode,
         )
 
+        _seed_training(settings.tile_preparation.seed)
         model = _load_or_create_model(settings, deps)
 
         def progress_sink(event: TrainProgressEvent) -> None:
@@ -326,6 +328,7 @@ def _mlflow_start_request(
             "pipeline": "train",
             "class": _mlflow_class_tag(settings),
             "task": settings.train.task,
+            "seed": str(settings.tile_preparation.seed),
         },
     )
 
@@ -499,6 +502,17 @@ def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies)
     return deps.create_model(spec)
 
 
+def _seed_training(seed: int) -> None:
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 class _CountingLoader:
     def __init__(
         self,
@@ -613,10 +627,16 @@ class _CountingLoader:
             "background",
             background_ratio_abs_error,
         )
+        scene_tile_diagnostics = _dataset_attr(self.dataset, "scene_tile_diagnostics")
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
             "scene_count": _dataset_attr(self.dataset, "scene_count"),
+            **(
+                {"scene_tile_diagnostics": scene_tile_diagnostics}
+                if scene_tile_diagnostics is not None
+                else {}
+            ),
             "candidate_window_count": _dataset_attr(self.dataset, "candidate_window_count"),
             "candidate_window_count_before_valid_filter": _dataset_attr(
                 self.dataset,
@@ -684,7 +704,12 @@ def _tile_preparation_report(
 ) -> dict[str, object]:
     return {
         "tile_size": settings.tile_preparation.tile_size,
+        "context": settings.tile_preparation.context,
+        "core_size": (
+            settings.tile_preparation.tile_size - 2 * settings.tile_preparation.context
+        ),
         "stride": settings.tile_preparation.stride,
+        "seed": settings.tile_preparation.seed,
         "batch_size": settings.train.batch_size,
         "input_channels": settings.train.input_channels,
         "input_dtype": "uint8",
@@ -789,6 +814,8 @@ def _train_request(
             task=settings.train.task,
             quality_metric=settings.train.quality_metric,
             batch_size=settings.train.batch_size,
+            seed=settings.tile_preparation.seed,
+            inference_context=settings.tile_preparation.context,
             device=settings.train.device,
             learning_rate=settings.train.learning_rate,
             weight_decay=settings.train.weight_decay,

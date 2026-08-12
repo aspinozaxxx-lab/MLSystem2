@@ -36,6 +36,8 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
             config=TrainConfig(
                 epochs=1,
                 batch_size=2,
+                seed=7,
+                inference_context=2,
                 device="cpu",
                 learning_rate=0.001,
                 weight_decay=0.0,
@@ -57,6 +59,9 @@ def test_train_model_smoke_saves_checkpoints(tmp_path: Path) -> None:
     assert 0.0 <= result.history[0].val_best_threshold_pixel_f1 <= 1.0
     checkpoint = torch.load(result.best_checkpoint_path, map_location="cpu")
     assert checkpoint["metadata"]["sample_size"] == 16
+    assert checkpoint["metadata"]["inference_context"] == 2
+    assert checkpoint["metadata"]["inference_core_size"] == 12
+    assert checkpoint["metadata"]["seed"] == 7
 
 
 def test_train_model_multiclass_cross_entropy_smoke(tmp_path: Path) -> None:
@@ -1118,6 +1123,194 @@ def test_multiclass_losses_penalize_false_positive_on_nodata_background(
     second_loss.backward()
     assert second.grad is not None
     assert torch.sum(torch.abs(second.grad[0, :, 0, 0])).item() > 0.0
+
+
+def test_validation_loss_f1_and_threshold_ignore_context_frame() -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    class BorderArtifactModel(torch.nn.Module):
+        def forward(self, images):
+            logits = torch.full_like(images[:, :1], -20.0)
+            logits[:, :, 0, :] = 20.0
+            logits[:, :, -1, :] = 20.0
+            logits[:, :, :, 0] = 20.0
+            logits[:, :, :, -1] = 20.0
+            logits[:, :, 2, 2] = 20.0
+            return logits
+
+    images = torch.zeros((1, 1, 6, 6), dtype=torch.float32)
+    masks = torch.zeros((1, 1, 6, 6), dtype=torch.float32)
+    masks[:, :, 2, 2] = 1.0
+
+    def evaluate(context: int):
+        return _trainer._validate_epoch(
+            torch,
+            BorderArtifactModel(),
+            [(images, masks)],
+            torch.device("cpu"),
+            TrainConfig(
+                epochs=1,
+                batch_size=1,
+                inference_context=context,
+                device="cpu",
+                learning_rate=0.001,
+                weight_decay=0.0,
+                loss="bce_dice",
+                threshold=0.5,
+                early_stopping_patience=1,
+            ),
+            1,
+        )
+
+    full = evaluate(0)
+    central = evaluate(1)
+
+    assert central["loss"] < full["loss"]
+    assert central["best_threshold_pixel_f1"] == pytest.approx(1.0)
+    assert central["best_threshold"] in _trainer.THRESHOLD_CANDIDATES
+    assert full["best_threshold_pixel_f1"] < 0.2
+
+
+@pytest.mark.parametrize("loss_name", ["bce_dice", "focal_dice", "focal_tversky"])
+def test_binary_loss_has_zero_gradient_in_context_frame(loss_name: str) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.zeros((1, 1, 6, 6), dtype=torch.float32, requires_grad=True)
+    masks = torch.zeros_like(logits)
+    masks[:, :, 2:4, 2:4] = 1.0
+    hard_negative = torch.zeros_like(logits, dtype=torch.bool)
+    config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        inference_context=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+    cropped_logits, cropped_masks, cropped_hard_negative = (
+        _trainer._crop_supervision_tensors(logits, masks, hard_negative, 1)
+    )
+
+    _trainer._loss(
+        torch,
+        cropped_logits,
+        cropped_masks,
+        config,
+        cropped_hard_negative,
+    ).backward()
+
+    assert logits.grad is not None
+    assert torch.count_nonzero(logits.grad[:, :, 0, :]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, -1, :]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, :, 0]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, :, -1]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, 1:-1, 1:-1]) > 0
+
+
+@pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
+def test_multiclass_loss_has_zero_gradient_in_context_frame(loss_name: str) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.zeros((1, 3, 6, 6), dtype=torch.float32, requires_grad=True)
+    masks = torch.zeros((1, 6, 6), dtype=torch.long)
+    masks[:, 2:4, 2:4] = 1
+    hard_negative = torch.zeros_like(masks, dtype=torch.bool)
+    config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=1,
+        inference_context=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        threshold=0.5,
+        early_stopping_patience=1,
+        class_slugs=["first", "second"],
+    )
+    cropped_logits, cropped_masks, cropped_hard_negative = (
+        _trainer._crop_supervision_tensors(logits, masks, hard_negative, 1)
+    )
+
+    _trainer._loss(
+        torch,
+        cropped_logits,
+        cropped_masks,
+        config,
+        cropped_hard_negative,
+    ).backward()
+
+    assert logits.grad is not None
+    assert torch.count_nonzero(logits.grad[:, :, 0, :]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, -1, :]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, :, 0]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, :, -1]) == 0
+    assert torch.count_nonzero(logits.grad[:, :, 1:-1, 1:-1]) > 0
+
+
+def test_two_short_trainings_are_reproducible_with_same_seed(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train_pipeline import _runner
+
+    class TinySegmentationModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = torch.nn.Conv2d(4, 1, kernel_size=1)
+
+        def forward(self, images):
+            return self.conv(images)
+
+    def run_once(name: str):
+        _runner._seed_training(42)
+        model = TinySegmentationModel()
+        result = train_model(
+            TrainRequest(
+                model=ModelHandle(
+                    spec=ModelSpec(
+                        name="segformer_b2",
+                        input_channels=4,
+                        output_channels=1,
+                    ),
+                    model=model,
+                ),
+                train_loader=_fake_loader(torch),
+                val_loader=_fake_loader(torch),
+                config=TrainConfig(
+                    epochs=2,
+                    batch_size=2,
+                    seed=42,
+                    device="cpu",
+                    learning_rate=0.001,
+                    weight_decay=0.0,
+                    loss="bce_dice",
+                    threshold=0.5,
+                    early_stopping_patience=2,
+                ),
+                checkpoint_dir=str(tmp_path / name),
+                sample_size=16,
+            )
+        )
+        return (
+            {key: value.detach().clone() for key, value in model.state_dict().items()},
+            [(item.train_loss, item.val_loss, item.val_quality_f1) for item in result.history],
+        )
+
+    first_state, first_history = run_once("first")
+    second_state, second_history = run_once("second")
+
+    assert first_history == pytest.approx(second_history)
+    assert first_state.keys() == second_state.keys()
+    assert all(torch.equal(first_state[key], second_state[key]) for key in first_state)
 
 
 def _fake_loader(torch, *, with_meta: bool = False):

@@ -16,7 +16,7 @@ from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
 from ._mask import HARD_NEGATIVE_LABEL, build_supervision_mask, rasterize_instance_mask
 from ._valid_footprint import filter_valid_windows
-from ._windows import TileWindow, build_tile_windows
+from ._windows import TileWindow, build_tile_windows, core_tile_window
 from .contracts import (
     TileClassAnnotation,
     TileClassDefinition,
@@ -50,6 +50,7 @@ class TileDataset:
         classes: list[TileClassDefinition] | None = None,
         tile_size: int,
         stride: int,
+        context: int = 0,
         mode: str,
         seed: int,
         augmentation_level: int,
@@ -82,6 +83,7 @@ class TileDataset:
                 "Нельзя одновременно задавать legacy class_annotations и per-image classes."
             )
         self._tile_size = tile_size
+        self._context = context
         self._mode = mode
         self._seed = seed
         self._augmentation_level = augmentation_level
@@ -106,6 +108,7 @@ class TileDataset:
         self._class_hints_by_index: list[frozenset[int]] | None = None
         self._scene_nodata: list[object] = []
         self._scene_crs: list[str | None] = []
+        self._scene_tile_diagnostics: list[dict[str, object]] = []
         self._windows: list[_SceneTileWindow] = []
         self._candidate_window_count_before_valid_filter = 0
         self._black_filtered_window_count = 0
@@ -135,11 +138,33 @@ class TileDataset:
                         dataset.height,
                         tile_size,
                         stride,
+                        context,
                     )
                     valid_windows, diagnostics = filter_valid_windows(
                         dataset,
                         candidate_windows,
                         nodata=nodata,
+                    )
+                    self._scene_tile_diagnostics.append(
+                        {
+                            "scene_id": scene.scene_id,
+                            "image_path": str(image_path),
+                            "width": dataset.width,
+                            "height": dataset.height,
+                            "resolution_x": abs(float(dataset.res[0])),
+                            "resolution_y": abs(float(dataset.res[1])),
+                            "candidate_window_count": (
+                                diagnostics.candidate_window_count_before_valid_filter
+                            ),
+                            "valid_window_count": len(valid_windows),
+                            "black_filtered_window_count": (
+                                diagnostics.black_filtered_window_count
+                            ),
+                            "positive_window_count": 0,
+                            "hard_negative_window_count": 0,
+                            "background_window_count": 0,
+                            "selected_window_count": 0,
+                        }
                     )
             except TilePreparationError:
                 raise
@@ -167,10 +192,12 @@ class TileDataset:
         should_build_hints = self._mode in {"train", "val"} or self._tile_split is not None
         if should_build_hints:
             self._build_hints()
+            self._record_scene_category_counts()
         self._pool_window_count = len(self._windows)
         if self._tile_split is not None:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
+        self._record_scene_selected_counts()
         self._close_datasets()
 
     def __len__(self) -> int:
@@ -196,7 +223,7 @@ class TileDataset:
             window,
             nodata_pixels,
         )
-        category = _tile_category_from_supervision_mask(mask)
+        category = _tile_category_from_supervision_mask(self._core_array(mask))
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
         if should_augment and category in {
@@ -235,8 +262,20 @@ class TileDataset:
         return self._tile_size
 
     @property
+    def context(self) -> int:
+        return self._context
+
+    @property
+    def core_size(self) -> int:
+        return self._tile_size - 2 * self._context
+
+    @property
     def scene_count(self) -> int:
         return len(self._scenes)
+
+    @property
+    def scene_tile_diagnostics(self) -> list[dict[str, object]]:
+        return [dict(item) for item in self._scene_tile_diagnostics]
 
     @property
     def positive_hints(self) -> list[bool] | None:
@@ -621,7 +660,8 @@ class TileDataset:
             scene_index = scene_window.scene_index
             dataset = self._open_dataset(scene_index)
             item = scene_window.window
-            window = Window(item.x, item.y, item.width, item.height)
+            core = core_tile_window(item, self._context)
+            window = Window(core.x, core.y, core.width, core.height)
             bounds = dataset.window_bounds(window)
             if self.uses_multiclass_masks:
                 class_ids = {
@@ -646,6 +686,34 @@ class TileDataset:
             hard_negative_hints,
         )
         self._class_hints_by_index = class_hints
+
+    def _record_scene_category_counts(self) -> None:
+        categories = self._category_hints()
+        if categories is None:
+            return
+        for item in self._scene_tile_diagnostics:
+            item["positive_window_count"] = 0
+            item["hard_negative_window_count"] = 0
+            item["background_window_count"] = 0
+        for scene_window, category in zip(self._windows, categories, strict=True):
+            diagnostics = self._scene_tile_diagnostics[scene_window.scene_index]
+            key = f"{category}_window_count"
+            diagnostics[key] = int(diagnostics[key]) + 1
+
+    def _record_scene_selected_counts(self) -> None:
+        for item in self._scene_tile_diagnostics:
+            item["selected_window_count"] = 0
+        for scene_window in self._windows:
+            diagnostics = self._scene_tile_diagnostics[scene_window.scene_index]
+            diagnostics["selected_window_count"] = (
+                int(diagnostics["selected_window_count"]) + 1
+            )
+
+    def _core_array(self, value: np.ndarray) -> np.ndarray:
+        if self._context == 0:
+            return value
+        end = self._tile_size - self._context
+        return value[..., self._context:end, self._context:end]
 
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:

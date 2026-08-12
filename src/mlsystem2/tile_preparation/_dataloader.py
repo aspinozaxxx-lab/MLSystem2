@@ -49,6 +49,7 @@ def create_tile_dataloader(
             class_annotations=request.class_annotations,
             classes=request.classes,
             tile_size=tile_settings.tile_size,
+            context=tile_settings.context,
             stride=tile_settings.stride,
             mode=request.mode,
             seed=tile_settings.seed,

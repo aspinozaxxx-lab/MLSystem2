@@ -834,6 +834,7 @@ type ModelExportRow = {
   selected: boolean;
   modelName: string;
   sampleSize: string;
+  context: string;
 };
 
 function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
@@ -856,6 +857,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
           selected: Boolean(result && isPrimaryDataset(dataset)),
           modelName: result ? defaultTrainingZipModelName(result, bootstrap.datasets) : "",
           sampleSize: result?.sample_size_hint ? String(result.sample_size_hint) : "",
+          context: "",
         };
       }),
     )
@@ -907,10 +909,16 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
         showModal({ title: "Ошибка", body: <p>sample_size должен быть положительным числом, кратным 32.</p> });
         return;
       }
+      const context = parseExportContext(row.context);
+      if (context === undefined) {
+        showModal({ title: "Ошибка", body: <p>context должен быть целым неотрицательным числом.</p> });
+        return;
+      }
       items.push({
         result_id: row.result!.id,
         model_name: modelName,
         sample_size: sampleSize,
+        context,
       });
     }
 
@@ -954,6 +962,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                   <col className="model-export-col-date" />
                   <col className="model-export-col-name" />
                   <col className="model-export-col-sample" />
+                  <col className="model-export-col-sample" />
                 </colgroup>
                 <thead>
                   <tr>
@@ -963,6 +972,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                     <th>Обучена</th>
                     <th>Имя выгрузки</th>
                     <th>sample_size</th>
+                    <th>context</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1012,6 +1022,18 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                           disabled={!row.result || busy}
                           aria-label={`sample_size ${row.dataset.name}`}
                           onChange={(event) => updateRow(row.dataset.key, { sampleSize: event.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={row.context}
+                          disabled={!row.result || busy}
+                          placeholder="из checkpoint"
+                          aria-label={`context ${row.dataset.name}`}
+                          onChange={(event) => updateRow(row.dataset.key, { context: event.target.value })}
                         />
                       </td>
                     </tr>
@@ -3715,6 +3737,14 @@ function byId<T extends { id: string }>(items: T[], id: string): T | undefined {
   return items.find((item) => item.id === id);
 }
 
+function parseExportContext(value: string): number | null | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const context = Number(trimmed);
+  if (!Number.isInteger(context) || context < 0) return undefined;
+  return context;
+}
+
 export function trainingConfigSchema(
   schema: ConfigSchema | undefined,
   task: DatasetInfo["task"],
@@ -4012,7 +4042,12 @@ function showTrainingResultZipModal(
       window.alert("Имя модели должно содержать только a-z, 0-9, дефис и подчеркивание.");
       return;
     }
-    await exportTrainingResultArchive(result.id, modelName, null, run, showModal, closeModal);
+    const context = parseExportContext(String(data.get("context") || ""));
+    if (context === undefined) {
+      window.alert("context должен быть целым неотрицательным числом.");
+      return;
+    }
+    await exportTrainingResultArchive(result.id, modelName, null, context, run, showModal, closeModal);
   };
   showModal({
     title: "Собрать Triton zip",
@@ -4021,6 +4056,10 @@ function showTrainingResultZipModal(
         <label className="field">
           <span>Имя модели</span>
           <input name="model_name" defaultValue={defaultName} pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?" required />
+        </label>
+        <label className="field">
+          <span>context (необязательно)</span>
+          <input name="context" type="number" min="0" step="1" placeholder="из checkpoint; для старого по умолчанию 0" />
         </label>
         <button className="primary" type="submit">
           <Archive size={16} />
@@ -4035,6 +4074,7 @@ async function exportTrainingResultArchive(
   resultId: string,
   modelName: string,
   sampleSize: number | null,
+  context: number | null,
   run: Runner,
   showModal: (modal: ModalState) => void,
   closeModal: () => void,
@@ -4042,13 +4082,14 @@ async function exportTrainingResultArchive(
   const request = new FormData();
   request.set("model_name", modelName);
   if (sampleSize !== null) request.set("sample_size", String(sampleSize));
+  if (context !== null) request.set("context", String(context));
   try {
     const response = await apiDownload(`/results/training/${encodeURIComponent(resultId)}/triton-zip`, request);
     downloadBlob(response.blob, response.filename || `${modelName}_export.zip`);
     closeModal();
   } catch (error) {
     if (error instanceof ApiError && error.message.includes("metadata.sample_size")) {
-      showSampleSizeModal((value) => exportTrainingResultArchive(resultId, modelName, value, run, showModal, closeModal), showModal, closeModal);
+      showSampleSizeModal((value) => exportTrainingResultArchive(resultId, modelName, value, context, run, showModal, closeModal), showModal, closeModal);
     } else {
       showModal({ title: "Ошибка экспорта", body: <p>{error instanceof Error ? error.message : "Неизвестная ошибка"}</p> });
     }

@@ -1493,6 +1493,7 @@ def export_training_result_triton_zip(
     model_name: str,
     sample_size: int | None,
     config: TrainingUIAPIConfig,
+    context: int | None = None,
 ) -> ModelExportArchive:
     row = _training_result_row_for_export(session, result_id)
     return _build_training_result_export_archive(
@@ -1500,6 +1501,7 @@ def export_training_result_triton_zip(
         row,
         model_name=model_name,
         sample_size=sample_size,
+        context=context,
         config=config,
     )
 
@@ -1533,6 +1535,7 @@ def export_training_results_triton_zip(
                 row,
                 model_name=model_name,
                 sample_size=item.sample_size,
+                context=item.context,
                 config=config,
             )
             try:
@@ -1609,6 +1612,7 @@ def _build_training_result_export_archive(
     model_name: str,
     sample_size: int | None,
     config: TrainingUIAPIConfig,
+    context: int | None = None,
 ) -> ModelExportArchive:
     try:
         external_manifest = external_result_manifest(session, row)
@@ -1649,6 +1653,7 @@ def _build_training_result_export_archive(
             checkpoint_filename=checkpoint_path.name or "best.pt",
             checkpoint_bytes=checkpoint_bytes,
             sample_size=sample_size,
+            context=context,
         )
 
 

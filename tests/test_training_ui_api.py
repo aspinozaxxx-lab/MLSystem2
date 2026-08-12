@@ -890,7 +890,14 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
                 spec=SimpleNamespace(input_channels=4, output_channels=1),
                 model=object(),
             ),
-            artifact=SimpleNamespace(metadata={"val_best_threshold": 0.73, "sample_size": 768}),
+            artifact=SimpleNamespace(
+                metadata={
+                    "val_best_threshold": 0.73,
+                    "sample_size": 768,
+                    "inference_context": 128,
+                    "inference_core_size": 512,
+                }
+            ),
         )
 
     def fake_export_onnx(**kwargs: object) -> None:
@@ -941,7 +948,8 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert "KIND_GPU" not in config
         pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(encoding="utf-8")
         assert 'name: "deforestation-b2"' in pipeline
-        assert "sample_size:\n        - 768\n        - 768" in pipeline
+        assert "bounds: 128" in pipeline
+        assert "sample_size:\n        - 512\n        - 512" in pipeline
         pipeline_config = yaml.safe_load(pipeline)["config"]["bricks"]
         assert pipeline_config[0]["output"] == ["RED", "GRN", "BLU", "NIR"]
         assert pipeline_config[1]["input_rasters"] == ["RED", "GRN", "BLU", "NIR"]
@@ -950,6 +958,9 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert metadata["threshold_source"] == "checkpoint_metadata"
         assert metadata["sample_size"] == 768
         assert metadata["sample_size_source"] == "checkpoint_metadata"
+        assert metadata["inference_context"] == 128
+        assert metadata["inference_context_source"] == "checkpoint_metadata"
+        assert metadata["inference_core_size"] == 512
         assert metadata["model_archive"] == "models-serving-service/deforestation-b2.zip"
         assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
         assert metadata["onnx_opset"] == 17
@@ -1037,15 +1048,23 @@ def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch)
         checkpoint_filename="best.pt",
         checkpoint_bytes=b"checkpoint",
         sample_size=768,
+        context=128,
     )
     try:
         assert captured == [(0.73, 768)]
         with zipfile.ZipFile(archive.zip_path) as zip_file:
             metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
+            pipeline = zip_file.read("pipelines/erosion-b2_triton.yaml").decode("utf-8")
         assert metadata["threshold"] == 0.73
         assert metadata["threshold_source"] == "checkpoint_metadata"
         assert metadata["sample_size"] == 768
         assert metadata["sample_size_source"] == "request"
+        assert metadata["inference_context"] == 128
+        assert metadata["inference_context_source"] == "request"
+        assert metadata["inference_core_size"] == 512
+        assert "bounds: 128" in pipeline
+        assert "sample_size: [" not in pipeline
+        assert "sample_size:\n        - 512\n        - 512" in pipeline
     finally:
         archive.cleanup()
 
@@ -1482,6 +1501,13 @@ def test_training_results_batch_export_supports_native_and_external_models(
             assert "models-serving-service/external_model.zip" in zip_file.namelist()
     finally:
         archive.cleanup()
+
+
+def test_model_export_old_checkpoint_defaults_to_zero_context() -> None:
+    assert _model_export._context_from_metadata_or_request({}, None) == (
+        0,
+        "legacy_default",
+    )
 
 
 def test_training_result_model_export_requires_ok_status_and_mlflow_run(
@@ -2549,6 +2575,25 @@ def test_training_ui_sanitizes_invalid_marked_template_factors() -> None:
     assert config["tile_preparation.positive_factor"] == pytest.approx(0.5)
     assert config["tile_preparation.hard_negative_factor"] == pytest.approx(0.3)
     assert config["tile_preparation.background_factor"] == pytest.approx(0.2)
+
+
+def test_training_ui_adds_context_to_legacy_768_template_and_preserves_explicit_zero() -> None:
+    legacy = sanitize_template_config(
+        {
+            "tile_preparation.tile_size": 768,
+            "tile_preparation.stride": 384,
+        }
+    )
+    explicit = sanitize_template_config(
+        {
+            "tile_preparation.tile_size": 768,
+            "tile_preparation.stride": 384,
+            "tile_preparation.context": 0,
+        }
+    )
+
+    assert legacy["tile_preparation.context"] == 128
+    assert explicit["tile_preparation.context"] == 0
 
 
 def test_training_ui_rejects_invalid_job_factor_sum(

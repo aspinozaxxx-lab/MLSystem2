@@ -826,6 +826,101 @@ def test_per_image_annotation_is_cut_to_nodata_as_background(tmp_path: Path) -> 
     dataset.close()
 
 
+@pytest.mark.parametrize("per_image", [False, True])
+def test_context_windows_cover_all_raster_edges_and_cut_invalid_pixels(
+    tmp_path: Path,
+    per_image: bool,
+) -> None:
+    raster_path = tmp_path / f"context_{per_image}.tif"
+    data = np.full((1, 8, 8), 1000, dtype=np.uint16)
+    data[:, 2:4, 2:4] = 0
+    _write_raster_data(raster_path, data, nodata=0)
+    annotation_file = tmp_path / f"context_{per_image}.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[-2, -2], [10, -2], [10, 10], [-2, 10], [-2, -2]],
+        role="positive" if per_image else None,
+    )
+    scene = TileSceneSource(
+        scene_id="scene",
+        image_path=raster_path,
+        annotation_file=annotation_file if per_image else None,
+    )
+
+    dataset = TileDataset(
+        scenes=[scene],
+        annotation_file=None if per_image else annotation_file,
+        tile_size=6,
+        stride=4,
+        context=1,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    assert _window_keys(dataset) == [
+        ("scene", -1, -1),
+        ("scene", 3, -1),
+        ("scene", -1, 3),
+        ("scene", 3, 3),
+    ]
+    for index in range(len(dataset)):
+        image, mask, _meta = dataset[index]
+        invalid = np.all(image == 0, axis=0)
+        assert np.any(invalid)
+        assert np.all(mask[:, invalid] == 0)
+        assert np.any(mask[:, ~invalid] == 1)
+    assert dataset.scene_tile_diagnostics == [
+        {
+            "scene_id": "scene",
+            "image_path": str(raster_path),
+            "width": 8,
+            "height": 8,
+            "resolution_x": 1.0,
+            "resolution_y": 1.0,
+            "candidate_window_count": 4,
+            "valid_window_count": 4,
+            "black_filtered_window_count": 0,
+            "positive_window_count": 4,
+            "hard_negative_window_count": 0,
+            "background_window_count": 0,
+            "selected_window_count": 4,
+        }
+    ]
+    dataset.close()
+
+
+def test_sampling_category_uses_only_central_supervision_area(tmp_path: Path) -> None:
+    raster_path = tmp_path / "central_sampling.tif"
+    _write_raster_data(
+        raster_path,
+        np.full((1, 4, 8), 1000, dtype=np.uint16),
+        nodata=0,
+    )
+    annotation_file = tmp_path / "central_sampling.geojson"
+    _write_annotation_polygon(
+        annotation_file,
+        [[4.2, 1], [4.8, 1], [4.8, 3], [4.2, 3], [4.2, 1]],
+    )
+
+    dataset = TileDataset(
+        scenes=[TileSceneSource(scene_id="scene", image_path=raster_path)],
+        annotation_file=annotation_file,
+        tile_size=6,
+        stride=4,
+        context=1,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    assert dataset.tile_categories == [
+        TILE_CATEGORY_BACKGROUND,
+        TILE_CATEGORY_POSITIVE,
+    ]
+    dataset.close()
+
+
 def test_raster_mask_invalid_pixels_are_background_and_normalized_to_nodata(
     tmp_path: Path,
 ) -> None:
@@ -2036,14 +2131,19 @@ def _write_annotation_height4(path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _write_annotation_polygon(path: Path, coordinates: list[list[float]]) -> None:
+def _write_annotation_polygon(
+    path: Path,
+    coordinates: list[list[float]],
+    *,
+    role: str | None = None,
+) -> None:
     payload = {
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
         "features": [
             {
                 "type": "Feature",
-                "properties": {},
+                "properties": ({"_mlsystem2_role": role} if role is not None else {}),
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": [coordinates],
@@ -2114,6 +2214,7 @@ def _write_config(
     *,
     tile_size: int,
     stride: int,
+    context: int = 0,
     batch_size: int,
     num_workers: int = 0,
     input_channels: int = 3,
@@ -2140,6 +2241,7 @@ dataset:
 
 tile_preparation:
   tile_size: {tile_size}
+  context: {context}
   stride: {stride}
   num_workers: {num_workers}
   prefetch_epochs: 2

@@ -80,6 +80,7 @@ class TilePreparationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tile_size: int = Field(gt=0)
+    context: int = Field(default=0, ge=0)
     stride: int = Field(gt=0)
     num_workers: int = Field(default=16, ge=0)
     prefetch_epochs: float = Field(default=2.0, gt=0.0)
@@ -104,6 +105,8 @@ class TilePreparationSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_tile_settings(self) -> Self:
+        if self.tile_size <= 2 * self.context:
+            raise ValueError("tile_size должен быть больше удвоенного context")
         if self.stride > self.tile_size:
             raise ValueError("stride должен быть меньше или равен tile_size")
         factor_sum = self.positive_factor + self.hard_negative_factor + self.background_factor

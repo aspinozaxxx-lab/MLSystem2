@@ -184,6 +184,12 @@ def _train_epoch(
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(torch, model, images, masks)
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
+        logits, masks, hard_negative_pixels = _crop_supervision_tensors(
+            logits,
+            masks,
+            hard_negative_pixels,
+            config.inference_context,
+        )
         if config.task == "multiclass":
             _validate_multiclass_targets(torch, masks, logits.shape[1], epoch, batch_index, "train")
         loss = _loss(torch, logits, masks, config, hard_negative_pixels)
@@ -270,6 +276,12 @@ def _validate_epoch(
             _validate_binary_targets(torch, masks, epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
+            logits, masks, hard_negative_pixels = _crop_supervision_tensors(
+                logits,
+                masks,
+                hard_negative_pixels,
+                config.inference_context,
+            )
             loss = _loss(torch, logits, masks, config, hard_negative_pixels)
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
@@ -285,6 +297,10 @@ def _validate_epoch(
             object_instances = meta.get("object_instances") if isinstance(meta, dict) else None
             if object_instances is not None:
                 object_instances_seen = True
+                object_instances = _crop_spatial(
+                    object_instances,
+                    config.inference_context,
+                )
                 _accumulate_object_threshold_counts(
                     object_threshold_counts,
                     _as_numpy_instances(object_instances),
@@ -414,6 +430,12 @@ def _validate_multiclass_epoch(
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             logits = _forward_logits(torch, model, images, masks)
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
+            logits, masks, hard_negative_pixels = _crop_supervision_tensors(
+                logits,
+                masks,
+                hard_negative_pixels,
+                config.inference_context,
+            )
             num_classes = int(logits.shape[1])
             _validate_multiclass_targets(torch, masks, num_classes, epoch, batch_index, "val")
             if num_classes != expected_num_classes:
@@ -649,6 +671,26 @@ def _forward_logits(torch, model, images, masks):
             align_corners=False,
         )
     return logits
+
+
+def _crop_supervision_tensors(logits, masks, hard_negative_pixels, context: int):
+    if context == 0:
+        return logits, masks, hard_negative_pixels
+    return (
+        _crop_spatial(logits, context),
+        _crop_spatial(masks, context),
+        _crop_spatial(hard_negative_pixels, context),
+    )
+
+
+def _crop_spatial(value, context: int):
+    if context == 0:
+        return value
+    height = int(value.shape[-2])
+    width = int(value.shape[-1])
+    if height <= 2 * context or width <= 2 * context:
+        raise TrainError("Размер supervision mask должен быть больше удвоенного context")
+    return value[..., context : height - context, context : width - context]
 
 
 def _prepare_supervision_masks(torch, masks, config, device):
@@ -968,6 +1010,13 @@ def _save_training_checkpoint(
                 "val_loss": metrics.val_loss,
                 "train_loss": metrics.train_loss,
                 "sample_size": request.sample_size,
+                "inference_context": request.config.inference_context,
+                "inference_core_size": (
+                    request.sample_size - 2 * request.config.inference_context
+                    if request.sample_size is not None
+                    else None
+                ),
+                "seed": request.config.seed,
                 "train_config": request.config.model_dump(mode="json"),
             },
         )

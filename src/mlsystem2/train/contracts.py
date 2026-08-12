@@ -30,6 +30,8 @@ class TrainConfig(BaseModel):
     quality_metric: Literal["pixel", "objects"] = "pixel"
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
+    seed: int = 42
+    inference_context: int = Field(default=0, ge=0)
     device: str
     learning_rate: float = Field(gt=0.0)
     weight_decay: float = Field(ge=0.0)
@@ -179,6 +181,15 @@ class TrainRequest(BaseModel):
     config: TrainConfig
     checkpoint_dir: str
     sample_size: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_inference_window(self) -> Self:
+        context = self.config.inference_context
+        if context and self.sample_size is None:
+            raise ValueError("sample_size обязателен при ненулевом inference_context")
+        if self.sample_size is not None and self.sample_size <= 2 * context:
+            raise ValueError("sample_size должен быть больше удвоенного inference_context")
+        return self
 
 
 class TrainResult(BaseModel):

@@ -232,7 +232,9 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     _write_test_f1_progress(progress_path, current=0, total=len(tiles), started=started)
     threshold: float | None = None
     inference_tile_size = int(config.get("tile_size") or 768)
-    stride = int(config.get("stride") or inference_tile_size)
+    context = int(config.get("context") or 0)
+    core_size = _inference_core_size(inference_tile_size, context)
+    stride = core_size if context else int(config.get("stride") or inference_tile_size)
     device = str(config.get("device") or "cpu")
     has_external_model = isinstance(config.get("external_model"), dict)
     profile = _postprocess_profile_from_config(
@@ -322,6 +324,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     image_path=Path(str(tile["image_path"])),
                     tile_size=inference_tile_size,
                     stride=stride,
+                    context=context,
                     threshold=threshold,
                     device=device,
                     postprocess_profile=profile,
@@ -933,7 +936,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     threshold_value = config.get("threshold")
     threshold = float(threshold_value) if threshold_value is not None else None
     tile_size = int(config.get("tile_size") or 768)
-    stride = int(config.get("stride") or tile_size)
+    context = int(config.get("context") or 0)
+    core_size = _inference_core_size(tile_size, context)
+    stride = core_size if context else int(config.get("stride") or tile_size)
     batch_size = int(config.get("batch_size") or 1)
     device = str(config.get("device") or "cpu")
 
@@ -947,6 +952,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         if external_manifest is not None:
             threshold = external_manifest.score_threshold
             tile_size = external_manifest.tile_size
+            context = external_manifest.context
             stride = external_manifest.stride
             batch_size = 1
         checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
@@ -1075,6 +1081,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                         config=config,
                         tile_size=tile_size,
                         stride=stride,
+                        context=context,
                         batch_size=batch_size,
                         threshold=threshold,
                         device=device,
@@ -1493,7 +1500,9 @@ def _read_inference_window(
         return None
     image = np.zeros((len(indexes), tile_size, tile_size), dtype=np.float32)
     source[:, ~valid] = 0
-    image[:, :height, :width] = source
+    target_y = int(clipped.row_off - window.row_off)
+    target_x = int(clipped.col_off - window.col_off)
+    image[:, target_y : target_y + height, target_x : target_x + width] = source
     if channel_mapping == "rgb_zero_nir":
         image = np.concatenate(
             (image, np.zeros((1, tile_size, tile_size), dtype=np.float32)),
@@ -1521,6 +1530,7 @@ def _infer_scene(
     threshold: float,
     device: str,
     postprocess_profile: _PostprocessProfile,
+    context: int = 0,
     aoi_wgs84: BaseGeometry | None = None,
     metrics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1560,6 +1570,7 @@ def _infer_scene(
                 raster_aoi=raster_aoi,
                 tile_size=tile_size,
                 stride=stride,
+                context=context,
                 torch=torch,
                 model=model,
                 threshold=threshold,
@@ -1582,11 +1593,14 @@ def _infer_scene(
                 dataset=dataset,
                 input_indexes=input_indexes,
                 nodata=nodata,
-                windows=list(_windows(dataset.width, dataset.height, tile_size, stride)),
+                windows=list(
+                    _windows(dataset.width, dataset.height, tile_size, stride, context)
+                ),
                 mask_window=mask_window,
                 mask=mask,
                 confidence_map=confidence_map,
                 tile_size=tile_size,
+                context=context,
                 torch=torch,
                 model=model,
                 threshold=threshold,
@@ -1638,10 +1652,12 @@ def _infer_aoi_scene_mask(
     prefetch_batches: int = 1,
     metrics: dict[str, Any] | None = None,
     object_types: list[dict[str, Any]] | None = None,
+    context: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, Window] | None:
     """Распознать AOI и расширить контекст до окончания связных объектов."""
 
-    _validate_window_grid(tile_size, stride)
+    _validate_window_grid(tile_size, stride, context)
+    core_size = _inference_core_size(tile_size, context)
     row_offsets = list(range(0, dataset.height, stride))
     column_offsets = list(range(0, dataset.width, stride))
     active_keys = {
@@ -1650,7 +1666,7 @@ def _infer_aoi_scene_mask(
         for column_index, column_offset in enumerate(column_offsets)
         if box(
             *window_bounds(
-                Window(column_offset, row_offset, tile_size, tile_size),
+                Window(column_offset, row_offset, core_size, core_size),
                 dataset.transform,
             )
         ).intersects(raster_aoi)
@@ -1669,7 +1685,7 @@ def _infer_aoi_scene_mask(
             column_offsets,
             dataset.width,
             dataset.height,
-            tile_size,
+            core_size,
         )
         if mask_window != expanded_window:
             expanded_shape = (int(expanded_window.height), int(expanded_window.width))
@@ -1690,8 +1706,8 @@ def _infer_aoi_scene_mask(
         pending_keys = sorted(active_keys - processed_keys)
         pending_windows = [
             Window(
-                column_offsets[column_index],
-                row_offsets[row_index],
+                column_offsets[column_index] - context,
+                row_offsets[row_index] - context,
                 tile_size,
                 tile_size,
             )
@@ -1707,6 +1723,7 @@ def _infer_aoi_scene_mask(
             mask=mask,
             confidence_map=confidence_map,
             tile_size=tile_size,
+            context=context,
             torch=torch,
             model=model,
             threshold=threshold,
@@ -1726,7 +1743,7 @@ def _infer_aoi_scene_mask(
             mask_window,
             dataset.width,
             dataset.height,
-            tile_size,
+            core_size,
         )
         if not _aoi_component_touches_unprocessed_area(
             mask,
@@ -1767,6 +1784,7 @@ def _infer_windows_into_mask(
     prefetch_batches: int = 1,
     metrics: dict[str, Any] | None = None,
     object_types: list[dict[str, Any]] | None = None,
+    context: int = 0,
 ) -> None:
     """Добавить предсказания окон в общую маску без повторной обработки."""
 
@@ -1816,6 +1834,7 @@ def _infer_windows_into_mask(
                 mask=mask,
                 confidence_map=confidence_map,
                 tile_size=tile_size,
+                context=context,
                 tile_mask=tile_mask,
                 tile_confidence=tile_confidence,
                 object_types=object_types,
@@ -1957,15 +1976,38 @@ def _merge_tile_prediction(
     tile_mask: np.ndarray,
     tile_confidence: np.ndarray,
     object_types: list[dict[str, Any]] | None = None,
+    context: int = 0,
 ) -> None:
-    crop_h = min(tile_size, dataset.height - int(window.row_off))
-    crop_w = min(tile_size, dataset.width - int(window.col_off))
-    y0 = int(window.row_off - mask_window.row_off)
-    x0 = int(window.col_off - mask_window.col_off)
-    target_mask = mask[y0 : y0 + crop_h, x0 : x0 + crop_w]
-    target_confidence = confidence_map[y0 : y0 + crop_h, x0 : x0 + crop_w]
-    incoming_mask = tile_mask[:crop_h, :crop_w]
-    incoming_confidence = tile_confidence[:crop_h, :crop_w]
+    core_size = _inference_core_size(tile_size, context)
+    core_x = int(window.col_off) + context
+    core_y = int(window.row_off) + context
+    mask_x = int(mask_window.col_off)
+    mask_y = int(mask_window.row_off)
+    start_x = max(0, mask_x, core_x)
+    start_y = max(0, mask_y, core_y)
+    stop_x = min(dataset.width, mask_x + int(mask_window.width), core_x + core_size)
+    stop_y = min(dataset.height, mask_y + int(mask_window.height), core_y + core_size)
+    if start_x >= stop_x or start_y >= stop_y:
+        return
+    target_x = start_x - mask_x
+    target_y = start_y - mask_y
+    incoming_x = start_x - int(window.col_off)
+    incoming_y = start_y - int(window.row_off)
+    crop_w = stop_x - start_x
+    crop_h = stop_y - start_y
+    target_mask = mask[target_y : target_y + crop_h, target_x : target_x + crop_w]
+    target_confidence = confidence_map[
+        target_y : target_y + crop_h,
+        target_x : target_x + crop_w,
+    ]
+    incoming_mask = tile_mask[
+        incoming_y : incoming_y + crop_h,
+        incoming_x : incoming_x + crop_w,
+    ]
+    incoming_confidence = tile_confidence[
+        incoming_y : incoming_y + crop_h,
+        incoming_x : incoming_x + crop_w,
+    ]
     if not object_types:
         target_mask[:] = np.maximum(target_mask, incoming_mask)
         target_confidence[:] = np.maximum(target_confidence, incoming_confidence)
@@ -2100,13 +2142,14 @@ def _infer_test_tile_mask(
     device: str,
     postprocess_profile: _PostprocessProfile,
     object_types: list[dict[str, Any]] | None = None,
+    context: int = 0,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         confidence_map = np.zeros(mask.shape, dtype=np.float32)
-        for window in _windows(dataset.width, dataset.height, tile_size, stride):
+        for window in _windows(dataset.width, dataset.height, tile_size, stride, context):
             image = dataset.read(
                 indexes=input_indexes,
                 window=window,
@@ -2131,6 +2174,7 @@ def _infer_test_tile_mask(
                 mask=mask,
                 confidence_map=confidence_map,
                 tile_size=tile_size,
+                context=context,
                 tile_mask=predicted,
                 tile_confidence=confidence,
                 object_types=object_types,
@@ -3333,18 +3377,27 @@ def _resolve_checkpoint(config: dict[str, Any], dst_dir: Path) -> Path:
     raise RuntimeError("Не задан локальный артефакт модели или MLflow run id для его скачивания.")
 
 
-def _windows(width: int, height: int, tile_size: int, stride: int):
-    _validate_window_grid(tile_size, stride)
+def _windows(width: int, height: int, tile_size: int, stride: int, context: int = 0):
+    _validate_window_grid(tile_size, stride, context)
     for y in range(0, height, stride):
         for x in range(0, width, stride):
-            yield Window(x, y, tile_size, tile_size)
+            yield Window(x - context, y - context, tile_size, tile_size)
 
 
-def _validate_window_grid(tile_size: int, stride: int) -> None:
+def _validate_window_grid(tile_size: int, stride: int, context: int = 0) -> None:
     if tile_size <= 0 or stride <= 0:
         raise RuntimeError("Размер тайла и шаг окон должны быть положительными.")
-    if stride > tile_size:
-        raise RuntimeError("Шаг окон не должен превышать размер тайла: иначе появляются разрывы.")
+    core_size = _inference_core_size(tile_size, context)
+    if stride > core_size:
+        raise RuntimeError(
+            "Шаг окон не должен превышать полезный центр тайла: иначе появляются разрывы."
+        )
+
+
+def _inference_core_size(tile_size: int, context: int) -> int:
+    if context < 0 or tile_size <= 2 * context:
+        raise RuntimeError("Размер тайла должен быть больше удвоенного context.")
+    return tile_size - 2 * context
 
 
 def _safe_dir_name(value: str) -> str:

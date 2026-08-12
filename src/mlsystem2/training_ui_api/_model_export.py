@@ -40,12 +40,14 @@ def build_triton_model_export_zip(
     checkpoint_filename: str,
     checkpoint_bytes: bytes,
     sample_size: int | None,
+    context: int | None = None,
 ) -> ModelExportArchive:
     """Собрать zip модели для загрузчика models-serving-service."""
 
     parsed_model_name = _validate_model_name(model_name)
     _validate_checkpoint_filename(checkpoint_filename)
     request_sample_size = _validate_optional_sample_size(sample_size)
+    request_context = _validate_optional_context(context)
 
     temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-model-export-"))
     try:
@@ -57,6 +59,14 @@ def build_triton_model_export_zip(
         parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
             loaded.artifact.metadata,
             request_sample_size,
+        )
+        parsed_context, context_source = _context_from_metadata_or_request(
+            loaded.artifact.metadata,
+            request_context,
+        )
+        inference_core_size = _validate_inference_window(
+            parsed_sample_size,
+            parsed_context,
         )
         input_channels = int(loaded.model.spec.input_channels)
 
@@ -103,6 +113,7 @@ def build_triton_model_export_zip(
                 parsed_sample_size,
                 input_channels,
                 class_schema=class_schema,
+                context=parsed_context,
             ),
         )
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
@@ -119,6 +130,9 @@ def build_triton_model_export_zip(
                 "input_channels": input_channels,
                 "sample_size": parsed_sample_size,
                 "sample_size_source": sample_size_source,
+                "inference_context": parsed_context,
+                "inference_context_source": context_source,
+                "inference_core_size": inference_core_size,
                 "threshold": effective_threshold,
                 "threshold_source": "checkpoint_metadata",
                 "task": task,
@@ -464,6 +478,18 @@ def _validate_optional_sample_size(value: int | None) -> int | None:
     return _validate_sample_size(value)
 
 
+def _validate_optional_context(value: int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        context = int(value)
+    except (TypeError, ValueError) as exc:
+        raise TrainingUIAPIError("context должен быть целым неотрицательным числом.") from exc
+    if context < 0:
+        raise TrainingUIAPIError("context должен быть целым неотрицательным числом.")
+    return context
+
+
 def _load_binary_checkpoint(checkpoint_path: Path) -> Any:
     return _load_native_checkpoint(checkpoint_path)
 
@@ -564,6 +590,27 @@ def _sample_size_from_metadata_or_request(metadata: dict[str, object], request_s
     raise TrainingUIAPIError(
         "Checkpoint не содержит metadata.sample_size. Для старого checkpoint задайте sample_size вручную."
     )
+
+
+def _context_from_metadata_or_request(
+    metadata: dict[str, object],
+    request_context: int | None,
+) -> tuple[int, str]:
+    raw_context = metadata.get("inference_context")
+    if raw_context is not None:
+        parsed = _validate_optional_context(raw_context)
+        assert parsed is not None
+        return parsed, "checkpoint_metadata"
+    if request_context is not None:
+        return request_context, "request"
+    return 0, "legacy_default"
+
+
+def _validate_inference_window(sample_size: int, context: int) -> int:
+    core_size = sample_size - 2 * context
+    if core_size <= 0:
+        raise TrainingUIAPIError("sample_size должен быть больше удвоенного context.")
+    return core_size
 
 
 def _export_segmentation_mask_onnx(
@@ -733,7 +780,9 @@ def _pipeline_yaml(
     sample_size: int,
     input_channels: int,
     class_schema: list[dict[str, object]] | None = None,
+    context: int = 0,
 ) -> str:
+    core_size = _validate_inference_window(sample_size, context)
     if input_channels == 3:
         bands = ("RED", "GRN", "BLU")
     elif input_channels == 4:
@@ -763,10 +812,10 @@ config:
       output:
 {bands_yaml}
     - _class: Segmentation
-      bounds: 0
+      bounds: {context}
       sample_size:
-        - {sample_size}
-        - {sample_size}
+        - {core_size}
+        - {core_size}
       input_rasters:
 {bands_yaml}
       output_labels:

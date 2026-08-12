@@ -253,6 +253,8 @@ def _run_case(
         train_config = TrainConfig(
             epochs=effective_epochs,
             batch_size=DEFAULT_BATCH_SIZE,
+            seed=settings.tile_preparation.seed,
+            inference_context=settings.tile_preparation.context,
             device=device,
             learning_rate=learning_rate,
             weight_decay=settings.train.weight_decay,

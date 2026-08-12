@@ -177,10 +177,26 @@ def create_pseudolabel_job(
         if selected.external_model is not None
         else _positive_int(source_config.get("tile_preparation.tile_size"), 768)
     )
+    context = (
+        selected.external_model.context
+        if selected.external_model is not None
+        else (_integer(source_config.get("tile_preparation.context")) or 0)
+    )
+    core_size = tile_size - 2 * context
+    if context < 0 or core_size <= 0:
+        raise PseudolabelAPIError(
+            "MODEL_WINDOW_INVALID",
+            "Размер inference-тайла должен быть больше удвоенного context.",
+            status_code=409,
+        )
     stride = (
         selected.external_model.stride
         if selected.external_model is not None
-        else _positive_int(source_config.get("tile_preparation.stride"), tile_size)
+        else (
+            core_size
+            if context
+            else _positive_int(source_config.get("tile_preparation.stride"), tile_size)
+        )
     )
     batch_size = (
         1
@@ -252,6 +268,7 @@ def create_pseudolabel_job(
                 ),
                 "inference_template_config": selected.inference_template_config,
                 "tile_size": tile_size,
+                "context": context,
                 "stride": stride,
                 "batch_size": batch_size,
                 "timeout_seconds": config.pseudolabel_job_timeout_seconds,

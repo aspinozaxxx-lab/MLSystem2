@@ -110,6 +110,8 @@ process и помечает известный MLflow run как `KILLED`; по�
 Шаблоны обучения в `training_ui_api` бывают базовыми для сети и привязанными к конкретному
 датасету. При создании job сервис сначала ищет шаблон `(architecture, dataset_key)`, затем использует
 базовый `(architecture, null)`, поэтому frontend не дублирует эту бизнес-логику.
+Обучение и нативный инференс используют единый контракт окна: `tile_preparation.tile_size` задаёт полный вход сети, `tile_preparation.context` — исключаемую рамку, полезный центр равен `tile_size - 2 × context`. Для действующих шаблонов с входом `768` используется context `128` и центр `512`; `context=0` сохраняет старое поведение. Подготовка строит окна с отрицательным начальным смещением, а loss, validation и выбор checkpoint считаются только по центру. Nodata, raster mask и padding внутри центра остаются обучающим фоном. Seed подготовки задаёт Python, NumPy, Torch и CUDA до создания модели и сохраняется в MLflow/checkpoint.
+
 Псевдоразметка Training UI запускается отдельным процессом с backend `pytorch_one_off`: worker пишет
 `pseudo_config.yaml`, runner загружает нативный checkpoint через `models.load_checkpoint` либо проверенный по
 SHA-256 TorchScript из ZIP импортированного результата, выполняет локальный
@@ -121,7 +123,7 @@ production-инференсом и явным экспортом. Эффекти
 модели независимо от источника снимков. Для трёхканального checkpoint этот одноразовый инференс принимает
 RGB и совместимые RGBA GeoTIFF, читая из RGBA только первые три канала; остальные несовпадения числа каналов
 отклоняются. `external_torchscript` является только inference-архитектурой, отсутствует в каталоге обучаемых
-сетей и имеет базовый inference-шаблон. Её манифест в исходном `JobRow.config` фиксирует адаптер, MLflow artifact,
+сетей и имеет базовый inference-шаблон. Нативная псевдоразметка читает полный вход, записывает только полезный центр и при ненулевом context идёт с шагом размера центра; старые jobs без context используют прежнюю сетку. Её манифест в исходном `JobRow.config` фиксирует адаптер, MLflow artifact,
 SHA-256, RGB-вход, разрешение, окна и постобработку. ЗУ500 сохраняет instance ID и confidence, выполняет NMS и
 не объединяет соседние участки; ОКС500 строит крышу из классов `1,2` и корректирует footprint по стенам класса
 `4`. Оба профиля обнуляют alpha/nodata. Нативный multiclass checkpoint использует `softmax → argmax → общий confidence threshold`; перекрытия окон и сцен разрешаются по confidence, затем priority и class ID. Морфология, векторизация и слияние выполняются отдельно по типам. Каноническая псевдоразметка остаётся одним FeatureCollection с родительским `class_id` и `object_type_id/slug/name/color`; дополнительный endpoint отдаёт ZIP с GeoJSON по типам. Подготовка датасета, обучение и основной CLI-инференс сохраняют строгую проверку каналов.
@@ -149,7 +151,7 @@ QGIS-плагин находится в отдельной корневой па
 Страница экспорта моделей в `training_ui_api` показывает последние успешные training results по датасетам
 MLMarkup и по умолчанию выбирает основные датасеты классов, скачивает `checkpoints/best.pt` либо внешний ZIP из MLflow по сохраненным run id,
 собирает временный общий zip-архив для `models-serving-service` и Triton через тот же сборщик, что одиночный
-экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса. Binary ABI остаётся прежним. Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold и checkpoint metadata.
+экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса. ONNX получает полный вход, а Geoalert YAML получает `bounds=context` и `sample_size=полезный центр`. Для старого checkpoint без metadata context экспорт использует `bounds=0`; оператор может явно задать context. Binary ABI остаётся прежним. Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold, размеры окна и checkpoint metadata.
 Страница создания списка сцен в `training_ui_api` принимает GeoJSON и тип снимков, рекурсивно сопоставляет
 полигональные объекты с фактическими валидными пикселями TIFF только внутри соответствующего корня
 `prepared_images/kanopus` или `prepared_images/orto` и возвращает ZIP с UTF-8 TXT полных относительных путей

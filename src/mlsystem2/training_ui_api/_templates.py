@@ -31,6 +31,13 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "min_value": 1,
         },
         {
+            "key": "tile_preparation.context",
+            "label": "Контекст тайла",
+            "value_type": "integer",
+            "tooltip": "Рамка входного тайла, исключённая из loss и итогового предсказания.",
+            "min_value": 0,
+        },
+        {
             "key": "tile_preparation.augmentation_level",
             "label": "Уровень аугментаций",
             "value_type": "integer",
@@ -182,6 +189,7 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "dataset.val_fraction": 0.2,
     "tile_preparation.tile_size": 512,
     "tile_preparation.stride": 256,
+    "tile_preparation.context": 0,
     "tile_preparation.augmentation_level": 3,
     "tile_preparation.positive_factor": 0.8,
     "tile_preparation.hard_negative_factor": 0.0,
@@ -312,6 +320,10 @@ _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
     "tile_preparation.stride": (
         "Шаг между соседними окнами. Меньший шаг увеличивает перекрытие и число тайлов, помогает не терять границы объектов, но замедляет подготовку и обучение.",
         "tile_size/2 обычно. Делать ближе к tile_size для быстрых запусков, меньше tile_size/2 для редких объектов и важных границ.",
+    ),
+    "tile_preparation.context": (
+        "Ширина контекстной рамки вокруг полезного центра. Модель видит всю рамку, но loss, validation и инференс используют только центр.",
+        "128 для входа 768 (полезный центр 512); 0 сохраняет прежнее поведение.",
     ),
     "tile_preparation.augmentation_level": (
         "Интенсивность train-аугментаций. Применяется к positive и hard-negative тайлам, обычный background не аугментируется. Чем выше уровень, тем лучше обобщение, но выше риск исказить слабые признаки.",
@@ -467,6 +479,9 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
+    if "tile_preparation.context" not in (config or {}):
+        tile_size = int(result.get("tile_preparation.tile_size") or 0)
+        result["tile_preparation.context"] = 128 if tile_size == 768 else 0
     _resolve_legacy_tile_factors(result, config or {})
     if normalize_factors:
         normalize_tile_factors(result)

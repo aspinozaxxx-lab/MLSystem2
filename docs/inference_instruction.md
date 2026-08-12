@@ -230,6 +230,11 @@ version_dir.mkdir(parents=True, exist_ok=True)
 
 loaded = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=str(checkpoint), map_location="cpu"))
 model = loaded.model.model.eval()
+input_size = int(loaded.artifact.metadata.get("sample_size") or 768)
+context = int(loaded.artifact.metadata.get("inference_context") or 0)
+core_size = input_size - 2 * context
+if core_size <= 0:
+    raise RuntimeError("sample_size должен быть больше удвоенного inference_context")
 
 class BinaryMaskWrapper(torch.nn.Module):
     def __init__(self, model, threshold: float) -> None:
@@ -246,7 +251,7 @@ class BinaryMaskWrapper(torch.nn.Module):
         return (torch.sigmoid(logits) > self.threshold).to(torch.uint8)
 
 wrapper = BinaryMaskWrapper(model, threshold).eval()
-dummy = torch.zeros((1, 4, 1024, 1024), dtype=torch.float32)
+dummy = torch.zeros((1, 4, input_size, input_size), dtype=torch.float32)
 with torch.no_grad():
     output = wrapper(dummy)
 print("dry_output", tuple(output.shape), output.dtype)
@@ -294,6 +299,9 @@ metadata = {
     "checkpoint_metadata": loaded.artifact.metadata,
     "model_spec": loaded.model.spec.model_dump(mode="json"),
     "threshold": threshold,
+    "sample_size": input_size,
+    "inference_context": context,
+    "inference_core_size": core_size,
     "source_run_id": "356d5fdb2a244e76a5d6863b34300d0d",
     "source_trial": "0003",
     "hpo_experiment": "Deforestation_Test_2",
@@ -410,10 +418,10 @@ config:
         - BLU
         - NIR
     - _class: Segmentation
-      bounds: 0
+      bounds: 128
       sample_size:
-        - 1024
-        - 1024
+        - 512
+        - 512
       input_rasters:
         - RED
         - GRN
@@ -442,7 +450,7 @@ config:
 YAML
 ```
 
-`sample_size` обычно `1024 x 1024`. Это не обязано совпадать с train tile size: Geoalert режет большой снимок на окна для инференса.
+Для нового checkpoint значения берутся из metadata: полный вход сети `sample_size=768`, `inference_context=128`, полезный центр `inference_core_size=512`. В Geoalert `bounds` равен `128`, а `sample_size` — `[512, 512]`; поэтому `Segmentation` читает окно `768 × 768`, но сохраняет только центр. Старый checkpoint без `inference_context` экспортируется с `bounds: 0`, если оператор явно не задал context. Всегда проверяй условие `полный вход > 2 × bounds`; исходный код Geoalert менять не нужно.
 
 ## 8. Запуск Geoalert по датасету
 

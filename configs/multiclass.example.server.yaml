@@ -64,6 +64,7 @@ dataset:
 
 tile_preparation:
   tile_size: 1024
+  context: 0
   stride: 512
   augmentation_level: 1
   positive_factor: 0.8

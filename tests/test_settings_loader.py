@@ -30,6 +30,21 @@ def test_load_settings_without_storage_section(tmp_path: Path) -> None:
     assert api.get_settings_path() == settings_path.resolve()
 
 
+def test_tile_context_requires_nonempty_core(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  tile_size: 512",
+            "  tile_size: 512\n  context: 256",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="удвоенного context"):
+        api.load_settings(settings_path)
+
+
 def test_load_settings_accepts_multiclass_dataset(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"

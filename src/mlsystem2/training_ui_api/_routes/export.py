@@ -148,6 +148,7 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
         model_name: str = Form(default=""),
         sample_size: int | None = Form(default=None),
+        context: int | None = Form(default=None),
         checkpoint: UploadFile | None = File(default=None),
     ) -> FileResponse:
         if checkpoint is None:
@@ -157,6 +158,7 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
             checkpoint_filename=checkpoint.filename or "",
             checkpoint_bytes=await checkpoint.read(),
             sample_size=sample_size,
+            context=context,
         )
         return FileResponse(
             archive.zip_path,
@@ -190,12 +192,14 @@ def register_export_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
         model_name: str = Form(default=""),
         sample_size: int | None = Form(default=None),
+        context: int | None = Form(default=None),
     ) -> FileResponse:
         archive = export_training_result_triton_zip(
             db,
             result_id=result_id,
             model_name=model_name,
             sample_size=sample_size,
+            context=context,
             config=ctx.config,
         )
         return FileResponse(
