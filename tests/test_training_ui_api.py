@@ -869,6 +869,66 @@ def test_training_ui_worker_dispatches_inference_before_training(
         assert session.get(JobRow, training.id).status == JobStatus.QUEUED.value
 
 
+def test_training_worker_preempts_and_resumes_training_for_urgent_inference(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start_inference(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+        row.process_pid = 5678
+
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start_inference)
+    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    created_at = datetime(2026, 8, 13, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        training.status = JobStatus.RUNNING.value
+        training.process_pid = 4321
+        training.tmp_path = str(tmp_path / "training")
+        Path(training.tmp_path).mkdir(parents=True)
+        urgent = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 2, created_at)
+        urgent.config = {"priority": "urgent"}
+        session.add_all([training, urgent])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        request_path = Path(training.tmp_path) / "control" / "pause.request"
+        marker_path = Path(training.tmp_path) / "control" / "paused"
+        assert request_path.is_file()
+        assert started == []
+        assert training.status == JobStatus.RUNNING.value
+
+        marker_path.write_text(request_path.read_text(encoding="utf-8"), encoding="utf-8")
+        dispatch_queue_once(session, config)
+        assert training.status == JobStatus.PAUSED.value
+        assert training.process_pid == 4321
+        assert started == [urgent.id]
+
+        urgent.status = JobStatus.COMPLETED.value
+        urgent.process_pid = None
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert not request_path.exists()
+        assert training.status == JobStatus.PAUSED.value
+
+        marker_path.unlink()
+        dispatch_queue_once(session, config)
+        assert training.status == JobStatus.RUNNING.value
+        assert training.process_pid == 4321
+
+
 def _queue_test_job(
     job_type: JobType,
     source: JobSource,

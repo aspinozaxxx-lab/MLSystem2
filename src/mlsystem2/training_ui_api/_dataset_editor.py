@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -17,15 +18,16 @@ from urllib.parse import quote
 
 import rasterio
 from affine import Affine
-from pyproj import CRS as PyprojCRS
+from pyproj import CRS as PyprojCRS, Transformer
 from rasterio.enums import Resampling
 from rasterio.features import shapes
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.dataset_preparing.api import (
     load_dataset_manifest,
@@ -43,13 +45,25 @@ from ._combined_dataset import (
 )
 from ._dataset_catalog import find_managed_dataset, list_managed_datasets
 from ._datasets import RASTER_SUFFIXES
-from ._models import DatasetClassRow, DatasetRow, JobRow
+from ._external_models import external_model_payload
+from ._models import (
+    DatasetClassRow,
+    DatasetRow,
+    JobRow,
+    PseudoMarkupResultRow,
+    StoredFileRow,
+    TrainingResultRow,
+)
+from ._pseudolabel import _select_model
+from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
+from ._test_samples import current_primary_training_result
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
     DatasetEditorObjectType,
     DatasetEditorMutationResult,
     DatasetEditorPublicationInfo,
+    DatasetEditorPseudoMarkupInfo,
     DatasetEditorRasterBrowserResponse,
     DatasetEditorRasterFolderInfo,
     DatasetEditorRasterInfo,
@@ -60,6 +74,10 @@ from .contracts import (
     DatasetEditorSceneInfo,
     DatasetEditorSceneListResponse,
     DatasetInfo,
+    JobSource,
+    JobStatus,
+    JobType,
+    ResultStatus,
     TrainingUIAPIError,
 )
 
@@ -72,6 +90,7 @@ _SERVICE_AUTHOR_NAME = "MLSystem2 Dataset Editor"
 _SERVICE_AUTHOR_EMAIL = "mlsystem2-dataset-editor@localhost"
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
+_URGENT_PRIORITY = "urgent"
 
 
 class DatasetEditorConflict(RuntimeError):
@@ -149,6 +168,193 @@ def editor_scene_detail(
             geojson=_clip_geojson_to_footprint(_read_geojson(annotation_path), footprint),
             valid_data_footprint=dict(mapping(footprint)),
         )
+
+
+def editor_scene_pseudo_markup(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    annotation_name: str,
+    *,
+    ensure: bool,
+) -> DatasetEditorPseudoMarkupInfo:
+    """Вернуть готовый фрагмент или идемпотентно поставить срочный инференс TIFF."""
+
+    with _editor_lock(config):
+        _synchronize_editor_clone(config)
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+        image_path = _matched_image_path(dataset, source_dir, annotation_name).resolve()
+
+    class_key = dataset.class_key or dataset.key
+    primary = current_primary_training_result(session, class_key)
+    if primary is None:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            message="Для класса не назначена успешная основная сеть.",
+        )
+    compatibility_error = _editor_pseudo_compatibility_error(dataset, primary)
+    if compatibility_error is not None:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=primary.id,
+            model_name=primary.model_name,
+            message=compatibility_error,
+        )
+
+    full_result = _latest_covering_pseudo_result(
+        session,
+        dataset,
+        primary.id,
+        image_path,
+    )
+    if full_result is not None and full_result.geojson_file is not None:
+        payload = _pseudo_geojson_for_image(Path(full_result.geojson_file.path), image_path)
+        return DatasetEditorPseudoMarkupInfo(
+            status="ready",
+            source="dataset",
+            training_result_id=primary.id,
+            model_name=primary.model_name,
+            object_count=len(payload["features"]),
+            geojson=payload,
+        )
+
+    raster_revision = _raster_revision(image_path)
+    job = _latest_editor_pseudo_job(
+        session,
+        dataset.key,
+        scene.annotation_name,
+        primary.id,
+        raster_revision,
+    )
+    if job is not None:
+        state = _editor_pseudo_state(job)
+        ready_file = _editor_pseudo_result_file(session, state)
+        if job.status == JobStatus.COMPLETED.value and ready_file is not None:
+            payload = _pseudo_geojson_for_image(Path(ready_file.path), image_path)
+            return DatasetEditorPseudoMarkupInfo(
+                status="ready",
+                source="scene",
+                training_result_id=primary.id,
+                model_name=primary.model_name,
+                job_id=job.id,
+                object_count=len(payload["features"]),
+                geojson=payload,
+            )
+        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+            current, total = _editor_pseudo_progress(job)
+            return DatasetEditorPseudoMarkupInfo(
+                status="queued" if job.status == JobStatus.QUEUED.value else "running",
+                source="scene",
+                training_result_id=primary.id,
+                model_name=primary.model_name,
+                job_id=job.id,
+                progress_current=current,
+                progress_total=total,
+                message=(
+                    "Срочный инференс поставлен в очередь."
+                    if job.status == JobStatus.QUEUED.value
+                    else "Выполняется срочный инференс по снимку."
+                ),
+            )
+        if not ensure:
+            return DatasetEditorPseudoMarkupInfo(
+                status="failed",
+                source="scene",
+                training_result_id=primary.id,
+                model_name=primary.model_name,
+                job_id=job.id,
+                message=str(state.get("error") or job.error or "Инференс по снимку завершился ошибкой."),
+            )
+
+    if not ensure:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=primary.id,
+            model_name=primary.model_name,
+            message="Для снимка ещё нет псевдоразметки.",
+        )
+
+    selected = _select_model(session, config, class_key, required=False)
+    if selected is None or selected.result.id != primary.id:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=primary.id,
+            model_name=primary.model_name,
+            message="Checkpoint текущей основной сети недоступен для инференса.",
+        )
+    if dataset.input_channels is not None and selected.input_channels != dataset.input_channels:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=primary.id,
+            model_name=primary.model_name,
+            message="Основная сеть несовместима с каналами снимков датасета.",
+        )
+    root = _dataset_images_root(dataset).resolve()
+    image_relative = image_path.relative_to(root).with_suffix("").as_posix()
+    source_job = session.get(JobRow, primary.job_id) if primary.job_id is not None else None
+    tile_size = _positive_integer(
+        (source_job.config or {}).get("tile_preparation.tile_size") if source_job else None,
+        768,
+    )
+    row = JobRow(
+        type=JobType.INFERENCE.value,
+        source=JobSource.MANUAL.value,
+        status=JobStatus.QUEUED.value,
+        queue_position=next_queue_position(session, JobType.INFERENCE, JobSource.MANUAL),
+        dataset_key=dataset.key,
+        dataset_version=dataset.version,
+        dataset_name=dataset.name,
+        training_dataset_name=selected.dataset_name,
+        inference_dataset_name=f"{dataset.name}: {scene.image_name}",
+        model_name=primary.model_name,
+        architecture=primary.architecture,
+        tile_size=tile_size,
+        config={
+            "operation": DATASET_EDITOR_PSEUDO_OPERATION,
+            "priority": _URGENT_PRIORITY,
+            "editor_pseudo": {
+                "dataset_key": dataset.key,
+                "annotation_name": scene.annotation_name,
+                "image_relative": image_relative,
+                "images_root": str(root),
+                "raster_revision": raster_revision,
+                "class_id": class_key,
+                "class_name": dataset.class_name or dataset.name,
+                "training_result_id": str(primary.id),
+                "model_name": primary.model_name,
+                "task": primary.task,
+                "object_types": list(primary.class_schema or []),
+                "imagery_type": dataset.imagery_type.value if dataset.imagery_type is not None else None,
+                "input_channels": selected.input_channels,
+                "mlflow_run_id": primary.mlflow_run_id,
+                "checkpoint_uri": selected.checkpoint.artifact_uri,
+                "checkpoint_artifact_path": selected.checkpoint.artifact_path,
+                "checkpoint_threshold": selected.checkpoint.threshold,
+                "checkpoint_f1_score": selected.checkpoint.f1_score,
+                "checkpoint_epoch": selected.checkpoint.epoch,
+                "external_model": external_model_payload(selected.external_model),
+                "inference_template_id": (
+                    str(selected.inference_template_id)
+                    if selected.inference_template_id is not None
+                    else None
+                ),
+                "inference_template_config": selected.inference_template_config,
+                "result_file_id": None,
+                "error": None,
+            },
+        },
+    )
+    session.add(row)
+    session.flush()
+    return DatasetEditorPseudoMarkupInfo(
+        status="queued",
+        source="scene",
+        training_result_id=primary.id,
+        model_name=primary.model_name,
+        job_id=row.id,
+        message="Срочный инференс по снимку поставлен в начало очереди.",
+    )
 
 
 def browse_editor_rasters(
@@ -1068,6 +1274,200 @@ def _editor_dataset_context(
     if source_dir.is_dir() and _direct_files(source_dir, ".txt"):
         raise TrainingUIAPIError("Редактор поддерживает только per-image датасеты без TXT")
     return dataset, source_dir
+
+
+def _editor_pseudo_compatibility_error(
+    dataset: DatasetInfo,
+    result: TrainingResultRow,
+) -> str | None:
+    if dataset.task != result.task:
+        return "Тип задачи основной сети не совпадает с типом датасета."
+    if dataset.task == "multiclass":
+        expected = [
+            (item.id, item.slug)
+            for item in dataset.object_types
+        ]
+        actual = [
+            (int(item.get("id") or 0), str(item.get("slug") or ""))
+            for item in result.class_schema or []
+            if isinstance(item, dict)
+        ]
+        if actual != expected:
+            return "Схема типов основной сети не совпадает со схемой датасета."
+    return None
+
+
+def _latest_covering_pseudo_result(
+    session: Session,
+    dataset: DatasetInfo,
+    training_result_id: uuid.UUID,
+    image_path: Path,
+) -> PseudoMarkupResultRow | None:
+    rows = session.scalars(
+        select(PseudoMarkupResultRow)
+        .where(
+            PseudoMarkupResultRow.dataset_key == dataset.key,
+            PseudoMarkupResultRow.training_result_id == training_result_id,
+            PseudoMarkupResultRow.status == ResultStatus.OK.value,
+            PseudoMarkupResultRow.geojson_file_id.is_not(None),
+        )
+        .options(
+            selectinload(PseudoMarkupResultRow.scenes_file),
+            selectinload(PseudoMarkupResultRow.geojson_file),
+        )
+        .order_by(
+            PseudoMarkupResultRow.updated_at.desc(),
+            PseudoMarkupResultRow.created_at.desc(),
+        )
+    ).all()
+    return next(
+        (
+            row
+            for row in rows
+            if row.geojson_file is not None
+            and Path(row.geojson_file.path).is_file()
+            and _pseudo_result_covers_image(row, dataset, image_path)
+        ),
+        None,
+    )
+
+
+def _pseudo_result_covers_image(
+    result: PseudoMarkupResultRow,
+    dataset: DatasetInfo,
+    image_path: Path,
+) -> bool:
+    if result.scenes_file is None:
+        return False
+    root = _dataset_images_root(dataset).resolve()
+    try:
+        expected = image_path.resolve().relative_to(root).with_suffix("").as_posix().casefold()
+        entries = result.scenes_file.path and Path(result.scenes_file.path).read_text(
+            encoding="utf-8-sig"
+        ).splitlines()
+    except (OSError, ValueError):
+        return False
+    normalized = {
+        Path(line.strip().replace("\\", "/")).with_suffix("").as_posix().casefold()
+        for line in entries
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    return expected in normalized
+
+
+def _raster_revision(image_path: Path) -> str:
+    status = image_path.stat()
+    payload = f"{image_path.resolve()}\0{status.st_size}\0{status.st_mtime_ns}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _latest_editor_pseudo_job(
+    session: Session,
+    dataset_key: str,
+    annotation_name: str,
+    training_result_id: uuid.UUID,
+    raster_revision: str,
+) -> JobRow | None:
+    rows = session.scalars(
+        select(JobRow)
+        .where(
+            JobRow.type == JobType.INFERENCE.value,
+            JobRow.dataset_key == dataset_key,
+        )
+        .order_by(JobRow.created_at.desc(), JobRow.id.desc())
+    ).all()
+    for row in rows:
+        if (row.config or {}).get("operation") != DATASET_EDITOR_PSEUDO_OPERATION:
+            continue
+        state = _editor_pseudo_state(row)
+        if (
+            state.get("annotation_name") == annotation_name
+            and state.get("training_result_id") == str(training_result_id)
+            and state.get("raster_revision") == raster_revision
+        ):
+            return row
+    return None
+
+
+def _editor_pseudo_state(row: JobRow) -> dict[str, Any]:
+    state = (row.config or {}).get("editor_pseudo")
+    return state if isinstance(state, dict) else {}
+
+
+def _editor_pseudo_result_file(
+    session: Session,
+    state: dict[str, Any],
+) -> StoredFileRow | None:
+    try:
+        file_id = uuid.UUID(str(state.get("result_file_id")))
+    except (TypeError, ValueError):
+        return None
+    row = session.get(StoredFileRow, file_id)
+    return row if row is not None and Path(row.path).is_file() else None
+
+
+def _editor_pseudo_progress(row: JobRow) -> tuple[int | None, int | None]:
+    if row.tmp_path is None:
+        return None, None
+    path = Path(row.tmp_path) / "scratch" / "progress.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        current = int(payload.get("current")) if payload.get("current") is not None else None
+        total = int(payload.get("total")) if payload.get("total") is not None else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None, None
+    return current, total
+
+
+def _pseudo_geojson_for_image(path: Path, image_path: Path) -> dict[str, Any]:
+    payload = _read_geojson(path)
+    features = payload.get("features")
+    if payload.get("type") != "FeatureCollection" or not isinstance(features, list):
+        raise TrainingUIAPIError("Псевдоразметка должна быть FeatureCollection.")
+    try:
+        with rasterio.open(image_path) as source:
+            if source.crs is None:
+                raise TrainingUIAPIError("У TIFF отсутствует CRS.")
+            raster_crs = PyprojCRS.from_user_input(source.crs)
+    except rasterio.errors.RasterioError as exc:
+        raise TrainingUIAPIError(f"Не удалось открыть TIFF: {exc}") from exc
+    footprint = _valid_data_footprint(image_path)
+    to_wgs84 = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+    footprint_wgs84 = transform_geometry(to_wgs84.transform, footprint)
+    raw_crs = payload.get("crs")
+    source_crs = _geojson_crs(payload) if raw_crs else PyprojCRS.from_epsg(4326)
+    to_wgs84_geometry = (
+        Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
+        if source_crs != PyprojCRS.from_epsg(4326)
+        else None
+    )
+    clipped: list[dict[str, Any]] = []
+    for feature in features:
+        if not isinstance(feature, dict) or feature.get("type") != "Feature":
+            continue
+        try:
+            geometry = shape(feature.get("geometry"))
+            if to_wgs84_geometry is not None:
+                geometry = transform_geometry(to_wgs84_geometry.transform, geometry)
+            geometry = _polygonal_geometry(geometry.intersection(footprint_wgs84))
+        except Exception:
+            continue
+        if geometry.is_empty:
+            continue
+        clipped.append({**feature, "geometry": dict(mapping(geometry))})
+    return {
+        **payload,
+        "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+        "features": clipped,
+    }
+
+
+def _positive_integer(value: object, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _editor_source_dir(config: TrainingUIAPIConfig, dataset: DatasetInfo) -> Path:

@@ -63,7 +63,11 @@ from ._models import (
 )
 from ._processes import terminate_job_process
 from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
-from ._queueing import dispatch_sort_key, ensure_queue_positions
+from ._queueing import (
+    DATASET_EDITOR_PSEUDO_OPERATION,
+    dispatch_sort_key,
+    ensure_queue_positions,
+)
 from ._templates import normalize_tile_factors
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
@@ -81,6 +85,10 @@ from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKi
 LOGGER = logging.getLogger(__name__)
 MLFLOW_RUN_ID_FILE = "mlflow_run_id"
 JOB_ERROR_MAX_BYTES = 8 * 1024
+TRAINING_CONTROL_DIR = "control"
+TRAINING_PAUSE_REQUEST = "pause.request"
+TRAINING_PAUSED_MARKER = "paused"
+URGENT_JOB_PRIORITY = "urgent"
 
 
 class _StartedProcess(Protocol):
@@ -105,6 +113,10 @@ def _is_pseudolabel_aoi_job(row: JobRow) -> bool:
     """Proverit domennoe naznachenie inference job."""
 
     return (row.config or {}).get("operation") == PSEUDOLABEL_AOI_OPERATION
+
+
+def _is_dataset_editor_pseudo_job(row: JobRow) -> bool:
+    return (row.config or {}).get("operation") == DATASET_EDITOR_PSEUDO_OPERATION
 
 
 async def run_queue_worker(
@@ -135,6 +147,8 @@ def dispatch_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
+    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+        return
     if _has_running_job(session):
         return
     job = _next_dispatch_job(session)
@@ -155,6 +169,8 @@ def dispatch_training_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
+    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+        return
     if _has_running_job(session):
         return
     next_job = _next_dispatch_job(session)
@@ -178,6 +194,8 @@ def dispatch_inference_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
+    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+        return
     if _has_running_job(session):
         return
     next_job = _next_dispatch_job(session)
@@ -209,6 +227,108 @@ def _next_dispatch_job(session: Session, job_type: JobType | None = None) -> Job
     return candidates[0] if candidates else None
 
 
+def _coordinate_urgent_inference(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    *,
+    popen_factory: ProcessLauncher,
+) -> bool:
+    """Приостановить обучение, выполнить срочный инференс и затем продолжить его."""
+
+    running_inference = session.scalar(
+        select(JobRow).where(
+            JobRow.type == JobType.INFERENCE.value,
+            JobRow.status == JobStatus.RUNNING.value,
+        )
+    )
+    if running_inference is not None:
+        return True
+    training = session.scalar(
+        select(JobRow).where(
+            JobRow.type == JobType.TRAINING.value,
+            JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
+        )
+    )
+    urgent = _next_urgent_inference_job(session)
+    if urgent is not None:
+        if training is not None:
+            token = _request_training_pause(training)
+            if not _training_pause_confirmed(training, token):
+                return True
+            training.status = JobStatus.PAUSED.value
+            session.flush()
+        _start_inference_job(session, urgent, config, popen_factory=popen_factory)
+        return True
+    if training is not None and training.status == JobStatus.PAUSED.value:
+        _request_training_resume(training)
+        if not _training_paused_marker(training).is_file():
+            training.status = JobStatus.RUNNING.value
+            session.flush()
+        return True
+    return training is not None
+
+
+def _next_urgent_inference_job(session: Session) -> JobRow | None:
+    rows = session.scalars(
+        select(JobRow).where(
+            JobRow.type == JobType.INFERENCE.value,
+            JobRow.status == JobStatus.QUEUED.value,
+        )
+    ).all()
+    candidates = [
+        row
+        for row in rows
+        if _is_urgent_job(row) and _dispatch_allowed(session, row, _automation_enabled(session))
+    ]
+    candidates.sort(key=dispatch_sort_key)
+    return candidates[0] if candidates else None
+
+
+def _is_urgent_job(row: JobRow) -> bool:
+    return (row.config or {}).get("priority") == URGENT_JOB_PRIORITY
+
+
+def _training_control_dir(row: JobRow) -> Path:
+    if row.tmp_path is None:
+        raise RuntimeError("У выполняющегося обучения отсутствует рабочая директория.")
+    return Path(row.tmp_path) / TRAINING_CONTROL_DIR
+
+
+def _training_pause_request(row: JobRow) -> Path:
+    return _training_control_dir(row) / TRAINING_PAUSE_REQUEST
+
+
+def _training_paused_marker(row: JobRow) -> Path:
+    return _training_control_dir(row) / TRAINING_PAUSED_MARKER
+
+
+def _request_training_pause(row: JobRow) -> str:
+    request_path = _training_pause_request(row)
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        token = request_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if token:
+        return token
+    token = uuid.uuid4().hex
+    temporary = request_path.with_suffix(".tmp")
+    temporary.write_text(f"{token}\n", encoding="utf-8")
+    os.replace(temporary, request_path)
+    return token
+
+
+def _training_pause_confirmed(row: JobRow, token: str) -> bool:
+    try:
+        return _training_paused_marker(row).read_text(encoding="utf-8").strip() == token
+    except OSError:
+        return False
+
+
+def _request_training_resume(row: JobRow) -> None:
+    _training_pause_request(row).unlink(missing_ok=True)
+
+
 def _dispatch_allowed(session: Session, row: JobRow, automation_enabled: bool) -> bool:
     if (
         row.source == JobSource.AUTOMATION.value
@@ -231,7 +351,7 @@ def _reconcile_running_training_jobs(session: Session, config: TrainingUIAPIConf
     rows = session.scalars(
         select(JobRow).where(
             JobRow.type == JobType.TRAINING.value,
-            JobRow.status == JobStatus.RUNNING.value,
+            JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
         )
     ).all()
     for row in rows:
@@ -278,7 +398,7 @@ def _has_running_training_job(session: Session) -> bool:
         session.scalar(
             select(JobRow.id).where(
                 JobRow.type == JobType.TRAINING.value,
-                JobRow.status == JobStatus.RUNNING.value,
+                JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
             )
         )
         is not None
@@ -288,7 +408,9 @@ def _has_running_training_job(session: Session) -> bool:
 def _has_running_job(session: Session) -> bool:
     return (
         session.scalar(
-            select(JobRow.id).where(JobRow.status == JobStatus.RUNNING.value)
+            select(JobRow.id).where(
+                JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value])
+            )
         )
         is not None
     )
@@ -320,6 +442,7 @@ def _start_training_job(
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "scratch").mkdir(parents=True, exist_ok=True)
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (run_dir / TRAINING_CONTROL_DIR).mkdir(parents=True, exist_ok=True)
 
     try:
         config_path = run_dir / "run.yml"
@@ -363,6 +486,7 @@ def _start_inference_job(
 ) -> None:
     is_test_f1 = _is_test_sample_f1_job(row)
     is_pseudolabel_aoi = _is_pseudolabel_aoi_job(row)
+    is_dataset_editor_pseudo = _is_dataset_editor_pseudo_job(row)
     run_dir = config.scratch_root / "jobs" / str(row.id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -374,12 +498,16 @@ def _start_inference_job(
             if is_test_f1
             else "pseudolabel_config.yaml"
             if is_pseudolabel_aoi
+            else "dataset_editor_pseudo_config.yaml"
+            if is_dataset_editor_pseudo
             else "pseudo_config.yaml"
         )
         if is_test_f1:
             payload = _build_test_sample_f1_config(session, row, config, run_dir)
         elif is_pseudolabel_aoi:
             payload = _build_pseudolabel_aoi_config(row, config, run_dir)
+        elif is_dataset_editor_pseudo:
+            payload = _build_dataset_editor_pseudo_config(session, row, config, run_dir)
         else:
             payload = _build_pseudo_markup_config(session, row, config, run_dir)
         _write_yaml(config_path, payload)
@@ -712,6 +840,89 @@ def _build_pseudolabel_aoi_config(
     }
 
 
+def _build_dataset_editor_pseudo_config(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    run_dir: Path,
+) -> dict[str, Any]:
+    state = (row.config or {}).get("editor_pseudo")
+    if not isinstance(state, dict):
+        raise RuntimeError("В задании редактора отсутствуют параметры псевдоразметки.")
+    try:
+        training_result_id = uuid.UUID(str(state.get("training_result_id")))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("В задании редактора повреждён идентификатор основной сети.") from exc
+    training_result = session.get(TrainingResultRow, training_result_id)
+    if training_result is None or training_result.status != ResultStatus.OK.value:
+        raise RuntimeError("Основная сеть для псевдоразметки снимка больше недоступна.")
+    source_job = (
+        session.get(JobRow, training_result.job_id)
+        if training_result.job_id is not None
+        else None
+    )
+    flat = dict(source_job.config or {}) if source_job is not None else {}
+    external_model = state.get("external_model")
+    external_model = external_model if isinstance(external_model, dict) else None
+    tile_size = (
+        _int_value(external_model, "tile_size", 768)
+        if external_model is not None
+        else _int_value(flat, "tile_preparation.tile_size", 768)
+    )
+    context = (
+        _int_value(external_model, "context", 0)
+        if external_model is not None
+        else _int_value(flat, "tile_preparation.context", 0)
+    )
+    core_size = tile_size - 2 * context
+    if context < 0 or core_size <= 0:
+        raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
+    threshold = _optional_float(state, "checkpoint_threshold")
+    if threshold is None and external_model is None:
+        raise RuntimeError("У основной сети отсутствует confidence threshold.")
+    scenes_path = run_dir / "editor_scene.txt"
+    scenes_path.write_text(f"{state.get('image_relative')}\n", encoding="utf-8")
+    return {
+        "run_root": str(run_dir / "scratch"),
+        "inference_backend": "pytorch_one_off",
+        "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
+        "report_path": str(run_dir / "scratch" / "report.json"),
+        "scenes_file": str(scenes_path),
+        "images_root": str(state.get("images_root") or config.images_root),
+        "annotation_files": [],
+        "class_id": state.get("class_id"),
+        "class_key": state.get("class_id"),
+        "class_name": state.get("class_name"),
+        "source_model": state.get("model_name") or training_result.model_name,
+        "task": state.get("task") or training_result.task,
+        "object_types": state.get("object_types") or training_result.class_schema,
+        "mlflow_tracking_uri": config.mlflow_tracking_uri,
+        "mlflow_run_id": state.get("mlflow_run_id"),
+        "checkpoint_uri": state.get("checkpoint_uri"),
+        "checkpoint_artifact_path": state.get("checkpoint_artifact_path") or "checkpoints/best.pt",
+        "checkpoint_f1_score": state.get("checkpoint_f1_score"),
+        "checkpoint_epoch": state.get("checkpoint_epoch"),
+        "external_model": external_model,
+        "imagery_type": state.get("imagery_type"),
+        "input_channels": _int_value(state, "input_channels", 4),
+        "postprocess_config": state.get("inference_template_config") or {},
+        "threshold": threshold,
+        "tile_size": tile_size,
+        "context": context,
+        "stride": (
+            _int_value(external_model, "stride", core_size)
+            if external_model is not None
+            else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
+        ),
+        "batch_size": (
+            1
+            if external_model is not None
+            else _int_value(flat, "train.batch_size", 1)
+        ),
+        "device": "cuda",
+    }
+
+
 def _build_test_sample_f1_config(
     session: Session,
     row: JobRow,
@@ -990,6 +1201,8 @@ def _write_run_script(
                 "set -o pipefail",
                 f"cd {shlex.quote(str(config.project_root))}",
                 f"export MLSYSTEM2_MLFLOW_RUN_ID_FILE={shlex.quote(str(mlflow_run_id_path))}",
+                "export MLSYSTEM2_TRAINING_CONTROL_DIR="
+                f"{shlex.quote(str(run_dir / TRAINING_CONTROL_DIR))}",
                 f"{quoted_command} > {shlex.quote(str(log_path))} 2>&1",
                 "code=$?",
                 f"printf '%s\\n' \"$code\" > {shlex.quote(str(exit_code_path))}",
@@ -1177,6 +1390,9 @@ def _finish_inference_job(
     if _is_pseudolabel_aoi_job(row):
         _finish_pseudolabel_aoi_job(session, row, config, succeeded=succeeded)
         return
+    if _is_dataset_editor_pseudo_job(row):
+        _finish_dataset_editor_pseudo_job(session, row, config, succeeded=succeeded)
+        return
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     row.finished_at = _now()
     row.process_pid = None
@@ -1242,6 +1458,61 @@ def _finish_inference_job(
         row.status,
         report,
     )
+
+
+def _finish_dataset_editor_pseudo_job(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    *,
+    succeeded: bool,
+) -> None:
+    row.finished_at = _now()
+    row.process_pid = None
+    output_path = _pseudo_output_path(row)
+    report = _pseudo_report(row)
+    succeeded = succeeded and _pseudo_report_allows_success(report)
+    file_row = None
+    if succeeded and output_path is not None and output_path.is_file():
+        file_row = _store_generated_geojson(
+            session,
+            output_path,
+            config,
+            original_name=f"dataset_editor_pseudo_{row.id}.geojson",
+            object_count=_pseudo_geojson_object_count(output_path, report),
+            kind=StoredFileKind.PSEUDOLABEL_GEOJSON,
+        )
+    succeeded = file_row is not None
+    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    state = dict((row.config or {}).get("editor_pseudo") or {})
+    state["result_file_id"] = str(file_row.id) if file_row is not None else None
+    state["error"] = None if succeeded else _dataset_editor_pseudo_error(report, row)
+    row.config = {**(row.config or {}), "editor_pseudo": state}
+    row.error = None if succeeded else str(state["error"])
+    session.flush()
+    _cleanup_inference_scratch(row)
+    LOGGER.info(
+        "Завершена псевдоразметка снимка редактора %s со статусом %s",
+        row.id,
+        row.status,
+    )
+
+
+def _dataset_editor_pseudo_error(report: dict[str, Any] | None, row: JobRow) -> str:
+    if report is not None:
+        if report.get("error"):
+            return f"Ошибка инференса: {report['error']}"
+        if report.get("failures"):
+            return f"Ошибка инференса: {report['failures']}"
+    if row.tmp_path:
+        path = Path(row.tmp_path) / "worker_error.txt"
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            value = ""
+        if value:
+            return value[:4000]
+    return "Не удалось получить псевдоразметку снимка."
 
 
 def _finish_pseudolabel_aoi_job(

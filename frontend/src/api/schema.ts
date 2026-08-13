@@ -400,6 +400,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scene Pseudo Markup */
+        get: operations["scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_get"];
+        put?: never;
+        /** Ensure Scene Pseudo Markup */
+        post: operations["ensure_scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/rasters": {
         parameters: {
             query?: never;
@@ -1773,6 +1791,37 @@ export interface components {
              */
             priority: number;
         };
+        /** DatasetEditorPseudoMarkupInfo */
+        DatasetEditorPseudoMarkupInfo: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unavailable" | "ready" | "queued" | "running" | "failed";
+            /** Source */
+            source?: ("dataset" | "scene") | null;
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Progress Current */
+            progress_current?: number | null;
+            /** Progress Total */
+            progress_total?: number | null;
+            /**
+             * Object Count
+             * @default 0
+             */
+            object_count: number;
+            /** Message */
+            message?: string | null;
+            /** Geojson */
+            geojson?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** DatasetEditorPublicationInfo */
         DatasetEditorPublicationInfo: {
             /** Commit */
@@ -2291,7 +2340,7 @@ export interface components {
          * JobStatus
          * @enum {string}
          */
-        JobStatus: "queued" | "running" | "completed" | "failed" | "cancelled";
+        JobStatus: "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
         /** JobSummary */
         JobSummary: {
             /**
@@ -4415,6 +4464,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorPseudoMarkupInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ensure_scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorPseudoMarkupInfo"];
                 };
             };
             /** @description Validation Error */

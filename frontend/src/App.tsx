@@ -4071,7 +4071,7 @@ function jobTypeBadge(job: JobSummary) {
 
 function statusClass(status: string): string {
   if (status === "ok" || status === "completed") return "ok";
-  if (status === "queued" || status === "running") return status;
+  if (status === "queued" || status === "running" || status === "paused") return status;
   if (status === "error" || status === "failed") return "error";
   if (status === "cancelled") return "warning";
   return "neutral";
@@ -4081,6 +4081,7 @@ function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     queued: "в очереди",
     running: "в процессе",
+    paused: "приостановлено для срочного инференса",
     ok: "ok",
     completed: "завершено",
     error: "ошибка",
@@ -4095,7 +4096,7 @@ function statusTiny(status?: string | null): string {
 }
 
 function isActiveStatus(status: string): boolean {
-  return status === "queued" || status === "running";
+  return status === "queued" || status === "running" || status === "paused";
 }
 
 function hasActiveDatasetResults(payload: DatasetResultsResponse): boolean {
@@ -4176,8 +4177,9 @@ function mergedQueueJobs(snapshot: QueueSnapshot): JobSummary[] {
 
 function queuePriority(job: JobSummary): number {
   if (job.status === "running") return 0;
-  if (job.status === "queued") return 1;
-  return 2;
+  if (job.status === "paused") return 1;
+  if (job.status === "queued") return 2;
+  return 3;
 }
 
 function automationRuleKey(datasetKey: string, architecture: string): string {

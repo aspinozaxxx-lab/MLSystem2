@@ -1,22 +1,40 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import shutil
 import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import numpy as np
 import pytest
 import rasterio
+import yaml
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 from shapely.geometry import box
+from shapely.geometry import mapping
+from shapely.ops import transform as transform_geometry
+from pyproj import Transformer
+from sqlalchemy import select
 
 from mlsystem2.training_ui_api.api import create_app
+from mlsystem2.training_ui_api import _worker
+from mlsystem2.training_ui_api._config import get_config
+from mlsystem2.training_ui_api._database import create_session_factory
+from mlsystem2.training_ui_api._models import (
+    DatasetClassRow,
+    DatasetRow,
+    JobRow,
+    PseudoMarkupResultRow,
+    StoredFileRow,
+    TrainingResultRow,
+)
 from mlsystem2.training_ui_api._dataset_editor import _footprint_covers_geometry
 
 
@@ -498,6 +516,197 @@ def test_dataset_editor_footprint_allows_only_numerical_boundary_sliver() -> Non
 
     assert _footprint_covers_geometry(footprint, box(-1e-13, 1, 2, 2))
     assert not _footprint_covers_geometry(footprint, box(-0.01, 1, 2, 2))
+
+
+def test_dataset_editor_returns_primary_network_pseudo_fragment(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    stored_root = get_config().stored_files_root
+    stored_root.mkdir(parents=True, exist_ok=True)
+    scenes_path = stored_root / "covered-scenes.txt"
+    scenes_path.write_text("Olskij/SCN01\n", encoding="utf-8")
+    to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    inside = transform_geometry(to_wgs84.transform, box(1, 1, 3, 3))
+    outside = transform_geometry(to_wgs84.transform, box(20, 20, 21, 21))
+    pseudo_path = stored_root / "full-pseudo.geojson"
+    pseudo_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {"confidence": 0.9}, "geometry": mapping(inside)},
+                    {"type": "Feature", "properties": {"confidence": 0.8}, "geometry": mapping(outside)},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with create_session_factory(get_config())() as session:
+        scenes_file = StoredFileRow(
+            kind="scenes_txt",
+            original_name=scenes_path.name,
+            content_type="text/plain",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        pseudo_file = StoredFileRow(
+            kind="pseudo_markup_geojson",
+            original_name=pseudo_path.name,
+            content_type="application/geo+json",
+            path=str(pseudo_path),
+            size_bytes=pseudo_path.stat().st_size,
+            object_count=2,
+        )
+        session.add_all([scenes_file, pseudo_file])
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                dataset_key=env.dataset_key,
+                training_result_id=result_id,
+                class_key=env.dataset_key,
+                source_dataset_name="Реки / test",
+                image_count=1,
+                scenes_file_id=scenes_file.id,
+                geojson_file_id=pseudo_file.id,
+                status="ok",
+            )
+        )
+        session.commit()
+
+    scene = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    ).json()["scenes"][0]
+    response = env.client.post(
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(env.dataset_key, safe='')}/scenes/"
+        f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["source"] == "dataset"
+    assert payload["training_result_id"] == str(result_id)
+    assert payload["object_count"] == 1
+    assert payload["geojson"]["crs"]["properties"]["name"] == "EPSG:4326"
+
+
+def test_dataset_editor_queues_one_urgent_scene_inference(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    with create_session_factory(get_config())() as session:
+        result = session.get(TrainingResultRow, result_id)
+        assert result is not None
+        selected = SimpleNamespace(
+            result=result,
+            dataset_name="Реки / test",
+            input_channels=4,
+            checkpoint=SimpleNamespace(
+                artifact_uri="s3://artifacts/best.pt",
+                artifact_path="checkpoints/best.pt",
+                threshold=0.7,
+                f1_score=0.8,
+                epoch=12,
+            ),
+            external_model=None,
+            inference_template_id=None,
+            inference_template_config={},
+        )
+    monkeypatch.setattr(
+        "mlsystem2.training_ui_api._dataset_editor._select_model",
+        lambda *_args, **_kwargs: selected,
+    )
+    scene = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    ).json()["scenes"][0]
+    endpoint = (
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(env.dataset_key, safe='')}/scenes/"
+        f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
+    )
+    first = env.client.post(endpoint)
+    second = env.client.post(endpoint)
+    assert first.status_code == 200
+    assert first.json()["status"] == "queued"
+    assert second.json()["job_id"] == first.json()["job_id"]
+    with create_session_factory(get_config())() as session:
+        rows = session.scalars(select(JobRow)).all()
+        editor_jobs = [
+            row
+            for row in rows
+            if (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
+        ]
+        assert len(editor_jobs) == 1
+        assert editor_jobs[0].config["priority"] == "urgent"
+        assert editor_jobs[0].config["editor_pseudo"]["image_relative"] == "Olskij/SCN01"
+        job_id = editor_jobs[0].id
+
+    with create_session_factory(get_config())() as session:
+        _worker.dispatch_inference_queue_once(
+            session,
+            get_config(),
+            popen_factory=lambda *_args, **_kwargs: SimpleNamespace(pid=4321),
+        )
+        session.flush()
+        job = session.get(JobRow, job_id)
+        assert job is not None and job.tmp_path is not None
+        run_dir = Path(job.tmp_path)
+        runner_config = yaml.safe_load(
+            (run_dir / "dataset_editor_pseudo_config.yaml").read_text(encoding="utf-8")
+        )
+        assert runner_config["scenes_file"].endswith("editor_scene.txt")
+        assert runner_config["checkpoint_uri"] == "s3://artifacts/best.pt"
+        assert Path(runner_config["images_root"]).name == "kanopus"
+        output = run_dir / "scratch" / "pseudo_markup.geojson"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+        (run_dir / "scratch" / "report.json").write_text(
+            '{"status":"ok","processed":1,"feature_count":0}',
+            encoding="utf-8",
+        )
+        (run_dir / "exit_code").write_text("0\n", encoding="utf-8")
+        _worker.dispatch_inference_queue_once(session, get_config())
+        session.commit()
+        completed = session.get(JobRow, job.id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.config["editor_pseudo"]["result_file_id"]
+
+    ready = env.client.get(endpoint)
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["source"] == "scene"
+
+
+def _create_primary_training_result(env: _EditorEnvironment):
+    with create_session_factory(get_config())() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        assert dataset is not None
+        class_row = session.get(DatasetClassRow, dataset.class_id)
+        assert class_row is not None
+        result = TrainingResultRow(
+            dataset_key=dataset.key,
+            dataset_version="test-version",
+            class_key=dataset.key,
+            class_display_name=class_row.name,
+            architecture="smp_segformer_b2",
+            model_name="SegFormer B2",
+            quality_metric="pixel",
+            task="binary",
+            class_schema=[],
+            status="ok",
+            trained_at=datetime.now(timezone.utc),
+            mlflow_run_id="run-primary",
+        )
+        session.add(result)
+        session.flush()
+        class_row.primary_training_result_id = result.id
+        session.commit()
+        return result.id
 
 
 def _annotation_payload(features: list[dict[str, object]]) -> dict[str, object]:

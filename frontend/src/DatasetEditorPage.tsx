@@ -7,6 +7,7 @@ import {
   EyeOff,
   Folder,
   FolderOpen,
+  Layers,
   MousePointer2,
   PaintBucket,
   PencilLine,
@@ -117,6 +118,18 @@ type SceneDetail = {
   geojson: JsonObject;
   valid_data_footprint: JsonObject;
 };
+type PseudoMarkupInfo = {
+  status: "unavailable" | "ready" | "queued" | "running" | "failed";
+  source: "dataset" | "scene" | null;
+  training_result_id: string | null;
+  model_name: string | null;
+  job_id: string | null;
+  progress_current: number | null;
+  progress_total: number | null;
+  object_count: number;
+  message: string | null;
+  geojson: JsonObject | null;
+};
 type SceneDraft = DraftState & {
   scene: EditorScene;
   validDataFootprint: JsonObject;
@@ -190,6 +203,10 @@ const SELECTED_VERTEX_IMAGE = new CircleStyle({
   fill: new Fill({ color: "#38BDF8" }),
   stroke: new Stroke({ color: "#FFFFFF", width: 2 }),
 });
+const PSEUDO_MARKUP_STYLE = new Style({
+  fill: new Fill({ color: "rgb(34 211 238 / 18%)" }),
+  stroke: new Stroke({ color: "#22D3EE", width: 2, lineDash: [7, 5] }),
+});
 
 export function DatasetEditorPage({
   run,
@@ -210,6 +227,8 @@ export function DatasetEditorPage({
   const [sortDirection, setSortDirection] = useState<SortDirection>("descending");
   const [fillEnabled, setFillEnabled] = useState(true);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  const [pseudoVisible, setPseudoVisible] = useState(false);
+  const [pseudoMarkup, setPseudoMarkup] = useState<PseudoMarkupInfo | null>(null);
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [drawInProgress, setDrawInProgress] = useState(false);
@@ -222,6 +241,8 @@ export function DatasetEditorPage({
   const mapRef = useRef<OLMap | null>(null);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
+  const pseudoSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
+  const pseudoLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const rasterLayerRef = useRef<WebGLTileLayer | null>(null);
   const selectRef = useRef<Select | null>(null);
   const vertexBoxRef = useRef<DragBox | null>(null);
@@ -239,6 +260,7 @@ export function DatasetEditorPage({
   const selectedVerticesRef = useRef<VertexSelection[]>([]);
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const sceneLoadRequestRef = useRef(0);
+  const pseudoLoadRequestRef = useRef(0);
 
   const selectedDataset = useMemo(
     () => datasets.find((item) => item.key === datasetKey) || null,
@@ -441,6 +463,60 @@ export function DatasetEditorPage({
     void loadScene(datasetKey, annotationName);
   }, [annotationName, datasetKey, loadScene]);
 
+  useEffect(() => {
+    pseudoLoadRequestRef.current += 1;
+    setPseudoVisible(false);
+    setPseudoMarkup(null);
+  }, [annotationName, datasetKey]);
+
+  const loadPseudoMarkup = useCallback(
+    async (ensure: boolean) => {
+      if (!datasetKey || !annotationName) return;
+      const requestId = ++pseudoLoadRequestRef.current;
+      const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup`;
+      try {
+        const payload = await apiJson<PseudoMarkupInfo>(
+          path,
+          ensure ? { method: "POST" } : undefined,
+        );
+        if (requestId === pseudoLoadRequestRef.current) setPseudoMarkup(payload);
+      } catch (error) {
+        if (requestId !== pseudoLoadRequestRef.current) return;
+        setPseudoMarkup({
+          status: "failed",
+          source: null,
+          training_result_id: null,
+          model_name: null,
+          job_id: null,
+          progress_current: null,
+          progress_total: null,
+          object_count: 0,
+          message: error instanceof Error ? error.message : "Не удалось получить псевдоразметку.",
+          geojson: null,
+        });
+      }
+    },
+    [annotationName, datasetKey],
+  );
+
+  useEffect(() => {
+    if (
+      !pseudoVisible ||
+      (pseudoMarkup?.status !== "queued" && pseudoMarkup?.status !== "running")
+    ) return;
+    const timer = window.setInterval(() => void loadPseudoMarkup(false), 1500);
+    return () => window.clearInterval(timer);
+  }, [loadPseudoMarkup, pseudoMarkup?.status, pseudoVisible]);
+
+  const togglePseudoMarkup = () => {
+    if (pseudoVisible) {
+      setPseudoVisible(false);
+      return;
+    }
+    setPseudoVisible(true);
+    if (pseudoMarkup?.status !== "ready") void loadPseudoMarkup(true);
+  };
+
   const captureActiveSnapshot = useCallback((): DraftSnapshot | null => {
     const name = activeAnnotationRef.current;
     const draft = draftsRef.current[name];
@@ -523,6 +599,12 @@ export function DatasetEditorPage({
         selectedDataset?.imagery_type === "kanopus" ? bandModeRef.current : "RGB",
       ),
     });
+    const pseudoSource = new VectorSource<Feature<Geometry>>();
+    const pseudoLayer = new VectorLayer({
+      source: pseudoSource,
+      visible: false,
+      style: PSEUDO_MARKUP_STYLE,
+    });
     const vectorLayer = new VectorLayer({
       source: vectorSource,
       visible: annotationsVisibleRef.current,
@@ -536,6 +618,7 @@ export function DatasetEditorPage({
         ),
     });
     const select = new Select({
+      layers: [vectorLayer],
       style: (feature) =>
         selectedFeatureStyles(
           feature as Feature<Geometry>,
@@ -709,7 +792,7 @@ export function DatasetEditorPage({
     const map = new OLMap({
       target,
       controls: defaultControls({ zoom: false }),
-      layers: [rasterLayer, vectorLayer],
+      layers: [rasterLayer, pseudoLayer, vectorLayer],
       interactions: defaultInteractions({ dragPan: false, shiftDragZoom: false }),
       view: rasterViewWithOverzoom(rasterSource),
     });
@@ -726,6 +809,8 @@ export function DatasetEditorPage({
     map.addInteraction(snap);
     map.on("singleclick", selectCurrentModifyVertexAfterInteractions);
     mapRef.current = map;
+    pseudoSourceRef.current = pseudoSource;
+    pseudoLayerRef.current = pseudoLayer;
     vectorLayerRef.current = vectorLayer;
     rasterLayerRef.current = rasterLayer;
     selectRef.current = select;
@@ -741,6 +826,8 @@ export function DatasetEditorPage({
       map.un("singleclick", selectCurrentModifyVertexAfterInteractions);
       map.setTarget(undefined);
       mapRef.current = null;
+      pseudoSourceRef.current = null;
+      pseudoLayerRef.current = null;
       vectorSourceRef.current = null;
       vectorLayerRef.current = null;
       rasterLayerRef.current = null;
@@ -764,6 +851,23 @@ export function DatasetEditorPage({
     updateDraft,
     objectTypeChoices,
   ]);
+
+  useEffect(() => {
+    const source = pseudoSourceRef.current;
+    const layer = pseudoLayerRef.current;
+    if (!source || !layer || !detail) return;
+    source.clear();
+    if (pseudoMarkup?.status === "ready" && pseudoMarkup.geojson) {
+      const rasterCrs = geojsonCrs(detail.geojson);
+      const pseudoCrs = geojsonCrs(pseudoMarkup.geojson);
+      const features = new GeoJSON().readFeatures(pseudoMarkup.geojson, {
+        dataProjection: pseudoCrs,
+        featureProjection: rasterCrs,
+      }) as Feature<Geometry>[];
+      source.addFeatures(features);
+    }
+    layer.setVisible(pseudoVisible && pseudoMarkup?.status === "ready");
+  }, [detail, pseudoMarkup, pseudoVisible]);
 
   useEffect(() => {
     const drawing = annotationsVisible && editMode === "draw";
@@ -1347,6 +1451,18 @@ export function DatasetEditorPage({
                   <div className="dataset-editor-map" ref={mapTargetRef} />
                   <div className="dataset-editor-map-controls">
                     <button
+                      className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
+                      type="button"
+                      aria-label={pseudoVisible ? "Скрыть псевдоразметку основной сети" : "Показать псевдоразметку основной сети"}
+                      aria-pressed={pseudoVisible}
+                      title={pseudoVisible
+                        ? "Скрыть псевдоразметку текущей основной сети"
+                        : "Показать псевдоразметку текущей основной сети; если её нет, запустить срочный инференс по снимку"}
+                      onClick={togglePseudoMarkup}
+                    >
+                      <Layers size={17} />
+                    </button>
+                    <button
                       className={`${annotationsVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
                       aria-label={annotationsVisible ? "Скрыть всю разметку" : "Показать всю разметку"}
@@ -1404,6 +1520,17 @@ export function DatasetEditorPage({
                       </div>
                     ) : null}
                   </div>
+                  {pseudoVisible && pseudoMarkup ? (
+                    <div className={`dataset-editor-pseudo-status ${pseudoMarkup.status}`} role="status">
+                      {pseudoMarkup.status === "ready"
+                        ? `Псевдоразметка: ${formatObjectCount(pseudoMarkup.object_count)} · ${pseudoMarkup.source === "dataset" ? "готовый результат датасета" : "инференс снимка"}`
+                        : pseudoMarkup.status === "queued"
+                          ? "Псевдоразметка: срочное задание в очереди"
+                          : pseudoMarkup.status === "running"
+                            ? `Псевдоразметка: инференс${pseudoMarkup.progress_total ? ` ${pseudoMarkup.progress_current || 0}/${pseudoMarkup.progress_total}` : ""}`
+                            : pseudoMarkup.message || "Псевдоразметка недоступна"}
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -1532,6 +1659,19 @@ export function DatasetEditorPage({
       ) : null}
     </>
   );
+}
+
+function formatObjectCount(count: number): string {
+  const modulo100 = Math.abs(count) % 100;
+  const modulo10 = modulo100 % 10;
+  const noun = modulo100 >= 11 && modulo100 <= 14
+    ? "объектов"
+    : modulo10 === 1
+      ? "объект"
+      : modulo10 >= 2 && modulo10 <= 4
+        ? "объекта"
+        : "объектов";
+  return `${count} ${noun}`;
 }
 
 function geojsonCrs(payload: JsonObject): string {

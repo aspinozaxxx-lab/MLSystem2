@@ -319,6 +319,11 @@ batch size и output GeoJSON задаются в отдельном `pseudo_conf
 еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
 MLflow run со статусом `KILLED`.
 
+Срочная поснимочная псевдоразметка редактора использует ту же inference-очередь с признаком `priority=urgent`.
+Если выполняется обучение, worker создаёт tokenized `pause.request`; train loop на границе batch переносит модель
+и optimizer state в CPU, освобождает CUDA и подтверждает `paused`. После срочного инференса worker снимает запрос,
+а тот же процесс и MLflow-run продолжают работу. Обычный running-инференс не прерывается.
+
 Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
 После успешного auto training result с MLflow run id worker ставит auto pseudo-markup job того же датасета.

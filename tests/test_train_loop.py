@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -1311,6 +1313,57 @@ def test_two_short_trainings_are_reproducible_with_same_seed(tmp_path: Path) -> 
     assert first_history == pytest.approx(second_history)
     assert first_state.keys() == second_state.keys()
     assert all(torch.equal(first_state[key], second_state[key]) for key in first_state)
+
+
+def test_training_pause_controller_preserves_process_and_optimizer_state(
+    tmp_path: Path,
+) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train import _trainer
+
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+    loss = model(torch.ones((1, 2))).sum()
+    loss.backward()
+    optimizer.step()
+    state_before = {
+        key: value.detach().clone()
+        for state in optimizer.state.values()
+        for key, value in state.items()
+        if torch.is_tensor(value)
+    }
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    request_path = control_dir / _trainer.PAUSE_REQUEST_FILE
+    marker_path = control_dir / _trainer.PAUSED_MARKER_FILE
+    request_path.write_text("urgent-token\n", encoding="utf-8")
+    controller = _trainer._TrainingPauseController(
+        torch,
+        model,
+        optimizer,
+        torch.device("cpu"),
+        str(control_dir),
+    )
+    thread = threading.Thread(target=controller.pause_if_requested)
+    thread.start()
+    deadline = time.monotonic() + 3
+    while not marker_path.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert marker_path.read_text(encoding="utf-8").strip() == "urgent-token"
+    assert thread.is_alive()
+
+    request_path.unlink()
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert not marker_path.exists()
+    state_after = {
+        key: value.detach().clone()
+        for state in optimizer.state.values()
+        for key, value in state.items()
+        if torch.is_tensor(value)
+    }
+    assert state_before.keys() == state_after.keys()
+    assert all(torch.equal(state_before[key], state_after[key]) for key in state_before)
 
 
 def _fake_loader(torch, *, with_meta: bool = False):

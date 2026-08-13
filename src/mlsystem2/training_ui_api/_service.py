@@ -165,7 +165,11 @@ from .contracts import (
 )
 
 
-ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.RUNNING.value,
+    JobStatus.PAUSED.value,
+}
 JOB_LOG_MAX_BYTES = 128 * 1024
 
 
@@ -888,7 +892,10 @@ def set_queue_enabled(
     control.updated_at = _now()
     if not request.enabled:
         running = session.scalars(
-            select(JobRow).where(JobRow.type == queue_name.value, JobRow.status == JobStatus.RUNNING.value)
+            select(JobRow).where(
+                JobRow.type == queue_name.value,
+                JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
+            )
         ).all()
         for row in running:
             _stop_process_and_cleanup(row)
@@ -963,7 +970,7 @@ def delete_job(
         raise TrainingUIAPIError("Автоматические задания отменяются только через форму автоматизации")
     detail = _job_detail(session, row).model_copy(update={"status": JobStatus.CANCELLED})
     mlflow_run_id = _job_mlflow_run_id(session, row)
-    if row.status == JobStatus.RUNNING.value:
+    if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         _stop_process_and_cleanup(row)
         if mlflow_run_id:
             _mark_mlflow_run_killed(mlflow_run_id)
@@ -1254,6 +1261,8 @@ def _job_purpose(row: JobRow) -> str:
 def _job_change_action(row: JobRow) -> str:
     running = row.status == JobStatus.RUNNING.value
     if row.type == JobType.TRAINING.value:
+        if row.status == JobStatus.PAUSED.value:
+            return "обучение приостановлено для срочного инференса"
         return "идёт обучение" if running else "запланировано обучение"
     if _job_purpose(row) == "test_sample_f1":
         return "считается тестовый F1" if running else "запланирован тестовый F1"
@@ -2519,7 +2528,7 @@ def _public_result_status(
 
 
 def _job_progress(session: Session, row: JobRow) -> RuntimeProgress | None:
-    if row.status != JobStatus.RUNNING.value:
+    if row.status not in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         return None
     if row.type == JobType.TRAINING.value:
         return _training_job_progress(session, row)
@@ -2648,7 +2657,7 @@ def _job_runtime_minutes(
 def _job_actions(row: JobRow) -> list[str]:
     if row.source == JobSource.AUTOMATION.value:
         return []
-    if row.status == JobStatus.RUNNING.value:
+    if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         return ["delete"]
     if row.status == JobStatus.QUEUED.value:
         return ["move_up", "move_down", "delete"]

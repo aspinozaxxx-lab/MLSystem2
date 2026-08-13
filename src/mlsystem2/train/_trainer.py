@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from math import isfinite
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -23,6 +25,83 @@ MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH = 1
 OBJECT_METRIC_MAX_WORKERS = 8
 THRESHOLD_CANDIDATES = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
 MULTICLASS_THRESHOLD_CANDIDATES = (0.0, *THRESHOLD_CANDIDATES)
+TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
+PAUSE_REQUEST_FILE = "pause.request"
+PAUSED_MARKER_FILE = "paused"
+
+
+class _TrainingPauseController:
+    """Кооперативно освобождает GPU, не завершая процесс и MLflow-run."""
+
+    def __init__(self, torch, model, optimizer, device, control_dir: str | None) -> None:
+        self._torch = torch
+        self._model = model
+        self._optimizer = optimizer
+        self._device = device
+        self._control_dir = Path(control_dir) if control_dir else None
+        self._paused = False
+
+    def pause_if_requested(self) -> None:
+        if self._control_dir is None:
+            return
+        request_path = self._control_dir / PAUSE_REQUEST_FILE
+        if not request_path.is_file():
+            return
+        marker_path = self._control_dir / PAUSED_MARKER_FILE
+        self._control_dir.mkdir(parents=True, exist_ok=True)
+        cpu = self._torch.device("cpu")
+        try:
+            pause_token = request_path.read_text(encoding="utf-8").strip()
+            if not pause_token:
+                return
+            self._model.to(cpu)
+            _move_optimizer_state(self._optimizer, cpu)
+            _release_training_cuda(self._torch, self._device)
+            temporary = marker_path.with_suffix(".tmp")
+            temporary.write_text(f"{pause_token}\n", encoding="utf-8")
+            os.replace(temporary, marker_path)
+            self._paused = True
+            while request_path.is_file():
+                time.sleep(0.2)
+            self._model.to(self._device)
+            _move_optimizer_state(self._optimizer, self._device)
+        finally:
+            marker_path.unlink(missing_ok=True)
+            self._paused = False
+
+    def close(self) -> None:
+        if self._control_dir is not None:
+            (self._control_dir / PAUSED_MARKER_FILE).unlink(missing_ok=True)
+
+
+def _move_optimizer_state(optimizer: object, device: object) -> None:
+    state_by_parameter = getattr(optimizer, "state", {})
+    for state in state_by_parameter.values():
+        if isinstance(state, dict):
+            for key, value in list(state.items()):
+                state[key] = _move_state_value(value, device)
+
+
+def _move_state_value(value: object, device: object) -> object:
+    if hasattr(value, "to") and callable(value.to):
+        return value.to(device)
+    if isinstance(value, dict):
+        return {key: _move_state_value(item, device) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_move_state_value(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_move_state_value(item, device) for item in value)
+    return value
+
+
+def _release_training_cuda(torch, device: object) -> None:
+    if not str(device).startswith("cuda"):
+        return
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return
+    cuda.synchronize(device)
+    cuda.empty_cache()
 
 
 def train_model(
@@ -57,9 +136,17 @@ def train_model(
     checkpoint_dir = _checkpoint_dir(request.checkpoint_dir)
     best_checkpoint_path = checkpoint_dir / "best.pt"
     final_checkpoint_path = checkpoint_dir / "final.pt"
+    pause_controller = _TrainingPauseController(
+        torch,
+        model,
+        optimizer,
+        device,
+        os.getenv(TRAINING_CONTROL_DIR_ENV),
+    )
 
     try:
         for epoch in range(1, config.epochs + 1):
+            pause_controller.pause_if_requested()
             _emit(progress_sink, epoch, "epoch_started", None)
             epoch_started = perf_counter()
 
@@ -71,8 +158,17 @@ def train_model(
                 device,
                 config,
                 epoch,
+                pause_controller=pause_controller,
             )
-            val = _validate_epoch(torch, model, request.val_loader, device, config, epoch)
+            val = _validate_epoch(
+                torch,
+                model,
+                request.val_loader,
+                device,
+                config,
+                epoch,
+                pause_controller=pause_controller,
+            )
             scheduler.step()
 
             _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
@@ -155,6 +251,8 @@ def train_model(
         raise
     except Exception as exc:
         raise TrainError("Ошибка во время обучения модели") from exc
+    finally:
+        pause_controller.close()
 
 
 def _train_epoch(
@@ -165,6 +263,7 @@ def _train_epoch(
     device: object,
     config,
     epoch: int,
+    pause_controller: "_TrainingPauseController | None" = None,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -211,10 +310,14 @@ def _train_epoch(
                 )
             total_loss += float(loss.detach().item())
             batches += 1
-            if (
+            reached_limit = (
                 config.max_train_batches_per_epoch is not None
                 and batch_index >= config.max_train_batches_per_epoch
-            ):
+            )
+            del images, masks, hard_negative_pixels, logits, loss
+            if pause_controller is not None:
+                pause_controller.pause_if_requested()
+            if reached_limit:
                 break
             continue
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -223,10 +326,14 @@ def _train_epoch(
         has_optimizer_step = True
         total_loss += float(loss.detach().item())
         batches += 1
-        if (
+        reached_limit = (
             config.max_train_batches_per_epoch is not None
             and batch_index >= config.max_train_batches_per_epoch
-        ):
+        )
+        del images, masks, hard_negative_pixels, logits, loss, grad_norm
+        if pause_controller is not None:
+            pause_controller.pause_if_requested()
+        if reached_limit:
             break
     if batches == 0:
         raise TrainError("Train DataLoader не вернул ни одного batch.")
@@ -244,9 +351,20 @@ def _validate_epoch(
     device: object,
     config,
     epoch: int,
+    pause_controller: "_TrainingPauseController | None" = None,
 ) -> dict[str, float | None]:
+    if pause_controller is not None:
+        pause_controller.pause_if_requested()
     if config.task == "multiclass":
-        return _validate_multiclass_epoch(torch, model, loader, device, config, epoch)
+        return _validate_multiclass_epoch(
+            torch,
+            model,
+            loader,
+            device,
+            config,
+            epoch,
+            pause_controller=pause_controller,
+        )
 
     model.eval()
     total_loss = 0.0
@@ -307,10 +425,14 @@ def _validate_epoch(
                     probs[:, 0, :, :].detach().cpu().numpy(),
                     object_metric_executor,
                 )
-            if (
+            reached_limit = (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
-            ):
+            )
+            del images, masks, hard_negative_pixels, logits, loss, probs, true, threshold_pred
+            if pause_controller is not None:
+                pause_controller.pause_if_requested()
+            if reached_limit:
                 break
 
     if batches == 0:
@@ -406,7 +528,10 @@ def _validate_multiclass_epoch(
     device: object,
     config,
     epoch: int,
+    pause_controller: "_TrainingPauseController | None" = None,
 ) -> dict[str, Any]:
+    if pause_controller is not None:
+        pause_controller.pause_if_requested()
     model.eval()
     total_loss = 0.0
     batches = 0
@@ -482,10 +607,16 @@ def _validate_multiclass_epoch(
                     (~predicted_foreground & expected_foreground).sum().item()
                 )
 
-            if (
+            reached_limit = (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
-            ):
+            )
+            del images, masks, hard_negative_pixels, logits, loss, probabilities
+            del confidence, raw_labels, labels, predicted, expected
+            del predicted_foreground, expected_foreground
+            if pause_controller is not None:
+                pause_controller.pause_if_requested()
+            if reached_limit:
                 break
 
     if batches == 0:

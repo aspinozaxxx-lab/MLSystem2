@@ -18,6 +18,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     delete_editor_scene,
     editor_publication_info,
     editor_scene_detail,
+    editor_scene_pseudo_markup,
     list_editor_datasets,
     list_editor_scenes,
     publish_editor_scenes,
@@ -33,6 +34,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorMutationResult,
     DatasetEditorPublishRequest,
     DatasetEditorPublicationInfo,
+    DatasetEditorPseudoMarkupInfo,
     DatasetEditorRasterBrowserResponse,
     DatasetEditorRebuildPreview,
     DatasetEditorRebuildRequest,
@@ -103,6 +105,44 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             annotation_name,
+        )
+
+    @app.get(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup",
+        response_model=DatasetEditorPseudoMarkupInfo,
+    )
+    def scene_pseudo_markup(
+        dataset_key: str,
+        annotation_name: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorPseudoMarkupInfo:
+        return _git_call(
+            editor_scene_pseudo_markup,
+            db,
+            ctx.config,
+            dataset_key,
+            annotation_name,
+            ensure=False,
+        )
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup",
+        response_model=DatasetEditorPseudoMarkupInfo,
+    )
+    def ensure_scene_pseudo_markup(
+        dataset_key: str,
+        annotation_name: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorPseudoMarkupInfo:
+        return _git_call(
+            editor_scene_pseudo_markup,
+            db,
+            ctx.config,
+            dataset_key,
+            annotation_name,
+            ensure=True,
         )
 
     @app.get(

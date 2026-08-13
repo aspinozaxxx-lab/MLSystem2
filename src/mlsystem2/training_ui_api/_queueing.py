@@ -12,6 +12,9 @@ from ._models import JobRow
 from .contracts import JobSource, JobStatus, JobType
 
 
+DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
+
+
 class _QueueRow(Protocol):
     type: str
     source: str
@@ -35,7 +38,11 @@ _QUEUE_POSITION_BASES = {
     )
 }
 _MIN_MANAGED_QUEUE_POSITION = min(_QUEUE_POSITION_BASES.values())
-_ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+_ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.RUNNING.value,
+    JobStatus.PAUSED.value,
+}
 
 
 def job_priority(row: _QueueRow) -> int:
@@ -43,7 +50,7 @@ def job_priority(row: _QueueRow) -> int:
 
 
 def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, datetime]:
-    status_rank = 0 if row.status == JobStatus.RUNNING.value else 1
+    status_rank = 0 if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value} else 1
     return status_rank, row.queue_position, -job_priority(row), row.created_at
 
 

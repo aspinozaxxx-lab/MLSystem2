@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal, Self
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -69,6 +70,21 @@ class DatasetEditorSceneDetail(BaseModel):
     scene: DatasetEditorSceneInfo
     geojson: dict[str, Any]
     valid_data_footprint: dict[str, Any]
+
+
+class DatasetEditorPseudoMarkupInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["unavailable", "ready", "queued", "running", "failed"]
+    source: Literal["dataset", "scene"] | None = None
+    training_result_id: UUID | None = None
+    model_name: str | None = None
+    job_id: UUID | None = None
+    progress_current: int | None = Field(default=None, ge=0)
+    progress_total: int | None = Field(default=None, ge=0)
+    object_count: int = Field(default=0, ge=0)
+    message: str | None = None
+    geojson: dict[str, Any] | None = None
 
 
 class DatasetEditorRasterFolderInfo(BaseModel):
@@ -214,6 +230,7 @@ __all__ = [
     "DatasetEditorPublishRequest",
     "DatasetEditorPublishSceneRequest",
     "DatasetEditorPublicationInfo",
+    "DatasetEditorPseudoMarkupInfo",
     "DatasetEditorRasterBrowserResponse",
     "DatasetEditorRasterFolderInfo",
     "DatasetEditorRasterInfo",

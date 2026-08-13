@@ -1290,6 +1290,28 @@
   box-shadow: var(--shadow-overlay);
 }
 
+.dataset-editor-pseudo-status {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  max-width: min(520px, calc(100% - 20px));
+  padding: 7px 10px;
+  border: 1px solid rgb(34 211 238 / 55%);
+  border-radius: 8px;
+  background: rgb(15 23 42 / 88%);
+  box-shadow: var(--shadow-overlay);
+  color: #cffafe;
+  font-size: 12px;
+  backdrop-filter: blur(4px);
+}
+
+.dataset-editor-pseudo-status.failed,
+.dataset-editor-pseudo-status.unavailable {
+  border-color: rgb(248 113 113 / 60%);
+  color: #fecaca;
+}
+
 .dataset-editor-band-picker {
   position: relative;
 }

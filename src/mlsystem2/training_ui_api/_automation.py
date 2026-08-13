@@ -72,7 +72,11 @@ from .contracts import (
 
 AUTOMATION_KEY = "automation"
 AUTOMATION_EXPERIMENT_NAME = "MLSystem2 Automation"
-ACTIVE_JOB_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.RUNNING.value,
+    JobStatus.PAUSED.value,
+}
 MLFLOW_RUN_ID_FILE = "mlflow_run_id"
 LOGGER = logging.getLogger(__name__)
 
@@ -597,7 +601,7 @@ def _cancel_all_automation_jobs(session: Session, config: TrainingUIAPIConfig) -
 
 def _cancel_job(session: Session, row: JobRow, config: TrainingUIAPIConfig) -> None:
     mlflow_run_id = _training_job_mlflow_run_id(session, row)
-    if row.status == JobStatus.RUNNING.value:
+    if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         process_pid = row.process_pid
         terminate_job_process(row)
         if process_pid is not None and not _wait_process_group_exit(process_pid):

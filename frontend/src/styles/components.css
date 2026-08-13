@@ -303,7 +303,8 @@ input[type="checkbox"] {
 }
 
 .badge.running,
-.badge.queued {
+.badge.queued,
+.badge.paused {
   background: var(--purple-soft);
   color: var(--purple);
 }
