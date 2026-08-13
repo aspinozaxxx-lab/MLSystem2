@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 import re
 from dataclasses import dataclass
@@ -515,9 +516,25 @@ def _seed_training(seed: int) -> None:
             raise
         return
 
+    torch.set_num_threads(_positive_env_int("MLSYSTEM2_TORCH_NUM_THREADS", 4))
+    try:
+        torch.set_num_interop_threads(
+            _positive_env_int("MLSYSTEM2_TORCH_NUM_INTEROP_THREADS", 2)
+        )
+    except RuntimeError:
+        # PyTorch разрешает задать interop pool только до первого параллельного вызова.
+        pass
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return max(1, value)
 
 
 class _CountingLoader:

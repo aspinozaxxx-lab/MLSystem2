@@ -533,6 +533,7 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % 2**32
     random.seed(worker_seed)
     np.random.seed(worker_seed)
+    os.environ["MLSYSTEM2_TILE_WORKER"] = "1"
 
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):

@@ -13,6 +13,7 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  Save,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -40,7 +41,6 @@ import "ol/ol.css";
 
 import { apiJson } from "./api/client";
 import {
-  acceptPublishedDraft,
   appendHistory,
   cloneSnapshot,
   deleteEditableVertices,
@@ -53,7 +53,6 @@ import {
   featureCounts,
   geometryInsideFootprint,
   preventMapMiddleButtonDefault,
-  publishScenes as buildPublishScenes,
   RASTER_CONTRAST,
   sceneClassCounts,
   sceneCounts,
@@ -91,6 +90,7 @@ type EditorDataset = {
   source_changes: string[];
   class_counts: Record<string, number>;
   hard_negative_count: number;
+  primary_training_result_id: string | null;
 };
 
 type EditorObjectType = {
@@ -111,12 +111,27 @@ type EditorScene = {
   hard_negative_count: number;
   class_counts: Record<string, number>;
   revision: string;
+  draft: DraftSummary | null;
 };
+
+type DraftSummary = {
+  annotation_name: string;
+  base_revision: string;
+  stale: boolean;
+  total_count: number;
+  positive_count: number;
+  hard_negative_count: number;
+  class_counts: Record<string, number>;
+  updated_at: string;
+};
+
+type DraftInfo = DraftSummary & { geojson: JsonObject };
 
 type SceneDetail = {
   scene: EditorScene;
   geojson: JsonObject;
   valid_data_footprint: JsonObject;
+  draft: DraftInfo | null;
 };
 type PseudoMarkupInfo = {
   status: "unavailable" | "ready" | "queued" | "running" | "failed";
@@ -129,11 +144,17 @@ type PseudoMarkupInfo = {
   object_count: number;
   message: string | null;
   geojson: JsonObject | null;
+  can_retry: boolean;
 };
 type SceneDraft = DraftState & {
   scene: EditorScene;
   validDataFootprint: JsonObject;
   normalized: boolean;
+  baseRevision: string;
+  serverSaved: DraftSnapshot;
+  hasServerDraft: boolean;
+  serverDraftStale: boolean;
+  serverUpdatedAt: string | null;
 };
 type DraftMap = Record<string, SceneDraft>;
 type RasterFolder = { name: string; path: string };
@@ -177,6 +198,7 @@ type RebuildResult = MutationResult & {
   conflicts: RebuildChange[];
   warnings: string[];
 };
+type DraftSaveStatus = "saved" | "saving" | "unsaved" | "error";
 
 const ROLE_PROPERTY = "_mlsystem2_role";
 const CLASS_PROPERTY = "_mlsystem2_class";
@@ -229,6 +251,8 @@ export function DatasetEditorPage({
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [pseudoVisible, setPseudoVisible] = useState(false);
   const [pseudoMarkup, setPseudoMarkup] = useState<PseudoMarkupInfo | null>(null);
+  const [pseudoRequestPending, setPseudoRequestPending] = useState(false);
+  const [draftSaveStatuses, setDraftSaveStatuses] = useState<Record<string, DraftSaveStatus>>({});
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [drawInProgress, setDrawInProgress] = useState(false);
@@ -261,18 +285,31 @@ export function DatasetEditorPage({
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const sceneLoadRequestRef = useRef(0);
   const pseudoLoadRequestRef = useRef(0);
+  const pseudoCacheRef = useRef<Map<string, PseudoMarkupInfo>>(new Map());
+  const draftSaveTimersRef = useRef<Map<string, number>>(new Map());
+  const draftSaveInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const datasetKeyRef = useRef(datasetKey);
+  datasetKeyRef.current = datasetKey;
 
   const selectedDataset = useMemo(
     () => datasets.find((item) => item.key === datasetKey) || null,
     [datasetKey, datasets],
   );
-  const hasDirtyDrafts = useMemo(
-    () => Object.values(drafts).some(draftChanged),
-    [drafts],
-  );
-  const dirtyDraftCount = useMemo(
-    () => Object.values(drafts).filter(draftChanged).length,
-    [drafts],
+  const draftSceneNames = useMemo(() => new Set([
+    ...scenes.filter((scene) => scene.draft).map((scene) => scene.annotation_name),
+    ...Object.values(drafts)
+      .filter((draft) => draftChanged(draft) || draft.hasServerDraft)
+      .map((draft) => draft.scene.annotation_name),
+  ]), [drafts, scenes]);
+  const hasDirtyDrafts = draftSceneNames.size > 0;
+  const dirtyDraftCount = draftSceneNames.size;
+  const hasUnsavedLocalDrafts = useMemo(
+    () => Object.values(drafts).some(
+      (draft) => !snapshotsEqual(draft.current, draft.serverSaved),
+    ) || Object.values(draftSaveStatuses).some((status) =>
+      status === "saving" || status === "unsaved" || status === "error"
+    ),
+    [draftSaveStatuses, drafts],
   );
   const sortedScenes = useMemo(
     () => sortEditorScenes(scenes, drafts, sortDirection),
@@ -287,6 +324,21 @@ export function DatasetEditorPage({
     () => activeDraft ? featureClassCounts(activeDraft.current.geojson) : {},
     [activeDraft],
   );
+  const activePseudoCacheKey = useMemo(
+    () => pseudoCacheKey(
+      datasetKey,
+      annotationName,
+      selectedDataset?.primary_training_result_id || "none",
+    ),
+    [annotationName, datasetKey, selectedDataset?.primary_training_result_id],
+  );
+  const activeDraftSaveStatus: DraftSaveStatus | undefined = annotationName
+    ? draftSaveStatuses[annotationName] || (
+        activeDraft && !snapshotsEqual(activeDraft.current, activeDraft.serverSaved)
+          ? "unsaved"
+          : "saved"
+      )
+    : undefined;
 
   const changeDrafts = useCallback((updater: (current: DraftMap) => DraftMap) => {
     const next = updater(draftsRef.current);
@@ -306,8 +358,11 @@ export function DatasetEditorPage({
   );
 
   const resetDrafts = useCallback(() => {
+    draftSaveTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    draftSaveTimersRef.current.clear();
     draftsRef.current = {};
     setDrafts({});
+    setDraftSaveStatuses({});
   }, []);
 
   useEffect(() => {
@@ -319,13 +374,13 @@ export function DatasetEditorPage({
   }, [annotationName]);
 
   useEffect(() => {
-    dirtyRef.current = hasDirtyDrafts;
-  }, [hasDirtyDrafts]);
+    dirtyRef.current = hasUnsavedLocalDrafts;
+  }, [hasUnsavedLocalDrafts]);
 
   useEffect(() => {
     const guard = () =>
       !dirtyRef.current ||
-      window.confirm("Есть неопубликованные изменения. Покинуть редактор и потерять черновики?");
+      window.confirm("Последние изменения ещё не сохранены на сервере. Покинуть редактор?");
     registerRouteGuard(guard);
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirtyRef.current) return;
@@ -432,6 +487,7 @@ export function DatasetEditorPage({
           scene: cached.scene,
           geojson: cached.current.geojson,
           valid_data_footprint: cached.validDataFootprint,
+          draft: null,
         });
         return;
       }
@@ -441,20 +497,35 @@ export function DatasetEditorPage({
         ),
       );
       if (!payload || requestId !== sceneLoadRequestRef.current) return;
-      const initial = { geojson: payload.geojson, newFeatureIndexes: [] };
-      changeDrafts((current) => ({
-        ...current,
+      const baseline = { geojson: payload.geojson, newFeatureIndexes: [] };
+      const draftSnapshot = payload.draft
+        ? {
+            geojson: payload.draft.geojson,
+            newFeatureIndexes: draftNewFeatureIndexes(payload.geojson, payload.draft.geojson),
+          }
+        : baseline;
+      const scene = {
+        ...payload.scene,
+        draft: payload.draft ? draftSummary(payload.draft) : payload.scene.draft || null,
+      };
+      changeDrafts((existing) => ({
+        ...existing,
         [name]: {
-          scene: payload.scene,
+          scene,
           validDataFootprint: payload.valid_data_footprint,
-          baseline: cloneSnapshot(initial),
-          current: cloneSnapshot(initial),
+          baseline: cloneSnapshot(baseline),
+          current: cloneSnapshot(draftSnapshot),
+          serverSaved: cloneSnapshot(draftSnapshot),
+          baseRevision: payload.draft?.base_revision || payload.scene.revision,
+          hasServerDraft: Boolean(payload.draft),
+          serverDraftStale: Boolean(payload.draft?.stale),
+          serverUpdatedAt: payload.draft?.updated_at || null,
           history: [],
-          normalized: false,
+          normalized: Boolean(payload.draft),
         },
       }));
       setEditMode("select");
-      setDetail(payload);
+      setDetail({ ...payload, scene });
     },
     [changeDrafts, run],
   );
@@ -463,26 +534,238 @@ export function DatasetEditorPage({
     void loadScene(datasetKey, annotationName);
   }, [annotationName, datasetKey, loadScene]);
 
+  const saveDraftNow = useCallback((name: string): Promise<boolean> => {
+    const key = datasetKey;
+    const operationKey = `${key}\u0000${name}`;
+    const existing = draftSaveInFlightRef.current.get(operationKey);
+    if (existing) return existing;
+    const operation = (async () => {
+      const draft = draftsRef.current[name];
+      if (
+        !key ||
+        !draft ||
+        snapshotsEqual(draft.current, draft.serverSaved)
+      ) return true;
+
+      if (!draftChanged(draft)) {
+        setDraftSaveStatuses((current) => ({ ...current, [name]: "saving" }));
+        try {
+          await apiJson<{ deleted_count: number }>(
+            `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/${encodeURIComponent(name)}`,
+            { method: "DELETE" },
+          );
+          if (datasetKeyRef.current !== key) return true;
+          changeDrafts((current) => {
+            const currentDraft = current[name];
+            if (!currentDraft) return current;
+            const hasNewerChanges = !snapshotsEqual(currentDraft.current, draft.current);
+            return {
+              ...current,
+              [name]: {
+                ...currentDraft,
+                scene: { ...currentDraft.scene, draft: null },
+                serverSaved: cloneSnapshot(draft.baseline),
+                hasServerDraft: false,
+                serverDraftStale: false,
+                serverUpdatedAt: null,
+                current: hasNewerChanges
+                  ? currentDraft.current
+                  : cloneSnapshot(draft.baseline),
+              },
+            };
+          });
+          setScenes((current) => current.map((scene) =>
+            scene.annotation_name === name ? { ...scene, draft: null } : scene
+          ));
+          const latest = draftsRef.current[name];
+          setDraftSaveStatuses((current) => ({
+            ...current,
+            [name]: latest && !snapshotsEqual(latest.current, latest.serverSaved)
+              ? "unsaved"
+              : "saved",
+          }));
+          return true;
+        } catch {
+          if (datasetKeyRef.current === key) {
+            setDraftSaveStatuses((current) => ({ ...current, [name]: "error" }));
+          }
+          return false;
+        }
+      }
+
+      const sent = cloneSnapshot(draft.current);
+      setDraftSaveStatuses((current) => ({ ...current, [name]: "saving" }));
+      try {
+        const saved = await apiJson<DraftInfo>(
+          `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/${encodeURIComponent(name)}`,
+          {
+            method: "PUT",
+            body: {
+              base_revision: draft.baseRevision,
+              geojson: sent.geojson,
+            },
+          },
+        );
+        if (datasetKeyRef.current !== key) return true;
+        const latest = draftsRef.current[name];
+        const hasNewerChanges = Boolean(latest && !snapshotsEqual(latest.current, sent));
+        const savedSnapshot = {
+          geojson: saved.geojson,
+          newFeatureIndexes: [...sent.newFeatureIndexes],
+        };
+        changeDrafts((current) => {
+          const currentDraft = current[name];
+          if (!currentDraft) return current;
+          const summary = draftSummary(saved);
+          return {
+            ...current,
+            [name]: {
+              ...currentDraft,
+              scene: { ...currentDraft.scene, draft: summary },
+              current: hasNewerChanges
+                ? currentDraft.current
+                : cloneSnapshot(savedSnapshot),
+              serverSaved: cloneSnapshot(savedSnapshot),
+              baseRevision: saved.base_revision,
+              hasServerDraft: true,
+              serverDraftStale: saved.stale,
+              serverUpdatedAt: saved.updated_at,
+              normalized: true,
+            },
+          };
+        });
+        setScenes((current) => current.map((scene) =>
+          scene.annotation_name === name
+            ? { ...scene, draft: draftSummary(saved) }
+            : scene
+        ));
+        setDraftSaveStatuses((current) => ({
+          ...current,
+          [name]: hasNewerChanges ? "unsaved" : "saved",
+        }));
+        return true;
+      } catch {
+        if (datasetKeyRef.current === key) {
+          setDraftSaveStatuses((current) => ({ ...current, [name]: "error" }));
+        }
+        return false;
+      }
+    })();
+    draftSaveInFlightRef.current.set(operationKey, operation);
+    void operation.finally(() => {
+      if (draftSaveInFlightRef.current.get(operationKey) === operation) {
+        draftSaveInFlightRef.current.delete(operationKey);
+        const latest = draftsRef.current[name];
+        if (
+          datasetKeyRef.current === key &&
+          latest &&
+          !snapshotsEqual(latest.current, latest.serverSaved) &&
+          !draftSaveTimersRef.current.has(name)
+        ) {
+          const timer = window.setTimeout(() => {
+            draftSaveTimersRef.current.delete(name);
+            void saveDraftNow(name);
+          }, 1000);
+          draftSaveTimersRef.current.set(name, timer);
+        }
+      }
+    });
+    return operation;
+  }, [changeDrafts, datasetKey]);
+
+  useEffect(() => {
+    const nextStatuses: Record<string, DraftSaveStatus> = {};
+    for (const [name, draft] of Object.entries(drafts)) {
+      if (snapshotsEqual(draft.current, draft.serverSaved)) continue;
+      nextStatuses[name] = "unsaved";
+      if (
+        draftSaveTimersRef.current.has(name) ||
+        draftSaveInFlightRef.current.has(`${datasetKey}\u0000${name}`)
+      ) continue;
+      const timer = window.setTimeout(() => {
+        draftSaveTimersRef.current.delete(name);
+        void saveDraftNow(name);
+      }, 1000);
+      draftSaveTimersRef.current.set(name, timer);
+    }
+    if (Object.keys(nextStatuses).length) {
+      setDraftSaveStatuses((current) => {
+        const updated = { ...current };
+        for (const [name, status] of Object.entries(nextStatuses)) {
+          if (updated[name] !== "saving" && updated[name] !== "error") {
+            updated[name] = status;
+          }
+        }
+        return updated;
+      });
+    }
+    setDraftSaveStatuses((current) => {
+      const updated = { ...current };
+      let changed = false;
+      for (const [name, status] of Object.entries(updated)) {
+        const draft = drafts[name];
+        if (!draft) {
+          delete updated[name];
+          changed = true;
+        } else if (
+          status !== "saving" &&
+          snapshotsEqual(draft.current, draft.serverSaved) &&
+          status !== "saved"
+        ) {
+          updated[name] = "saved";
+          changed = true;
+        }
+      }
+      return changed ? updated : current;
+    });
+  }, [drafts, saveDraftNow]);
+
+  useEffect(() => () => {
+    draftSaveTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    draftSaveTimersRef.current.clear();
+  }, []);
+
+  const flushDrafts = useCallback(async (): Promise<boolean> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const names = Object.entries(draftsRef.current)
+        .filter(([, draft]) => !snapshotsEqual(draft.current, draft.serverSaved))
+        .map(([name]) => name);
+      if (!names.length) return true;
+      names.forEach((name) => {
+        const timer = draftSaveTimersRef.current.get(name);
+        if (timer !== undefined) window.clearTimeout(timer);
+        draftSaveTimersRef.current.delete(name);
+      });
+      const results = await Promise.all(names.map(saveDraftNow));
+      if (results.some((value) => !value)) return false;
+    }
+    return false;
+  }, [saveDraftNow]);
+
   useEffect(() => {
     pseudoLoadRequestRef.current += 1;
     setPseudoVisible(false);
-    setPseudoMarkup(null);
-  }, [annotationName, datasetKey]);
+    setPseudoRequestPending(false);
+    setPseudoMarkup(pseudoCacheRef.current.get(activePseudoCacheKey) || null);
+  }, [activePseudoCacheKey]);
 
   const loadPseudoMarkup = useCallback(
-    async (ensure: boolean) => {
+    async (ensure: boolean, retry = false) => {
       if (!datasetKey || !annotationName) return;
       const requestId = ++pseudoLoadRequestRef.current;
-      const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup`;
+      const cacheKey = activePseudoCacheKey;
+      const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup${retry ? "?retry=true" : ""}`;
+      setPseudoRequestPending(true);
       try {
         const payload = await apiJson<PseudoMarkupInfo>(
           path,
           ensure ? { method: "POST" } : undefined,
         );
+        pseudoCacheRef.current.set(cacheKey, payload);
         if (requestId === pseudoLoadRequestRef.current) setPseudoMarkup(payload);
       } catch (error) {
         if (requestId !== pseudoLoadRequestRef.current) return;
-        setPseudoMarkup({
+        const failed: PseudoMarkupInfo = {
           status: "failed",
           source: null,
           training_result_id: null,
@@ -493,20 +776,43 @@ export function DatasetEditorPage({
           object_count: 0,
           message: error instanceof Error ? error.message : "Не удалось получить псевдоразметку.",
           geojson: null,
-        });
+          can_retry: true,
+        };
+        pseudoCacheRef.current.set(cacheKey, failed);
+        setPseudoMarkup(failed);
+      } finally {
+        if (requestId === pseudoLoadRequestRef.current) setPseudoRequestPending(false);
       }
     },
-    [annotationName, datasetKey],
+    [activePseudoCacheKey, annotationName, datasetKey],
   );
+
+  const pollPseudoMarkup = useCallback(async (jobId: string) => {
+    const requestId = pseudoLoadRequestRef.current;
+    const cacheKey = activePseudoCacheKey;
+    try {
+      const payload = await apiJson<PseudoMarkupInfo>(
+        `/dataset-editor/pseudo-markup/${encodeURIComponent(jobId)}`,
+      );
+      pseudoCacheRef.current.set(cacheKey, payload);
+      if (requestId === pseudoLoadRequestRef.current) setPseudoMarkup(payload);
+    } catch {
+      // Временная ошибка polling не должна создавать новое задание или стирать готовый кеш.
+    }
+  }, [activePseudoCacheKey]);
 
   useEffect(() => {
     if (
       !pseudoVisible ||
-      (pseudoMarkup?.status !== "queued" && pseudoMarkup?.status !== "running")
+      !pseudoMarkup?.job_id ||
+      (pseudoMarkup.status !== "queued" && pseudoMarkup.status !== "running")
     ) return;
-    const timer = window.setInterval(() => void loadPseudoMarkup(false), 1500);
+    const timer = window.setInterval(
+      () => void pollPseudoMarkup(pseudoMarkup.job_id as string),
+      1500,
+    );
     return () => window.clearInterval(timer);
-  }, [loadPseudoMarkup, pseudoMarkup?.status, pseudoVisible]);
+  }, [pollPseudoMarkup, pseudoMarkup?.job_id, pseudoMarkup?.status, pseudoVisible]);
 
   const togglePseudoMarkup = () => {
     if (pseudoVisible) {
@@ -514,7 +820,7 @@ export function DatasetEditorPage({
       return;
     }
     setPseudoVisible(true);
-    if (pseudoMarkup?.status !== "ready") void loadPseudoMarkup(true);
+    if (!pseudoMarkup) void loadPseudoMarkup(true);
   };
 
   const captureActiveSnapshot = useCallback((): DraftSnapshot | null => {
@@ -674,6 +980,7 @@ export function DatasetEditorPage({
         ...current,
         baseline: cloneSnapshot(normalized),
         current: cloneSnapshot(normalized),
+        serverSaved: cloneSnapshot(normalized),
         normalized: true,
       }));
     }
@@ -748,6 +1055,7 @@ export function DatasetEditorPage({
     });
     draw.on("drawend", (event) => {
       setDrawingState(false);
+      if (event.feature.getId() === undefined) event.feature.setId(crypto.randomUUID());
       applyObjectSelection(event.feature, roleRef.current, selectedDataset);
       if (!geometryInsideFootprint(event.feature.getGeometry(), rasterFootprintRef.current)) {
         drawBefore = null;
@@ -899,7 +1207,9 @@ export function DatasetEditorPage({
   }, [publication]);
 
   const confirmDiscardDrafts = () =>
-    !dirtyRef.current || window.confirm("Отменить все неопубликованные изменения датасета?");
+    !dirtyRef.current || window.confirm(
+      "Последние изменения ещё не сохранены на сервере. Перейти и оставить их несохранёнными?",
+    );
 
   const selectClass = (event: ChangeEvent<HTMLSelectElement>) => {
     if (!confirmDiscardDrafts()) return;
@@ -1090,48 +1400,65 @@ export function DatasetEditorPage({
     setBandMenuOpen(false);
   };
 
-  const publish = async () => {
-    const items = buildPublishScenes(draftsRef.current);
-    if (!datasetKey || !items.length || drawInProgressRef.current) return;
+  const saveAllDrafts = async () => {
+    if (!datasetKey || drawInProgressRef.current) return;
+    const saved = await flushDrafts();
+    if (!saved) window.alert("Не удалось сохранить часть черновиков на сервере.");
+  };
+
+  const discardAllDrafts = async () => {
+    if (!datasetKey || !hasDirtyDrafts) return;
+    if (!window.confirm(
+      "Удалить все ваши черновики этого датасета и вернуться к опубликованной разметке MLMarkup?",
+    )) return;
     setBusy(true);
+    draftSaveTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    draftSaveTimersRef.current.clear();
+    await Promise.allSettled([...draftSaveInFlightRef.current.values()]);
+    draftSaveTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    draftSaveTimersRef.current.clear();
     const result = await run(() =>
-      apiJson<MutationResult>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes`,
-        { method: "PUT", body: { scenes: items } },
+      apiJson<{ deleted_count: number }>(
+        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/drafts`,
+        { method: "DELETE" },
       ),
     );
     setBusy(false);
     if (!result) return;
-    const updatedByName = new Map(result.scenes.map((scene) => [scene.annotation_name, scene]));
-    setScenes((current) =>
-      current.map((scene) => updatedByName.get(scene.annotation_name) || scene),
-    );
-    changeDrafts((current) => {
-      const next = { ...current };
-      for (const item of items) {
-        const draft = next[item.annotation_name];
-        const updatedScene = updatedByName.get(item.annotation_name);
-        if (!draft || !updatedScene) continue;
-        next[item.annotation_name] = {
-          ...acceptPublishedDraft(draft, updatedScene),
-          normalized: true,
-        };
-      }
-      return next;
-    });
-    const refreshedActive = draftsRef.current[activeAnnotationRef.current];
-    if (refreshedActive && updatedByName.has(refreshedActive.scene.annotation_name)) {
-      setDetail({
-        scene: refreshedActive.scene,
-        geojson: refreshedActive.current.geojson,
-        valid_data_footprint: refreshedActive.validDataFootprint,
-      });
+    const active = activeAnnotationRef.current;
+    resetDrafts();
+    setDetail(null);
+    await loadScenes(datasetKey, active);
+    if (active) await loadScene(datasetKey, active);
+  };
+
+  const publish = async () => {
+    if (!datasetKey || !hasDirtyDrafts || drawInProgressRef.current) return;
+    setBusy(true);
+    const saved = await flushDrafts();
+    if (!saved) {
+      setBusy(false);
+      window.alert("Не удалось сохранить часть черновиков. Публикация не выполнена.");
+      return;
     }
+    const result = await run(() =>
+      apiJson<MutationResult>(
+        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/drafts/publish`,
+        { method: "POST" },
+      ),
+    );
+    setBusy(false);
+    if (!result) return;
+    const active = activeAnnotationRef.current;
+    resetDrafts();
+    setDetail(null);
     setPublication({
       commit: result.commit,
       live_commit: null,
       status: result.publication_status,
     });
+    await loadScenes(datasetKey, active);
+    if (active) await loadScene(datasetKey, active);
   };
 
   const removeScene = async () => {
@@ -1198,7 +1525,7 @@ export function DatasetEditorPage({
       <header className="page-header">
         <div className="page-title">
           <h1>Редактор датасетов</h1>
-          <p>Один GeoJSON на снимок · изменения публикуются через отдельный клон MLMarkup</p>
+          <p>Один GeoJSON на снимок · черновики сохраняются на сервере и публикуются отдельно</p>
         </div>
         {publication ? (
           <span className={`badge ${publication.status === "published" ? "ok" : "running"}`}>
@@ -1280,12 +1607,43 @@ export function DatasetEditorPage({
             >
               <CloudUpload size={16} /> Опубликовать
             </button>
+            <div className="button-row dataset-editor-draft-actions">
+              <button
+                className="secondary"
+                type="button"
+                disabled={!hasUnsavedLocalDrafts || busy || drawInProgress}
+                title="Немедленно сохранить промежуточную разметку на сервере без публикации"
+                onClick={() => void saveAllDrafts()}
+              >
+                <Save size={15} /> Сохранить черновик
+              </button>
+              <button
+                className="ghost"
+                type="button"
+                disabled={!hasDirtyDrafts || busy}
+                title="Удалить ваши черновики и вернуться к опубликованной разметке MLMarkup"
+                onClick={() => void discardAllDrafts()}
+              >
+                <Undo2 size={15} /> Отменить
+              </button>
+            </div>
             <div className="dataset-editor-scene-list">
               {sortedScenes.map((scene) => {
                 const draft = drafts[scene.annotation_name];
-                const counts = sceneCounts(scene, draft);
-                const classCounts = sceneClassCounts(scene, draft);
-                const changed = Boolean(draft && draftChanged(draft));
+                const summary = scene.draft;
+                const counts = draft
+                  ? sceneCounts(scene, draft)
+                  : summary
+                    ? {
+                        total: summary.total_count,
+                        positive: summary.positive_count,
+                        hardNegative: summary.hard_negative_count,
+                      }
+                    : sceneCounts(scene, undefined);
+                const classCounts = draft
+                  ? sceneClassCounts(scene, draft)
+                  : summary?.class_counts || sceneClassCounts(scene, undefined);
+                const changed = Boolean(summary || (draft && (draftChanged(draft) || draft.hasServerDraft)));
                 const countDescription = selectedDataset?.task === "multiclass"
                   ? objectTypeChoices
                     .map((item) => `${item.name}: ${classCounts[item.slug] || 0}`)
@@ -1333,6 +1691,22 @@ export function DatasetEditorPage({
                   <span className="source-lines">
                     <strong>{activeDraft.scene.image_name}</strong>
                     <small className="muted">{activeDraft.scene.annotation_name}</small>
+                    <small className={`dataset-editor-draft-status ${activeDraftSaveStatus || "saved"}`}>
+                      {activeDraftSaveStatus === "saving"
+                        ? "Черновик сохраняется…"
+                        : activeDraftSaveStatus === "unsaved"
+                          ? "Есть несохранённые изменения"
+                          : activeDraftSaveStatus === "error"
+                            ? "Ошибка сохранения черновика"
+                            : activeDraft.hasServerDraft
+                              ? "Черновик сохранён на сервере"
+                              : "Опубликованная разметка"}
+                    </small>
+                    {activeDraft.serverDraftStale ? (
+                      <small className="dataset-editor-draft-status error">
+                        MLMarkup изменился после создания черновика. Перед публикацией потребуется обновить правки.
+                      </small>
+                    ) : null}
                   </span>
                   <div className="dataset-editor-map-actions">
                     <div className="dataset-editor-mode-toggle" role="group" aria-label="Режим редактирования">
@@ -1453,6 +1827,7 @@ export function DatasetEditorPage({
                     <button
                       className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
+                      disabled={pseudoRequestPending}
                       aria-label={pseudoVisible ? "Скрыть псевдоразметку основной сети" : "Показать псевдоразметку основной сети"}
                       aria-pressed={pseudoVisible}
                       title={pseudoVisible
@@ -1522,13 +1897,25 @@ export function DatasetEditorPage({
                   </div>
                   {pseudoVisible && pseudoMarkup ? (
                     <div className={`dataset-editor-pseudo-status ${pseudoMarkup.status}`} role="status">
-                      {pseudoMarkup.status === "ready"
-                        ? `Псевдоразметка: ${formatObjectCount(pseudoMarkup.object_count)} · ${pseudoMarkup.source === "dataset" ? "готовый результат датасета" : "инференс снимка"}`
-                        : pseudoMarkup.status === "queued"
-                          ? "Псевдоразметка: срочное задание в очереди"
-                          : pseudoMarkup.status === "running"
-                            ? `Псевдоразметка: инференс${pseudoMarkup.progress_total ? ` ${pseudoMarkup.progress_current || 0}/${pseudoMarkup.progress_total}` : ""}`
-                            : pseudoMarkup.message || "Псевдоразметка недоступна"}
+                      <span>
+                        {pseudoMarkup.status === "ready"
+                          ? `Псевдоразметка: ${formatObjectCount(pseudoMarkup.object_count)} · ${pseudoMarkup.source === "dataset" ? "готовый результат датасета" : "инференс снимка"}`
+                          : pseudoMarkup.status === "queued"
+                            ? "Псевдоразметка: срочное задание в очереди"
+                            : pseudoMarkup.status === "running"
+                              ? `Псевдоразметка: инференс${pseudoMarkup.progress_total ? ` ${pseudoMarkup.progress_current || 0}/${pseudoMarkup.progress_total}` : ""}`
+                              : pseudoMarkup.message || "Псевдоразметка недоступна"}
+                      </span>
+                      {pseudoMarkup.can_retry ? (
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={pseudoRequestPending}
+                          onClick={() => void loadPseudoMarkup(true, true)}
+                        >
+                          <RefreshCw size={14} /> Повторить
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -1672,6 +2059,46 @@ function formatObjectCount(count: number): string {
         ? "объекта"
         : "объектов";
   return `${count} ${noun}`;
+}
+
+function draftSummary(info: DraftInfo): DraftSummary {
+  return {
+    annotation_name: info.annotation_name,
+    base_revision: info.base_revision,
+    stale: info.stale,
+    total_count: info.total_count,
+    positive_count: info.positive_count,
+    hard_negative_count: info.hard_negative_count,
+    class_counts: info.class_counts,
+    updated_at: info.updated_at,
+  };
+}
+
+function draftNewFeatureIndexes(live: JsonObject, draft: JsonObject): number[] {
+  const liveFeatures = Array.isArray(live.features) ? live.features : [];
+  const knownIds = new Set(
+    liveFeatures.flatMap((feature) => {
+      if (!feature || typeof feature !== "object") return [];
+      const id = (feature as JsonObject).id;
+      return id === undefined || id === null ? [] : [JSON.stringify(id)];
+    }),
+  );
+  const draftFeatures = Array.isArray(draft.features) ? draft.features : [];
+  return draftFeatures.flatMap((feature, index) => {
+    if (!feature || typeof feature !== "object") return [];
+    const id = (feature as JsonObject).id;
+    return id !== undefined && id !== null && !knownIds.has(JSON.stringify(id))
+      ? [index]
+      : [];
+  });
+}
+
+function pseudoCacheKey(
+  datasetKey: string,
+  annotationName: string,
+  trainingResultId: string,
+): string {
+  return JSON.stringify([datasetKey, annotationName, trainingResultId]);
 }
 
 function geojsonCrs(payload: JsonObject): string {

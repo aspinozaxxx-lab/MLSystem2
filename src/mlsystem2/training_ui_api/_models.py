@@ -94,6 +94,32 @@ class DatasetRow(Base):
     )
 
 
+class DatasetEditorDraftRow(Base):
+    __tablename__ = "dataset_editor_drafts"
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_key",
+            "annotation_name",
+            "username",
+            name="uq_dataset_editor_drafts_owner_scene",
+        ),
+        Index("ix_dataset_editor_drafts_dataset_owner", "dataset_key", "username"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_key: Mapped[str] = mapped_column(String(180))
+    annotation_name: Mapped[str] = mapped_column(String(512))
+    username: Mapped[str] = mapped_column(String(180))
+    base_revision: Mapped[str] = mapped_column(String(128))
+    geojson: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
     __table_args__ = (
@@ -269,6 +295,12 @@ class JobRow(Base):
     model_name: Mapped[str] = mapped_column(String(160))
     architecture: Mapped[str] = mapped_column(String(96))
     tile_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dedup_key: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     mlflow_experiment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mlflow_experiment_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     mlflow_run_name: Mapped[str | None] = mapped_column(String(256), nullable=True)

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -26,15 +27,14 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.dataset_preparing.api import (
     load_dataset_manifest,
     per_image_annotation_name,
-    resolve_scene_images,
 )
-from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from ._config import TrainingUIAPIConfig
 from ._combined_dataset import (
@@ -44,10 +44,11 @@ from ._combined_dataset import (
     tree_revision,
 )
 from ._dataset_catalog import find_managed_dataset, list_managed_datasets
-from ._datasets import RASTER_SUFFIXES
+from ._datasets import RASTER_SUFFIXES, build_per_image_index
 from ._external_models import external_model_payload
 from ._models import (
     DatasetClassRow,
+    DatasetEditorDraftRow,
     DatasetRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -60,6 +61,9 @@ from ._test_samples import current_primary_training_result
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
+    DatasetEditorDiscardDraftsResult,
+    DatasetEditorDraftInfo,
+    DatasetEditorDraftSummary,
     DatasetEditorObjectType,
     DatasetEditorMutationResult,
     DatasetEditorPublicationInfo,
@@ -91,6 +95,8 @@ _SERVICE_AUTHOR_EMAIL = "mlsystem2-dataset-editor@localhost"
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 _URGENT_PRIORITY = "urgent"
+_EDITOR_SYNC_TTL_SECONDS = 60.0
+_EDITOR_PSEUDO_ALGORITHM_VERSION = 1
 
 
 class DatasetEditorConflict(RuntimeError):
@@ -106,7 +112,7 @@ def list_editor_datasets(
     config: TrainingUIAPIConfig,
 ) -> DatasetEditorDatasetListResponse:
     with _editor_lock(config):
-        _synchronize_editor_clone(config)
+        _synchronize_editor_clone_if_stale(config)
         result: list[DatasetEditorDatasetInfo] = []
         for dataset in list_managed_datasets(session, config, include_custom=False):
             try:
@@ -125,7 +131,17 @@ def list_editor_datasets(
                 continue
             if dataset.annotations_dir is None and not geojson_files:
                 continue
-            result.append(_editor_dataset_info(dataset, len(geojson_files)))
+            primary = current_primary_training_result(
+                session,
+                dataset.class_key or dataset.key,
+            )
+            result.append(
+                _editor_dataset_info(
+                    dataset,
+                    len(geojson_files),
+                    primary_training_result_id=(primary.id if primary is not None else None),
+                )
+            )
         result.sort(key=lambda item: (item.class_name.casefold(), item.dataset_name.casefold()))
         return DatasetEditorDatasetListResponse(datasets=result)
 
@@ -134,18 +150,29 @@ def list_editor_scenes(
     session: Session,
     config: TrainingUIAPIConfig,
     dataset_key: str,
+    *,
+    username: str,
 ) -> DatasetEditorSceneListResponse:
     with _editor_lock(config):
-        _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(
             session,
             config,
             dataset_key,
             allow_missing=True,
         )
-        scenes = _scene_infos(config, dataset, source_dir)
+        scenes = _attach_draft_summaries(
+            session,
+            dataset,
+            _scene_infos(config, dataset, source_dir),
+            username,
+        )
+        primary = current_primary_training_result(session, dataset.class_key or dataset.key)
         return DatasetEditorSceneListResponse(
-            dataset=_editor_dataset_info(dataset, len(scenes)),
+            dataset=_editor_dataset_info(
+                dataset,
+                len(scenes),
+                primary_training_result_id=(primary.id if primary is not None else None),
+            ),
             scenes=scenes,
         )
 
@@ -155,19 +182,124 @@ def editor_scene_detail(
     config: TrainingUIAPIConfig,
     dataset_key: str,
     annotation_name: str,
+    *,
+    username: str,
 ) -> DatasetEditorSceneDetail:
     with _editor_lock(config):
-        _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         annotation_path = _annotation_path(source_dir, annotation_name)
         image_path = _matched_image_path(dataset, source_dir, annotation_name)
         footprint = _valid_data_footprint(image_path)
+        draft_row = _editor_draft_row(
+            session,
+            dataset.key,
+            scene.annotation_name,
+            username,
+        )
         return DatasetEditorSceneDetail(
             scene=scene,
             geojson=_clip_geojson_to_footprint(_read_geojson(annotation_path), footprint),
             valid_data_footprint=dict(mapping(footprint)),
+            draft=(
+                _draft_info(draft_row, dataset, scene.revision)
+                if draft_row is not None
+                else None
+            ),
         )
+
+
+def save_editor_draft(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    annotation_name: str,
+    *,
+    base_revision: str,
+    geojson: dict[str, Any],
+    username: str,
+) -> DatasetEditorDraftInfo:
+    """Сохранить проверенный черновик в БД без Git-коммита и инференса."""
+
+    with _editor_lock(config):
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+        annotation_path = _annotation_path(source_dir, scene.annotation_name)
+        image_path = _matched_image_path(dataset, source_dir, scene.annotation_name)
+        previous_payload = _read_geojson(annotation_path)
+        normalized_geojson = _normalize_editor_geojson(geojson, previous_payload, dataset)
+        _validate_editor_geojson(normalized_geojson, image_path, dataset)
+        _validate_preserved_properties(previous_payload, normalized_geojson)
+        row = _editor_draft_row(session, dataset.key, scene.annotation_name, username)
+        if row is None:
+            created_at = datetime.now(timezone.utc)
+            row = DatasetEditorDraftRow(
+                dataset_key=dataset.key,
+                annotation_name=scene.annotation_name,
+                username=username,
+                base_revision=base_revision,
+                geojson=normalized_geojson,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            session.add(row)
+        else:
+            row.base_revision = base_revision
+            row.geojson = normalized_geojson
+            row.updated_at = datetime.now(timezone.utc)
+        session.flush()
+        return _draft_info(row, dataset, scene.revision)
+
+
+def discard_editor_drafts(
+    session: Session,
+    dataset_key: str,
+    *,
+    username: str,
+    annotation_name: str | None = None,
+) -> DatasetEditorDiscardDraftsResult:
+    conditions = [
+        DatasetEditorDraftRow.dataset_key == dataset_key,
+        DatasetEditorDraftRow.username == username,
+    ]
+    if annotation_name is not None:
+        conditions.append(
+            DatasetEditorDraftRow.annotation_name == _safe_annotation_name(annotation_name)
+        )
+    rows = session.scalars(select(DatasetEditorDraftRow).where(*conditions)).all()
+    for row in rows:
+        session.delete(row)
+    session.flush()
+    return DatasetEditorDiscardDraftsResult(deleted_count=len(rows))
+
+
+def publish_editor_drafts(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    username: str,
+) -> DatasetEditorMutationResult:
+    rows = session.scalars(
+        select(DatasetEditorDraftRow)
+        .where(
+            DatasetEditorDraftRow.dataset_key == dataset_key,
+            DatasetEditorDraftRow.username == username,
+        )
+        .order_by(DatasetEditorDraftRow.annotation_name)
+    ).all()
+    if not rows:
+        raise TrainingUIAPIError("Нет сохранённых черновиков для публикации")
+    return publish_editor_scenes(
+        session,
+        config,
+        dataset_key,
+        scenes=[
+            (row.annotation_name, row.base_revision, dict(row.geojson))
+            for row in rows
+        ],
+        username=username,
+    )
 
 
 def editor_scene_pseudo_markup(
@@ -177,11 +309,11 @@ def editor_scene_pseudo_markup(
     annotation_name: str,
     *,
     ensure: bool,
+    retry: bool = False,
 ) -> DatasetEditorPseudoMarkupInfo:
     """Вернуть готовый фрагмент или идемпотентно поставить срочный инференс TIFF."""
 
     with _editor_lock(config):
-        _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         image_path = _matched_image_path(dataset, source_dir, annotation_name).resolve()
@@ -220,54 +352,21 @@ def editor_scene_pseudo_markup(
         )
 
     raster_revision = _raster_revision(image_path)
-    job = _latest_editor_pseudo_job(
-        session,
-        dataset.key,
-        scene.annotation_name,
-        primary.id,
-        raster_revision,
-    )
-    if job is not None:
-        state = _editor_pseudo_state(job)
-        ready_file = _editor_pseudo_result_file(session, state)
-        if job.status == JobStatus.COMPLETED.value and ready_file is not None:
-            payload = _pseudo_geojson_for_image(Path(ready_file.path), image_path)
-            return DatasetEditorPseudoMarkupInfo(
-                status="ready",
-                source="scene",
-                training_result_id=primary.id,
-                model_name=primary.model_name,
-                job_id=job.id,
-                object_count=len(payload["features"]),
-                geojson=payload,
-            )
-        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
-            current, total = _editor_pseudo_progress(job)
-            return DatasetEditorPseudoMarkupInfo(
-                status="queued" if job.status == JobStatus.QUEUED.value else "running",
-                source="scene",
-                training_result_id=primary.id,
-                model_name=primary.model_name,
-                job_id=job.id,
-                progress_current=current,
-                progress_total=total,
-                message=(
-                    "Срочный инференс поставлен в очередь."
-                    if job.status == JobStatus.QUEUED.value
-                    else "Выполняется срочный инференс по снимку."
-                ),
-            )
-        if not ensure:
-            return DatasetEditorPseudoMarkupInfo(
-                status="failed",
-                source="scene",
-                training_result_id=primary.id,
-                model_name=primary.model_name,
-                job_id=job.id,
-                message=str(state.get("error") or job.error or "Инференс по снимку завершился ошибкой."),
-            )
-
     if not ensure:
+        job = _latest_editor_pseudo_job(
+            session,
+            dataset.key,
+            scene.annotation_name,
+            primary.id,
+            raster_revision,
+        )
+        if job is not None:
+            return _editor_pseudo_job_info(
+                session,
+                job,
+                image_path=image_path,
+                training_result=primary,
+            )
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
             training_result_id=primary.id,
@@ -297,6 +396,31 @@ def editor_scene_pseudo_markup(
         (source_job.config or {}).get("tile_preparation.tile_size") if source_job else None,
         768,
     )
+    inference_config_hash = _editor_pseudo_inference_config_hash(selected, tile_size)
+    dedup_key = _editor_pseudo_dedup_key(
+        dataset.key,
+        scene.annotation_name,
+        primary.id,
+        raster_revision,
+        inference_config_hash,
+    )
+    existing = session.scalar(select(JobRow).where(JobRow.dedup_key == dedup_key))
+    if existing is not None:
+        info = _editor_pseudo_job_info(
+            session,
+            existing,
+            image_path=image_path,
+            training_result=primary,
+        )
+        if info.status != "failed" or not retry:
+            return info
+        _reset_editor_pseudo_job(session, existing)
+        return _editor_pseudo_job_info(
+            session,
+            existing,
+            image_path=image_path,
+            training_result=primary,
+        )
     row = JobRow(
         type=JobType.INFERENCE.value,
         source=JobSource.MANUAL.value,
@@ -310,6 +434,7 @@ def editor_scene_pseudo_markup(
         model_name=primary.model_name,
         architecture=primary.architecture,
         tile_size=tile_size,
+        dedup_key=dedup_key,
         config={
             "operation": DATASET_EDITOR_PSEUDO_OPERATION,
             "priority": _URGENT_PRIORITY,
@@ -319,6 +444,9 @@ def editor_scene_pseudo_markup(
                 "image_relative": image_relative,
                 "images_root": str(root),
                 "raster_revision": raster_revision,
+                "image_relative_path": image_path.relative_to(root).as_posix(),
+                "inference_config_hash": inference_config_hash,
+                "algorithm_version": _EDITOR_PSEUDO_ALGORITHM_VERSION,
                 "class_id": class_key,
                 "class_name": dataset.class_name or dataset.name,
                 "training_result_id": str(primary.id),
@@ -345,8 +473,20 @@ def editor_scene_pseudo_markup(
             },
         },
     )
-    session.add(row)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        concurrent = session.scalar(select(JobRow).where(JobRow.dedup_key == dedup_key))
+        if concurrent is None:
+            raise
+        return _editor_pseudo_job_info(
+            session,
+            concurrent,
+            image_path=image_path,
+            training_result=primary,
+        )
     return DatasetEditorPseudoMarkupInfo(
         status="queued",
         source="scene",
@@ -354,6 +494,59 @@ def editor_scene_pseudo_markup(
         model_name=primary.model_name,
         job_id=row.id,
         message="Срочный инференс по снимку поставлен в начало очереди.",
+    )
+
+
+def editor_pseudo_job_info(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    job_id: uuid.UUID,
+) -> DatasetEditorPseudoMarkupInfo:
+    """Лёгкий polling задания без Git и повторного разрешения каталога снимков."""
+
+    row = session.get(JobRow, job_id)
+    if row is None or (row.config or {}).get("operation") != DATASET_EDITOR_PSEUDO_OPERATION:
+        raise TrainingUIAPIError("Задание псевдоразметки снимка не найдено")
+    state = _editor_pseudo_state(row)
+    try:
+        training_result_id = uuid.UUID(str(state.get("training_result_id")))
+    except (TypeError, ValueError) as exc:
+        raise TrainingUIAPIError("Параметры задания псевдоразметки повреждены") from exc
+    training_result = session.get(TrainingResultRow, training_result_id)
+    if training_result is None:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            job_id=row.id,
+            message="Основная сеть задания больше недоступна.",
+        )
+    current_primary = current_primary_training_result(session, str(state.get("class_id") or ""))
+    if current_primary is None or current_primary.id != training_result.id:
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=training_result.id,
+            model_name=training_result.model_name,
+            job_id=row.id,
+            message="Основная сеть класса была изменена.",
+        )
+    root = Path(str(state.get("images_root") or config.images_root)).resolve()
+    relative = PurePosixPath(str(state.get("image_relative_path") or ""))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise TrainingUIAPIError("Путь снимка в задании повреждён")
+    image_path = root.joinpath(*relative.parts).resolve()
+    _ensure_within(image_path, root, "Снимок задания выходит за пределы каталога")
+    if not image_path.is_file() or _raster_revision(image_path) != state.get("raster_revision"):
+        return DatasetEditorPseudoMarkupInfo(
+            status="unavailable",
+            training_result_id=training_result.id,
+            model_name=training_result.model_name,
+            job_id=row.id,
+            message="Снимок был изменён после запуска инференса.",
+        )
+    return _editor_pseudo_job_info(
+        session,
+        row,
+        image_path=image_path,
+        training_result=training_result,
     )
 
 
@@ -414,7 +607,7 @@ def add_editor_scenes(
     folder_path: str | None,
     username: str,
 ) -> DatasetEditorMutationResult:
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(
             session,
@@ -528,7 +721,7 @@ def publish_editor_scenes(
     if len(normalized_names) != len(set(normalized_names)):
         raise TrainingUIAPIError("Список публикации содержит повторяющиеся снимки")
 
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
@@ -600,6 +793,14 @@ def publish_editor_scenes(
         updated_scenes = {
             item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
         }
+        session.execute(
+            delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == dataset.key,
+                DatasetEditorDraftRow.username == username,
+                DatasetEditorDraftRow.annotation_name.in_([item[0] for item in prepared]),
+            )
+        )
+        session.flush()
         return DatasetEditorMutationResult(
             commit=commit,
             publication_status=_publication_status(config, commit),
@@ -616,7 +817,7 @@ def delete_editor_scene(
     revision: str,
     username: str,
 ) -> DatasetEditorMutationResult:
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         annotation_path = _annotation_path(source_dir, annotation_name)
@@ -641,6 +842,13 @@ def delete_editor_scene(
                 relative_path.as_posix(),
             )
             raise
+        session.execute(
+            delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == dataset.key,
+                DatasetEditorDraftRow.annotation_name == annotation_name,
+            )
+        )
+        session.flush()
         return DatasetEditorMutationResult(
             commit=commit,
             publication_status=_publication_status(config, commit),
@@ -658,7 +866,7 @@ def delete_editor_dataset(
         select(JobRow.id)
         .where(
             JobRow.dataset_key == dataset_key,
-            JobRow.status.in_(("queued", "running")),
+            JobRow.status.in_(("queued", "running", "paused")),
         )
         .limit(1)
     )
@@ -667,7 +875,7 @@ def delete_editor_dataset(
             "Перед удалением датасета завершите или удалите его активные задания."
         )
 
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset = _managed_editor_dataset(session, config, dataset_key)
         row = session.scalar(
@@ -734,6 +942,11 @@ def delete_editor_dataset(
         row.deleted_at = datetime.now(timezone.utc)
         row.config_revision += 1
         row.legacy_version = False
+        session.execute(
+            delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == dataset_key
+            )
+        )
         session.flush()
         return DatasetEditorMutationResult(
             commit=commit,
@@ -747,7 +960,7 @@ def editor_publication_info(
 ) -> DatasetEditorPublicationInfo:
     if _SHA_PATTERN.fullmatch(commit) is None:
         raise TrainingUIAPIError("Некорректный SHA коммита")
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _fetch_editor_clone(config)
         live_commit = _live_commit(config)
         status = "publishing"
@@ -773,7 +986,7 @@ def preview_editor_dataset_rebuild(
     config: TrainingUIAPIConfig,
     dataset_key: str,
 ) -> DatasetEditorRebuildPreview:
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         manifest = load_dataset_manifest(source_dir)
@@ -864,7 +1077,7 @@ def rebuild_editor_dataset(
         raise TrainingUIAPIError("mode должен быть merge или replace")
     if not re.fullmatch(r"[0-9a-f]{32}", preview_token):
         raise DatasetEditorConflict("Некорректный или устаревший preview_token")
-    with _editor_lock(config):
+    with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         preview_path = _rebuild_preview_path(config, preview_token)
@@ -1361,6 +1574,46 @@ def _raster_revision(image_path: Path) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _editor_pseudo_inference_config_hash(selected: Any, tile_size: int) -> str:
+    payload = {
+        "algorithm_version": _EDITOR_PSEUDO_ALGORITHM_VERSION,
+        "inference_template_id": (
+            str(selected.inference_template_id)
+            if selected.inference_template_id is not None
+            else None
+        ),
+        "inference_template_config": selected.inference_template_config,
+        "checkpoint_threshold": selected.checkpoint.threshold,
+        "tile_size": tile_size,
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _editor_pseudo_dedup_key(
+    dataset_key: str,
+    annotation_name: str,
+    training_result_id: uuid.UUID,
+    raster_revision: str,
+    inference_config_hash: str,
+) -> str:
+    serialized = "\0".join(
+        (
+            dataset_key,
+            annotation_name,
+            str(training_result_id),
+            raster_revision,
+            inference_config_hash,
+        )
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def _latest_editor_pseudo_job(
     session: Session,
     dataset_key: str,
@@ -1392,6 +1645,77 @@ def _latest_editor_pseudo_job(
 def _editor_pseudo_state(row: JobRow) -> dict[str, Any]:
     state = (row.config or {}).get("editor_pseudo")
     return state if isinstance(state, dict) else {}
+
+
+def _editor_pseudo_job_info(
+    session: Session,
+    row: JobRow,
+    *,
+    image_path: Path,
+    training_result: TrainingResultRow,
+) -> DatasetEditorPseudoMarkupInfo:
+    state = _editor_pseudo_state(row)
+    ready_file = _editor_pseudo_result_file(session, state)
+    if row.status == JobStatus.COMPLETED.value and ready_file is not None:
+        payload = _pseudo_geojson_for_image(Path(ready_file.path), image_path)
+        return DatasetEditorPseudoMarkupInfo(
+            status="ready",
+            source="scene",
+            training_result_id=training_result.id,
+            model_name=training_result.model_name,
+            job_id=row.id,
+            object_count=len(payload["features"]),
+            geojson=payload,
+        )
+    if row.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+        current, total = _editor_pseudo_progress(row)
+        return DatasetEditorPseudoMarkupInfo(
+            status="queued" if row.status == JobStatus.QUEUED.value else "running",
+            source="scene",
+            training_result_id=training_result.id,
+            model_name=training_result.model_name,
+            job_id=row.id,
+            progress_current=current,
+            progress_total=total,
+            message=(
+                "Срочный инференс поставлен в очередь."
+                if row.status == JobStatus.QUEUED.value
+                else "Выполняется срочный инференс по снимку."
+            ),
+        )
+    return DatasetEditorPseudoMarkupInfo(
+        status="failed",
+        source="scene",
+        training_result_id=training_result.id,
+        model_name=training_result.model_name,
+        job_id=row.id,
+        message=str(
+            state.get("error")
+            or row.error
+            or "Инференс по снимку завершился ошибкой."
+        ),
+        can_retry=True,
+    )
+
+
+def _reset_editor_pseudo_job(session: Session, row: JobRow) -> None:
+    state = dict(_editor_pseudo_state(row))
+    state["result_file_id"] = None
+    state["error"] = None
+    row.config = {**(row.config or {}), "editor_pseudo": state}
+    row.status = JobStatus.QUEUED.value
+    row.queue_position = next_queue_position(
+        session,
+        JobType.INFERENCE,
+        JobSource.MANUAL,
+    )
+    row.process_pid = None
+    row.tmp_path = None
+    row.error = None
+    row.started_at = None
+    row.finished_at = None
+    row.created_at = datetime.now(timezone.utc)
+    session.flush()
 
 
 def _editor_pseudo_result_file(
@@ -1482,7 +1806,12 @@ def _editor_source_dir(config: TrainingUIAPIConfig, dataset: DatasetInfo) -> Pat
     return target
 
 
-def _editor_dataset_info(dataset: DatasetInfo, scene_count: int) -> DatasetEditorDatasetInfo:
+def _editor_dataset_info(
+    dataset: DatasetInfo,
+    scene_count: int,
+    *,
+    primary_training_result_id: uuid.UUID | None = None,
+) -> DatasetEditorDatasetInfo:
     if dataset.imagery_type is None:
         raise TrainingUIAPIError("У датасета не задан тип снимков")
     return DatasetEditorDatasetInfo(
@@ -1509,6 +1838,7 @@ def _editor_dataset_info(dataset: DatasetInfo, scene_count: int) -> DatasetEdito
         source_changes=list(dataset.source_changes),
         class_counts=dict(dataset.class_counts),
         hard_negative_count=dataset.hard_negative_count,
+        primary_training_result_id=primary_training_result_id,
     )
 
 
@@ -1519,55 +1849,62 @@ def _scene_infos(
 ) -> list[DatasetEditorSceneInfo]:
     if not source_dir.is_dir():
         return []
-    resolution = resolve_scene_images(
-        SceneImageResolutionRequest(
-            images_dir=str(_dataset_images_root(dataset)),
-            annotations_dir=str(source_dir),
-        )
-    )
-    if resolution.missing_scenes:
-        raise TrainingUIAPIError(
-            "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
-        )
-    if resolution.ambiguous_scenes:
-        raise TrainingUIAPIError(
-            "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
-            + ", ".join(sorted(resolution.ambiguous_scenes))
-        )
-    root = _dataset_images_root(dataset)
+    annotation_paths = _direct_files(source_dir, ".geojson")
+    revisions = _blob_revisions(config, "HEAD", _repo_relative(config, source_dir))
     result: list[DatasetEditorSceneInfo] = []
-    for item in resolution.images:
-        annotation_path = Path(item.annotation_file or "")
-        relative_annotation = _repo_relative(config, annotation_path)
-        revision = _blob_revision(config, "HEAD", relative_annotation)
+    for path in annotation_paths:
+        relative_path = _repo_relative(config, path)
+        revision = revisions.get(relative_path)
         if revision is None:
-            raise DatasetEditorGitError(
-                f"GeoJSON не зафиксирован в Git: {annotation_path.name}"
-            )
-        positive, hard_negative, class_counts = _editor_counts(
-            _read_geojson(annotation_path),
-            dataset,
-        )
-        image_path = Path(item.image_path).resolve()
-        image_relative = image_path.relative_to(root).as_posix()
+            raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {path.name}")
         result.append(
-            DatasetEditorSceneInfo(
-                scene_id=item.scene_id,
-                annotation_name=annotation_path.name,
-                image_name=image_path.name,
-                raster_url=(
-                    "/api/v1/dataset-editor/datasets/"
-                    f"{quote(dataset.key, safe='')}/raster/{quote(image_relative, safe='/')}"
-                ),
-                total_count=positive + hard_negative,
-                positive_count=positive,
-                hard_negative_count=hard_negative,
+            _scene_info_for_annotation(
+                config,
+                dataset,
+                source_dir,
+                path.name,
                 revision=revision,
-                class_counts=class_counts,
             )
         )
     result.sort(key=lambda item: item.scene_id.casefold())
     return result
+
+
+def _scene_info_for_annotation(
+    config: TrainingUIAPIConfig,
+    dataset: DatasetInfo,
+    source_dir: Path,
+    annotation_name: str,
+    *,
+    revision: str | None = None,
+) -> DatasetEditorSceneInfo:
+    annotation_path = _annotation_path(source_dir, annotation_name)
+    if revision is None:
+        relative_annotation = _repo_relative(config, annotation_path)
+        revision = _blob_revision(config, "HEAD", relative_annotation)
+    if revision is None:
+        raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {annotation_path.name}")
+    positive, hard_negative, class_counts = _editor_counts(
+        _read_geojson(annotation_path),
+        dataset,
+    )
+    root = _dataset_images_root(dataset)
+    image_path = _matched_image_path(dataset, source_dir, annotation_path.name).resolve()
+    image_relative = image_path.relative_to(root).as_posix()
+    return DatasetEditorSceneInfo(
+        scene_id=image_path.relative_to(root).with_suffix("").as_posix(),
+        annotation_name=annotation_path.name,
+        image_name=image_path.name,
+        raster_url=(
+            "/api/v1/dataset-editor/datasets/"
+            f"{quote(dataset.key, safe='')}/raster/{quote(image_relative, safe='/')}"
+        ),
+        total_count=positive + hard_negative,
+        positive_count=positive,
+        hard_negative_count=hard_negative,
+        revision=revision,
+        class_counts=class_counts,
+    )
 
 
 def _scene_by_annotation(
@@ -1577,13 +1914,9 @@ def _scene_by_annotation(
     annotation_name: str,
 ) -> DatasetEditorSceneInfo:
     safe_name = _safe_annotation_name(annotation_name)
-    scene = next(
-        (item for item in _scene_infos(config, dataset, source_dir) if item.annotation_name == safe_name),
-        None,
-    )
-    if scene is None:
+    if not (source_dir / safe_name).is_file():
         raise TrainingUIAPIError(f"Снимок датасета не найден: {safe_name}")
-    return scene
+    return _scene_info_for_annotation(config, dataset, source_dir, safe_name)
 
 
 def _matched_image_path(
@@ -1591,24 +1924,89 @@ def _matched_image_path(
     source_dir: Path,
     annotation_name: str,
 ) -> Path:
-    resolution = resolve_scene_images(
-        SceneImageResolutionRequest(
-            images_dir=str(_dataset_images_root(dataset)),
-            annotations_dir=str(source_dir),
+    safe_name = _safe_annotation_name(annotation_name)
+    if not (source_dir / safe_name).is_file():
+        raise TrainingUIAPIError(f"GeoJSON датасета не найден: {safe_name}")
+    candidates = build_per_image_index(_dataset_images_root(dataset)).get(
+        safe_name.casefold(),
+        [],
+    )
+    if not candidates:
+        raise TrainingUIAPIError(f"Для GeoJSON не найден TIFF: {safe_name}")
+    if len(candidates) > 1:
+        raise TrainingUIAPIError(f"Имя GeoJSON неоднозначно сопоставлено с TIFF: {safe_name}")
+    return candidates[0]
+
+
+def _attach_draft_summaries(
+    session: Session,
+    dataset: DatasetInfo,
+    scenes: list[DatasetEditorSceneInfo],
+    username: str,
+) -> list[DatasetEditorSceneInfo]:
+    rows = session.scalars(
+        select(DatasetEditorDraftRow).where(
+            DatasetEditorDraftRow.dataset_key == dataset.key,
+            DatasetEditorDraftRow.username == username,
+        )
+    ).all()
+    drafts = {row.annotation_name: row for row in rows}
+    return [
+        scene.model_copy(
+            update={
+                "draft": (
+                    _draft_summary(drafts[scene.annotation_name], dataset, scene.revision)
+                    if scene.annotation_name in drafts
+                    else None
+                )
+            }
+        )
+        for scene in scenes
+    ]
+
+
+def _editor_draft_row(
+    session: Session,
+    dataset_key: str,
+    annotation_name: str,
+    username: str,
+) -> DatasetEditorDraftRow | None:
+    return session.scalar(
+        select(DatasetEditorDraftRow).where(
+            DatasetEditorDraftRow.dataset_key == dataset_key,
+            DatasetEditorDraftRow.annotation_name == annotation_name,
+            DatasetEditorDraftRow.username == username,
         )
     )
-    safe_name = _safe_annotation_name(annotation_name)
-    item = next(
-        (
-            candidate
-            for candidate in resolution.images
-            if Path(candidate.annotation_file or "").name == safe_name
-        ),
-        None,
+
+
+def _draft_summary(
+    row: DatasetEditorDraftRow,
+    dataset: DatasetInfo,
+    current_revision: str,
+) -> DatasetEditorDraftSummary:
+    positive, hard_negative, class_counts = _editor_counts(dict(row.geojson), dataset)
+    return DatasetEditorDraftSummary(
+        annotation_name=row.annotation_name,
+        base_revision=row.base_revision,
+        stale=row.base_revision != current_revision,
+        total_count=positive + hard_negative,
+        positive_count=positive,
+        hard_negative_count=hard_negative,
+        class_counts=class_counts,
+        updated_at=row.updated_at,
     )
-    if item is None:
-        raise TrainingUIAPIError(f"Для GeoJSON не найден TIFF: {safe_name}")
-    return Path(item.image_path)
+
+
+def _draft_info(
+    row: DatasetEditorDraftRow,
+    dataset: DatasetInfo,
+    current_revision: str,
+) -> DatasetEditorDraftInfo:
+    return DatasetEditorDraftInfo(
+        **_draft_summary(row, dataset, current_revision).model_dump(),
+        geojson=dict(row.geojson),
+    )
 
 
 def _dataset_images_root(dataset: DatasetInfo) -> Path:
@@ -2079,7 +2477,11 @@ def _ensure_within(path: Path, root: Path, message: str) -> None:
 
 
 @contextmanager
-def _editor_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
+def _editor_lock(
+    config: TrainingUIAPIConfig,
+    *,
+    restore_ownership: bool = False,
+) -> Iterator[None]:
     lock_path = config.mlmarkup_editor_root.parent / ".mlmarkup-editor.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as stream:
@@ -2096,7 +2498,8 @@ def _editor_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
                 yield
             finally:
                 try:
-                    _restore_editor_clone_ownership(config)
+                    if restore_ownership:
+                        _restore_editor_clone_ownership(config)
                 finally:
                     stream.seek(0)
                     msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
@@ -2108,7 +2511,8 @@ def _editor_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
                 yield
             finally:
                 try:
-                    _restore_editor_clone_ownership(config)
+                    if restore_ownership:
+                        _restore_editor_clone_ownership(config)
                 finally:
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
@@ -2162,6 +2566,39 @@ def _synchronize_editor_clone(config: TrainingUIAPIConfig) -> None:
         "--ff-only",
         f"origin/{config.mlmarkup_editor_branch}",
     )
+    _mark_editor_clone_synchronized(config)
+
+
+def _synchronize_editor_clone_if_stale(config: TrainingUIAPIConfig) -> None:
+    """Обновить клон не чаще TTL; polling и чтение сцен Git не запускают."""
+
+    _ensure_editor_clone(config)
+    stamp_path = _editor_sync_stamp_path(config)
+    try:
+        age_seconds = time.time() - stamp_path.stat().st_mtime
+    except OSError:
+        age_seconds = _EDITOR_SYNC_TTL_SECONDS
+    if 0 <= age_seconds < _EDITOR_SYNC_TTL_SECONDS:
+        return
+    try:
+        _synchronize_editor_clone(config)
+    finally:
+        _restore_editor_clone_ownership(config)
+
+
+def _editor_sync_stamp_path(config: TrainingUIAPIConfig) -> Path:
+    return config.mlmarkup_editor_root.parent / ".mlmarkup-editor-sync"
+
+
+def _mark_editor_clone_synchronized(config: TrainingUIAPIConfig) -> None:
+    path = _editor_sync_stamp_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    try:
+        temporary.write_text(f"{time.time_ns()}\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _fetch_editor_clone(config: TrainingUIAPIConfig) -> None:
@@ -2287,6 +2724,31 @@ def _blob_revision(
 ) -> str | None:
     result = _git_optional(config, "rev-parse", f"{ref}:{relative_path.as_posix()}")
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _blob_revisions(
+    config: TrainingUIAPIConfig,
+    ref: str,
+    relative_directory: PurePosixPath,
+) -> dict[PurePosixPath, str]:
+    """Получить SHA всех blob каталога одним процессом Git."""
+
+    result = _git(
+        config,
+        "ls-tree",
+        "-rz",
+        ref,
+        "--",
+        relative_directory.as_posix(),
+    )
+    revisions: dict[PurePosixPath, str] = {}
+    for line in result.stdout.split("\0"):
+        header, separator, raw_path = line.partition("\t")
+        parts = header.split()
+        if not separator or len(parts) != 3 or parts[1] != "blob":
+            continue
+        revisions[PurePosixPath(raw_path)] = parts[2]
+    return revisions
 
 
 def _tree_object_revision(

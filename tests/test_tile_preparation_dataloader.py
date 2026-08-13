@@ -61,6 +61,25 @@ def test_linux_mem_available_bytes_reads_memavailable(tmp_path: Path) -> None:
     assert _linux_mem_available_bytes(str(meminfo)) == 104127980 * 1024
 
 
+def test_tile_worker_waits_for_training_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    pause_request = control_dir / "pause.request"
+    pause_request.write_text("token\n", encoding="utf-8")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_CONTROL_DIR", str(control_dir))
+
+    dataset_impl._wait_while_training_paused()
+    assert pause_request.is_file()
+
+    monkeypatch.setenv("MLSYSTEM2_TILE_WORKER", "1")
+    monkeypatch.setattr(dataset_impl.time, "sleep", lambda _seconds: pause_request.unlink())
+    dataset_impl._wait_while_training_paused()
+    assert not pause_request.exists()
+
+
 def test_available_memory_bytes_prefers_linux_memavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

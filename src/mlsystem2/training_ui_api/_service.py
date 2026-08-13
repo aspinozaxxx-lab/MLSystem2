@@ -325,11 +325,17 @@ def models() -> ModelListResponse:
 
 
 def bootstrap(session: Session, config: TrainingUIAPIConfig) -> BootstrapInfo:
+    all_datasets = list_managed_datasets(session, config)
+    managed_datasets = [item for item in all_datasets if not item.is_custom]
     return BootstrapInfo(
         links=app_links(config).links,
-        datasets=datasets(session, config).datasets,
+        datasets=all_datasets,
         image_folders=image_folders(config).folders,
-        classes=classes(session, config).classes,
+        classes=list_managed_classes(
+            session,
+            config,
+            managed_datasets=managed_datasets,
+        ),
         models=models().models,
         training_templates=training_templates(session).templates,
         inference_templates=inference_templates(session).templates,

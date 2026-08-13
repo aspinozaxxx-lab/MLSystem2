@@ -80,6 +80,10 @@ class TrainingUIAPIConfig:
     mlmarkup_editor_root: Path = Path("/data/mlsystem2/mlmarkup-editor")
     mlmarkup_release_marker: Path = Path("/data/MLMarkup/.mlsystem2-release")
     mlmarkup_editor_branch: str = "main"
+    training_torch_num_threads: int = 4
+    training_torch_num_interop_threads: int = 2
+    training_process_nice: int = 10
+    training_process_io_priority: int = 7
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -196,6 +200,22 @@ def get_config() -> TrainingUIAPIConfig:
         mlmarkup_editor_branch=os.getenv(
             "MLSYSTEM2_MLMARKUP_EDITOR_BRANCH",
             "main",
+        ),
+        training_torch_num_threads=max(
+            1,
+            _int_env("MLSYSTEM2_TRAINING_TORCH_NUM_THREADS", 4),
+        ),
+        training_torch_num_interop_threads=max(
+            1,
+            _int_env("MLSYSTEM2_TRAINING_TORCH_NUM_INTEROP_THREADS", 2),
+        ),
+        training_process_nice=min(
+            19,
+            max(0, _int_env("MLSYSTEM2_TRAINING_PROCESS_NICE", 10)),
+        ),
+        training_process_io_priority=min(
+            7,
+            max(0, _int_env("MLSYSTEM2_TRAINING_PROCESS_IO_PRIORITY", 7)),
         ),
     )
 

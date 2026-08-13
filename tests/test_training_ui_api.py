@@ -2407,6 +2407,13 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "--run" in run_script
         assert "run.yml" in run_script
         assert "MLSYSTEM2_MLFLOW_RUN_ID_FILE" in run_script
+        assert "MLSYSTEM2_TORCH_NUM_THREADS=4" in run_script
+        assert "MLSYSTEM2_TORCH_NUM_INTEROP_THREADS=2" in run_script
+        assert "OMP_NUM_THREADS=4" in run_script
+        assert "MKL_NUM_THREADS=4" in run_script
+        assert "OPENBLAS_NUM_THREADS=1" in run_script
+        assert "renice -n 10" in run_script
+        assert "ionice -c 2 -n 7" in run_script
 
     assert started
     assert started[0][0][0] == "bash"

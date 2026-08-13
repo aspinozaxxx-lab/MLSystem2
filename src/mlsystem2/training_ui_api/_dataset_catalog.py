@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 import uuid
 from pathlib import Path, PurePosixPath
 
@@ -31,6 +32,7 @@ from ._datasets import (
     _first_file,
     _image_index,
     _path_metadata,
+    build_per_image_index,
     imagery_images_dir,
     resolve_scenes_file_images,
 )
@@ -69,6 +71,8 @@ IMAGERY_NAMES = {"kanopus": "Канопус", "ortho": "Ортофото"}
 QUALITY_PIXEL = "pixel"
 QUALITY_OBJECTS = "objects"
 _SYNC_LOCK = threading.RLock()
+_SYNC_TTL_SECONDS = 60.0
+_LAST_SYNC_BY_ROOT: dict[Path, tuple[float, tuple[tuple[str, int], ...]]] = {}
 
 
 def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> None:
@@ -79,6 +83,51 @@ def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -
         _import_historical_dataset_keys(session, config)
         _import_mlmarkup_folders(session, config, preserve_legacy_keys=initial_import)
         session.flush()
+        root = Path(config.mlmarkup_root).resolve()
+        _LAST_SYNC_BY_ROOT[root] = (time.monotonic(), _catalog_tree_stamp(root))
+
+
+def _synchronize_dataset_catalog_if_stale(
+    session: Session,
+    config: TrainingUIAPIConfig,
+) -> None:
+    root = Path(config.mlmarkup_root).resolve()
+    tree_stamp = _catalog_tree_stamp(root)
+    with _SYNC_LOCK:
+        last_sync = _LAST_SYNC_BY_ROOT.get(root)
+        if (
+            last_sync is not None
+            and time.monotonic() - last_sync[0] < _SYNC_TTL_SECONDS
+            and last_sync[1] == tree_stamp
+        ):
+            return
+        synchronize_dataset_catalog(session, config)
+
+
+def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
+    """Дешёвая ревизия папок class/dataset для мгновенного сброса TTL."""
+
+    if not root.is_dir():
+        return ()
+    result: list[tuple[str, int]] = []
+    try:
+        class_dirs = [path for path in root.iterdir() if path.is_dir()]
+        for class_dir in sorted(class_dirs, key=lambda item: item.name.casefold()):
+            result.append((class_dir.name, class_dir.stat().st_mtime_ns))
+            dataset_dirs = [path for path in class_dir.iterdir() if path.is_dir()]
+            for dataset_dir in sorted(
+                dataset_dirs,
+                key=lambda item: item.name.casefold(),
+            ):
+                result.append(
+                    (
+                        f"{class_dir.name}/{dataset_dir.name}",
+                        dataset_dir.stat().st_mtime_ns,
+                    )
+                )
+    except OSError:
+        return ()
+    return tuple(result)
 
 
 def primary_training_result(
@@ -137,7 +186,7 @@ def list_managed_datasets(
     *,
     include_custom: bool = True,
 ) -> list[DatasetInfo]:
-    synchronize_dataset_catalog(session, config)
+    _synchronize_dataset_catalog_if_stale(session, config)
     rows = session.execute(
         select(DatasetRow, DatasetClassRow).join(
             DatasetClassRow,
@@ -145,8 +194,15 @@ def list_managed_datasets(
         ).where(DatasetRow.deleted_at.is_(None))
     ).all()
     image_indexes: dict[Path, dict[str, list[Path]]] = {}
+    per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
     datasets = [
-        _dataset_info(dataset, class_row, config, image_indexes=image_indexes)
+        _dataset_info(
+            dataset,
+            class_row,
+            config,
+            image_indexes=image_indexes,
+            per_image_indexes=per_image_indexes,
+        )
         for dataset, class_row in rows
     ]
     datasets.sort(
@@ -166,8 +222,13 @@ def list_managed_classes(
     config: TrainingUIAPIConfig,
     *,
     include_custom: bool = True,
+    managed_datasets: list[DatasetInfo] | None = None,
 ) -> list[ClassInfo]:
-    datasets = list_managed_datasets(session, config, include_custom=False)
+    datasets = (
+        managed_datasets
+        if managed_datasets is not None
+        else list_managed_datasets(session, config, include_custom=False)
+    )
     class_rows = session.scalars(select(DatasetClassRow)).all()
     by_class: dict[str, list[DatasetInfo]] = {}
     for dataset in datasets:
@@ -208,7 +269,7 @@ def find_managed_dataset(
 ) -> DatasetInfo | None:
     if dataset_key == CUSTOM_KEY:
         return _custom_dataset_info(config)
-    synchronize_dataset_catalog(session, config)
+    _synchronize_dataset_catalog_if_stale(session, config)
     row = session.execute(
         select(DatasetRow, DatasetClassRow)
         .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
@@ -234,7 +295,7 @@ def find_managed_class(
 
 
 def managed_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> DatasetCatalogInfo:
-    synchronize_dataset_catalog(session, config)
+    _synchronize_dataset_catalog_if_stale(session, config)
     return DatasetCatalogInfo(
         classes=list_managed_classes(session, config, include_custom=False),
         sources=_source_infos(session, config),
@@ -611,6 +672,7 @@ def _dataset_info(
     config: TrainingUIAPIConfig,
     *,
     image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
+    per_image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
 ) -> DatasetInfo:
     source_path = _resolved_source_path(config.mlmarkup_root, dataset.source_path)
     images_dir = imagery_images_dir(config.images_root, class_row.imagery_type)
@@ -689,9 +751,16 @@ def _dataset_info(
                 image_indexes[images_dir] = index
         image_count = _dataset_image_count(scenes_file, index)
     elif annotations_dir is not None and images_inside_root and images_dir.is_dir():
+        if per_image_indexes is None:
+            per_image_index = build_per_image_index(images_dir)
+        else:
+            per_image_index = per_image_indexes.get(images_dir)
+            if per_image_index is None:
+                per_image_index = build_per_image_index(images_dir)
+                per_image_indexes[images_dir] = per_image_index
         image_count = _per_image_catalog_count(
             annotations_dir,
-            images_dir,
+            per_image_index,
             diagnostics,
         )
     display_name = f"{class_row.name}\\{dataset.name}"
@@ -856,33 +925,41 @@ def _custom_dataset_info(config: TrainingUIAPIConfig) -> DatasetInfo:
 
 def _per_image_catalog_count(
     annotations_dir: Path,
-    images_dir: Path,
+    images_by_annotation: dict[str, list[Path]],
     diagnostics: list[str],
 ) -> int:
-    try:
-        resolution = resolve_scene_images(
-            SceneImageResolutionRequest(
-                images_dir=str(images_dir),
-                annotations_dir=str(annotations_dir),
-            )
-        )
-    except (OSError, ValueError) as exc:
-        diagnostics.append(f"Не удалось сопоставить per-image разметку: {exc}")
-        return 0
-    if resolution.missing_scenes:
+    annotation_files = sorted(
+        (
+            path
+            for path in annotations_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() == ".geojson"
+        ),
+        key=lambda item: item.name.casefold(),
+    )
+    missing = [
+        path.name
+        for path in annotation_files
+        if not images_by_annotation.get(path.name.casefold())
+    ]
+    ambiguous = [
+        path.name
+        for path in annotation_files
+        if len(images_by_annotation.get(path.name.casefold(), [])) > 1
+    ]
+    if missing:
         diagnostics.append(
-            "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
+            "Для GeoJSON не найдены TIFF: " + ", ".join(missing)
         )
-    if resolution.ambiguous_scenes:
+    if ambiguous:
         diagnostics.append(
             "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
-            + ", ".join(sorted(resolution.ambiguous_scenes))
+            + ", ".join(ambiguous)
         )
-    if resolution.input_scene_count == 0:
+    if not annotation_files:
         diagnostics.append(
             "Per-image датасет пуст: его можно редактировать, но нельзя использовать для обучения."
         )
-    return len(resolution.images)
+    return len(annotation_files) - len(missing) - len(ambiguous)
 
 
 def _source_infos(session: Session, config: TrainingUIAPIConfig) -> list[DatasetSourceInfo]:

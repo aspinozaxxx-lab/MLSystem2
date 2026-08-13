@@ -985,6 +985,20 @@
   font-size: 13px;
 }
 
+.dataset-editor-draft-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  margin-bottom: 9px;
+}
+
+.dataset-editor-draft-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .dataset-editor-scene-list {
   display: grid;
   gap: 4px;
@@ -1071,6 +1085,20 @@
 
 .dataset-editor-toolbar > .source-lines {
   flex: 1 1 220px;
+}
+
+.dataset-editor-draft-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.dataset-editor-draft-status.saving,
+.dataset-editor-draft-status.unsaved {
+  color: var(--warn);
+}
+
+.dataset-editor-draft-status.error {
+  color: var(--danger);
 }
 
 .dataset-editor-map-actions,
@@ -1304,6 +1332,23 @@
   color: #cffafe;
   font-size: 12px;
   backdrop-filter: blur(4px);
+}
+
+.dataset-editor-pseudo-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dataset-editor-pseudo-status span {
+  min-width: 0;
+}
+
+.dataset-editor-pseudo-status button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .dataset-editor-pseudo-status.failed,

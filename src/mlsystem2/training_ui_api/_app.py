@@ -52,10 +52,10 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         cleanup_expired_markup_exports(config, remove_incomplete=True)
         with session_factory() as session:
+            ensure_seed_templates(session)
             synchronize_dataset_catalog(session, config)
             cleanup_test_sample_storage(session, config)
             recover_test_sample_batches(session)
-            ensure_seed_templates(session)
             reconcile_test_sample_evaluations(session, config)
             reconcile_training_result_test_f1(session, config)
             session.commit()
@@ -179,3 +179,19 @@ def main() -> None:
 
     config = get_config()
     uvicorn.run("mlsystem2.training_ui_api.api:create_app", host=config.host, port=config.port, factory=True)
+
+
+def worker_main() -> None:
+    """Запустить исполнителей очередей отдельно от HTTP-процесса."""
+
+    config = get_config()
+    configure_schema(None if config.database_url.startswith("sqlite") else config.database_schema)
+    session_factory = create_session_factory(config)
+
+    async def run_workers() -> None:
+        await asyncio.gather(
+            run_queue_worker(session_factory, config),
+            run_test_sample_batch_worker(session_factory, config),
+        )
+
+    asyncio.run(run_workers())

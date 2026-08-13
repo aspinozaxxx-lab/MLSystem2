@@ -6,6 +6,7 @@ from typing import Any
 
 from ._app import create_app as _create_app
 from ._app import main as _main
+from ._app import worker_main as _worker_main
 
 
 def create_app() -> Any:
@@ -20,5 +21,9 @@ def main() -> None:
     _main()
 
 
-__all__ = ["create_app", "get_openapi_schema", "main"]
+def worker_main() -> None:
+    _worker_main()
+
+
+__all__ = ["create_app", "get_openapi_schema", "main", "worker_main"]
 

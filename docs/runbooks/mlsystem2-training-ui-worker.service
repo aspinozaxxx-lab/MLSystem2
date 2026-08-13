@@ -1,0 +1,21 @@
+[Unit]
+Description=MLSystem2 — исполнители очередей обучения и инференса
+After=network.target mlsystem2-training-ui-api.service
+Wants=mlsystem2-training-ui-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mlsystem2/repo
+EnvironmentFile=/etc/mlsystem2/training-ui-api.env
+ExecStart=/opt/mlsystem2/repo/.venv/bin/mlsystem2-training-ui-worker
+Restart=always
+RestartSec=5
+KillMode=process
+Nice=5
+CPUWeight=100
+IOWeight=100
+AllowedCPUs=4-31
+
+[Install]
+WantedBy=multi-user.target

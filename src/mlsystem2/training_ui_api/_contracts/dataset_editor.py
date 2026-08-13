@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Self
 from uuid import UUID
 
@@ -35,12 +36,32 @@ class DatasetEditorDatasetInfo(BaseModel):
     source_changes: list[str] = Field(default_factory=list)
     class_counts: dict[str, int] = Field(default_factory=dict)
     hard_negative_count: int = Field(default=0, ge=0)
+    primary_training_result_id: UUID | None = None
 
 
 class DatasetEditorDatasetListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     datasets: list[DatasetEditorDatasetInfo]
+
+
+class DatasetEditorDraftSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_name: str
+    base_revision: str
+    stale: bool = False
+    total_count: int = Field(ge=0)
+    positive_count: int = Field(ge=0)
+    hard_negative_count: int = Field(ge=0)
+    class_counts: dict[str, int] = Field(default_factory=dict)
+    updated_at: datetime
+
+
+class DatasetEditorDraftInfo(DatasetEditorDraftSummary):
+    model_config = ConfigDict(extra="forbid")
+
+    geojson: dict[str, Any]
 
 
 class DatasetEditorSceneInfo(BaseModel):
@@ -55,6 +76,7 @@ class DatasetEditorSceneInfo(BaseModel):
     hard_negative_count: int = Field(ge=0)
     revision: str
     class_counts: dict[str, int] = Field(default_factory=dict)
+    draft: DatasetEditorDraftSummary | None = None
 
 
 class DatasetEditorSceneListResponse(BaseModel):
@@ -70,6 +92,7 @@ class DatasetEditorSceneDetail(BaseModel):
     scene: DatasetEditorSceneInfo
     geojson: dict[str, Any]
     valid_data_footprint: dict[str, Any]
+    draft: DatasetEditorDraftInfo | None = None
 
 
 class DatasetEditorPseudoMarkupInfo(BaseModel):
@@ -85,6 +108,20 @@ class DatasetEditorPseudoMarkupInfo(BaseModel):
     object_count: int = Field(default=0, ge=0)
     message: str | None = None
     geojson: dict[str, Any] | None = None
+    can_retry: bool = False
+
+
+class DatasetEditorSaveDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision: str = Field(min_length=1, max_length=128)
+    geojson: dict[str, Any]
+
+
+class DatasetEditorDiscardDraftsResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted_count: int = Field(ge=0)
 
 
 class DatasetEditorRasterFolderInfo(BaseModel):
@@ -225,6 +262,9 @@ __all__ = [
     "DatasetEditorDatasetInfo",
     "DatasetEditorDatasetListResponse",
     "DatasetEditorDeleteSceneRequest",
+    "DatasetEditorDiscardDraftsResult",
+    "DatasetEditorDraftInfo",
+    "DatasetEditorDraftSummary",
     "DatasetEditorObjectType",
     "DatasetEditorMutationResult",
     "DatasetEditorPublishRequest",
@@ -240,6 +280,7 @@ __all__ = [
     "DatasetEditorRebuildRequest",
     "DatasetEditorRebuildResult",
     "DatasetEditorSaveSceneRequest",
+    "DatasetEditorSaveDraftRequest",
     "DatasetEditorSceneDetail",
     "DatasetEditorSceneInfo",
     "DatasetEditorSceneListResponse",

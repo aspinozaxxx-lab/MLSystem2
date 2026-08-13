@@ -400,6 +400,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Draft */
+        put: operations["save_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__put"];
+        post?: never;
+        /** Discard Draft */
+        delete: operations["discard_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Discard Drafts */
+        delete: operations["discard_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Drafts */
+        post: operations["publish_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup": {
         parameters: {
             query?: never;
@@ -412,6 +464,23 @@ export interface paths {
         put?: never;
         /** Ensure Scene Pseudo Markup */
         post: operations["ensure_scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dataset-editor/pseudo-markup/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pseudo Markup Job */
+        get: operations["pseudo_markup_job_api_v1_dataset_editor_pseudo_markup__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1752,6 +1821,8 @@ export interface components {
              * @default 0
              */
             hard_negative_count: number;
+            /** Primary Training Result Id */
+            primary_training_result_id?: string | null;
         };
         /** DatasetEditorDatasetListResponse */
         DatasetEditorDatasetListResponse: {
@@ -1762,6 +1833,69 @@ export interface components {
         DatasetEditorDeleteSceneRequest: {
             /** Revision */
             revision: string;
+        };
+        /** DatasetEditorDiscardDraftsResult */
+        DatasetEditorDiscardDraftsResult: {
+            /** Deleted Count */
+            deleted_count: number;
+        };
+        /** DatasetEditorDraftInfo */
+        DatasetEditorDraftInfo: {
+            /** Annotation Name */
+            annotation_name: string;
+            /** Base Revision */
+            base_revision: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Total Count */
+            total_count: number;
+            /** Positive Count */
+            positive_count: number;
+            /** Hard Negative Count */
+            hard_negative_count: number;
+            /** Class Counts */
+            class_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
+        /** DatasetEditorDraftSummary */
+        DatasetEditorDraftSummary: {
+            /** Annotation Name */
+            annotation_name: string;
+            /** Base Revision */
+            base_revision: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Total Count */
+            total_count: number;
+            /** Positive Count */
+            positive_count: number;
+            /** Hard Negative Count */
+            hard_negative_count: number;
+            /** Class Counts */
+            class_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** DatasetEditorMutationResult */
         DatasetEditorMutationResult: {
@@ -1821,6 +1955,11 @@ export interface components {
             geojson?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Can Retry
+             * @default false
+             */
+            can_retry: boolean;
         };
         /** DatasetEditorPublicationInfo */
         DatasetEditorPublicationInfo: {
@@ -1952,6 +2091,15 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /** DatasetEditorSaveDraftRequest */
+        DatasetEditorSaveDraftRequest: {
+            /** Base Revision */
+            base_revision: string;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
         /** DatasetEditorSaveSceneRequest */
         DatasetEditorSaveSceneRequest: {
             /** Revision */
@@ -1972,6 +2120,7 @@ export interface components {
             valid_data_footprint: {
                 [key: string]: unknown;
             };
+            draft?: components["schemas"]["DatasetEditorDraftInfo"] | null;
         };
         /** DatasetEditorSceneInfo */
         DatasetEditorSceneInfo: {
@@ -1995,6 +2144,7 @@ export interface components {
             class_counts?: {
                 [key: string]: number;
             };
+            draft?: components["schemas"]["DatasetEditorDraftSummary"] | null;
         };
         /** DatasetEditorSceneListResponse */
         DatasetEditorSceneListResponse: {
@@ -4477,6 +4627,136 @@ export interface operations {
             };
         };
     };
+    save_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorSaveDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorDraftInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorDiscardDraftsResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorDiscardDraftsResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_get: {
         parameters: {
             query?: never;
@@ -4511,11 +4791,44 @@ export interface operations {
     };
     ensure_scene_pseudo_markup_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__pseudo_markup_post: {
         parameters: {
-            query?: never;
+            query?: {
+                retry?: boolean;
+            };
             header?: never;
             path: {
                 dataset_key: string;
                 annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorPseudoMarkupInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pseudo_markup_job_api_v1_dataset_editor_pseudo_markup__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
             };
             cookie?: never;
         };

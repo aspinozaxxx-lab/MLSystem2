@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import threading
+import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from collections.abc import Sequence
 
 from mlsystem2.dataset_preparing.api import resolve_scene_images
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
@@ -20,6 +23,14 @@ DEFAULT_DATASET_NAME = "main"
 RASTER_SUFFIXES = (".tif", ".tiff")
 IMAGERY_FOLDERS = {"kanopus": "kanopus", "ortho": "orto"}
 IMAGERY_CHANNELS = {"kanopus": 4, "ortho": 3}
+_IMAGE_INDEX_TTL_SECONDS = 60.0
+_IMAGE_INDEX_LOCK = threading.RLock()
+_IMAGE_INDEX_CACHE: dict[
+    Path,
+    tuple[float, tuple[Path, ...], dict[str, list[Path]]],
+] = {}
+_IMAGE_TREE_STAMP_CACHE: dict[Path, tuple[tuple[str, int], ...]] = {}
+_PER_IMAGE_INDEX_CACHE: dict[Path, tuple[float, dict[str, list[Path]]]] = {}
 
 
 def list_datasets(mlmarkup_root: Path, images_root: Path | None = None) -> list[DatasetInfo]:
@@ -85,12 +96,14 @@ def list_image_folders(images_root: Path) -> list[ImageFolderInfo]:
         imagery_root = (root / folder_name).resolve()
         if not imagery_root.is_dir() or not _is_within_root(imagery_root, root):
             continue
-        directories = [imagery_root, *(item for item in imagery_root.rglob("*") if item.is_dir())]
-        for path in sorted(directories, key=lambda item: item.as_posix().casefold()):
+        counts: dict[Path, int] = {}
+        for raster_path in _cached_image_files(imagery_root):
+            counts[raster_path.parent] = counts.get(raster_path.parent, 0) + 1
+        for path in sorted(counts, key=lambda item: item.as_posix().casefold()):
             relative = path.relative_to(root)
             if any(part.startswith(".") for part in relative.parts):
                 continue
-            count = _direct_raster_count(path)
+            count = counts[path]
             if count <= 0:
                 continue
             key = relative.as_posix()
@@ -130,6 +143,27 @@ def imagery_images_dir(images_root: Path, imagery_type: str) -> Path:
 
 def build_image_index(images_root: Path) -> dict[str, list[Path]]:
     return _image_index(images_root)
+
+
+def build_per_image_index(images_root: Path) -> dict[str, list[Path]]:
+    """Сопоставить каноническое имя per-image GeoJSON с TIFF без повторного обхода дерева."""
+
+    from mlsystem2.dataset_preparing.api import per_image_annotation_name
+
+    root = Path(images_root).resolve()
+    files = _cached_image_files(root)
+    now = time.monotonic()
+    with _IMAGE_INDEX_LOCK:
+        cached = _PER_IMAGE_INDEX_CACHE.get(root)
+        if cached is not None and now - cached[0] < _IMAGE_INDEX_TTL_SECONDS:
+            return cached[1]
+        result: dict[str, list[Path]] = {}
+        for image_path in files:
+            result.setdefault(per_image_annotation_name(image_path).casefold(), []).append(
+                image_path
+            )
+        _PER_IMAGE_INDEX_CACHE[root] = (now, result)
+        return result
 
 
 def resolve_scenes_file_images(scenes_file: Path, images_root: Path) -> list[Path]:
@@ -421,14 +455,14 @@ def _dataset_image_count(scenes_file: Path | None, image_index: dict[str, list[P
 
 
 def _image_index(images_root: Path) -> dict[str, list[Path]]:
-    root = Path(images_root)
+    root = Path(images_root).resolve()
     if not root.exists() or not root.is_dir():
         return {}
-    files = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in RASTER_SUFFIXES
-    ]
+    files = _cached_image_files(root)
+    with _IMAGE_INDEX_LOCK:
+        cached = _IMAGE_INDEX_CACHE.get(root)
+        if cached is not None and cached[2]:
+            return cached[2]
     index: dict[str, list[Path]] = {}
     for path in sorted(files):
         try:
@@ -452,7 +486,56 @@ def _image_index(images_root: Path) -> dict[str, list[Path]]:
                 continue
             for key in _scene_lookup_keys(relative_parent):
                 _add_index_path(index, key, path)
+    with _IMAGE_INDEX_LOCK:
+        cached = _IMAGE_INDEX_CACHE.get(root)
+        if cached is not None and cached[1] == files:
+            _IMAGE_INDEX_CACHE[root] = (cached[0], files, index)
     return index
+
+
+def _cached_image_files(images_root: Path) -> tuple[Path, ...]:
+    root = Path(images_root).resolve()
+    if not root.is_dir():
+        return ()
+    now = time.monotonic()
+    tree_stamp = _directory_tree_stamp(root)
+    with _IMAGE_INDEX_LOCK:
+        cached = _IMAGE_INDEX_CACHE.get(root)
+        if (
+            cached is not None
+            and cached[0] > now
+            and _IMAGE_TREE_STAMP_CACHE.get(root) == tree_stamp
+        ):
+            return cached[1]
+        files = tuple(
+            sorted(
+                (
+                    path.resolve()
+                    for path in root.rglob("*")
+                    if path.is_file() and path.suffix.lower() in RASTER_SUFFIXES
+                ),
+                key=lambda item: item.as_posix().casefold(),
+            )
+        )
+        index: dict[str, list[Path]] = {}
+        _IMAGE_INDEX_CACHE[root] = (now + _IMAGE_INDEX_TTL_SECONDS, files, index)
+        _IMAGE_TREE_STAMP_CACHE[root] = tree_stamp
+        _PER_IMAGE_INDEX_CACHE.pop(root, None)
+        return files
+
+
+def _directory_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
+    """Ревизия каталогов снимков без повторного stat каждого TIFF."""
+
+    result: list[tuple[str, int]] = []
+    try:
+        for directory, directory_names, _file_names in os.walk(root):
+            directory_names.sort(key=str.casefold)
+            path = Path(directory)
+            result.append((path.relative_to(root).as_posix(), path.stat().st_mtime_ns))
+    except OSError:
+        return ()
+    return tuple(result)
 
 
 def _add_index_path(index: dict[str, list[Path]], key: str, path: Path) -> None:

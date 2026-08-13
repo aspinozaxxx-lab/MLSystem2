@@ -29,6 +29,7 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import create_session_factory
 from mlsystem2.training_ui_api._models import (
     DatasetClassRow,
+    DatasetEditorDraftRow,
     DatasetRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -295,6 +296,62 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     env.release_marker.write_text(commit + "\n", encoding="utf-8")
     published = env.client.get(f"/api/v1/dataset-editor/publication/{commit}")
     assert published.json()["status"] == "published"
+
+
+def test_dataset_editor_persists_discards_and_publishes_server_drafts(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    scene = env.client.get(scenes_url).json()["scenes"][0]
+    annotation_path = quote(scene["annotation_name"], safe="")
+    detail_url = f"{scenes_url}/{annotation_path}"
+    draft_url = (
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_path}"
+    )
+    live_before = env.live_annotation.read_bytes()
+    head_before = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    payload = deepcopy(env.client.get(detail_url).json()["geojson"])
+    payload["features"] = payload["features"][:1]
+
+    saved = env.client.put(
+        draft_url,
+        json={"base_revision": scene["revision"], "geojson": payload},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["total_count"] == 1
+    assert env.live_annotation.read_bytes() == live_before
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head_before
+    listed = env.client.get(scenes_url).json()["scenes"][0]
+    assert listed["draft"]["total_count"] == 1
+    reopened = env.client.get(detail_url).json()
+    assert reopened["draft"]["geojson"] == saved.json()["geojson"]
+    with create_session_factory(get_config())() as session:
+        assert session.scalar(select(DatasetEditorDraftRow)) is not None
+        assert not [
+            row
+            for row in session.scalars(select(JobRow)).all()
+            if (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
+        ]
+
+    discarded = env.client.delete(draft_url)
+    assert discarded.status_code == 200
+    assert discarded.json()["deleted_count"] == 1
+    assert env.client.get(detail_url).json()["draft"] is None
+
+    assert env.client.put(
+        draft_url,
+        json={"base_revision": scene["revision"], "geojson": payload},
+    ).status_code == 200
+    published = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish"
+    )
+    assert published.status_code == 200
+    assert published.json()["commit"] != head_before
+    assert env.client.get(detail_url).json()["draft"] is None
+    with create_session_factory(get_config())() as session:
+        assert session.scalar(select(DatasetEditorDraftRow)) is None
 
 
 def test_dataset_editor_publishes_multiple_scenes_atomically(
@@ -644,6 +701,16 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
         assert editor_jobs[0].config["priority"] == "urgent"
         assert editor_jobs[0].config["editor_pseudo"]["image_relative"] == "Olskij/SCN01"
         job_id = editor_jobs[0].id
+        editor_jobs[0].status = "failed"
+        editor_jobs[0].error = "тестовая ошибка"
+        session.commit()
+
+    failed = env.client.post(endpoint)
+    assert failed.json()["status"] == "failed"
+    assert failed.json()["can_retry"] is True
+    retried = env.client.post(f"{endpoint}?retry=true")
+    assert retried.json()["status"] == "queued"
+    assert retried.json()["job_id"] == str(job_id)
 
     with create_session_factory(get_config())() as session:
         _worker.dispatch_inference_queue_once(
@@ -680,6 +747,15 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
     assert ready.json()["source"] == "scene"
+    repeated_ready = env.client.post(endpoint)
+    assert repeated_ready.json()["status"] == "ready"
+    assert repeated_ready.json()["job_id"] == str(job_id)
+    lightweight = env.client.get(
+        f"/api/v1/dataset-editor/pseudo-markup/{job_id}"
+    )
+    assert lightweight.status_code == 200
+    assert lightweight.json()["status"] == "ready"
+    assert lightweight.json()["job_id"] == str(job_id)
 
 
 def _create_primary_training_result(env: _EditorEnvironment):

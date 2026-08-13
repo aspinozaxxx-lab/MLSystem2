@@ -16,21 +16,27 @@ from mlsystem2.training_ui_api._dataset_editor import (
     browse_editor_rasters,
     delete_editor_dataset,
     delete_editor_scene,
+    discard_editor_drafts,
+    editor_pseudo_job_info,
     editor_publication_info,
     editor_scene_detail,
     editor_scene_pseudo_markup,
     list_editor_datasets,
     list_editor_scenes,
+    publish_editor_drafts,
     publish_editor_scenes,
     preview_editor_dataset_rebuild,
     rebuild_editor_dataset,
     resolve_editor_raster,
     save_editor_scene,
+    save_editor_draft,
 )
 from mlsystem2.training_ui_api.contracts import (
     DatasetEditorAddScenesRequest,
     DatasetEditorDatasetListResponse,
     DatasetEditorDeleteSceneRequest,
+    DatasetEditorDiscardDraftsResult,
+    DatasetEditorDraftInfo,
     DatasetEditorMutationResult,
     DatasetEditorPublishRequest,
     DatasetEditorPublicationInfo,
@@ -40,6 +46,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorRebuildRequest,
     DatasetEditorRebuildResult,
     DatasetEditorSaveSceneRequest,
+    DatasetEditorSaveDraftRequest,
     DatasetEditorSceneDetail,
     DatasetEditorSceneListResponse,
 )
@@ -68,9 +75,15 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
     def scenes(
         dataset_key: str,
         db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
+        username: str = Depends(ctx.authenticated),
     ) -> DatasetEditorSceneListResponse:
-        return _git_call(list_editor_scenes, db, ctx.config, dataset_key)
+        return _git_call(
+            list_editor_scenes,
+            db,
+            ctx.config,
+            dataset_key,
+            username=username,
+        )
 
     @app.delete(
         "/api/v1/dataset-editor/datasets/{dataset_key}",
@@ -97,7 +110,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         dataset_key: str,
         annotation_name: str,
         db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
+        username: str = Depends(ctx.authenticated),
     ) -> DatasetEditorSceneDetail:
         return _git_call(
             editor_scene_detail,
@@ -105,6 +118,74 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             annotation_name,
+            username=username,
+        )
+
+    @app.put(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}",
+        response_model=DatasetEditorDraftInfo,
+    )
+    def save_draft(
+        dataset_key: str,
+        annotation_name: str,
+        request: DatasetEditorSaveDraftRequest,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorDraftInfo:
+        return _git_call(
+            save_editor_draft,
+            db,
+            ctx.config,
+            dataset_key,
+            annotation_name,
+            base_revision=request.base_revision,
+            geojson=request.geojson,
+            username=username,
+        )
+
+    @app.delete(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}",
+        response_model=DatasetEditorDiscardDraftsResult,
+    )
+    def discard_draft(
+        dataset_key: str,
+        annotation_name: str,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorDiscardDraftsResult:
+        return discard_editor_drafts(
+            db,
+            dataset_key,
+            username=username,
+            annotation_name=annotation_name,
+        )
+
+    @app.delete(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/drafts",
+        response_model=DatasetEditorDiscardDraftsResult,
+    )
+    def discard_drafts(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorDiscardDraftsResult:
+        return discard_editor_drafts(db, dataset_key, username=username)
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish",
+        response_model=DatasetEditorMutationResult,
+    )
+    def publish_drafts(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorMutationResult:
+        return _git_call(
+            publish_editor_drafts,
+            db,
+            ctx.config,
+            dataset_key,
+            username=username,
         )
 
     @app.get(
@@ -133,6 +214,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
     def ensure_scene_pseudo_markup(
         dataset_key: str,
         annotation_name: str,
+        retry: bool = Query(default=False),
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> DatasetEditorPseudoMarkupInfo:
@@ -143,7 +225,28 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             dataset_key,
             annotation_name,
             ensure=True,
+            retry=retry,
         )
+
+    @app.get(
+        "/api/v1/dataset-editor/pseudo-markup/{job_id}",
+        response_model=DatasetEditorPseudoMarkupInfo,
+    )
+    def pseudo_markup_job(
+        job_id: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorPseudoMarkupInfo:
+        from uuid import UUID
+
+        try:
+            parsed_job_id = UUID(job_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Задание псевдоразметки снимка не найдено",
+            ) from exc
+        return editor_pseudo_job_info(db, ctx.config, parsed_job_id)
 
     @app.get(
         "/api/v1/dataset-editor/datasets/{dataset_key}/rasters",

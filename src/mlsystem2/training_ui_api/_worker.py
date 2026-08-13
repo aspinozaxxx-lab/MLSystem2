@@ -1203,6 +1203,18 @@ def _write_run_script(
                 f"export MLSYSTEM2_MLFLOW_RUN_ID_FILE={shlex.quote(str(mlflow_run_id_path))}",
                 "export MLSYSTEM2_TRAINING_CONTROL_DIR="
                 f"{shlex.quote(str(run_dir / TRAINING_CONTROL_DIR))}",
+                f"export MLSYSTEM2_TORCH_NUM_THREADS={config.training_torch_num_threads}",
+                "export MLSYSTEM2_TORCH_NUM_INTEROP_THREADS="
+                f"{config.training_torch_num_interop_threads}",
+                f"export OMP_NUM_THREADS={config.training_torch_num_threads}",
+                f"export MKL_NUM_THREADS={config.training_torch_num_threads}",
+                "export OPENBLAS_NUM_THREADS=1",
+                "export NUMEXPR_NUM_THREADS=1",
+                "command -v renice >/dev/null 2>&1 && "
+                f"renice -n {config.training_process_nice} -p $$ >/dev/null 2>&1 || true",
+                "command -v ionice >/dev/null 2>&1 && "
+                f"ionice -c 2 -n {config.training_process_io_priority} -p $$ "
+                ">/dev/null 2>&1 || true",
                 f"{quoted_command} > {shlex.quote(str(log_path))} 2>&1",
                 "code=$?",
                 f"printf '%s\\n' \"$code\" > {shlex.quote(str(exit_code_path))}",

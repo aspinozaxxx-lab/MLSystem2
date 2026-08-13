@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,8 @@ TILE_CATEGORY_POSITIVE = "positive"
 TILE_CATEGORY_HARD_NEGATIVE = "hard_negative"
 TILE_CATEGORY_BACKGROUND = "background"
 _MAX_OPEN_RASTERS = 8
+_TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
+_PAUSE_REQUEST_FILE = "pause.request"
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +208,7 @@ class TileDataset:
         return len(self._windows)
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+        _wait_while_training_paused()
         scene_window = self._windows[index]
         dataset = self._open_dataset(scene_window.scene_index)
         tile_window = scene_window.window
@@ -914,6 +919,17 @@ def _tile_categories(
         else:
             categories.append(TILE_CATEGORY_BACKGROUND)
     return categories
+
+
+def _wait_while_training_paused() -> None:
+    """Остановить дорогое чтение тайлов, пока train loop уступил GPU срочному заданию."""
+
+    control_dir = os.getenv(_TRAINING_CONTROL_DIR_ENV)
+    if not control_dir or os.getenv("MLSYSTEM2_TILE_WORKER") != "1":
+        return
+    request_path = Path(control_dir) / _PAUSE_REQUEST_FILE
+    while request_path.is_file():
+        time.sleep(0.1)
 
 
 def _tile_category_from_supervision_mask(mask: np.ndarray) -> str:

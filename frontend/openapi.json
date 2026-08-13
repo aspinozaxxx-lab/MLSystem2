@@ -936,6 +936,188 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}": {
+      "put": {
+        "summary": "Save Draft",
+        "operationId": "save_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__put",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorSaveDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDraftInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Discard Draft",
+        "operationId": "discard_draft_api_v1_dataset_editor_datasets__dataset_key__drafts__annotation_name__delete",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDiscardDraftsResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts": {
+      "delete": {
+        "summary": "Discard Drafts",
+        "operationId": "discard_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_delete",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDiscardDraftsResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish": {
+      "post": {
+        "summary": "Publish Drafts",
+        "operationId": "publish_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_publish_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup": {
       "get": {
         "summary": "Scene Pseudo Markup",
@@ -1003,6 +1185,55 @@
             "schema": {
               "type": "string",
               "title": "Annotation Name"
+            }
+          },
+          {
+            "name": "retry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Retry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorPseudoMarkupInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-editor/pseudo-markup/{job_id}": {
+      "get": {
+        "summary": "Pseudo Markup Job",
+        "operationId": "pseudo_markup_job_api_v1_dataset_editor_pseudo_markup__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
             }
           }
         ],
@@ -4701,6 +4932,18 @@
             "minimum": 0.0,
             "title": "Hard Negative Count",
             "default": 0
+          },
+          "primary_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Training Result Id"
           }
         },
         "additionalProperties": false,
@@ -4748,6 +4991,137 @@
           "revision"
         ],
         "title": "DatasetEditorDeleteSceneRequest"
+      },
+      "DatasetEditorDiscardDraftsResult": {
+        "properties": {
+          "deleted_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Deleted Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "deleted_count"
+        ],
+        "title": "DatasetEditorDiscardDraftsResult"
+      },
+      "DatasetEditorDraftInfo": {
+        "properties": {
+          "annotation_name": {
+            "type": "string",
+            "title": "Annotation Name"
+          },
+          "base_revision": {
+            "type": "string",
+            "title": "Base Revision"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Count"
+          },
+          "positive_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Positive Count"
+          },
+          "hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hard Negative Count"
+          },
+          "class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Counts"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "annotation_name",
+          "base_revision",
+          "total_count",
+          "positive_count",
+          "hard_negative_count",
+          "updated_at",
+          "geojson"
+        ],
+        "title": "DatasetEditorDraftInfo"
+      },
+      "DatasetEditorDraftSummary": {
+        "properties": {
+          "annotation_name": {
+            "type": "string",
+            "title": "Annotation Name"
+          },
+          "base_revision": {
+            "type": "string",
+            "title": "Base Revision"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Count"
+          },
+          "positive_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Positive Count"
+          },
+          "hard_negative_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hard Negative Count"
+          },
+          "class_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Counts"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "annotation_name",
+          "base_revision",
+          "total_count",
+          "positive_count",
+          "hard_negative_count",
+          "updated_at"
+        ],
+        "title": "DatasetEditorDraftSummary"
       },
       "DatasetEditorMutationResult": {
         "properties": {
@@ -4929,6 +5303,11 @@
               }
             ],
             "title": "Geojson"
+          },
+          "can_retry": {
+            "type": "boolean",
+            "title": "Can Retry",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -5313,6 +5692,28 @@
         ],
         "title": "DatasetEditorRebuildResult"
       },
+      "DatasetEditorSaveDraftRequest": {
+        "properties": {
+          "base_revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Base Revision"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_revision",
+          "geojson"
+        ],
+        "title": "DatasetEditorSaveDraftRequest"
+      },
       "DatasetEditorSaveSceneRequest": {
         "properties": {
           "revision": {
@@ -5349,6 +5750,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Valid Data Footprint"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetEditorDraftInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -5403,6 +5814,16 @@
             },
             "type": "object",
             "title": "Class Counts"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetEditorDraftSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

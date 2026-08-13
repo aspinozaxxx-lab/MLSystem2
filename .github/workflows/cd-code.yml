@@ -81,6 +81,7 @@ jobs:
           TARGET_PATH: ${{ vars.MLSYSTEM2_DEPLOY_PATH || '/opt/mlsystem2/repo' }}
           FRONTEND_DIST_PATH: ${{ vars.MLSYSTEM2_FRONTEND_DIST_PATH || '/opt/mlsystem2/frontend' }}
           TRAINING_UI_API_SERVICE: ${{ vars.MLSYSTEM2_TRAINING_UI_API_SERVICE || 'mlsystem2-training-ui-api' }}
+          TRAINING_UI_WORKER_SERVICE: ${{ vars.MLSYSTEM2_TRAINING_UI_WORKER_SERVICE || 'mlsystem2-training-ui-worker' }}
           TRAINING_UI_HEALTH_URL: ${{ vars.MLSYSTEM2_TRAINING_UI_HEALTH_URL || 'http://127.0.0.1:8091/api/v1/health' }}
           OLD_FRONTEND_SERVICE: ${{ vars.MLSYSTEM_OLD_FRONTEND_SERVICE || '' }}
         run: |
@@ -109,4 +110,5 @@ jobs:
             ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl disable --now '${OLD_FRONTEND_SERVICE}' || true"
           fi
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl restart '${TRAINING_UI_API_SERVICE}'"
+          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "if systemctl cat '${TRAINING_UI_WORKER_SERVICE}' >/dev/null 2>&1; then systemctl restart '${TRAINING_UI_WORKER_SERVICE}'; fi"
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "for attempt in \$(seq 1 30); do curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}' && exit 0; sleep 2; done; exit 1"
