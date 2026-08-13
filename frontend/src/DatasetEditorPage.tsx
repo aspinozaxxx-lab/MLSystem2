@@ -546,6 +546,7 @@ export function DatasetEditorPage({
     let drawBefore: DraftSnapshot | null = null;
     let modifyBefore: DraftSnapshot | null = null;
     let drawCommitTimer: number | null = null;
+    let vertexSelectionTimer: number | null = null;
 
     const normalized = vectorSnapshot(
       vectorSource,
@@ -570,6 +571,15 @@ export function DatasetEditorPage({
         return;
       }
       setSelectedVertex({ feature, coordinate: [...coordinate] });
+    };
+
+    const selectCurrentModifyVertexAfterInteractions = () => {
+      // Map вызывает свои singleclick-listeners до interactions; ждём обновления точки Modify.
+      if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
+      vertexSelectionTimer = window.setTimeout(() => {
+        vertexSelectionTimer = null;
+        selectCurrentModifyVertex();
+      }, 0);
     };
 
     select.on("select", (event) => {
@@ -646,7 +656,7 @@ export function DatasetEditorPage({
     map.addInteraction(modify);
     map.addInteraction(draw);
     map.addInteraction(snap);
-    map.on("singleclick", selectCurrentModifyVertex);
+    map.on("singleclick", selectCurrentModifyVertexAfterInteractions);
     mapRef.current = map;
     vectorLayerRef.current = vectorLayer;
     rasterLayerRef.current = rasterLayer;
@@ -656,7 +666,8 @@ export function DatasetEditorPage({
 
     return () => {
       if (drawCommitTimer !== null) window.clearTimeout(drawCommitTimer);
-      map.un("singleclick", selectCurrentModifyVertex);
+      if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
+      map.un("singleclick", selectCurrentModifyVertexAfterInteractions);
       map.setTarget(undefined);
       mapRef.current = null;
       vectorSourceRef.current = null;
