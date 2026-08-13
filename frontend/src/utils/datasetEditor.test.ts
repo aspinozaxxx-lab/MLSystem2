@@ -14,6 +14,7 @@ import {
   featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
+  preventMapMiddleButtonDefault,
   publishScenes,
   sceneClassCounts,
   snapshotsEqual,
@@ -71,6 +72,18 @@ describe("черновики редактора датасетов", () => {
       0.125,
       0.1,
     ]);
+  });
+
+  it("отменяет нативное действие только для средней кнопки мыши", () => {
+    let prevented = 0;
+    const preventDefault = () => {
+      prevented += 1;
+    };
+
+    expect(preventMapMiddleButtonDefault({ button: 0, preventDefault })).toBe(false);
+    expect(prevented).toBe(0);
+    expect(preventMapMiddleButtonDefault({ button: 1, preventDefault })).toBe(true);
+    expect(prevented).toBe(1);
   });
 
   it("принимает численную погрешность на границе footprint, но отклоняет реальный выход", () => {

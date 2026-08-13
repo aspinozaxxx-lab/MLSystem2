@@ -51,6 +51,7 @@ import {
   featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
+  preventMapMiddleButtonDefault,
   publishScenes as buildPublishScenes,
   RASTER_CONTRAST,
   sceneClassCounts,
@@ -565,8 +566,9 @@ export function DatasetEditorPage({
     const middleDragPan = new DragPan({
       condition: (event) => {
         const originalEvent = event.originalEvent;
-        return originalEvent instanceof PointerEvent &&
-          (originalEvent.pointerType === "touch" || originalEvent.button === 1);
+        if (!(originalEvent instanceof PointerEvent)) return false;
+        if (originalEvent.pointerType === "touch") return true;
+        return preventMapMiddleButtonDefault(originalEvent);
       },
     });
     const snap = new Snap({ source: vectorSource });
@@ -711,6 +713,11 @@ export function DatasetEditorPage({
       interactions: defaultInteractions({ dragPan: false, shiftDragZoom: false }),
       view: rasterViewWithOverzoom(rasterSource),
     });
+    const preventMiddleButtonBrowserAction = (event: MouseEvent) => {
+      preventMapMiddleButtonDefault(event);
+    };
+    target.addEventListener("mousedown", preventMiddleButtonBrowserAction, true);
+    target.addEventListener("auxclick", preventMiddleButtonBrowserAction, true);
     map.addInteraction(middleDragPan);
     map.addInteraction(select);
     map.addInteraction(vertexBox);
@@ -729,6 +736,8 @@ export function DatasetEditorPage({
     return () => {
       if (drawCommitTimer !== null) window.clearTimeout(drawCommitTimer);
       if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
+      target.removeEventListener("mousedown", preventMiddleButtonBrowserAction, true);
+      target.removeEventListener("auxclick", preventMiddleButtonBrowserAction, true);
       map.un("singleclick", selectCurrentModifyVertexAfterInteractions);
       map.setTarget(undefined);
       mapRef.current = null;

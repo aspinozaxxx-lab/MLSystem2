@@ -9,6 +9,14 @@ export type SortDirection = "ascending" | "descending";
 export const RASTER_MAX_SCALE = 10;
 export const RASTER_CONTRAST = 0.15;
 
+export function preventMapMiddleButtonDefault(
+  event: Pick<MouseEvent, "button" | "preventDefault">,
+): boolean {
+  if (event.button !== 1) return false;
+  event.preventDefault();
+  return true;
+}
+
 export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];
