@@ -1,4 +1,6 @@
 import type Geometry from "ol/geom/Geometry";
+import type MultiPolygon from "ol/geom/MultiPolygon";
+import type Polygon from "ol/geom/Polygon";
 
 export type JsonObject = Record<string, unknown>;
 export type SortDirection = "ascending" | "descending";
@@ -34,6 +36,14 @@ export function cloneSnapshot(snapshot: DraftSnapshot): DraftSnapshot {
     geojson: JSON.parse(JSON.stringify(snapshot.geojson)) as JsonObject,
     newFeatureIndexes: [...snapshot.newFeatureIndexes],
   };
+}
+
+export function snapshotsEqual(left: DraftSnapshot, right: DraftSnapshot): boolean {
+  return (
+    canonicalJson(left.geojson) === canonicalJson(right.geojson) &&
+    left.newFeatureIndexes.length === right.newFeatureIndexes.length &&
+    left.newFeatureIndexes.every((value, index) => value === right.newFeatureIndexes[index])
+  );
 }
 
 export function extendRasterResolutions(
@@ -102,6 +112,35 @@ export function geometryInsideFootprint(
     if (deltaX * deltaX + deltaY * deltaY > tolerance * tolerance) return false;
   }
   return true;
+}
+
+export function editableVertexCoordinates(
+  geometry: Geometry | null | undefined,
+): number[][] {
+  if (!geometry) return [];
+  if (geometry.getType() === "Polygon") {
+    return polygonVertexCoordinates((geometry as Polygon).getCoordinates());
+  }
+  if (geometry.getType() === "MultiPolygon") {
+    return (geometry as MultiPolygon)
+      .getCoordinates()
+      .flatMap(polygonVertexCoordinates);
+  }
+  return [];
+}
+
+function polygonVertexCoordinates(polygons: number[][][]): number[][] {
+  return polygons.flatMap((ring) => {
+    if (ring.length < 2) return ring.map((coordinate) => [...coordinate]);
+    const first = ring[0];
+    const last = ring.at(-1);
+    const isClosed = Boolean(
+      last &&
+      first.length === last.length &&
+      first.every((value, index) => value === last[index]),
+    );
+    return (isClosed ? ring.slice(0, -1) : ring).map((coordinate) => [...coordinate]);
+  });
 }
 
 export function featureCounts(geojson: JsonObject): {

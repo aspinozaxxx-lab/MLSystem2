@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
+import MultiPolygon from "ol/geom/MultiPolygon";
 import Polygon from "ol/geom/Polygon";
 
 import {
   acceptPublishedDraft,
   appendHistory,
   draftChanged,
+  editableVertexCoordinates,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
   publishScenes,
   sceneClassCounts,
+  snapshotsEqual,
   sortEditorScenes,
   undoDraft,
   type DraftSnapshot,
@@ -99,6 +102,23 @@ describe("черновики редактора датасетов", () => {
     expect(geometryInsideFootprint(outsideGeometry, footprint)).toBe(false);
   });
 
+  it("возвращает все редактируемые вершины без замыкающих дублей", () => {
+    const polygon = new Polygon([
+      [[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]],
+      [[1, 1], [2, 1], [1, 2], [1, 1]],
+    ]);
+    const multipolygon = new MultiPolygon([
+      polygon.getCoordinates(),
+      [[[10, 10], [12, 10], [11, 12], [10, 10]]],
+    ]);
+
+    expect(editableVertexCoordinates(polygon)).toEqual([
+      [0, 0], [4, 0], [4, 4], [0, 4],
+      [1, 1], [2, 1], [1, 2],
+    ]);
+    expect(editableVertexCoordinates(multipolygon)).toHaveLength(10);
+  });
+
   it("считает роли из текущей разметки", () => {
     expect(featureCounts(snapshot(["positive", "hard_negative", "positive"]).geojson)).toEqual({
       total: 3,
@@ -164,6 +184,8 @@ describe("черновики редактора датасетов", () => {
       newFeatureIndexes: [],
     };
     expect(draftChanged({ baseline, current, history: [] })).toBe(false);
+    expect(snapshotsEqual(baseline, current)).toBe(true);
+    expect(snapshotsEqual(baseline, { ...current, newFeatureIndexes: [0] })).toBe(false);
   });
 
   it("сортирует по текущему количеству в обоих направлениях", () => {

@@ -19,6 +19,8 @@ import Feature from "ol/Feature";
 import { defaults as defaultControls } from "ol/control/defaults";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
+import MultiPoint from "ol/geom/MultiPoint";
+import Point from "ol/geom/Point";
 import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
 import Select from "ol/interaction/Select";
@@ -28,7 +30,7 @@ import VectorLayer from "ol/layer/Vector";
 import OLMap from "ol/Map";
 import GeoTIFF from "ol/source/GeoTIFF";
 import VectorSource from "ol/source/Vector";
-import { Fill, Stroke, Style } from "ol/style";
+import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
 import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
@@ -39,6 +41,7 @@ import {
   appendHistory,
   cloneSnapshot,
   draftChanged,
+  editableVertexCoordinates,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
@@ -47,6 +50,7 @@ import {
   RASTER_CONTRAST,
   sceneClassCounts,
   sceneCounts,
+  snapshotsEqual,
   sortEditorScenes,
   undoDraft,
   type DraftSnapshot,
@@ -59,6 +63,10 @@ type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
 type EditMode = "select" | "draw";
 type BandMode = "RGB" | "NRG" | "NGB";
+type VertexSelection = {
+  feature: Feature<Geometry>;
+  coordinate: number[];
+};
 
 type EditorDataset = {
   key: string;
@@ -160,6 +168,21 @@ const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
   NGB: [4, 2, 3],
 };
 const styleCache = new Map<string, Style>();
+const EDITABLE_VERTICES_STYLE = new Style({
+  geometry: (feature) => new MultiPoint(
+    editableVertexCoordinates((feature as Feature<Geometry>).getGeometry()),
+  ),
+  image: new CircleStyle({
+    radius: 5,
+    fill: new Fill({ color: "#FFFFFF" }),
+    stroke: new Stroke({ color: "#0284C7", width: 2 }),
+  }),
+});
+const SELECTED_VERTEX_IMAGE = new CircleStyle({
+  radius: 7,
+  fill: new Fill({ color: "#38BDF8" }),
+  stroke: new Stroke({ color: "#FFFFFF", width: 2 }),
+});
 
 export function DatasetEditorPage({
   run,
@@ -205,6 +228,7 @@ export function DatasetEditorPage({
   const bandModeRef = useRef<BandMode>(bandMode);
   const activeAnnotationRef = useRef(annotationName);
   const drawInProgressRef = useRef(false);
+  const selectedVertexRef = useRef<VertexSelection | null>(null);
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const sceneLoadRequestRef = useRef(0);
 
@@ -426,7 +450,7 @@ export function DatasetEditorPage({
     (before: DraftSnapshot) => {
       const name = activeAnnotationRef.current;
       const current = captureActiveSnapshot();
-      if (!name || !current) return;
+      if (!name || !current || snapshotsEqual(before, current)) return;
       updateDraft(name, (draft) => ({
         ...draft,
         current,
@@ -440,6 +464,14 @@ export function DatasetEditorPage({
   const setDrawingState = useCallback((value: boolean) => {
     drawInProgressRef.current = value;
     setDrawInProgress(value);
+  }, []);
+
+  const setSelectedVertex = useCallback((selection: VertexSelection | null) => {
+    const previous = selectedVertexRef.current;
+    selectedVertexRef.current = selection;
+    previous?.feature.changed();
+    if (selection?.feature !== previous?.feature) selection?.feature.changed();
+    mapRef.current?.render();
   }, []);
 
   useEffect(() => {
@@ -495,15 +527,18 @@ export function DatasetEditorPage({
     });
     const select = new Select({
       style: (feature) =>
-        featureStyle(
+        selectedFeatureStyles(
           feature as Feature<Geometry>,
-          true,
           fillEnabledRef.current,
           newFeaturesRef.current,
           objectTypeChoices,
+          selectedVertexRef.current,
         ),
     });
-    const modify = new Modify({ source: vectorSource });
+    const modify = new Modify({
+      features: select.getFeatures(),
+      deleteCondition: () => false,
+    });
     const snap = new Snap({ source: vectorSource });
     const draw = new Draw({ source: vectorSource, type: "Polygon" });
     draw.setActive(false);
@@ -527,7 +562,18 @@ export function DatasetEditorPage({
       }));
     }
 
+    const selectCurrentModifyVertex = () => {
+      const feature = select.getFeatures().item(0) as Feature<Geometry> | undefined;
+      const coordinate = modify.getPoint();
+      if (!feature || !coordinate || !modify.canRemovePoint()) {
+        setSelectedVertex(null);
+        return;
+      }
+      setSelectedVertex({ feature, coordinate: [...coordinate] });
+    };
+
     select.on("select", (event) => {
+      setSelectedVertex(null);
       const selected = event.selected[0] as Feature<Geometry> | undefined;
       if (!selected) return;
       const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative"
@@ -579,12 +625,14 @@ export function DatasetEditorPage({
       if (outside) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
         modifyBefore = null;
+        setSelectedVertex(null);
         window.alert("Геометрия не может выходить за границы снимка.");
         return;
       }
       const before = modifyBefore;
       modifyBefore = null;
       if (before) recordCurrentChange(before);
+      selectCurrentModifyVertex();
     });
 
     const map = new OLMap({
@@ -598,6 +646,7 @@ export function DatasetEditorPage({
     map.addInteraction(modify);
     map.addInteraction(draw);
     map.addInteraction(snap);
+    map.on("singleclick", selectCurrentModifyVertex);
     mapRef.current = map;
     vectorLayerRef.current = vectorLayer;
     rasterLayerRef.current = rasterLayer;
@@ -607,6 +656,7 @@ export function DatasetEditorPage({
 
     return () => {
       if (drawCommitTimer !== null) window.clearTimeout(drawCommitTimer);
+      map.un("singleclick", selectCurrentModifyVertex);
       map.setTarget(undefined);
       mapRef.current = null;
       vectorSourceRef.current = null;
@@ -616,6 +666,7 @@ export function DatasetEditorPage({
       modifyRef.current = null;
       drawRef.current = null;
       rasterFootprintRef.current = null;
+      selectedVertexRef.current = null;
       newFeaturesRef.current = new WeakSet();
       setDrawingState(false);
     };
@@ -625,6 +676,7 @@ export function DatasetEditorPage({
     recordCurrentChange,
     selectedDataset?.imagery_type,
     selectedDataset,
+    setSelectedVertex,
     setDrawingState,
     updateDraft,
     objectTypeChoices,
@@ -635,8 +687,11 @@ export function DatasetEditorPage({
     drawRef.current?.setActive(drawing);
     selectRef.current?.setActive(annotationsVisible && !drawing);
     modifyRef.current?.setActive(annotationsVisible && !drawing);
-    if (drawing || !annotationsVisible) selectRef.current?.getFeatures().clear();
-  }, [annotationsVisible, detail, editMode]);
+    if (drawing || !annotationsVisible) {
+      setSelectedVertex(null);
+      selectRef.current?.getFeatures().clear();
+    }
+  }, [annotationsVisible, detail, editMode, setSelectedVertex]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -726,6 +781,7 @@ export function DatasetEditorPage({
     const source = vectorSourceRef.current;
     if (!selected || !source || selected.getLength() === 0) return;
     const before = captureActiveSnapshot();
+    setSelectedVertex(null);
     selected.getArray().forEach((feature) => source.removeFeature(feature));
     selected.clear();
     if (before) recordCurrentChange(before);
@@ -734,11 +790,12 @@ export function DatasetEditorPage({
   const restoreActiveSnapshot = useCallback((snapshot: DraftSnapshot) => {
     const source = vectorSourceRef.current;
     if (!source) return;
+    setSelectedVertex(null);
     restoreVectorSnapshot(source, snapshot, geojsonCrs(snapshot.geojson), newFeaturesRef);
     selectRef.current?.getFeatures().clear();
     vectorLayerRef.current?.changed();
     mapRef.current?.render();
-  }, []);
+  }, [setSelectedVertex]);
 
   const undoCurrent = useCallback(() => {
     if (drawInProgressRef.current) {
@@ -761,16 +818,44 @@ export function DatasetEditorPage({
     restoreActiveSnapshot(restored.current);
   }, [changeDrafts, restoreActiveSnapshot]);
 
+  const deleteSelectedVertex = useCallback((): boolean => {
+    const selection = selectedVertexRef.current;
+    const modify = modifyRef.current;
+    const selected = selectRef.current?.getFeatures();
+    if (
+      !selection ||
+      !modify ||
+      !modify.getActive() ||
+      !selected?.getArray().includes(selection.feature)
+    ) {
+      return false;
+    }
+    const removed = modify.removePoint(selection.coordinate);
+    if (!removed) {
+      window.alert("У кольца полигона должно остаться не менее трёх вершин.");
+      return false;
+    }
+    setSelectedVertex(null);
+    return true;
+  }, [setSelectedVertex]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
       if (isTextInput(event.target)) return;
-      event.preventDefault();
-      undoCurrent();
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (!selectedVertexRef.current) return;
+        event.preventDefault();
+        deleteSelectedVertex();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        undoCurrent();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undoCurrent]);
+  }, [deleteSelectedVertex, undoCurrent]);
 
   const toggleFill = () => {
     const next = !fillEnabledRef.current;
@@ -784,6 +869,7 @@ export function DatasetEditorPage({
     const next = !annotationsVisibleRef.current;
     if (!next) {
       if (drawInProgressRef.current) drawRef.current?.abortDrawing();
+      setSelectedVertex(null);
       selectRef.current?.getFeatures().clear();
     }
     annotationsVisibleRef.current = next;
@@ -1049,7 +1135,7 @@ export function DatasetEditorPage({
                         type="button"
                         aria-label="Выбор и правка полигонов"
                         aria-pressed={editMode === "select"}
-                        title="Выбор и правка: выбрать полигон и перемещать его вершины"
+                        title="Выбор и правка: клик по ребру добавляет вершину, Del удаляет выбранную"
                         onClick={() => setEditMode("select")}
                       >
                         <MousePointer2 size={17} />
@@ -1139,7 +1225,7 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Клик — выбор, колесо — масштаб до 1000%, Ctrl+Z — отмена.
+                  <MousePointer2 size={14} /> Клик по ребру — новая вершина, клик по вершине + Del — удаление, Ctrl+Z — отмена.
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
@@ -1469,6 +1555,26 @@ function featureStyle(
   });
   styleCache.set(key, style);
   return style;
+}
+
+function selectedFeatureStyles(
+  feature: Feature<Geometry>,
+  filled: boolean,
+  newFeatures: WeakSet<Feature<Geometry>>,
+  objectTypes: EditorObjectType[],
+  selectedVertex: VertexSelection | null,
+): Style[] {
+  const styles = [
+    featureStyle(feature, true, filled, newFeatures, objectTypes),
+    EDITABLE_VERTICES_STYLE,
+  ];
+  if (selectedVertex?.feature === feature) {
+    styles.push(new Style({
+      geometry: new Point([...selectedVertex.coordinate]),
+      image: SELECTED_VERTEX_IMAGE,
+    }));
+  }
+  return styles;
 }
 
 function hexToRgba(color: string, alpha: number): string {
