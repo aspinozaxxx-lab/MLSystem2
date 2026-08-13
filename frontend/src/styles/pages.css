@@ -1267,6 +1267,12 @@
   image-rendering: pixelated;
 }
 
+.dataset-editor-vertex-box {
+  box-sizing: border-box;
+  border: 2px solid #38bdf8;
+  background: rgb(56 189 248 / 16%);
+}
+
 .dataset-editor-map-controls {
   position: absolute;
   top: 10px;

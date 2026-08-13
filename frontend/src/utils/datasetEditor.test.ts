@@ -5,8 +5,11 @@ import Polygon from "ol/geom/Polygon";
 import {
   acceptPublishedDraft,
   appendHistory,
+  deleteEditableVertices,
   draftChanged,
   editableVertexCoordinates,
+  editableVertices,
+  editableVerticesInExtent,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
@@ -117,6 +120,69 @@ describe("черновики редактора датасетов", () => {
       [1, 1], [2, 1], [1, 2],
     ]);
     expect(editableVertexCoordinates(multipolygon)).toHaveLength(10);
+  });
+
+  it("выбирает рамкой все вершины внутри области", () => {
+    const polygon = new Polygon([[
+      [0, 0], [4, 0], [4, 4], [0, 4], [0, 0],
+    ]]);
+
+    expect(editableVerticesInExtent(polygon, [3.5, -0.5, 4.5, 4.5])).toEqual([
+      { polygonIndex: 0, ringIndex: 0, vertexIndex: 1, coordinate: [4, 0] },
+      { polygonIndex: 0, ringIndex: 0, vertexIndex: 2, coordinate: [4, 4] },
+    ]);
+  });
+
+  it("удаляет выбранные вершины и снова замыкает кольцо", () => {
+    const polygon = new Polygon([[
+      [0, 0], [2, 0], [4, 0], [4, 4], [2, 4], [0, 4], [0, 0],
+    ]]);
+    const selected = editableVertices(polygon).filter((vertex) =>
+      vertex.vertexIndex === 1 || vertex.vertexIndex === 3,
+    );
+
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(2);
+    expect(result.blockedRingCount).toBe(0);
+    expect((result.geometry as Polygon).getCoordinates()).toEqual([[
+      [0, 0], [4, 0], [2, 4], [0, 4], [0, 0],
+    ]]);
+    expect(polygon.getCoordinates()[0]).toHaveLength(7);
+  });
+
+  it("не удаляет вершины кольца, если останется меньше трёх", () => {
+    const polygon = new Polygon([[
+      [0, 0], [4, 0], [0, 4], [0, 0],
+    ]]);
+
+    const result = deleteEditableVertices(polygon, [editableVertices(polygon)[0]]);
+
+    expect(result.removedCount).toBe(0);
+    expect(result.blockedRingCount).toBe(1);
+    expect((result.geometry as Polygon).getCoordinates()).toEqual(polygon.getCoordinates());
+  });
+
+  it("удаляет вершины независимо в отверстиях и частях MultiPolygon", () => {
+    const multipolygon = new MultiPolygon([
+      [
+        [[0, 0], [6, 0], [6, 6], [0, 6], [0, 0]],
+        [[1, 1], [3, 1], [3, 3], [1, 3], [1, 1]],
+      ],
+      [[[10, 10], [14, 10], [14, 14], [10, 14], [10, 10]]],
+    ]);
+    const selected = editableVertices(multipolygon).filter((vertex) =>
+      (vertex.polygonIndex === 0 && vertex.ringIndex === 1 && vertex.vertexIndex === 1) ||
+      (vertex.polygonIndex === 1 && vertex.ringIndex === 0 && vertex.vertexIndex === 2),
+    );
+
+    const result = deleteEditableVertices(multipolygon, selected);
+    const coordinates = (result.geometry as MultiPolygon).getCoordinates();
+
+    expect(result.removedCount).toBe(2);
+    expect(result.blockedRingCount).toBe(0);
+    expect(coordinates[0][1]).toEqual([[1, 1], [3, 3], [1, 3], [1, 1]]);
+    expect(coordinates[1][0]).toEqual([[10, 10], [14, 10], [10, 14], [10, 10]]);
   });
 
   it("считает роли из текущей разметки", () => {

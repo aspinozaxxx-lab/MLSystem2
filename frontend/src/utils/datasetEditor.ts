@@ -1,3 +1,4 @@
+import { containsCoordinate, type Extent } from "ol/extent";
 import type Geometry from "ol/geom/Geometry";
 import type MultiPolygon from "ol/geom/MultiPolygon";
 import type Polygon from "ol/geom/Polygon";
@@ -17,6 +18,19 @@ export type DraftState = {
   baseline: DraftSnapshot;
   current: DraftSnapshot;
   history: DraftSnapshot[];
+};
+
+export type EditableVertex = {
+  polygonIndex: number;
+  ringIndex: number;
+  vertexIndex: number;
+  coordinate: number[];
+};
+
+export type VertexDeletionResult = {
+  geometry: Geometry;
+  removedCount: number;
+  blockedRingCount: number;
 };
 
 export type CountedScene = {
@@ -117,30 +131,108 @@ export function geometryInsideFootprint(
 export function editableVertexCoordinates(
   geometry: Geometry | null | undefined,
 ): number[][] {
+  return editableVertices(geometry).map((vertex) => vertex.coordinate);
+}
+
+export function editableVertices(
+  geometry: Geometry | null | undefined,
+): EditableVertex[] {
   if (!geometry) return [];
   if (geometry.getType() === "Polygon") {
-    return polygonVertexCoordinates((geometry as Polygon).getCoordinates());
+    return polygonVertices((geometry as Polygon).getCoordinates(), 0);
   }
   if (geometry.getType() === "MultiPolygon") {
     return (geometry as MultiPolygon)
       .getCoordinates()
-      .flatMap(polygonVertexCoordinates);
+      .flatMap((polygon, polygonIndex) => polygonVertices(polygon, polygonIndex));
   }
   return [];
 }
 
-function polygonVertexCoordinates(polygons: number[][][]): number[][] {
-  return polygons.flatMap((ring) => {
-    if (ring.length < 2) return ring.map((coordinate) => [...coordinate]);
-    const first = ring[0];
-    const last = ring.at(-1);
-    const isClosed = Boolean(
-      last &&
-      first.length === last.length &&
-      first.every((value, index) => value === last[index]),
-    );
-    return (isClosed ? ring.slice(0, -1) : ring).map((coordinate) => [...coordinate]);
-  });
+export function editableVerticesInExtent(
+  geometry: Geometry | null | undefined,
+  extent: Extent,
+): EditableVertex[] {
+  return editableVertices(geometry).filter((vertex) =>
+    containsCoordinate(extent, vertex.coordinate),
+  );
+}
+
+export function deleteEditableVertices(
+  geometry: Geometry,
+  selectedVertices: EditableVertex[],
+): VertexDeletionResult {
+  const geometryType = geometry.getType();
+  if (geometryType !== "Polygon" && geometryType !== "MultiPolygon") {
+    return { geometry: geometry.clone(), removedCount: 0, blockedRingCount: 0 };
+  }
+
+  const selectedIndexes = new Map<string, Set<number>>();
+  for (const vertex of selectedVertices) {
+    const ringKey = `${vertex.polygonIndex}:${vertex.ringIndex}`;
+    const indexes = selectedIndexes.get(ringKey) || new Set<number>();
+    indexes.add(vertex.vertexIndex);
+    selectedIndexes.set(ringKey, indexes);
+  }
+
+  let removedCount = 0;
+  let blockedRingCount = 0;
+  const sourcePolygons = geometryType === "Polygon"
+    ? [(geometry as Polygon).getCoordinates()]
+    : (geometry as MultiPolygon).getCoordinates();
+  const coordinates = sourcePolygons.map((polygon, polygonIndex) =>
+    polygon.map((ring, ringIndex) => {
+      const openRing = ringWithoutClosingVertex(ring);
+      const selected = selectedIndexes.get(`${polygonIndex}:${ringIndex}`);
+      const removable = selected
+        ? new Set([...selected].filter((index) => index >= 0 && index < openRing.length))
+        : new Set<number>();
+      if (!removable.size) return cloneRing(ring);
+      if (openRing.length - removable.size < 3) {
+        blockedRingCount += 1;
+        return cloneRing(ring);
+      }
+      const remaining = openRing
+        .filter((_, vertexIndex) => !removable.has(vertexIndex))
+        .map((coordinate) => [...coordinate]);
+      removedCount += removable.size;
+      return [...remaining, [...remaining[0]]];
+    }),
+  );
+
+  const result = geometry.clone();
+  if (geometryType === "Polygon") {
+    (result as Polygon).setCoordinates(coordinates[0]);
+  } else {
+    (result as MultiPolygon).setCoordinates(coordinates);
+  }
+  return { geometry: result, removedCount, blockedRingCount };
+}
+
+function polygonVertices(polygon: number[][][], polygonIndex: number): EditableVertex[] {
+  return polygon.flatMap((ring, ringIndex) =>
+    ringWithoutClosingVertex(ring).map((coordinate, vertexIndex) => ({
+      polygonIndex,
+      ringIndex,
+      vertexIndex,
+      coordinate: [...coordinate],
+    })),
+  );
+}
+
+function ringWithoutClosingVertex(ring: number[][]): number[][] {
+  if (ring.length < 2) return ring;
+  const first = ring[0];
+  const last = ring.at(-1);
+  return last && coordinatesEqual(first, last) ? ring.slice(0, -1) : ring;
+}
+
+function coordinatesEqual(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function cloneRing(ring: number[][]): number[][] {
+  return ring.map((coordinate) => [...coordinate]);
 }
 
 export function featureCounts(geojson: JsonObject): {

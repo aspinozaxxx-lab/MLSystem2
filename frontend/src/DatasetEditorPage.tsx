@@ -20,7 +20,9 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
 import MultiPoint from "ol/geom/MultiPoint";
-import Point from "ol/geom/Point";
+import { defaults as defaultInteractions } from "ol/interaction/defaults";
+import DragBox from "ol/interaction/DragBox";
+import DragPan from "ol/interaction/DragPan";
 import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
 import Select from "ol/interaction/Select";
@@ -40,8 +42,11 @@ import {
   acceptPublishedDraft,
   appendHistory,
   cloneSnapshot,
+  deleteEditableVertices,
   draftChanged,
   editableVertexCoordinates,
+  editableVertices,
+  editableVerticesInExtent,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
@@ -55,6 +60,7 @@ import {
   undoDraft,
   type DraftSnapshot,
   type DraftState,
+  type EditableVertex,
   type JsonObject,
   type SortDirection,
 } from "./utils/datasetEditor";
@@ -65,7 +71,7 @@ type EditMode = "select" | "draw";
 type BandMode = "RGB" | "NRG" | "NGB";
 type VertexSelection = {
   feature: Feature<Geometry>;
-  coordinate: number[];
+  vertex: EditableVertex;
 };
 
 type EditorDataset = {
@@ -217,6 +223,7 @@ export function DatasetEditorPage({
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const rasterLayerRef = useRef<WebGLTileLayer | null>(null);
   const selectRef = useRef<Select | null>(null);
+  const vertexBoxRef = useRef<DragBox | null>(null);
   const modifyRef = useRef<Modify | null>(null);
   const drawRef = useRef<Draw | null>(null);
   const rasterFootprintRef = useRef<Geometry | null>(null);
@@ -228,7 +235,7 @@ export function DatasetEditorPage({
   const bandModeRef = useRef<BandMode>(bandMode);
   const activeAnnotationRef = useRef(annotationName);
   const drawInProgressRef = useRef(false);
-  const selectedVertexRef = useRef<VertexSelection | null>(null);
+  const selectedVerticesRef = useRef<VertexSelection[]>([]);
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const sceneLoadRequestRef = useRef(0);
 
@@ -466,11 +473,13 @@ export function DatasetEditorPage({
     setDrawInProgress(value);
   }, []);
 
-  const setSelectedVertex = useCallback((selection: VertexSelection | null) => {
-    const previous = selectedVertexRef.current;
-    selectedVertexRef.current = selection;
-    previous?.feature.changed();
-    if (selection?.feature !== previous?.feature) selection?.feature.changed();
+  const setSelectedVertices = useCallback((selections: VertexSelection[]) => {
+    const changedFeatures = new Set<Feature<Geometry>>([
+      ...selectedVerticesRef.current.map((selection) => selection.feature),
+      ...selections.map((selection) => selection.feature),
+    ]);
+    selectedVerticesRef.current = selections;
+    changedFeatures.forEach((feature) => feature.changed());
     mapRef.current?.render();
   }, []);
 
@@ -532,12 +541,33 @@ export function DatasetEditorPage({
           fillEnabledRef.current,
           newFeaturesRef.current,
           objectTypeChoices,
-          selectedVertexRef.current,
+          selectedVerticesRef.current,
         ),
     });
     const modify = new Modify({
       features: select.getFeatures(),
       deleteCondition: () => false,
+    });
+    const vertexBox = new DragBox({
+      className: "dataset-editor-vertex-box",
+      minArea: 16,
+      condition: (event) => {
+        const originalEvent = event.originalEvent;
+        return originalEvent instanceof PointerEvent &&
+          originalEvent.pointerType !== "touch" &&
+          originalEvent.button === 0 &&
+          !originalEvent.altKey &&
+          !originalEvent.ctrlKey &&
+          !originalEvent.metaKey &&
+          !originalEvent.shiftKey;
+      },
+    });
+    const middleDragPan = new DragPan({
+      condition: (event) => {
+        const originalEvent = event.originalEvent;
+        return originalEvent instanceof PointerEvent &&
+          (originalEvent.pointerType === "touch" || originalEvent.button === 1);
+      },
     });
     const snap = new Snap({ source: vectorSource });
     const draw = new Draw({ source: vectorSource, type: "Polygon" });
@@ -564,13 +594,21 @@ export function DatasetEditorPage({
     }
 
     const selectCurrentModifyVertex = () => {
-      const feature = select.getFeatures().item(0) as Feature<Geometry> | undefined;
       const coordinate = modify.getPoint();
-      if (!feature || !coordinate || !modify.canRemovePoint()) {
-        setSelectedVertex(null);
+      if (!coordinate || !modify.canRemovePoint()) {
+        setSelectedVertices([]);
         return;
       }
-      setSelectedVertex({ feature, coordinate: [...coordinate] });
+      for (const feature of select.getFeatures().getArray() as Feature<Geometry>[]) {
+        const vertex = editableVertices(feature.getGeometry()).find((candidate) =>
+          coordinatesEqual(candidate.coordinate, coordinate),
+        );
+        if (vertex) {
+          setSelectedVertices([{ feature, vertex }]);
+          return;
+        }
+      }
+      setSelectedVertices([]);
     };
 
     const selectCurrentModifyVertexAfterInteractions = () => {
@@ -582,9 +620,7 @@ export function DatasetEditorPage({
       }, 0);
     };
 
-    select.on("select", (event) => {
-      setSelectedVertex(null);
-      const selected = event.selected[0] as Feature<Geometry> | undefined;
+    const syncRoleFromFeature = (selected: Feature<Geometry> | undefined) => {
       if (!selected) return;
       const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative"
         ? "hard_negative"
@@ -593,6 +629,29 @@ export function DatasetEditorPage({
           : "positive";
       roleRef.current = selectedRole;
       setRole(selectedRole);
+    };
+
+    select.on("select", (event) => {
+      setSelectedVertices([]);
+      syncRoleFromFeature(event.selected[0] as Feature<Geometry> | undefined);
+    });
+    vertexBox.on("boxstart", () => {
+      setSelectedVertices([]);
+    });
+    vertexBox.on("boxend", () => {
+      const extent = vertexBox.getGeometry().getExtent();
+      const selections = vectorSource.getFeatures().flatMap((feature) =>
+        editableVerticesInExtent(feature.getGeometry(), extent).map((vertex) => ({
+          feature,
+          vertex,
+        })),
+      );
+      const features = [...new Set(selections.map((selection) => selection.feature))];
+      const selectedFeatures = select.getFeatures();
+      selectedFeatures.clear();
+      selectedFeatures.extend(features);
+      setSelectedVertices(selections);
+      syncRoleFromFeature(features[0]);
     });
     draw.on("drawstart", () => {
       drawBefore = captureActiveSnapshot();
@@ -635,7 +694,7 @@ export function DatasetEditorPage({
       if (outside) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
         modifyBefore = null;
-        setSelectedVertex(null);
+        setSelectedVertices([]);
         window.alert("Геометрия не может выходить за границы снимка.");
         return;
       }
@@ -649,10 +708,12 @@ export function DatasetEditorPage({
       target,
       controls: defaultControls({ zoom: false }),
       layers: [rasterLayer, vectorLayer],
-      interactions: undefined,
+      interactions: defaultInteractions({ dragPan: false, shiftDragZoom: false }),
       view: rasterViewWithOverzoom(rasterSource),
     });
+    map.addInteraction(middleDragPan);
     map.addInteraction(select);
+    map.addInteraction(vertexBox);
     map.addInteraction(modify);
     map.addInteraction(draw);
     map.addInteraction(snap);
@@ -661,6 +722,7 @@ export function DatasetEditorPage({
     vectorLayerRef.current = vectorLayer;
     rasterLayerRef.current = rasterLayer;
     selectRef.current = select;
+    vertexBoxRef.current = vertexBox;
     modifyRef.current = modify;
     drawRef.current = draw;
 
@@ -674,10 +736,11 @@ export function DatasetEditorPage({
       vectorLayerRef.current = null;
       rasterLayerRef.current = null;
       selectRef.current = null;
+      vertexBoxRef.current = null;
       modifyRef.current = null;
       drawRef.current = null;
       rasterFootprintRef.current = null;
-      selectedVertexRef.current = null;
+      selectedVerticesRef.current = [];
       newFeaturesRef.current = new WeakSet();
       setDrawingState(false);
     };
@@ -687,7 +750,7 @@ export function DatasetEditorPage({
     recordCurrentChange,
     selectedDataset?.imagery_type,
     selectedDataset,
-    setSelectedVertex,
+    setSelectedVertices,
     setDrawingState,
     updateDraft,
     objectTypeChoices,
@@ -697,12 +760,13 @@ export function DatasetEditorPage({
     const drawing = annotationsVisible && editMode === "draw";
     drawRef.current?.setActive(drawing);
     selectRef.current?.setActive(annotationsVisible && !drawing);
+    vertexBoxRef.current?.setActive(annotationsVisible && !drawing);
     modifyRef.current?.setActive(annotationsVisible && !drawing);
     if (drawing || !annotationsVisible) {
-      setSelectedVertex(null);
+      setSelectedVertices([]);
       selectRef.current?.getFeatures().clear();
     }
-  }, [annotationsVisible, detail, editMode, setSelectedVertex]);
+  }, [annotationsVisible, detail, editMode, setSelectedVertices]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -792,7 +856,7 @@ export function DatasetEditorPage({
     const source = vectorSourceRef.current;
     if (!selected || !source || selected.getLength() === 0) return;
     const before = captureActiveSnapshot();
-    setSelectedVertex(null);
+    setSelectedVertices([]);
     selected.getArray().forEach((feature) => source.removeFeature(feature));
     selected.clear();
     if (before) recordCurrentChange(before);
@@ -801,12 +865,12 @@ export function DatasetEditorPage({
   const restoreActiveSnapshot = useCallback((snapshot: DraftSnapshot) => {
     const source = vectorSourceRef.current;
     if (!source) return;
-    setSelectedVertex(null);
+    setSelectedVertices([]);
     restoreVectorSnapshot(source, snapshot, geojsonCrs(snapshot.geojson), newFeaturesRef);
     selectRef.current?.getFeatures().clear();
     vectorLayerRef.current?.changed();
     mapRef.current?.render();
-  }, [setSelectedVertex]);
+  }, [setSelectedVertices]);
 
   const undoCurrent = useCallback(() => {
     if (drawInProgressRef.current) {
@@ -829,34 +893,52 @@ export function DatasetEditorPage({
     restoreActiveSnapshot(restored.current);
   }, [changeDrafts, restoreActiveSnapshot]);
 
-  const deleteSelectedVertex = useCallback((): boolean => {
-    const selection = selectedVertexRef.current;
+  const deleteSelectedVertices = useCallback((): boolean => {
+    const selections = selectedVerticesRef.current;
     const modify = modifyRef.current;
-    const selected = selectRef.current?.getFeatures();
-    if (
-      !selection ||
-      !modify ||
-      !modify.getActive() ||
-      !selected?.getArray().includes(selection.feature)
-    ) {
-      return false;
+    const source = vectorSourceRef.current;
+    if (!selections.length || !modify?.getActive() || !source) return false;
+
+    const before = captureActiveSnapshot();
+    const selectionsByFeature = new Map<Feature<Geometry>, EditableVertex[]>();
+    for (const selection of selections) {
+      const vertices = selectionsByFeature.get(selection.feature) || [];
+      vertices.push(selection.vertex);
+      selectionsByFeature.set(selection.feature, vertices);
     }
-    const removed = modify.removePoint(selection.coordinate);
-    if (!removed) {
-      window.alert("У кольца полигона должно остаться не менее трёх вершин.");
-      return false;
+
+    let removedCount = 0;
+    let blockedRingCount = 0;
+    for (const [feature, vertices] of selectionsByFeature) {
+      const geometry = feature.getGeometry();
+      if (!geometry) continue;
+      const result = deleteEditableVertices(geometry, vertices);
+      removedCount += result.removedCount;
+      blockedRingCount += result.blockedRingCount;
+      if (result.removedCount) feature.setGeometry(result.geometry);
     }
-    setSelectedVertex(null);
-    return true;
-  }, [setSelectedVertex]);
+
+    setSelectedVertices([]);
+    if (removedCount) {
+      source.changed();
+      mapRef.current?.render();
+      if (before) recordCurrentChange(before);
+    }
+    if (blockedRingCount) {
+      window.alert(
+        `В ${blockedRingCount} кольцах вершины не удалены: в каждом кольце должно остаться не менее трёх вершин.`,
+      );
+    }
+    return removedCount > 0;
+  }, [captureActiveSnapshot, recordCurrentChange, setSelectedVertices]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInput(event.target)) return;
       if (event.key === "Delete" || event.key === "Backspace") {
-        if (!selectedVertexRef.current) return;
+        if (!selectedVerticesRef.current.length) return;
         event.preventDefault();
-        deleteSelectedVertex();
+        deleteSelectedVertices();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "z") {
@@ -866,7 +948,7 @@ export function DatasetEditorPage({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelectedVertex, undoCurrent]);
+  }, [deleteSelectedVertices, undoCurrent]);
 
   const toggleFill = () => {
     const next = !fillEnabledRef.current;
@@ -880,7 +962,7 @@ export function DatasetEditorPage({
     const next = !annotationsVisibleRef.current;
     if (!next) {
       if (drawInProgressRef.current) drawRef.current?.abortDrawing();
-      setSelectedVertex(null);
+      setSelectedVertices([]);
       selectRef.current?.getFeatures().clear();
     }
     annotationsVisibleRef.current = next;
@@ -1146,7 +1228,7 @@ export function DatasetEditorPage({
                         type="button"
                         aria-label="Выбор и правка полигонов"
                         aria-pressed={editMode === "select"}
-                        title="Выбор и правка: клик по ребру добавляет вершину, Del удаляет выбранную"
+                        title="Выбор и правка: протяните рамку левой кнопкой, затем удалите выбранные вершины клавишей Del"
                         onClick={() => setEditMode("select")}
                       >
                         <MousePointer2 size={17} />
@@ -1236,7 +1318,7 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Клик по ребру — новая вершина, клик по вершине + Del — удаление, Ctrl+Z — отмена.
+                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин, Del — удалить выбранные; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z — отмена.
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
@@ -1573,15 +1655,18 @@ function selectedFeatureStyles(
   filled: boolean,
   newFeatures: WeakSet<Feature<Geometry>>,
   objectTypes: EditorObjectType[],
-  selectedVertex: VertexSelection | null,
+  selectedVertices: VertexSelection[],
 ): Style[] {
   const styles = [
     featureStyle(feature, true, filled, newFeatures, objectTypes),
     EDITABLE_VERTICES_STYLE,
   ];
-  if (selectedVertex?.feature === feature) {
+  const coordinates = selectedVertices
+    .filter((selection) => selection.feature === feature)
+    .map((selection) => selection.vertex.coordinate);
+  if (coordinates.length) {
     styles.push(new Style({
-      geometry: new Point([...selectedVertex.coordinate]),
+      geometry: new MultiPoint(coordinates),
       image: SELECTED_VERTEX_IMAGE,
     }));
   }
@@ -1627,4 +1712,8 @@ function isTextInput(target: EventTarget | null): boolean {
     target.tagName === "SELECT" ||
     target.tagName === "TEXTAREA"
   );
+}
+
+function coordinatesEqual(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
