@@ -36,6 +36,7 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import dataset_class_row
 from mlsystem2.training_ui_api._models import (
+    DatasetRow,
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
@@ -2527,6 +2528,119 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         assert metric.job_id is None
         assert metric.status == "unavailable"
         assert "изменён" in (metric.error or "")
+
+
+def test_class_primary_sample_evaluates_network_from_another_dataset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                object_count=1,
+            ),
+            config,
+        )
+        update_test_sample_primary(
+            session,
+            sample.id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        class_row = dataset_class_row(session, sample.class_key)
+        assert class_row is not None
+        new_dataset = DatasetRow(
+            key=str(uuid.uuid4()),
+            class_id=class_row.id,
+            name="main_new",
+            source_type="mlmarkup",
+            source_path="Вырубки/main_new",
+            legacy_version=False,
+        )
+        session.add(new_dataset)
+        session.flush()
+        training = TrainingResultRow(
+            source="manual",
+            dataset_key=new_dataset.key,
+            class_key=new_dataset.key,
+            class_display_name="Вырубки\\main_new",
+            architecture="segformer_b2",
+            model_name="segformer b2",
+            mlflow_run_id="run-main-new",
+            status="ok",
+        )
+        session.add(training)
+        session.flush()
+
+        assert queue_training_result_test_f1(session, training, config) is True
+        metric = session.get(TrainingResultTestMetricRow, training.id)
+        assert metric is not None
+        job = session.get(JobRow, metric.job_id)
+        assert job is not None
+        assert job.dataset_key == new_dataset.key
+        assert job.config["test_sample_id"] == str(sample.id)
+
+        monkeypatch.setattr(
+            _worker,
+            "_best_training_checkpoint",
+            lambda _config, _run_id: SimpleNamespace(
+                artifact_uri="file:///checkpoint.pt",
+                artifact_path="checkpoints/best.pt",
+                f1_score=0.8,
+                epoch=20,
+                threshold=0.5,
+            ),
+        )
+        run_root = tmp_path / "main-new-network-test-f1"
+        payload = _worker._build_test_sample_f1_config(
+            session,
+            job,
+            config,
+            run_root,
+        )
+        assert payload["test_sample_id"] == str(sample.id)
+        assert payload["training_result_id"] == str(training.id)
+
+        (run_root / "scratch").mkdir(parents=True)
+        (run_root / "scratch" / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "processed": 1,
+                    "threshold": 0.5,
+                    "true_positive": 8,
+                    "false_positive": 1,
+                    "false_negative": 1,
+                    "object_true_positive": 1,
+                    "object_false_positive": 0,
+                    "object_false_negative": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        job.tmp_path = str(run_root)
+        job.status = "running"
+        _finish_test_sample_f1_job(
+            session,
+            job,
+            config,
+            succeeded=True,
+        )
+
+        assert job.status == "completed"
+        assert metric.status == "current"
+        assert metric.f1 == pytest.approx(8 / 9)
+        assert metric.object_f1 == pytest.approx(1.0)
 
 
 def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(

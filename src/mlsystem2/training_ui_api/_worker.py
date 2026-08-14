@@ -74,6 +74,7 @@ from ._test_samples import (
     TEST_SAMPLE_EVALUATION_TARGET,
     current_primary_training_result,
     evaluate_test_samples_for_pseudo_markup,
+    primary_test_sample,
     queue_training_result_test_f1,
     reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
@@ -906,8 +907,22 @@ def _build_test_sample_f1_config(
         )
         if compatibility_error is not None:
             raise RuntimeError(compatibility_error)
-    elif not sample.is_primary or sample.dataset_key != training_result.class_key:
-        raise RuntimeError("Основная тестовая разметка была заменена или удалена.")
+    else:
+        primary_sample = primary_test_sample(session, training_result.class_key)
+        compatibility_error = test_sample_model_compatibility_error(
+            session,
+            sample,
+            training_result,
+        )
+        if (
+            primary_sample is None
+            or primary_sample.id != sample.id
+            or compatibility_error is not None
+        ):
+            raise RuntimeError(
+                compatibility_error
+                or "Основная тестовая разметка была заменена или удалена."
+            )
     expected_revision = int(row.config.get("test_sample_revision") or 0)
     if sample.content_revision != expected_revision:
         raise RuntimeError("Состав основной тестовой разметки изменён.")
@@ -1577,11 +1592,24 @@ def _finish_test_sample_f1_job(
     metric = _test_sample_f1_metric(session, row)
     if metric is not None:
         sample = session.get(TestSampleRow, metric.sample_id) if metric.sample_id is not None else None
+        training_result = _test_sample_f1_training_result(session, row)
+        primary_sample = (
+            primary_test_sample(session, training_result.class_key)
+            if training_result is not None
+            else None
+        )
+        compatibility_error = (
+            test_sample_model_compatibility_error(session, sample, training_result)
+            if sample is not None and training_result is not None
+            else "Сеть или тестовая разметка больше не существуют."
+        )
         expected_revision = int(row.config.get("test_sample_revision") or 0)
         still_current = bool(
             sample
-            and sample.is_primary
-            and sample.dataset_key == row.dataset_key
+            and training_result
+            and primary_sample is not None
+            and primary_sample.id == sample.id
+            and compatibility_error is None
             and sample.content_revision == expected_revision
             and metric.sample_revision == expected_revision
             and metric.job_id == row.id
