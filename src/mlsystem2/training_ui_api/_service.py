@@ -1139,6 +1139,37 @@ def set_primary_training_result(
     return _training_result_info(session, row, config=config)
 
 
+def clear_primary_training_result(
+    session: Session,
+    result_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+) -> TrainingResultInfo:
+    """Снять явную отметку основной сети и включить выбор последней успешной."""
+
+    row = session.get(TrainingResultRow, result_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
+    class_row = dataset_class_row(session, row.dataset_key or row.class_key)
+    if class_row is None:
+        raise TrainingUIAPIError(f"Класс результата не найден: {row.class_key}")
+    if class_row.primary_training_result_id != row.id:
+        raise TrainingUIAPIError("Эта сеть не отмечена основной для класса.")
+
+    class_row.primary_training_result_id = None
+    class_row.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    reconcile_test_sample_evaluations(
+        session,
+        config,
+        class_keys={class_row.key},
+    )
+    try:
+        queue_class_test_f1(session, row.class_key, config)
+    except TrainingUIAPIError:
+        pass
+    return _training_result_info(session, row, config=config)
+
+
 def result_changes(
     session: Session,
     config: TrainingUIAPIConfig,

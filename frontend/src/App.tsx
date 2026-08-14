@@ -3145,10 +3145,11 @@ function DatasetResultsPage({
     showTrainingResultZipModal(result, bootstrap.datasets, run, showModal, closeModal);
   };
 
-  const setPrimaryResult = async (result: TrainingResultInfo) => {
-    if (result.is_primary) return;
+  const togglePrimaryResult = async (result: TrainingResultInfo) => {
     const updated = await run(() =>
-      apiJson<TrainingResultInfo>(`/results/training/${result.id}/primary`, { method: "POST" }),
+      apiJson<TrainingResultInfo>(`/results/training/${result.id}/primary`, {
+        method: result.is_primary ? "DELETE" : "POST",
+      }),
     );
     if (updated) await load();
   };
@@ -3220,7 +3221,7 @@ function DatasetResultsPage({
           imageFolders={bootstrap.image_folders}
           onPseudo={showPseudo}
           onZip={showZip}
-          onPrimary={(result) => void setPrimaryResult(result)}
+          onPrimary={(result) => void togglePrimaryResult(result)}
           onDeletePseudo={deletePseudo}
           showJobLog={showJobLog}
         />
@@ -3698,8 +3699,8 @@ function ResultsTable({
                           <button
                             className="icon-button primary-result-star"
                             type="button"
-                            title={result.is_primary ? "Основная сеть класса" : "Сделать основной сетью класса"}
-                            aria-label={result.is_primary ? "Основная сеть класса" : "Сделать основной сетью класса"}
+                            title={result.is_primary ? "Снять отметку основной сети класса" : "Сделать основной сетью класса"}
+                            aria-label={result.is_primary ? "Снять отметку основной сети класса" : "Сделать основной сетью класса"}
                             onClick={() => onPrimary(result)}
                           >
                             <Star className={result.is_primary ? "primary-star" : undefined} size={17} fill={result.is_primary ? "currentColor" : "none"} />

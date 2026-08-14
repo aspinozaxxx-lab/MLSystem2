@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
+    clear_primary_training_result,
     create_pseudo_markup_job,
     dataset_results,
     delete_pseudo_markup_result,
@@ -97,6 +98,17 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TrainingResultInfo:
         return set_primary_training_result(db, result_id, ctx.config)
+
+    @app.delete(
+        "/api/v1/results/training/{result_id}/primary",
+        response_model=TrainingResultInfo,
+    )
+    def delete_primary_training_result(
+        result_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TrainingResultInfo:
+        return clear_primary_training_result(db, result_id, ctx.config)
 
     @app.delete("/api/v1/results/pseudo-markup/{result_id}", response_model=PseudoMarkupResultInfo)
     def delete_pseudo_markup(

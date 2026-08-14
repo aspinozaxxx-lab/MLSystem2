@@ -1477,7 +1477,8 @@ export interface paths {
         put?: never;
         /** Post Primary Training Result */
         post: operations["post_primary_training_result_api_v1_results_training__result_id__primary_post"];
-        delete?: never;
+        /** Delete Primary Training Result */
+        delete: operations["delete_primary_training_result_api_v1_results_training__result_id__primary_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -7039,6 +7040,37 @@ export interface operations {
         };
     };
     post_primary_training_result_api_v1_results_training__result_id__primary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingResultInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_primary_training_result_api_v1_results_training__result_id__primary_delete: {
         parameters: {
             query?: never;
             header?: never;

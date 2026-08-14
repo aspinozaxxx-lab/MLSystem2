@@ -207,6 +207,22 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert before_by_id[second.id].test_f1 is not None
         assert before_by_id[second.id].test_f1.status == "queued"
 
+        cleared = _service.clear_primary_training_result(session, first.id, config)
+        fallback = _service.dataset_results(session, dataset.key, config)
+        fallback_by_id = {item.id: item for item in fallback.results}
+        assert cleared.is_primary is False
+        assert class_row.primary_training_result_id is None
+        assert all(item.is_primary is False for item in fallback.results)
+        assert _service.primary_training_result(session, class_row.key).id == second.id
+        session.refresh(sample)
+        fallback_job = session.get(JobRow, sample.evaluation_job_id)
+        assert fallback_job is not None
+        assert fallback_job.config["training_result_id"] == str(second.id)
+        assert fallback_by_id[first.id].is_primary is False
+        assert fallback_by_id[second.id].is_primary is False
+        with pytest.raises(TrainingUIAPIError, match="не отмечена основной"):
+            _service.clear_primary_training_result(session, first.id, config)
+
         selected = _service.set_primary_training_result(session, second.id, config)
         after = _service.dataset_results(session, dataset.key, config)
         after_by_id = {item.id: item for item in after.results}
