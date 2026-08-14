@@ -43,7 +43,11 @@ from ._combined_dataset import (
     folder_file_hashes,
     tree_revision,
 )
-from ._dataset_catalog import find_managed_dataset, list_managed_datasets
+from ._dataset_catalog import (
+    dataset_class_row,
+    find_managed_dataset,
+    list_managed_datasets,
+)
 from ._datasets import RASTER_SUFFIXES, build_per_image_index
 from ._external_models import external_model_payload
 from ._models import (
@@ -131,8 +135,9 @@ def list_editor_datasets(
                 continue
             if dataset.annotations_dir is None and not geojson_files:
                 continue
-            primary = current_primary_training_result(
+            primary = _editor_effective_training_result(
                 session,
+                dataset.key,
                 dataset.class_key or dataset.key,
             )
             result.append(
@@ -166,7 +171,11 @@ def list_editor_scenes(
             _scene_infos(config, dataset, source_dir),
             username,
         )
-        primary = current_primary_training_result(session, dataset.class_key or dataset.key)
+        primary = _editor_effective_training_result(
+            session,
+            dataset.key,
+            dataset.class_key or dataset.key,
+        )
         return DatasetEditorSceneListResponse(
             dataset=_editor_dataset_info(
                 dataset,
@@ -202,9 +211,7 @@ def editor_scene_detail(
             geojson=_clip_geojson_to_footprint(_read_geojson(annotation_path), footprint),
             valid_data_footprint=dict(mapping(footprint)),
             draft=(
-                _draft_info(draft_row, dataset, scene.revision)
-                if draft_row is not None
-                else None
+                _draft_info(draft_row, dataset, scene.revision) if draft_row is not None else None
             ),
         )
 
@@ -302,11 +309,7 @@ def publish_editor_drafts(
             for row in rows
             if not row.deleted
         ],
-        deletions=[
-            (row.annotation_name, row.base_revision)
-            for row in rows
-            if row.deleted
-        ],
+        deletions=[(row.annotation_name, row.base_revision) for row in rows if row.deleted],
         username=username,
     )
 
@@ -328,7 +331,7 @@ def editor_scene_pseudo_markup(
         image_path = _matched_image_path(dataset, source_dir, annotation_name).resolve()
 
     class_key = dataset.class_key or dataset.key
-    primary = current_primary_training_result(session, class_key)
+    primary = _editor_effective_training_result(session, dataset.key, class_key)
     if primary is None:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
@@ -383,7 +386,13 @@ def editor_scene_pseudo_markup(
             message="Для снимка ещё нет псевдоразметки.",
         )
 
-    selected = _select_model(session, config, class_key, required=False)
+    selected = _select_model(
+        session,
+        config,
+        class_key,
+        required=False,
+        preferred_training_result_id=primary.id,
+    )
     if selected is None or selected.result.id != primary.id:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
@@ -462,7 +471,9 @@ def editor_scene_pseudo_markup(
                 "model_name": primary.model_name,
                 "task": primary.task,
                 "object_types": list(primary.class_schema or []),
-                "imagery_type": dataset.imagery_type.value if dataset.imagery_type is not None else None,
+                "imagery_type": dataset.imagery_type.value
+                if dataset.imagery_type is not None
+                else None,
                 "input_channels": selected.input_channels,
                 "mlflow_run_id": primary.mlflow_run_id,
                 "checkpoint_uri": selected.checkpoint.artifact_uri,
@@ -528,7 +539,11 @@ def editor_pseudo_job_info(
             job_id=row.id,
             message="Основная сеть задания больше недоступна.",
         )
-    current_primary = current_primary_training_result(session, str(state.get("class_id") or ""))
+    current_primary = _editor_effective_training_result(
+        session,
+        str(row.dataset_key or ""),
+        str(state.get("class_id") or ""),
+    )
     if current_primary is None or current_primary.id != training_result.id:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
@@ -629,9 +644,7 @@ def add_editor_scenes(
             _relative, selected_folder = _safe_relative_directory(images_root, folder_path)
             selected_paths = [
                 path
-                for path in sorted(
-                    selected_folder.iterdir(), key=lambda item: item.name.casefold()
-                )
+                for path in sorted(selected_folder.iterdir(), key=lambda item: item.name.casefold())
                 if path.is_file() and path.suffix.casefold() in RASTER_SUFFIXES
             ]
         else:
@@ -656,9 +669,7 @@ def add_editor_scenes(
                 raise DatasetEditorConflict(
                     "Снимки уже добавлены в датасет: " + ", ".join(collisions)
                 )
-            names = {
-                key: value for key, value in names.items() if key not in existing
-            }
+            names = {key: value for key, value in names.items() if key not in existing}
             if not names:
                 raise TrainingUIAPIError("Все TIFF из выбранной папки уже добавлены в датасет")
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -837,9 +848,7 @@ def publish_editor_scenes(
                 delete(DatasetEditorDraftRow).where(
                     DatasetEditorDraftRow.dataset_key == dataset.key,
                     DatasetEditorDraftRow.username == username,
-                    DatasetEditorDraftRow.annotation_name.in_(
-                        [item[0] for item in prepared]
-                    ),
+                    DatasetEditorDraftRow.annotation_name.in_([item[0] for item in prepared]),
                 )
             )
         if resolved_deletions:
@@ -976,9 +985,7 @@ def delete_editor_dataset(
         row.config_revision += 1
         row.legacy_version = False
         session.execute(
-            delete(DatasetEditorDraftRow).where(
-                DatasetEditorDraftRow.dataset_key == dataset_key
-            )
+            delete(DatasetEditorDraftRow).where(DatasetEditorDraftRow.dataset_key == dataset_key)
         )
         session.flush()
         return DatasetEditorMutationResult(
@@ -1024,9 +1031,7 @@ def preview_editor_dataset_rebuild(
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         manifest = load_dataset_manifest(source_dir)
         if manifest is None or not manifest.combined:
-            raise TrainingUIAPIError(
-                "Пересборка доступна только датасету с combined-манифестом."
-            )
+            raise TrainingUIAPIError("Пересборка доступна только датасету с combined-манифестом.")
         build = build_combined_dataset(
             manifest=manifest,
             repo_root=config.mlmarkup_editor_root,
@@ -1057,9 +1062,7 @@ def preview_editor_dataset_rebuild(
             "source_trees": {
                 source.path: tree_revision(
                     folder_file_hashes(
-                        config.mlmarkup_editor_root.joinpath(
-                            *PurePosixPath(source.path).parts
-                        )
+                        config.mlmarkup_editor_root.joinpath(*PurePosixPath(source.path).parts)
                     )
                 )
                 for source in manifest.sources
@@ -1126,9 +1129,7 @@ def rebuild_editor_dataset(
         if manifest is None:
             raise DatasetEditorConflict("Манифест target-датасета изменился после preview")
         for source in manifest.sources:
-            source_path = config.mlmarkup_editor_root.joinpath(
-                *PurePosixPath(source.path).parts
-            )
+            source_path = config.mlmarkup_editor_root.joinpath(*PurePosixPath(source.path).parts)
             current_tree = tree_revision(folder_file_hashes(source_path))
             if current_tree != (state.get("source_trees") or {}).get(source.path):
                 raise DatasetEditorConflict(
@@ -1155,9 +1156,7 @@ def rebuild_editor_dataset(
             manifest,
             candidate_files,
         )
-        expected_revisions = {
-            path: _blob_revision(config, "HEAD", path) for path in tracked_paths
-        }
+        expected_revisions = {path: _blob_revision(config, "HEAD", path) for path in tracked_paths}
         _replace_dataset_files_atomically(
             source_dir,
             output_files,
@@ -1168,10 +1167,7 @@ def rebuild_editor_dataset(
             _git(config, "add", "-A", "--", target_relative.as_posix())
             commit = _commit(
                 config,
-                (
-                    f"Пересобрать датасет {dataset.dataset_name or dataset.name} "
-                    f"в режиме {mode}"
-                ),
+                (f"Пересобрать датасет {dataset.dataset_name or dataset.name} в режиме {mode}"),
                 username,
             )
             commit = _push_with_retry(
@@ -1218,9 +1214,7 @@ def rebuild_editor_dataset(
 
 
 def _target_geojson_payloads(source_dir: Path) -> dict[str, dict[str, Any]]:
-    return {
-        path.name: _read_geojson(path) for path in _direct_files(source_dir, ".geojson")
-    }
+    return {path.name: _read_geojson(path) for path in _direct_files(source_dir, ".geojson")}
 
 
 def _source_rebuild_changes(
@@ -1376,9 +1370,7 @@ def _merge_rebuild_payloads(
         template = dict(candidate_payload or current_payload)
         template["_mlsystem2_schema_version"] = manifest.schema_version
         template["_mlsystem2_task"] = manifest.task
-        template["_mlsystem2_classes"] = [
-            item.model_dump(mode="json") for item in manifest.classes
-        ]
+        template["_mlsystem2_classes"] = [item.model_dump(mode="json") for item in manifest.classes]
         template["features"] = sorted(
             merged_features.values(),
             key=lambda feature: str(feature.get("id") or ""),
@@ -1529,10 +1521,7 @@ def _editor_pseudo_compatibility_error(
     if dataset.task != result.task:
         return "Тип задачи основной сети не совпадает с типом датасета."
     if dataset.task == "multiclass":
-        expected = [
-            (item.id, item.slug)
-            for item in dataset.object_types
-        ]
+        expected = [(item.id, item.slug) for item in dataset.object_types]
         actual = [
             (int(item.get("id") or 0), str(item.get("slug") or ""))
             for item in result.class_schema or []
@@ -1541,6 +1530,39 @@ def _editor_pseudo_compatibility_error(
         if actual != expected:
             return "Схема типов основной сети не совпадает со схемой датасета."
     return None
+
+
+def _editor_effective_training_result(
+    session: Session,
+    dataset_key: str,
+    class_key: str,
+) -> TrainingResultRow | None:
+    """Выбрать сеть для подсказки редактора без неявного назначения звезды."""
+
+    class_row = dataset_class_row(session, class_key or dataset_key)
+    if class_row is not None and class_row.primary_training_result_id is not None:
+        selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
+        if selected is not None and selected.status == ResultStatus.OK.value:
+            return selected
+    local_result = session.scalar(
+        select(TrainingResultRow)
+        .where(
+            (
+                (TrainingResultRow.dataset_key == dataset_key)
+                | (TrainingResultRow.class_key == dataset_key)
+            ),
+            TrainingResultRow.status == ResultStatus.OK.value,
+        )
+        .order_by(
+            TrainingResultRow.trained_at.desc().nullslast(),
+            TrainingResultRow.created_at.desc(),
+            TrainingResultRow.id.desc(),
+        )
+        .limit(1)
+    )
+    if local_result is not None:
+        return local_result
+    return current_primary_training_result(session, class_key or dataset_key)
 
 
 def _latest_covering_pseudo_result(
@@ -1586,9 +1608,10 @@ def _pseudo_result_covers_image(
     if result.scenes_file is None:
         return False
     try:
-        entries = result.scenes_file.path and Path(result.scenes_file.path).read_text(
-            encoding="utf-8-sig"
-        ).splitlines()
+        entries = (
+            result.scenes_file.path
+            and Path(result.scenes_file.path).read_text(encoding="utf-8-sig").splitlines()
+        )
     except OSError:
         return False
     resolved_image = image_path.resolve()
@@ -1596,9 +1619,7 @@ def _pseudo_result_covers_image(
     source_job = session.get(JobRow, result.job_id) if result.job_id is not None else None
     source_root = (source_job.config or {}).get("images_root") if source_job is not None else None
     root = (
-        Path(str(source_root)).resolve()
-        if source_root
-        else _dataset_images_root(dataset).resolve()
+        Path(str(source_root)).resolve() if source_root else _dataset_images_root(dataset).resolve()
     )
     try:
         expected.add(_scene_reference_key(resolved_image.relative_to(root).as_posix()))
@@ -1741,11 +1762,7 @@ def _editor_pseudo_job_info(
         training_result_id=training_result.id,
         model_name=training_result.model_name,
         job_id=row.id,
-        message=str(
-            state.get("error")
-            or row.error
-            or "Инференс по снимку завершился ошибкой."
-        ),
+        message=str(state.get("error") or row.error or "Инференс по снимку завершился ошибкой."),
         can_retry=True,
     )
 
@@ -2140,9 +2157,7 @@ def _validate_editor_geojson(
     image_path: Path,
     dataset: DatasetInfo,
 ) -> None:
-    if payload.get("type") != "FeatureCollection" or not isinstance(
-        payload.get("features"), list
-    ):
+    if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
     geojson_crs = _geojson_crs(payload)
     try:
@@ -2240,10 +2255,13 @@ def _cached_valid_data_footprint(
             )
             sample_width = max(1, int(round(source.width * scale)))
             sample_height = max(1, int(round(source.height * scale)))
-            valid_mask = source.dataset_mask(
-                out_shape=(sample_height, sample_width),
-                resampling=Resampling.nearest,
-            ) > 0
+            valid_mask = (
+                source.dataset_mask(
+                    out_shape=(sample_height, sample_width),
+                    resampling=Resampling.nearest,
+                )
+                > 0
+            )
             if not bool(valid_mask.any()):
                 raise TrainingUIAPIError(
                     f"TIFF не содержит валидных пикселей: {Path(image_path).name}"
@@ -2272,12 +2290,15 @@ def _cached_valid_data_footprint(
                     if int(value) == 1
                 ]
                 footprint = _polygonal_geometry(unary_union(parts))
-                tolerance = max(
-                    abs(mask_transform.a),
-                    abs(mask_transform.b),
-                    abs(mask_transform.d),
-                    abs(mask_transform.e),
-                ) * _VALID_FOOTPRINT_SIMPLIFY_CELLS
+                tolerance = (
+                    max(
+                        abs(mask_transform.a),
+                        abs(mask_transform.b),
+                        abs(mask_transform.d),
+                        abs(mask_transform.e),
+                    )
+                    * _VALID_FOOTPRINT_SIMPLIFY_CELLS
+                )
                 if tolerance > 0:
                     footprint = _polygonal_geometry(
                         footprint.simplify(tolerance, preserve_topology=True)
@@ -2308,7 +2329,9 @@ def _clip_geojson_to_footprint(
             geometry = shape(feature.get("geometry"))
             geometry = _polygonal_geometry(geometry.intersection(footprint))
         except Exception as exc:  # noqa: BLE001
-            raise TrainingUIAPIError(f"Не удалось обрезать геометрию объекта {index}: {exc}") from exc
+            raise TrainingUIAPIError(
+                f"Не удалось обрезать геометрию объекта {index}: {exc}"
+            ) from exc
         if geometry.is_empty:
             continue
         clipped_features.append({**feature, "geometry": dict(mapping(geometry))})
@@ -2354,9 +2377,7 @@ def _validate_preserved_properties(
             else None
         )
         if identity is not None and identity in previous_by_id:
-            if _non_system_properties(feature) != _non_system_properties(
-                previous_by_id[identity]
-            ):
+            if _non_system_properties(feature) != _non_system_properties(previous_by_id[identity]):
                 raise TrainingUIAPIError("Существующие свойства объектов изменять нельзя")
         properties = _non_system_properties(feature)
         if properties != "{}" and properties not in previous_property_sets:
@@ -2366,11 +2387,7 @@ def _validate_preserved_properties(
 def _non_system_properties(feature: dict[str, Any]) -> str:
     properties = feature.get("properties")
     cleaned = (
-        {
-            key: value
-            for key, value in properties.items()
-            if not key.startswith("_mlsystem2_")
-        }
+        {key: value for key, value in properties.items() if not key.startswith("_mlsystem2_")}
         if isinstance(properties, dict)
         else {}
     )
@@ -2404,7 +2421,11 @@ def _role_counts(payload: dict[str, Any]) -> tuple[int, int]:
         if not isinstance(feature, dict):
             raise TrainingUIAPIError("GeoJSON содержит некорректный Feature")
         properties = feature.get("properties")
-        role = properties.get(_ROLE_PROPERTY, "positive") if isinstance(properties, dict) else "positive"
+        role = (
+            properties.get(_ROLE_PROPERTY, "positive")
+            if isinstance(properties, dict)
+            else "positive"
+        )
         if role == "positive":
             positive += 1
         elif role == "hard_negative":

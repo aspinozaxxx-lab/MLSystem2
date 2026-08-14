@@ -1,4 +1,4 @@
-﻿"""Servis AOI-raspoznavaniya vnutri training_ui_api."""
+"""Servis AOI-raspoznavaniya vnutri training_ui_api."""
 
 from __future__ import annotations
 
@@ -168,9 +168,7 @@ def create_pseudolabel_job(
         else ""
     )
     source_job = (
-        session.get(JobRow, selected.result.job_id)
-        if selected.result.job_id is not None
-        else None
+        session.get(JobRow, selected.result.job_id) if selected.result.job_id is not None else None
     )
     source_config = dict(source_job.config or {}) if source_job is not None else {}
     tile_size = (
@@ -376,6 +374,7 @@ def _select_model(
     class_id: str,
     *,
     required: bool,
+    preferred_training_result_id: uuid.UUID | None = None,
 ) -> _SelectedModel | None:
     """Vybrat poslednii prigodnyi best checkpoint osnovnogo dataseta."""
 
@@ -412,25 +411,22 @@ def _select_model(
             )
         return None
     class_row = dataset_class_row(session, class_info.key)
-    if class_row is not None and class_row.primary_training_result_id is not None:
+    if preferred_training_result_id is not None:
+        preferred_result = session.get(TrainingResultRow, preferred_training_result_id)
+        rows = [preferred_result] if preferred_result is not None else []
+    elif class_row is not None and class_row.primary_training_result_id is not None:
         effective_result = primary_training_result(session, class_info.key)
         rows = [effective_result] if effective_result is not None else []
     else:
         rows = successful_training_results(session, class_info.key)
     for row in rows:
-        if (
-            row.status != ResultStatus.OK.value
-            or row.trained_at is None
-            or not row.mlflow_run_id
-        ):
+        if row.status != ResultStatus.OK.value or row.trained_at is None or not row.mlflow_run_id:
             continue
         source_job = session.get(JobRow, row.job_id) if row.job_id is not None else None
         if source_job is not None and source_job.status != JobStatus.COMPLETED.value:
             continue
         model_dataset = (
-            find_managed_dataset(session, config, row.dataset_key)
-            if row.dataset_key
-            else dataset
+            find_managed_dataset(session, config, row.dataset_key) if row.dataset_key else dataset
         )
         if (
             model_dataset is None
@@ -684,7 +680,9 @@ def _job_info(row: JobRow) -> PseudolabelJobInfo:
         source_attributions=_string_list(state.get("source_attributions"))
         or _string_list([state.get("source_attribution")]),
         source_license_url=str(state.get("source_license_url") or ""),
-        performance=(state.get("performance") if isinstance(state.get("performance"), dict) else {}),
+        performance=(
+            state.get("performance") if isinstance(state.get("performance"), dict) else {}
+        ),
         task=str(state.get("task") or "binary"),
         object_types=(
             [item for item in state.get("object_types", []) if isinstance(item, dict)]

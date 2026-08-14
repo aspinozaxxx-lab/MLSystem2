@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import sqlite3
@@ -155,9 +155,7 @@ def editor_environment(
         payload = datasets.json()["datasets"]
         assert {item["dataset_name"] for item in payload} == {"empty", "test"}
         dataset = next(item for item in payload if item["dataset_name"] == "test")
-        empty_dataset = next(
-            item for item in payload if item["dataset_name"] == "empty"
-        )
+        empty_dataset = next(item for item in payload if item["dataset_name"] == "empty")
         yield _EditorEnvironment(
             client=client,
             dataset_key=dataset["key"],
@@ -193,9 +191,7 @@ def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
     assert scenes[0]["hard_negative_count"] == 1
     assert len(scenes[0]["revision"]) == 40
     empty_path = quote(env.empty_dataset_key, safe="")
-    empty_scenes = env.client.get(
-        f"/api/v1/dataset-editor/datasets/{empty_path}/scenes"
-    )
+    empty_scenes = env.client.get(f"/api/v1/dataset-editor/datasets/{empty_path}/scenes")
     assert empty_scenes.status_code == 200
     assert empty_scenes.json()["scenes"] == []
 
@@ -277,9 +273,7 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     inside_nodata = current["geojson"]
     inside_nodata["features"][0]["geometry"] = {
         "type": "Polygon",
-        "coordinates": [
-            [[6.25, 0.25], [7.75, 0.25], [7.75, 1.75], [6.25, 1.75], [6.25, 0.25]]
-        ],
+        "coordinates": [[[6.25, 0.25], [7.75, 0.25], [7.75, 1.75], [6.25, 1.75], [6.25, 0.25]]],
     }
     rejected_nodata = env.client.put(
         detail_url,
@@ -307,9 +301,7 @@ def test_dataset_editor_persists_discards_and_publishes_server_drafts(
     scene = env.client.get(scenes_url).json()["scenes"][0]
     annotation_path = quote(scene["annotation_name"], safe="")
     detail_url = f"{scenes_url}/{annotation_path}"
-    draft_url = (
-        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_path}"
-    )
+    draft_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_path}"
     live_before = env.live_annotation.read_bytes()
     head_before = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
     payload = deepcopy(env.client.get(detail_url).json()["geojson"])
@@ -340,13 +332,14 @@ def test_dataset_editor_persists_discards_and_publishes_server_drafts(
     assert discarded.json()["deleted_count"] == 1
     assert env.client.get(detail_url).json()["draft"] is None
 
-    assert env.client.put(
-        draft_url,
-        json={"base_revision": scene["revision"], "geojson": payload},
-    ).status_code == 200
-    published = env.client.post(
-        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish"
+    assert (
+        env.client.put(
+            draft_url,
+            json={"base_revision": scene["revision"], "geojson": payload},
+        ).status_code
+        == 200
     )
+    published = env.client.post(f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish")
     assert published.status_code == 200
     assert published.json()["commit"] != head_before
     assert env.client.get(detail_url).json()["draft"] is None
@@ -364,9 +357,7 @@ def test_dataset_editor_publishes_multiple_scenes_atomically(
     assert added.status_code == 200
 
     scenes = env.client.get(scenes_url).json()["scenes"]
-    first = next(
-        item for item in scenes if item["annotation_name"] == "Olskij_SCN01.part.geojson"
-    )
+    first = next(item for item in scenes if item["annotation_name"] == "Olskij_SCN01.part.geojson")
     second = next(item for item in scenes if item["annotation_name"] == "batch_SCN02.geojson")
 
     def detail(scene: dict[str, object]) -> dict[str, object]:
@@ -402,9 +393,7 @@ def test_dataset_editor_publishes_multiple_scenes_atomically(
     commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
     published = env.client.put(scenes_url, json=request)
     assert published.status_code == 200
-    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (
-        commits_before + 1
-    )
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (commits_before + 1)
     assert [item["annotation_name"] for item in published.json()["scenes"]] == [
         first["annotation_name"],
         second["annotation_name"],
@@ -461,9 +450,7 @@ def test_dataset_editor_publishes_multiple_scenes_atomically(
     duplicate = {"scenes": [request["scenes"][0], request["scenes"][0]]}
     assert env.client.put(scenes_url, json=duplicate).status_code == 422
     openapi = env.client.get("/openapi.json").json()
-    assert "put" in openapi["paths"][
-        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes"
-    ]
+    assert "put" in openapi["paths"]["/api/v1/dataset-editor/datasets/{dataset_key}/scenes"]
     assert "DatasetEditorPublishRequest" in openapi["components"]["schemas"]
 
 
@@ -488,9 +475,7 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     added = env.client.post(scenes_url, json={"folder_path": "batch"})
     assert added.status_code == 200
     assert len(added.json()["scenes"]) == 2
-    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (
-        commits_before + 1
-    )
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (commits_before + 1)
     assert env.live_annotation.read_bytes() == live_before
     assert not (env.live_annotation.parent / "batch_SCN02.geojson").exists()
     already_added = env.client.post(scenes_url, json={"folder_path": "batch"})
@@ -544,14 +529,15 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     )
     assert restored["draft"] is None
 
-    assert env.client.request(
-        "DELETE",
-        f"{scenes_url}/{quote(scene['annotation_name'], safe='')}",
-        json={"revision": scene["revision"]},
-    ).status_code == 200
-    published = env.client.post(
-        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish"
+    assert (
+        env.client.request(
+            "DELETE",
+            f"{scenes_url}/{quote(scene['annotation_name'], safe='')}",
+            json={"revision": scene["revision"]},
+        ).status_code
+        == 200
     )
+    published = env.client.post(f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish")
     assert published.status_code == 200
     remaining = env.client.get(scenes_url).json()["scenes"]
     assert {item["annotation_name"] for item in remaining} == {
@@ -587,9 +573,12 @@ def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
         for dataset in class_info["datasets"]
     }
     assert env.dataset_key not in active_keys
-    assert env.client.get(
-        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
-    ).status_code == 400
+    assert (
+        env.client.get(
+            f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+        ).status_code
+        == 400
+    )
 
     with sqlite3.connect(env.database_path) as connection:
         source_path, deleted_at = connection.execute(
@@ -598,9 +587,12 @@ def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
         ).fetchone()
     assert source_path
     assert deleted_at
-    assert "delete" in env.client.get("/openapi.json").json()["paths"][
-        "/api/v1/dataset-editor/datasets/{dataset_key}"
-    ]
+    assert (
+        "delete"
+        in env.client.get("/openapi.json").json()["paths"][
+            "/api/v1/dataset-editor/datasets/{dataset_key}"
+        ]
+    )
 
 
 def test_dataset_editor_returns_service_unavailable_for_missing_clone(
@@ -644,8 +636,16 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
             {
                 "type": "FeatureCollection",
                 "features": [
-                    {"type": "Feature", "properties": {"confidence": 0.9}, "geometry": mapping(inside)},
-                    {"type": "Feature", "properties": {"confidence": 0.8}, "geometry": mapping(outside)},
+                    {
+                        "type": "Feature",
+                        "properties": {"confidence": 0.9},
+                        "geometry": mapping(inside),
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {"confidence": 0.8},
+                        "geometry": mapping(outside),
+                    },
                 ],
             }
         ),
@@ -698,6 +698,98 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
     assert payload["training_result_id"] == str(result_id)
     assert payload["object_count"] == 1
     assert payload["geojson"]["crs"]["properties"]["name"] == "EPSG:4326"
+    with create_session_factory(get_config())() as session:
+        assert not any(
+            (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
+            for row in session.scalars(select(JobRow)).all()
+        )
+
+
+def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    local_result_id = _create_primary_training_result(env)
+    stored_root = get_config().stored_files_root
+    stored_root.mkdir(parents=True, exist_ok=True)
+    scenes_path = stored_root / "covered-scenes-without-primary.txt"
+    scenes_path.write_text("Olskij/SCN01.part\n", encoding="utf-8")
+    pseudo_path = stored_root / "full-pseudo-without-primary.geojson"
+    pseudo_path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": []}),
+        encoding="utf-8",
+    )
+    with create_session_factory(get_config())() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        other_dataset = session.scalar(
+            select(DatasetRow).where(DatasetRow.key == env.empty_dataset_key)
+        )
+        assert dataset is not None and other_dataset is not None
+        class_row = session.get(DatasetClassRow, dataset.class_id)
+        assert class_row is not None
+        class_row.primary_training_result_id = None
+        newer_class_result = TrainingResultRow(
+            dataset_key=other_dataset.key,
+            dataset_version="newer-other-version",
+            class_key=other_dataset.key,
+            class_display_name=class_row.name,
+            architecture="smp_segformer_b2",
+            model_name="Более новая сеть другого датасета",
+            quality_metric="pixel",
+            task="binary",
+            class_schema=[],
+            status="ok",
+            trained_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+            mlflow_run_id="run-newer-other-dataset",
+        )
+        scenes_file = StoredFileRow(
+            kind="scenes_txt",
+            original_name=scenes_path.name,
+            content_type="text/plain",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        pseudo_file = StoredFileRow(
+            kind="pseudo_markup_geojson",
+            original_name=pseudo_path.name,
+            content_type="application/geo+json",
+            path=str(pseudo_path),
+            size_bytes=pseudo_path.stat().st_size,
+            object_count=0,
+        )
+        session.add_all([newer_class_result, scenes_file, pseudo_file])
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                dataset_key=dataset.key,
+                training_result_id=local_result_id,
+                class_key=dataset.key,
+                source_dataset_name="Реки / test",
+                image_count=1,
+                scenes_file_id=scenes_file.id,
+                geojson_file_id=pseudo_file.id,
+                status="ok",
+            )
+        )
+        session.commit()
+
+    scenes_response = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    )
+    assert scenes_response.status_code == 200
+    scenes_payload = scenes_response.json()
+    assert scenes_payload["dataset"]["primary_training_result_id"] == str(local_result_id)
+    scene = scenes_payload["scenes"][0]
+    response = env.client.post(
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(env.dataset_key, safe='')}/scenes/"
+        f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["source"] == "dataset"
+    assert payload["training_result_id"] == str(local_result_id)
     with create_session_factory(get_config())() as session:
         assert not any(
             (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
@@ -778,9 +870,7 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
         job = session.get(JobRow, job_id)
         assert job is not None and job.tmp_path is not None
         run_dir = Path(job.tmp_path)
-        runner_config = yaml.safe_load(
-            (run_dir / "pseudo_config.yaml").read_text(encoding="utf-8")
-        )
+        runner_config = yaml.safe_load((run_dir / "pseudo_config.yaml").read_text(encoding="utf-8"))
         assert runner_config["scenes_file"].endswith("editor_scene.txt")
         assert runner_config["inference_backend"] == "pytorch_one_off"
         assert runner_config["class_key"] == env.dataset_key
@@ -808,9 +898,7 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
     repeated_ready = env.client.post(endpoint)
     assert repeated_ready.json()["status"] == "ready"
     assert repeated_ready.json()["job_id"] == str(job_id)
-    lightweight = env.client.get(
-        f"/api/v1/dataset-editor/pseudo-markup/{job_id}"
-    )
+    lightweight = env.client.get(f"/api/v1/dataset-editor/pseudo-markup/{job_id}")
     assert lightweight.status_code == 200
     assert lightweight.json()["status"] == "ready"
     assert lightweight.json()["job_id"] == str(job_id)
