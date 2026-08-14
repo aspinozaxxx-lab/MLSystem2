@@ -88,11 +88,11 @@ from .contracts import (
     TestSampleMetric,
     TestSampleOptimizeRequest,
     TestSamplePrimaryUpdate,
+    TestSamplePseudoMarkupInfo,
     TestSampleSummary,
     TestSampleTileInfo,
     TestSampleTileUpdate,
     TestSampleUpdate,
-    TestSampleDatasetGroup,
     TrainingResultTestF1Info,
     TrainingUIAPIError,
 )
@@ -223,6 +223,7 @@ def create_test_sample(
             generated,
             quality_metric=dataset.quality_metric,
         )
+        _normalize_test_sample_class(session, row)
         session.add(row)
         session.flush()
         evaluate_test_sample(session, row, config)
@@ -233,7 +234,7 @@ def create_test_sample(
             source=JobSource.AUTOMATION,
         )
         session.flush()
-        return _detail(row)
+        return _detail(session, row)
     except Exception:
         shutil.rmtree(building_root, ignore_errors=True)
         shutil.rmtree(final_root, ignore_errors=True)
@@ -283,6 +284,14 @@ def _new_test_sample_row(
         for tile in generated.tiles
     ]
     return row
+
+
+def _normalize_test_sample_class(session: Session, row: TestSampleRow) -> None:
+    class_row = dataset_class_row(session, row.dataset_key)
+    if class_row is None:
+        return
+    row.class_key = class_row.key
+    row.class_name = class_row.name
 
 
 def create_test_sample_batch(
@@ -490,7 +499,11 @@ def _create_grouped_test_sample(
     item: TestSampleBatchItemRow,
     config: TrainingUIAPIConfig,
 ) -> TestSampleDetail:
-    source = _latest_pseudo_markup(session, item.dataset_key)
+    source = _latest_pseudo_markup(
+        session,
+        item.dataset_key,
+        class_key=item.class_key,
+    )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
             "Нет успешной псевдоразметки выбранного датасета для оптимизации состава."
@@ -526,6 +539,7 @@ def _create_grouped_test_sample(
             generated,
             quality_metric=dataset.quality_metric,
         )
+        _normalize_test_sample_class(session, row)
         session.add(row)
         session.flush()
         _optimize_test_sample_row(
@@ -547,7 +561,7 @@ def _create_grouped_test_sample(
             source=JobSource.AUTOMATION,
         )
         session.flush()
-        return _detail(row)
+        return _detail(session, row)
     except Exception:
         shutil.rmtree(building_root, ignore_errors=True)
         shutil.rmtree(final_root, ignore_errors=True)
@@ -631,25 +645,16 @@ def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
         .options(selectinload(TestSampleRow.tiles))
         .order_by(TestSampleRow.created_at.desc(), TestSampleRow.id.desc())
     ).all()
-    grouped: dict[tuple[str, str], dict[tuple[str, str], list[TestSampleSummary]]] = (
-        defaultdict(lambda: defaultdict(list))
-    )
+    grouped: dict[tuple[str, str], list[TestSampleSummary]] = defaultdict(list)
     for row in rows:
-        grouped[(row.class_key, row.class_name)][
-            (row.dataset_key, row.dataset_short_name)
-        ].append(_summary(row))
+        grouped[(row.class_key, row.class_name)].append(_summary(session, row))
     classes = [
         TestSampleClassGroup(
             key=class_key,
             name=class_name,
-            datasets=[
-                TestSampleDatasetGroup(key=dataset_key, name=dataset_name, samples=samples)
-                for (dataset_key, dataset_name), samples in sorted(
-                    dataset_groups.items(), key=lambda item: item[0][1].casefold()
-                )
-            ],
+            samples=samples,
         )
-        for (class_key, class_name), dataset_groups in sorted(
+        for (class_key, class_name), samples in sorted(
             grouped.items(), key=lambda item: item[0][1].casefold()
         )
     ]
@@ -664,7 +669,7 @@ def test_sample_detail(
     row = _sample_row(session, sample_id)
     if config is not None:
         _backfill_test_sample_tile_f1(session, row, config)
-    return _detail(row)
+    return _detail(session, row)
 
 
 def _backfill_test_sample_tile_f1(
@@ -738,7 +743,7 @@ def update_test_sample(
     if primary_changed or (content_changed and (was_primary or row.is_primary)):
         _refresh_training_metrics_after_primary_change(
             session,
-            row.dataset_key,
+            row.class_key,
             config,
             reason=(
                 "Основная тестовая разметка изменена; требуется пересчёт."
@@ -750,7 +755,7 @@ def update_test_sample(
         reconcile_training_result_test_f1(
             session,
             config,
-            dataset_keys={row.dataset_key},
+            dataset_keys=_class_scope_keys(session, row.class_key),
         )
     if content_changed:
         queue_test_sample_evaluation(
@@ -760,7 +765,7 @@ def update_test_sample(
             source=JobSource.AUTOMATION,
         )
     session.flush()
-    return _detail(row)
+    return _detail(session, row)
 
 
 def update_test_sample_primary(
@@ -771,15 +776,15 @@ def update_test_sample_primary(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     if not _set_test_sample_primary(session, row, request.is_primary):
-        return _detail(row)
+        return _detail(session, row)
     _refresh_training_metrics_after_primary_change(
         session,
-        row.dataset_key,
+        row.class_key,
         config,
         reason="Основная тестовая разметка изменена; требуется пересчёт.",
     )
     session.flush()
-    return _detail(row)
+    return _detail(session, row)
 
 
 def _set_test_sample_primary(
@@ -792,7 +797,7 @@ def _set_test_sample_primary(
     if is_primary:
         current_rows = session.scalars(
             select(TestSampleRow).where(
-                TestSampleRow.dataset_key == row.dataset_key,
+                TestSampleRow.class_key.in_(_class_scope_keys(session, row.class_key)),
                 TestSampleRow.is_primary.is_(True),
                 TestSampleRow.id != row.id,
             )
@@ -845,7 +850,7 @@ def update_test_sample_tile(
         if row.is_primary:
             _refresh_training_metrics_after_primary_change(
                 session,
-                row.dataset_key,
+                row.class_key,
                 config,
                 reason="Состав основной тестовой разметки изменён; требуется пересчёт.",
             )
@@ -857,7 +862,7 @@ def update_test_sample_tile(
                 source=JobSource.AUTOMATION,
             )
         session.flush()
-    return _detail(row)
+    return _detail(session, row)
 
 
 def delete_test_sample(
@@ -877,7 +882,7 @@ def delete_test_sample(
         if row.is_primary:
             _mark_training_test_metrics_stale(
                 session,
-                row.dataset_key,
+                row.class_key,
                 "Основная тестовая разметка удалена.",
                 unavailable=True,
             )
@@ -904,7 +909,7 @@ def evaluate_test_sample_by_id(
         force=True,
     )
     session.flush()
-    return _detail(row)
+    return _detail(session, row)
 
 
 def evaluate_test_sample_preview(
@@ -927,7 +932,7 @@ def optimize_test_sample_preview(
 ) -> TestSampleDraftPreview:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(session, row.dataset_key)
+    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
             "Нет успешной разметки для этого датасета; "
@@ -973,7 +978,7 @@ def _preview_evaluation(
             status="unavailable",
             error="В тестовой разметке нет включённых тайлов.",
         )
-    source = _latest_pseudo_markup(session, row.dataset_key)
+    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
     if source is None or source.geojson_file is None:
         return TestSampleEvaluationInfo(
             status="unavailable",
@@ -1016,6 +1021,17 @@ def _preview_evaluation_info(
             if source.training_result is not None
             else "псевдоразметка"
         ),
+        training_result_id=source.training_result_id,
+        training_dataset_key=(
+            source.training_result.dataset_key or source.training_result.class_key
+            if source.training_result is not None
+            else None
+        ),
+        training_dataset_name=(
+            source.training_result.class_display_name
+            if source.training_result is not None
+            else None
+        ),
         markup_created_at=source.updated_at or source.created_at,
         evaluated_at=_utc_now(),
     )
@@ -1029,7 +1045,7 @@ def optimize_test_sample(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(session, row.dataset_key)
+    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
             "Нет успешной разметки для этого датасета; "
@@ -1052,7 +1068,7 @@ def optimize_test_sample(
         if row.is_primary:
             _refresh_training_metrics_after_primary_change(
                 session,
-                row.dataset_key,
+                row.class_key,
                 config,
                 reason="Состав основной тестовой разметки оптимизирован; требуется пересчёт.",
             )
@@ -1063,7 +1079,7 @@ def optimize_test_sample(
             source=JobSource.AUTOMATION,
         )
     session.flush()
-    return _detail(row)
+    return _detail(session, row)
 
 
 def _optimize_test_sample_row(
@@ -1135,7 +1151,11 @@ def evaluate_test_sample(
 ) -> None:
     """Обновить поснимочный кэш оптимизатора по псевдоразметке."""
 
-    source = pseudo_result or _latest_pseudo_markup(session, row.dataset_key)
+    source = pseudo_result or _latest_pseudo_markup(
+        session,
+        row.dataset_key,
+        class_key=row.class_key,
+    )
     if source is None or source.geojson_file is None:
         _clear_test_sample_tile_f1(row)
         row.evaluation_pseudo_result_id = None
@@ -1486,20 +1506,23 @@ def evaluate_test_samples_for_pseudo_markup(
     if (
         pseudo_result.status != "ok"
         or pseudo_result.geojson_file is None
-        or not pseudo_result.class_key
-        or pseudo_result.dataset_key != pseudo_result.class_key
+        or not pseudo_result.dataset_key
     ):
-        return
-    latest = _latest_pseudo_markup(session, pseudo_result.class_key)
-    if latest is None or latest.id != pseudo_result.id:
         return
     rows = session.scalars(
         select(TestSampleRow)
-        .where(TestSampleRow.dataset_key == pseudo_result.class_key)
+        .where(TestSampleRow.dataset_key == pseudo_result.dataset_key)
         .options(selectinload(TestSampleRow.tiles))
         .order_by(TestSampleRow.created_at)
     ).all()
     for row in rows:
+        latest = _latest_pseudo_markup(
+            session,
+            row.dataset_key,
+            class_key=row.class_key,
+        )
+        if latest is None or latest.id != pseudo_result.id:
+            continue
         evaluate_test_sample(session, row, config, pseudo_result=pseudo_result)
     session.flush()
 
@@ -1623,22 +1646,23 @@ def build_test_samples_download(
             str(row.id),
         ),
     )
-    rows_by_dataset: dict[str, list[TestSampleRow]] = defaultdict(list)
+    rows_by_class: dict[str, list[TestSampleRow]] = defaultdict(list)
     for row in ordered_rows:
-        rows_by_dataset[row.dataset_key].append(row)
-    duplicate_datasets = sorted(
+        class_row = dataset_class_row(session, row.class_key)
+        rows_by_class[class_row.key if class_row is not None else row.class_key].append(row)
+    duplicate_classes = sorted(
         {
-            dataset_rows[0].dataset_name
-            for dataset_rows in rows_by_dataset.values()
-            if len(dataset_rows) > 1
+            class_rows[0].class_name
+            for class_rows in rows_by_class.values()
+            if len(class_rows) > 1
         },
         key=str.casefold,
     )
-    if duplicate_datasets:
+    if duplicate_classes:
         raise TrainingUIAPIError(
             "Для группового скачивания можно выбрать не более одной разметки "
-            "каждого датасета. Повторяются датасеты: "
-            + ", ".join(duplicate_datasets)
+            "каждого класса. Повторяются классы: "
+            + ", ".join(duplicate_classes)
         )
     empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
     if empty:
@@ -2387,11 +2411,14 @@ def _polygonal_geometry(geometry: BaseGeometry) -> Polygon | MultiPolygon | None
 def _latest_pseudo_markup(
     session: Session,
     dataset_key: str,
+    *,
+    class_key: str | None = None,
 ) -> PseudoMarkupResultRow | None:
-    primary = primary_training_result(session, dataset_key)
+    primary = current_primary_training_result(session, class_key or dataset_key)
+    if primary is None:
+        primary = primary_training_result(session, class_key or dataset_key)
     conditions = [
             PseudoMarkupResultRow.status == "ok",
-            PseudoMarkupResultRow.class_key == dataset_key,
             PseudoMarkupResultRow.dataset_key == dataset_key,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
     ]
@@ -2424,6 +2451,20 @@ def _sample_row(session: Session, sample_id: uuid.UUID) -> TestSampleRow:
     return row
 
 
+def _class_scope_keys(session: Session, class_or_dataset_key: str) -> set[str]:
+    """Вернуть канонический ключ класса и ключи всех его датасетов."""
+
+    class_row = dataset_class_row(session, class_or_dataset_key)
+    if class_row is None:
+        return {class_or_dataset_key}
+    return {
+        class_row.key,
+        *session.scalars(
+            select(DatasetRow.key).where(DatasetRow.class_id == class_row.id)
+        ).all(),
+    }
+
+
 def _refresh_training_metrics_after_primary_change(
     session: Session,
     dataset_key: str,
@@ -2451,13 +2492,17 @@ def _mark_training_test_metrics_stale(
     *,
     unavailable: bool = False,
 ) -> None:
+    class_keys = _class_scope_keys(session, dataset_key)
     rows = session.scalars(
         select(TrainingResultTestMetricRow)
         .join(
             TrainingResultRow,
             TrainingResultRow.id == TrainingResultTestMetricRow.training_result_id,
         )
-        .where(TrainingResultRow.class_key == dataset_key)
+        .where(
+            TrainingResultRow.class_key.in_(class_keys)
+            | TrainingResultRow.dataset_key.in_(class_keys)
+        )
     ).all()
     for row in rows:
         _cancel_test_metric_job(session, row)
@@ -2796,10 +2841,14 @@ def queue_class_test_f1(
         raise TrainingUIAPIError("Для датасета не назначена основная тестовая разметка.")
     if not any(tile.enabled for tile in sample.tiles):
         raise TrainingUIAPIError("В основной тестовой разметке нет включённых тайлов.")
+    class_keys = _class_scope_keys(session, dataset_key)
     results = session.scalars(
         select(TrainingResultRow)
         .where(
-            TrainingResultRow.class_key == dataset_key,
+            (
+                TrainingResultRow.class_key.in_(class_keys)
+                | TrainingResultRow.dataset_key.in_(class_keys)
+            ),
             TrainingResultRow.status == "ok",
         )
         .order_by(TrainingResultRow.created_at.desc(), TrainingResultRow.id.desc())
@@ -2829,7 +2878,10 @@ def reconcile_training_result_test_f1(
     if dataset_keys is not None:
         if not dataset_keys:
             return 0
-        conditions.append(TrainingResultRow.class_key.in_(dataset_keys))
+        conditions.append(
+            TrainingResultRow.class_key.in_(dataset_keys)
+            | TrainingResultRow.dataset_key.in_(dataset_keys)
+        )
     results = session.scalars(
         select(TrainingResultRow)
         .where(*conditions)
@@ -3063,10 +3115,11 @@ def primary_test_sample(
 
 
 def _primary_sample(session: Session, dataset_key: str) -> TestSampleRow | None:
+    class_keys = _class_scope_keys(session, dataset_key)
     return session.scalar(
         select(TestSampleRow)
         .where(
-            TestSampleRow.dataset_key == dataset_key,
+            TestSampleRow.class_key.in_(class_keys),
             TestSampleRow.is_primary.is_(True),
         )
         .options(selectinload(TestSampleRow.tiles))
@@ -3122,7 +3175,11 @@ def _test_f1_postprocess_profile_name(
         else None
     )
     if source is None or source.image_count is None:
-        source = _latest_pseudo_markup(session, sample.dataset_key)
+        source = _latest_pseudo_markup(
+            session,
+            sample.dataset_key,
+            class_key=sample.class_key,
+        )
     image_count = source.image_count if source is not None else None
     if image_count is None:
         dataset = find_managed_dataset(session, config, sample.dataset_key)
@@ -3205,7 +3262,86 @@ def _test_f1_progress(job: JobRow | None) -> RuntimeProgress | None:
     )
 
 
-def _summary(row: TestSampleRow) -> TestSampleSummary:
+def test_sample_pseudo_markup_info(
+    session: Session,
+    row: TestSampleRow,
+) -> TestSamplePseudoMarkupInfo:
+    """Описать кэш псевдоразметки исходного датасета для оптимизатора."""
+
+    target = current_primary_training_result(session, row.class_key)
+    if target is None:
+        return TestSamplePseudoMarkupInfo(
+            status="unavailable",
+            error="Для класса не назначена успешная основная сеть.",
+        )
+    common = {
+        "training_result_id": target.id,
+        "model_name": target.model_name,
+        "training_dataset_key": target.dataset_key or target.class_key,
+        "training_dataset_name": target.class_display_name,
+    }
+    ready = _latest_pseudo_markup(
+        session,
+        row.dataset_key,
+        class_key=row.class_key,
+    )
+    if (
+        ready is not None
+        and ready.training_result_id == target.id
+        and ready.geojson_file is not None
+        and Path(ready.geojson_file.path).is_file()
+    ):
+        return TestSamplePseudoMarkupInfo(
+            status="ready",
+            result_id=ready.id,
+            job_id=ready.job_id,
+            can_create=False,
+            **common,
+        )
+    candidate = session.scalar(
+        select(PseudoMarkupResultRow)
+        .where(
+            PseudoMarkupResultRow.dataset_key == row.dataset_key,
+            PseudoMarkupResultRow.training_result_id == target.id,
+        )
+        .order_by(
+            PseudoMarkupResultRow.updated_at.desc(),
+            PseudoMarkupResultRow.created_at.desc(),
+            PseudoMarkupResultRow.id.desc(),
+        )
+        .limit(1)
+    )
+    job = (
+        session.get(JobRow, candidate.job_id)
+        if candidate is not None and candidate.job_id is not None
+        else None
+    )
+    if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+        return TestSamplePseudoMarkupInfo(
+            status=job.status,
+            result_id=candidate.id if candidate is not None else None,
+            job_id=job.id,
+            can_create=False,
+            **common,
+        )
+    if candidate is not None and candidate.status in {"error", "failed"}:
+        return TestSamplePseudoMarkupInfo(
+            status="error",
+            result_id=candidate.id,
+            job_id=candidate.job_id,
+            can_create=True,
+            error=(job.error if job is not None else None) or "Псевдоразметка завершилась с ошибкой.",
+            **common,
+        )
+    return TestSamplePseudoMarkupInfo(
+        status="unavailable",
+        can_create=True,
+        error="Для исходного датасета нет псевдоразметки текущей основной сети.",
+        **common,
+    )
+
+
+def _summary(session: Session, row: TestSampleRow) -> TestSampleSummary:
     enabled = [tile for tile in row.tiles if tile.enabled]
     return TestSampleSummary(
         id=row.id,
@@ -3213,6 +3349,9 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         dataset_key=row.dataset_key,
         dataset_name=row.dataset_name,
         dataset_version=row.dataset_version,
+        source_dataset_key=row.dataset_key,
+        source_dataset_name=row.dataset_name,
+        source_dataset_version=row.dataset_version,
         class_key=row.class_key,
         class_name=row.class_name,
         task=row.task,
@@ -3230,14 +3369,15 @@ def _summary(row: TestSampleRow) -> TestSampleSummary:
         actual_object_count=row.actual_object_count,
         enabled_object_count=sum(tile.object_count for tile in enabled),
         is_primary=row.is_primary,
-        evaluation=_evaluation_info(row),
+        evaluation=_evaluation_info(session, row),
+        pseudo_markup=test_sample_pseudo_markup_info(session, row),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
 
-def _detail(row: TestSampleRow) -> TestSampleDetail:
-    summary = _summary(row)
+def _detail(session: Session, row: TestSampleRow) -> TestSampleDetail:
+    summary = _summary(session, row)
     return TestSampleDetail(
         **summary.model_dump(),
         tile_width=row.tile_width,
@@ -3269,7 +3409,7 @@ def _detail(row: TestSampleRow) -> TestSampleDetail:
     )
 
 
-def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
+def _evaluation_info(session: Session, row: TestSampleRow) -> TestSampleEvaluationInfo:
     status = row.metric_status
     if (
         status not in {"queued", "running"}
@@ -3283,17 +3423,19 @@ def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
         or job.status not in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
     ):
         status = "stale" if _has_metrics(row) else "error"
-    target_result_id: uuid.UUID | None = None
-    target_model_name: str | None = None
+    saved_result = (
+        session.get(TrainingResultRow, row.evaluation_training_result_id)
+        if row.evaluation_training_result_id is not None
+        else None
+    )
+    target_result = current_primary_training_result(session, row.class_key)
     if job is not None and (job.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET:
         try:
-            target_result_id = uuid.UUID(str((job.config or {}).get("training_result_id")))
+            queued_result_id = uuid.UUID(str((job.config or {}).get("training_result_id")))
         except (TypeError, ValueError):
-            target_result_id = None
-        target_model_name = job.model_name
-    elif status == "current":
-        target_result_id = row.evaluation_training_result_id
-        target_model_name = row.evaluation_model_name
+            queued_result_id = None
+        if queued_result_id is not None:
+            target_result = session.get(TrainingResultRow, queued_result_id)
     return TestSampleEvaluationInfo(
         status=status,
         pixel=_metric_info(
@@ -3319,9 +3461,25 @@ def _evaluation_info(row: TestSampleRow) -> TestSampleEvaluationInfo:
             else None
         ),
         training_result_id=row.evaluation_training_result_id,
-        target_training_result_id=target_result_id,
+        target_training_result_id=target_result.id if target_result is not None else None,
         model_name=row.evaluation_model_name,
-        target_model_name=target_model_name,
+        target_model_name=target_result.model_name if target_result is not None else None,
+        training_dataset_key=(
+            saved_result.dataset_key or saved_result.class_key
+            if saved_result is not None
+            else None
+        ),
+        training_dataset_name=(
+            saved_result.class_display_name if saved_result is not None else None
+        ),
+        target_training_dataset_key=(
+            target_result.dataset_key or target_result.class_key
+            if target_result is not None
+            else None
+        ),
+        target_training_dataset_name=(
+            target_result.class_display_name if target_result is not None else None
+        ),
         threshold=row.evaluation_threshold,
         job_id=row.evaluation_job_id,
         progress=_test_f1_progress(job),

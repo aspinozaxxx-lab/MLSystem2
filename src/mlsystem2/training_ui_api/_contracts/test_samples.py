@@ -81,7 +81,7 @@ class TestSampleBulkDownloadRequest(BaseModel):
         min_length=1,
         description=(
             "Уникальные идентификаторы сохранённых тестовых разметок; "
-            "не более одной разметки для каждого dataset_key."
+            "не более одной разметки для каждого класса."
         ),
         json_schema_extra={"uniqueItems": True},
     )
@@ -117,6 +117,10 @@ class TestSampleEvaluationInfo(BaseModel):
     target_training_result_id: UUID | None = None
     model_name: str | None = None
     target_model_name: str | None = None
+    training_dataset_key: str | None = None
+    training_dataset_name: str | None = None
+    target_training_dataset_key: str | None = None
+    target_training_dataset_name: str | None = None
     threshold: float | None = None
     job_id: UUID | None = None
     progress: RuntimeProgress | None = None
@@ -124,6 +128,20 @@ class TestSampleEvaluationInfo(BaseModel):
     evaluated_at: datetime | None = None
     error: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class TestSamplePseudoMarkupInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ready", "queued", "running", "unavailable", "error"]
+    result_id: UUID | None = None
+    job_id: UUID | None = None
+    training_result_id: UUID | None = None
+    model_name: str | None = None
+    training_dataset_key: str | None = None
+    training_dataset_name: str | None = None
+    can_create: bool = False
+    error: str | None = None
 
 
 class TestSampleSummary(BaseModel):
@@ -134,6 +152,9 @@ class TestSampleSummary(BaseModel):
     dataset_key: str
     dataset_name: str
     dataset_version: str | None = None
+    source_dataset_key: str
+    source_dataset_name: str
+    source_dataset_version: str | None = None
     class_key: str
     class_name: str
     task: Literal["binary", "multiclass"] = "binary"
@@ -146,6 +167,7 @@ class TestSampleSummary(BaseModel):
     enabled_object_count: int = Field(ge=0)
     is_primary: bool = False
     evaluation: TestSampleEvaluationInfo
+    pseudo_markup: TestSamplePseudoMarkupInfo
     created_at: datetime
     updated_at: datetime
 
@@ -163,6 +185,7 @@ class TestSampleClassGroup(BaseModel):
 
     key: str
     name: str
+    samples: list[TestSampleSummary] = Field(default_factory=list)
     datasets: list[TestSampleDatasetGroup] = Field(default_factory=list)
 
 
@@ -301,6 +324,7 @@ __all__ = [
     "TestSampleMetric",
     "TestSampleOptimizeRequest",
     "TestSamplePrimaryUpdate",
+    "TestSamplePseudoMarkupInfo",
     "TestSampleSummary",
     "TestSampleTileInfo",
     "TestSampleTileUpdate",

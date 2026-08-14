@@ -31,7 +31,9 @@ from mlsystem2.training_ui_api._test_samples import (
     update_test_sample_primary,
     update_test_sample_tile,
 )
+from mlsystem2.training_ui_api._service import ensure_test_sample_pseudo_markup_job
 from mlsystem2.training_ui_api.contracts import (
+    JobDetail,
     TestSampleBatchCreate,
     TestSampleBatchInfo,
     TestSampleBulkDownloadRequest,
@@ -236,6 +238,21 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         )
         db.commit()
         return detail
+
+    @app.post(
+        "/api/v1/test-samples/{sample_id}/pseudo-markup",
+        response_model=JobDetail,
+    )
+    def post_test_sample_pseudo_markup(
+        sample_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> JobDetail:
+        job = _sample_or_404(
+            lambda: ensure_test_sample_pseudo_markup_job(db, sample_id, ctx.config)
+        )
+        db.commit()
+        return job
 
     @app.post(
         "/api/v1/test-samples/{sample_id}/optimize",

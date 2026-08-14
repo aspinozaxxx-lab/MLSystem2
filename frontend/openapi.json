@@ -918,7 +918,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                  "$ref": "#/components/schemas/DatasetEditorDraftInfo"
                 }
               }
             }
@@ -2299,6 +2299,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestSampleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/pseudo-markup": {
+      "post": {
+        "summary": "Post Test Sample Pseudo Markup",
+        "operationId": "post_test_sample_pseudo_markup_api_v1_test_samples__sample_id__pseudo_markup_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetail"
                 }
               }
             }
@@ -5017,6 +5057,11 @@
             "type": "string",
             "title": "Base Revision"
           },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
+          },
           "stale": {
             "type": "boolean",
             "title": "Stale",
@@ -5077,6 +5122,11 @@
           "base_revision": {
             "type": "string",
             "title": "Base Revision"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
           },
           "stale": {
             "type": "boolean",
@@ -5704,6 +5754,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Geojson"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -8856,7 +8911,7 @@
             "minItems": 1,
             "uniqueItems": true,
             "title": "Sample Ids",
-            "description": "Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого dataset_key."
+            "description": "Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого класса."
           },
           "include_previews": {
             "type": "boolean",
@@ -8894,6 +8949,13 @@
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleSummary"
+            },
+            "type": "array",
+            "title": "Samples"
           },
           "datasets": {
             "items": {
@@ -9012,6 +9074,25 @@
             ],
             "title": "Dataset Version"
           },
+          "source_dataset_key": {
+            "type": "string",
+            "title": "Source Dataset Key"
+          },
+          "source_dataset_name": {
+            "type": "string",
+            "title": "Source Dataset Name"
+          },
+          "source_dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Dataset Version"
+          },
           "class_key": {
             "type": "string",
             "title": "Class Key"
@@ -9081,6 +9162,9 @@
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
           },
+          "pseudo_markup": {
+            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -9137,6 +9221,8 @@
           "name",
           "dataset_key",
           "dataset_name",
+          "source_dataset_key",
+          "source_dataset_name",
           "class_key",
           "class_name",
           "image_count",
@@ -9144,6 +9230,7 @@
           "actual_object_count",
           "enabled_object_count",
           "evaluation",
+          "pseudo_markup",
           "created_at",
           "updated_at",
           "tile_width",
@@ -9306,6 +9393,50 @@
               }
             ],
             "title": "Target Model Name"
+          },
+          "training_dataset_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Dataset Key"
+          },
+          "training_dataset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Dataset Name"
+          },
+          "target_training_dataset_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Training Dataset Key"
+          },
+          "target_training_dataset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Training Dataset Name"
           },
           "threshold": {
             "anyOf": [
@@ -9500,6 +9631,112 @@
         ],
         "title": "TestSamplePrimaryUpdate"
       },
+      "TestSamplePseudoMarkupInfo": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "queued",
+              "running",
+              "unavailable",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Id"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "training_dataset_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Dataset Key"
+          },
+          "training_dataset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Dataset Name"
+          },
+          "can_create": {
+            "type": "boolean",
+            "title": "Can Create",
+            "default": false
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "TestSamplePseudoMarkupInfo"
+      },
       "TestSampleSummary": {
         "properties": {
           "id": {
@@ -9529,6 +9766,25 @@
               }
             ],
             "title": "Dataset Version"
+          },
+          "source_dataset_key": {
+            "type": "string",
+            "title": "Source Dataset Key"
+          },
+          "source_dataset_name": {
+            "type": "string",
+            "title": "Source Dataset Name"
+          },
+          "source_dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Dataset Version"
           },
           "class_key": {
             "type": "string",
@@ -9599,6 +9855,9 @@
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
           },
+          "pseudo_markup": {
+            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -9617,6 +9876,8 @@
           "name",
           "dataset_key",
           "dataset_name",
+          "source_dataset_key",
+          "source_dataset_name",
           "class_key",
           "class_name",
           "image_count",
@@ -9624,6 +9885,7 @@
           "actual_object_count",
           "enabled_object_count",
           "evaluation",
+          "pseudo_markup",
           "created_at",
           "updated_at"
         ],

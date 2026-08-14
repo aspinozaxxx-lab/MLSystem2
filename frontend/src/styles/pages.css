@@ -986,8 +986,8 @@
 }
 
 .dataset-editor-draft-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  justify-content: flex-end;
   gap: 5px;
   margin-bottom: 9px;
 }
@@ -1022,6 +1022,15 @@
 .dataset-editor-scene-list button.active {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.dataset-editor-scene-list button.pending-delete {
+  opacity: 0.72;
+}
+
+.dataset-editor-scene-list button.pending-delete .dataset-editor-scene-name > strong,
+.dataset-editor-scene-list button.pending-delete .dataset-editor-scene-counts {
+  text-decoration: line-through;
 }
 
 .dataset-editor-scene-name {
@@ -1421,6 +1430,16 @@
 
 .dataset-editor-file.folder {
   cursor: pointer;
+}
+
+.dataset-editor-file.already-added {
+  border-color: #22c55e;
+  box-shadow: inset 0 0 0 1px #22c55e;
+}
+
+.dataset-editor-file.already-added small {
+  color: #16a34a;
+  font-weight: 600;
 }
 
 .dataset-editor-file > span {

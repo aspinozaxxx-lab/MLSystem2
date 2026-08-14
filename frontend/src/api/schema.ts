@@ -881,6 +881,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/pseudo-markup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Pseudo Markup */
+        post: operations["post_test_sample_pseudo_markup_api_v1_test_samples__sample_id__pseudo_markup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/optimize": {
         parameters: {
             query?: never;
@@ -1846,6 +1863,11 @@ export interface components {
             /** Base Revision */
             base_revision: string;
             /**
+             * Deleted
+             * @default false
+             */
+            deleted: boolean;
+            /**
              * Stale
              * @default false
              */
@@ -1876,6 +1898,11 @@ export interface components {
             annotation_name: string;
             /** Base Revision */
             base_revision: string;
+            /**
+             * Deleted
+             * @default false
+             */
+            deleted: boolean;
             /**
              * Stale
              * @default false
@@ -2099,6 +2126,11 @@ export interface components {
             geojson: {
                 [key: string]: unknown;
             };
+            /**
+             * Deleted
+             * @default false
+             */
+            deleted: boolean;
         };
         /** DatasetEditorSaveSceneRequest */
         DatasetEditorSaveSceneRequest: {
@@ -3236,7 +3268,7 @@ export interface components {
         TestSampleBulkDownloadRequest: {
             /**
              * Sample Ids
-             * @description Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого dataset_key.
+             * @description Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого класса.
              */
             sample_ids: string[];
             /**
@@ -3256,6 +3288,8 @@ export interface components {
             key: string;
             /** Name */
             name: string;
+            /** Samples */
+            samples?: components["schemas"]["TestSampleSummary"][];
             /** Datasets */
             datasets?: components["schemas"]["TestSampleDatasetGroup"][];
         };
@@ -3313,6 +3347,12 @@ export interface components {
             dataset_name: string;
             /** Dataset Version */
             dataset_version?: string | null;
+            /** Source Dataset Key */
+            source_dataset_key: string;
+            /** Source Dataset Name */
+            source_dataset_name: string;
+            /** Source Dataset Version */
+            source_dataset_version?: string | null;
             /** Class Key */
             class_key: string;
             /** Class Name */
@@ -3351,6 +3391,7 @@ export interface components {
              */
             is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /**
              * Created At
              * Format: date-time
@@ -3420,6 +3461,14 @@ export interface components {
             model_name?: string | null;
             /** Target Model Name */
             target_model_name?: string | null;
+            /** Training Dataset Key */
+            training_dataset_key?: string | null;
+            /** Training Dataset Name */
+            training_dataset_name?: string | null;
+            /** Target Training Dataset Key */
+            target_training_dataset_key?: string | null;
+            /** Target Training Dataset Name */
+            target_training_dataset_name?: string | null;
             /** Threshold */
             threshold?: number | null;
             /** Job Id */
@@ -3476,6 +3525,33 @@ export interface components {
             /** Is Primary */
             is_primary: boolean;
         };
+        /** TestSamplePseudoMarkupInfo */
+        TestSamplePseudoMarkupInfo: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "queued" | "running" | "unavailable" | "error";
+            /** Result Id */
+            result_id?: string | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Training Dataset Key */
+            training_dataset_key?: string | null;
+            /** Training Dataset Name */
+            training_dataset_name?: string | null;
+            /**
+             * Can Create
+             * @default false
+             */
+            can_create: boolean;
+            /** Error */
+            error?: string | null;
+        };
         /** TestSampleSummary */
         TestSampleSummary: {
             /**
@@ -3491,6 +3567,12 @@ export interface components {
             dataset_name: string;
             /** Dataset Version */
             dataset_version?: string | null;
+            /** Source Dataset Key */
+            source_dataset_key: string;
+            /** Source Dataset Name */
+            source_dataset_name: string;
+            /** Source Dataset Version */
+            source_dataset_version?: string | null;
             /** Class Key */
             class_key: string;
             /** Class Name */
@@ -3529,6 +3611,7 @@ export interface components {
              */
             is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /**
              * Created At
              * Format: date-time
@@ -4613,7 +4696,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                    "application/json": components["schemas"]["DatasetEditorDraftInfo"];
                 };
             };
             /** @description Validation Error */
@@ -5658,6 +5741,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_sample_pseudo_markup_api_v1_test_samples__sample_id__pseudo_markup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
                 };
             };
             /** @description Validation Error */

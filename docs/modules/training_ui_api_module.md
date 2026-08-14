@@ -49,9 +49,9 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET /api/v1/dataset-editor/datasets/{dataset_key}/rasters` и `GET /api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}` - серверный выбор снимков и авторизованный TIFF с HTTP Range.
 - `GET|POST /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup` - получить готовый фрагмент текущей основной сети либо идемпотентно поставить срочный поснимочный инференс.
 - `GET /api/v1/dataset-editor/pseudo-markup/{job_id}` - лёгкий polling поснимочного задания без Git-синхронизации и разрешения полного каталога.
-- `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}` и `DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts` - сохранить промежуточный пользовательский GeoJSON без публикации либо удалить один/все свои черновики.
-- `POST /api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish` - атомарно опубликовать все сохранённые черновики пользователя одним Git-коммитом.
-- `POST|PUT /api/v1/dataset-editor/datasets/{dataset_key}/scenes`, `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}` - добавить TIFF/папку, атомарно опубликовать несколько GeoJSON, совместимо сохранить один GeoJSON или удалить сцену.
+- `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}` и `DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts` - автоматически сохранить промежуточный пользовательский GeoJSON или пометку удаления без публикации либо удалить один/все свои черновики.
+- `POST /api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish` - атомарно опубликовать все сохранённые изменения и удаления пользователя одним Git-коммитом.
+- `POST|PUT /api/v1/dataset-editor/datasets/{dataset_key}/scenes`, `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}` - добавить отсутствующие TIFF/папку, атомарно опубликовать несколько GeoJSON, совместимо сохранить один GeoJSON или создать отменяемую пометку удаления сцены.
 - `GET /api/v1/dataset-editor/publication/{commit}` - `publishing|published` по ancestry commit текущего live-релиза.
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/rebuild/preview` и `POST /api/v1/dataset-editor/datasets/{dataset_key}/rebuild` - preview и атомарная merge/replace-пересборка combined dataset; изменение source или target после preview возвращает `409`.
 - `GET /api/v1/files/{file_id}/download-by-type` - ZIP канонической multiclass-псевдоразметки с одним GeoJSON на object type.
@@ -75,22 +75,24 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
 - `POST /api/v1/test-samples/reconcile` - идемпотентно ставит в inference-очередь отсутствующие и устаревшие прямые оценки всех сохранённых разметок текущими основными сетями классов.
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - принудительно ставит прямой пересчёт pixel/object F1 текущей основной сетью класса.
+- `POST /api/v1/test-samples/{sample_id}/pseudo-markup` - идемпотентно ставит штатную полную псевдоразметку исходного датасета текущей основной сетью класса для предварительной оценки и оптимизации.
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов по основной метрике класса; request-поле старого клиента принимается, но не меняет выбор метрики.
 - `POST /api/v1/test-samples/{sample_id}/evaluate-preview` и `POST /api/v1/test-samples/{sample_id}/optimize-preview` - рассчитывают F1 или оптимальный состав черновика без записи в БД.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP сохранённых включённых тайлов.
 - `POST /api/v1/test-samples/{sample_id}/download` - ZIP явно выбранных тайлов текущего черновика без изменения разметки в БД; флаг `include_previews` оставляет полный состав либо только TIFF и GeoJSON.
-- `POST /api/v1/test-samples/download` - несжатый ZIP явно выбранных сохранённых разметок, не более одной на датасет; до восьми разметок готовятся параллельно, каждая в папке `<класс>_<датасет>`.
+- `POST /api/v1/test-samples/download` - несжатый ZIP явно выбранных сохранённых разметок, не более одной на класс; до восьми разметок готовятся параллельно, каждая в папке `<класс>_<исходный датасет>`.
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
-- `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает основную разметку точного датасета.
+- `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает единственную основную разметку класса.
 - `GET /api/v1/results/datasets/{dataset_key}`, `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup` и `POST /api/v1/results/datasets/{dataset_key}/test-f1` - результаты датасета, ручная псевдоразметка и постановка недостающих либо устаревших оценок в inference-очередь.
 - `POST /api/v1/results/training/{result_id}/primary` - назначение успешной сети основной для её класса; этот выбор используется QGIS, групповым экспортом и публичным F1.
 - `GET /api/v1/pseudolabel/classes`, `POST /api/v1/pseudolabel/jobs`, `GET|DELETE /api/v1/pseudolabel/jobs/{job_id}` и `GET /api/v1/pseudolabel/jobs/{job_id}/result` - серверное распознавание AOI без передачи клиентских растров; полный контракт описан в `docs/pseudolabel_api.md`.
 
 Сохранённая контрольная метрика каждой тестовой разметки получается прямым инференсом явно назначенной основной
-сети класса и фиксирует сеть, ревизию состава, effective inference-шаблон, профиль и версию evaluator. Псевдоразметка
-точного датасета используется отдельно для создания набора, черновых `evaluate-preview`/`optimize-preview` и
-поснимочного кэша оптимизатора. Матрица `training_result_test_metrics` остаётся независимым контуром: все успешные
-сети оцениваются только на основной тестовой разметке своего точного датасета.
+сети класса и фиксирует сеть, её обучающий датасет, ревизию состава, effective inference-шаблон, профиль и версию
+evaluator. Поле датасета тестовой разметки означает только источник её тайлов. Псевдоразметка этого источника
+используется отдельно для создания набора, черновых `evaluate-preview`/`optimize-preview` и поснимочного кэша
+оптимизатора. Матрица `training_result_test_metrics` остаётся независимым контуром: все успешные сети всех
+датасетов класса оцениваются на единственной основной тестовой разметке класса.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -130,5 +132,9 @@ auto jobs: queued rows уходят из очередей, running process по�
 создает новые jobs по текущим правилам и версиям датасетов, а не восстанавливает старую очередь.
 
 ## Алгоритм работы и его особенности
+
+Черновик редактора включает геометрию и отменяемую пометку удаления снимка. Он сохраняется только автоматически;
+ручной кнопки сохранения нет. В браузере TIFF уже добавленные снимки остаются в текущей сортировке, отмечаются
+зелёной рамкой и недоступны для повторного выбора, а добавление всей папки пропускает их.
 
 Каталог различает legacy по TXT, per-image binary по отсутствию TXT и manifest-backed `per_image_multiclass`; пустой per-image набор доступен редактору, но не обучению. Worker копирует GeoJSON и manifest в immutable snapshot, автоматически фиксирует multiclass task, `output_channels=N+1`, class balance и совместимый loss. Шаблоны с входом `768`, в которых context ещё не был задан, получают `tile_preparation.context=128`; явный `0` сохраняется. Редактор считает role/class/provenance системными полями, но разрешает явную переклассификацию. Изменённый GeoJSON автоматически сохраняется в `dataset_editor_drafts` отдельно для пользователя без Git и инференса, переживает перезагрузку страницы и удаляется при отмене либо после успешной batch-публикации под Git-lock; optimistic-lock конфликт возвращает `409`. Перетаскивание с зажатым колесом перемещает снимок и подавляет нативную автопрокрутку браузера внутри карты, поэтому страница остаётся неподвижной; левая кнопка задаёт рамку выбора всех попавших в неё вершин. Modify добавляет вершину кликом по ребру, а `Delete` удаляет выбранную группу через общую undo-историю; кольца с менее чем тремя оставшимися вершинами не меняются, остальные автоматически замыкаются. Список снимков показывает цветные счётчики каждого смыслового типа и hard negative из текущего черновика. Псевдоразметка основной сети скрыта по умолчанию: любой готовый полный результат текущей основной сети, содержащий TIFF в `scenes_file`, обрезается по снимку независимо от исходного датасета результата; отсутствующий снимок проходит через общий builder и runner штатной псевдоразметки как приоритетный one-off job и показывается отдельным нередактируемым слоем. Frontend кэширует результат при переключении снимков, polling использует отдельный лёгкий endpoint. Удаление датасета проверяет активные jobs, удаляет только его Git-дерево и мягко архивирует каталог без очистки исторических таблиц. Combined builder читает обе source-папки целиком, чинит/попускает invalid geometry с отчётом, применяет priority, вычитает positive из hard negative, ищет TIFF по valid-data footprint и создаёт стабильные feature ID/origin-key. Rebuild preview фиксирует filesystem и Git trees; merge сохраняет ручную версию конфликтующего объекта, replace полностью заменяет per-image файлы, после чего один commit публикует manifest и все GeoJSON. Нативная псевдоразметка, F1 и AOI читают полный тайл и записывают только центр согласно context; старые результаты без context используют `0`. Экспорт берёт context из metadata нового checkpoint либо ручного override старого. Псевдоразметка, F1 и AOI используют нативный checkpoint либо проверенный ZIP `external_torchscript`; multiclass инференс, метрики и экспорт сохраняют class schema. Binary ABI и legacy DTO остаются совместимыми. Live-каталог редактор не изменяет.

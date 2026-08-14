@@ -31,7 +31,7 @@ from mlsystem2.dataset_preparing.contracts import (
     DatasetPreparationRequest,
     SceneImageResolutionRequest,
 )
-from mlsystem2.training_ui_api import _markup_export, _test_samples, _worker
+from mlsystem2.training_ui_api import _markup_export, _service, _test_samples, _worker
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import dataset_class_row
@@ -1567,6 +1567,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/reconcile" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
+        assert "/api/v1/test-samples/{sample_id}/pseudo-markup" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize-preview" in openapi["paths"]
@@ -1630,13 +1631,14 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
 
         catalog = client.get("/api/v1/test-samples").json()
         assert catalog["classes"][0]["name"] == "Вырубки"
-        assert catalog["classes"][0]["datasets"][0]["name"] == "main"
-        assert catalog["classes"][0]["datasets"][0]["samples"][0]["name"] == (
-            "Контрольная выборка"
+        assert catalog["classes"][0]["datasets"] == []
+        assert catalog["classes"][0]["samples"][0]["name"] == "Контрольная выборка"
+        assert catalog["classes"][0]["samples"][0]["source_dataset_name"] == (
+            "Вырубки\\main"
         )
         reconciled = client.post("/api/v1/test-samples/reconcile")
         assert reconciled.status_code == 200
-        assert reconciled.json()["classes"][0]["datasets"][0]["samples"][0][
+        assert reconciled.json()["classes"][0]["samples"][0][
             "evaluation"
         ]["status"] == "unavailable"
 
@@ -1717,12 +1719,21 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         assert second_sample_response.status_code == 200
         second_sample_id = second_sample_response.json()["id"]
-        duplicate_dataset_response = client.post(
+        assert client.put(
+            f"/api/v1/test-samples/{sample_id}/primary",
+            json={"is_primary": True},
+        ).json()["is_primary"] is True
+        assert client.put(
+            f"/api/v1/test-samples/{second_sample_id}/primary",
+            json={"is_primary": True},
+        ).json()["is_primary"] is True
+        assert client.get(f"/api/v1/test-samples/{sample_id}").json()["is_primary"] is False
+        duplicate_class_response = client.post(
             "/api/v1/test-samples/download",
             json={"sample_ids": [sample_id, second_sample_id]},
         )
-        assert duplicate_dataset_response.status_code == 400
-        assert "не более одной разметки" in duplicate_dataset_response.json()["detail"]
+        assert duplicate_class_response.status_code == 400
+        assert "не более одной разметки" in duplicate_class_response.json()["detail"]
         assert client.delete(
             f"/api/v1/test-samples/{second_sample_id}"
         ).status_code == 204
@@ -2157,6 +2168,26 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         class_row.primary_training_result_id = first_result.id
         session.flush()
 
+        pseudo_before = _test_sample_detail(session, first.id)
+        assert pseudo_before.pseudo_markup.status == "unavailable"
+        assert pseudo_before.pseudo_markup.can_create is True
+        assert pseudo_before.pseudo_markup.training_result_id == first_result.id
+        monkeypatch.setattr(_service, "_best_training_checkpoint", lambda *_args: None)
+        pseudo_job = _service.ensure_test_sample_pseudo_markup_job(
+            session,
+            first.id,
+            config,
+        )
+        same_pseudo_job = _service.ensure_test_sample_pseudo_markup_job(
+            session,
+            first.id,
+            config,
+        )
+        assert same_pseudo_job.id == pseudo_job.id
+        pseudo_pending = _test_sample_detail(session, first.id)
+        assert pseudo_pending.pseudo_markup.status == "queued"
+        assert pseudo_pending.pseudo_markup.job_id == pseudo_job.id
+
         assert reconcile_test_sample_evaluations(session, config) == 2
         assert reconcile_test_sample_evaluations(session, config) == 0
         direct_jobs = [
@@ -2196,6 +2227,10 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         assert queued.evaluation.training_result_id is None
         assert queued.evaluation.target_training_result_id == first_result.id
         assert queued.evaluation.target_model_name == "Основная сеть 1"
+        assert queued.evaluation.target_training_dataset_key == "Вырубки\\main"
+        assert queued.evaluation.target_training_dataset_name == "Вырубки\\main"
+        assert queued.pseudo_markup.status == "queued"
+        assert queued.pseudo_markup.training_result_id == first_result.id
 
         first_job = next(
             job
@@ -2233,6 +2268,8 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         assert current.evaluation.status == "current"
         assert current.evaluation.training_result_id == first_result.id
         assert current.evaluation.model_name == "Основная сеть 1"
+        assert current.evaluation.training_dataset_key == "Вырубки\\main"
+        assert current.evaluation.training_dataset_name == "Вырубки\\main"
         assert current.evaluation.threshold == pytest.approx(0.61)
         assert current.evaluation.pixel is not None
         assert current.evaluation.pixel.true_positive == 90
@@ -2611,7 +2648,7 @@ def test_bulk_download_rejects_duplicate_datasets_and_normalized_folder_collisio
         sample_ids = [sample.id for sample in samples]
         with pytest.raises(
             TrainingUIAPIError,
-            match="не более одной разметки каждого датасета",
+            match="не более одной разметки каждого класса",
         ):
             build_test_samples_download(session, sample_ids, config)
 
@@ -2625,6 +2662,7 @@ def test_bulk_download_rejects_duplicate_datasets_and_normalized_folder_collisio
         second_row.dataset_key = "Вырубки\\main test"
         second_row.dataset_name = "Вырубки\\main test"
         second_row.dataset_short_name = "main test"
+        second_row.class_key = "другой-класс"
         session.flush()
 
         with pytest.raises(
@@ -2669,6 +2707,7 @@ def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
             row.dataset_key = f"Вырубки\\set-{index:02d}"
             row.dataset_name = f"Вырубки\\set-{index:02d}"
             row.dataset_short_name = f"set-{index:02d}"
+            row.class_key = f"класс-{index:02d}"
         session.flush()
         original_prepare = _test_samples._prepare_test_sample_download
         lock = threading.Lock()

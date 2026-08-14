@@ -13,7 +13,6 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
-  Save,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -117,6 +116,7 @@ type EditorScene = {
 type DraftSummary = {
   annotation_name: string;
   base_revision: string;
+  deleted: boolean;
   stale: boolean;
   total_count: number;
   positive_count: number;
@@ -315,6 +315,10 @@ export function DatasetEditorPage({
     () => sortEditorScenes(scenes, drafts, sortDirection),
     [drafts, scenes, sortDirection],
   );
+  const addedAnnotationNames = useMemo(
+    () => new Set(scenes.map((scene) => scene.annotation_name.toLocaleLowerCase("ru"))),
+    [scenes],
+  );
   const activeDraft = annotationName ? drafts[annotationName] : undefined;
   const objectTypeChoices = useMemo(
     () => selectedDataset?.object_types || [],
@@ -497,11 +501,12 @@ export function DatasetEditorPage({
         ),
       );
       if (!payload || requestId !== sceneLoadRequestRef.current) return;
-      const baseline = { geojson: payload.geojson, newFeatureIndexes: [] };
+      const baseline = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false };
       const draftSnapshot = payload.draft
         ? {
             geojson: payload.draft.geojson,
             newFeatureIndexes: draftNewFeatureIndexes(payload.geojson, payload.draft.geojson),
+            deleted: payload.draft.deleted,
           }
         : baseline;
       const scene = {
@@ -603,6 +608,7 @@ export function DatasetEditorPage({
             body: {
               base_revision: draft.baseRevision,
               geojson: sent.geojson,
+              deleted: Boolean(sent.deleted),
             },
           },
         );
@@ -612,6 +618,7 @@ export function DatasetEditorPage({
         const savedSnapshot = {
           geojson: saved.geojson,
           newFeatureIndexes: [...sent.newFeatureIndexes],
+          deleted: saved.deleted,
         };
         changeDrafts((current) => {
           const currentDraft = current[name];
@@ -828,12 +835,15 @@ export function DatasetEditorPage({
     const draft = draftsRef.current[name];
     const source = vectorSourceRef.current;
     if (!draft || !source) return null;
-    return vectorSnapshot(
-      source,
-      geojsonCrs(draft.current.geojson),
-      draft.current.geojson,
-      newFeaturesRef.current,
-    );
+    return {
+      ...vectorSnapshot(
+        source,
+        geojsonCrs(draft.current.geojson),
+        draft.current.geojson,
+        newFeaturesRef.current,
+      ),
+      deleted: Boolean(draft.current.deleted),
+    };
   }, []);
 
   const recordCurrentChange = useCallback(
@@ -1178,16 +1188,18 @@ export function DatasetEditorPage({
   }, [detail, pseudoMarkup, pseudoVisible]);
 
   useEffect(() => {
-    const drawing = annotationsVisible && editMode === "draw";
+    const sceneDeleted = Boolean(activeDraft?.current.deleted);
+    const drawing = annotationsVisible && !sceneDeleted && editMode === "draw";
     drawRef.current?.setActive(drawing);
-    selectRef.current?.setActive(annotationsVisible && !drawing);
-    vertexBoxRef.current?.setActive(annotationsVisible && !drawing);
-    modifyRef.current?.setActive(annotationsVisible && !drawing);
-    if (drawing || !annotationsVisible) {
+    selectRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
+    vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
+    modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
+    vectorLayerRef.current?.setVisible(annotationsVisible && !sceneDeleted);
+    if (drawing || !annotationsVisible || sceneDeleted) {
       setSelectedVertices([]);
       selectRef.current?.getFeatures().clear();
     }
-  }, [annotationsVisible, detail, editMode, setSelectedVertices]);
+  }, [activeDraft?.current.deleted, annotationsVisible, detail, editMode, setSelectedVertices]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -1400,12 +1412,6 @@ export function DatasetEditorPage({
     setBandMenuOpen(false);
   };
 
-  const saveAllDrafts = async () => {
-    if (!datasetKey || drawInProgressRef.current) return;
-    const saved = await flushDrafts();
-    if (!saved) window.alert("Не удалось сохранить часть черновиков на сервере.");
-  };
-
   const discardAllDrafts = async () => {
     if (!datasetKey || !hasDirtyDrafts) return;
     if (!window.confirm(
@@ -1463,27 +1469,18 @@ export function DatasetEditorPage({
 
   const removeScene = async () => {
     const draft = draftsRef.current[activeAnnotationRef.current];
-    if (!draft) return;
-    const warning = draftChanged(draft)
-      ? `Удалить снимок ${draft.scene.image_name}? Его неопубликованные изменения будут потеряны.`
-      : `Удалить снимок ${draft.scene.image_name} из датасета?`;
-    if (!window.confirm(warning)) return;
-    setBusy(true);
-    const result = await run(() =>
-      apiJson<MutationResult>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(draft.scene.annotation_name)}`,
-        { method: "DELETE", body: { revision: draft.scene.revision } },
-      ),
-    );
-    setBusy(false);
-    if (!result) return;
-    changeDrafts((current) => {
-      const next = { ...current };
-      delete next[draft.scene.annotation_name];
-      return next;
-    });
-    setPublication({ commit: result.commit, live_commit: null, status: result.publication_status });
-    await loadScenes(datasetKey);
+    if (!draft || drawInProgressRef.current) return;
+    const deleting = !draft.current.deleted;
+    if (deleting && !window.confirm(
+      `Пометить снимок ${draft.scene.image_name} на удаление? Файл останется в MLMarkup до публикации, действие можно отменить.`,
+    )) return;
+    const before = captureActiveSnapshot() || cloneSnapshot(draft.current);
+    updateDraft(draft.scene.annotation_name, (current) => ({
+      ...current,
+      current: { ...cloneSnapshot(before), deleted: deleting },
+      history: appendHistory(current.history, before),
+      normalized: true,
+    }));
   };
 
   const loadBrowser = async (folder: string) => {
@@ -1609,15 +1606,6 @@ export function DatasetEditorPage({
             </button>
             <div className="button-row dataset-editor-draft-actions">
               <button
-                className="secondary"
-                type="button"
-                disabled={!hasUnsavedLocalDrafts || busy || drawInProgress}
-                title="Немедленно сохранить промежуточную разметку на сервере без публикации"
-                onClick={() => void saveAllDrafts()}
-              >
-                <Save size={15} /> Сохранить черновик
-              </button>
-              <button
                 className="ghost"
                 type="button"
                 disabled={!hasDirtyDrafts || busy}
@@ -1644,6 +1632,7 @@ export function DatasetEditorPage({
                   ? sceneClassCounts(scene, draft)
                   : summary?.class_counts || sceneClassCounts(scene, undefined);
                 const changed = Boolean(summary || (draft && (draftChanged(draft) || draft.hasServerDraft)));
+                const deleted = Boolean(draft?.current.deleted ?? summary?.deleted);
                 const countDescription = selectedDataset?.task === "multiclass"
                   ? objectTypeChoices
                     .map((item) => `${item.name}: ${classCounts[item.slug] || 0}`)
@@ -1651,7 +1640,7 @@ export function DatasetEditorPage({
                   : `positive: ${counts.positive}`;
                 return (
                   <button
-                    className={scene.annotation_name === annotationName ? "active" : ""}
+                    className={`${scene.annotation_name === annotationName ? "active" : ""}${deleted ? " pending-delete" : ""}`}
                     type="button"
                     key={scene.annotation_name}
                     title={`Открыть снимок ${scene.image_name}. ${counts.total} объектов: ${countDescription}, hard negative: ${counts.hardNegative}${changed ? ". Есть неопубликованные изменения" : ""}`}
@@ -1659,9 +1648,10 @@ export function DatasetEditorPage({
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
+                      {deleted ? <span className="badge warning">к удалению</span> : null}
                       {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
                     </span>
-                    <span className="dataset-editor-scene-counts">
+                    <span className="dataset-editor-scene-counts" aria-hidden={deleted}>
                       {selectedDataset?.task === "multiclass"
                         ? objectTypeChoices.map((item) => (
                           <i key={item.slug} style={{ color: item.color }}>
@@ -1707,12 +1697,18 @@ export function DatasetEditorPage({
                         MLMarkup изменился после создания черновика. Перед публикацией потребуется обновить правки.
                       </small>
                     ) : null}
+                    {activeDraft.current.deleted ? (
+                      <small className="dataset-editor-draft-status error">
+                        Снимок помечен на удаление. Он исчезнет из MLMarkup только после публикации.
+                      </small>
+                    ) : null}
                   </span>
                   <div className="dataset-editor-map-actions">
                     <div className="dataset-editor-mode-toggle" role="group" aria-label="Режим редактирования">
                       <button
                         className={`${editMode === "select" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
                         type="button"
+                        disabled={Boolean(activeDraft.current.deleted)}
                         aria-label="Выбор и правка полигонов"
                         aria-pressed={editMode === "select"}
                         title="Выбор и правка: протяните рамку левой кнопкой, затем удалите выбранные вершины клавишей Del"
@@ -1723,6 +1719,7 @@ export function DatasetEditorPage({
                       <button
                         className={`${editMode === "draw" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
                         type="button"
+                        disabled={Boolean(activeDraft.current.deleted)}
                         aria-label="Нарисовать новый полигон"
                         aria-pressed={editMode === "draw"}
                         title="Новый полигон: ставьте вершины кликами, завершите двойным кликом"
@@ -1793,14 +1790,14 @@ export function DatasetEditorPage({
                       <Trash2 size={17} />
                     </button>
                     <button
-                      className="danger icon-button dataset-editor-icon-button"
+                      className={`${activeDraft.current.deleted ? "secondary" : "danger"} icon-button dataset-editor-icon-button`}
                       type="button"
-                      disabled={busy}
-                      aria-label="Удалить снимок из датасета"
-                      title="Удалить текущий снимок и его GeoJSON из датасета"
+                      disabled={busy || drawInProgress}
+                      aria-label={activeDraft.current.deleted ? "Отменить удаление снимка" : "Удалить снимок из датасета"}
+                      title={activeDraft.current.deleted ? "Отменить удаление снимка" : "Пометить снимок на удаление; действие сохраняется в черновике"}
                       onClick={() => void removeScene()}
                     >
-                      <Trash2 size={17} />
+                      {activeDraft.current.deleted ? <Undo2 size={17} /> : <Trash2 size={17} />}
                     </button>
                   </div>
                 </div>
@@ -1942,7 +1939,7 @@ export function DatasetEditorPage({
               <button
                 className="secondary"
                 type="button"
-                disabled={!browser.rasters.length || busy}
+                disabled={!browser.rasters.some((raster) => !addedAnnotationNames.has(raster.annotation_name.toLocaleLowerCase("ru"))) || busy}
                 title="Добавить все TIFF непосредственно из текущей папки"
                 onClick={() => void addRasters(true)}
               ><Plus size={15} /> Добавить всю папку</button>
@@ -1971,22 +1968,34 @@ export function DatasetEditorPage({
                 onClick={() => void loadBrowser(folder.path)}
               ><Folder size={17} /><span>{folder.name}</span></button>
             ))}
-            {browser.rasters.map((raster) => (
-              <label className="dataset-editor-file" key={raster.path} title={`Добавить TIFF ${raster.name}`}>
-                <input
-                  type="checkbox"
-                  checked={selectedRasters.has(raster.path)}
-                  onChange={(event) => {
-                    setSelectedRasters((current) => {
-                      const next = new Set(current);
-                      if (event.target.checked) next.add(raster.path); else next.delete(raster.path);
-                      return next;
-                    });
-                  }}
-                />
-                <span><strong>{raster.name}</strong><small>{raster.annotation_name}</small></span>
-              </label>
-            ))}
+            {browser.rasters.map((raster) => {
+              const added = addedAnnotationNames.has(raster.annotation_name.toLocaleLowerCase("ru"));
+              return (
+                <label
+                  className={`dataset-editor-file${added ? " already-added" : ""}`}
+                  key={raster.path}
+                  title={added ? `TIFF ${raster.name} уже добавлен` : `Добавить TIFF ${raster.name}`}
+                >
+                  {added ? null : (
+                    <input
+                      type="checkbox"
+                      checked={selectedRasters.has(raster.path)}
+                      onChange={(event) => {
+                        setSelectedRasters((current) => {
+                          const next = new Set(current);
+                          if (event.target.checked) next.add(raster.path); else next.delete(raster.path);
+                          return next;
+                        });
+                      }}
+                    />
+                  )}
+                  <span>
+                    <strong>{raster.name}</strong>
+                    <small>{added ? "Уже добавлен" : raster.annotation_name}</small>
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -2065,6 +2074,7 @@ function draftSummary(info: DraftInfo): DraftSummary {
   return {
     annotation_name: info.annotation_name,
     base_revision: info.base_revision,
+    deleted: info.deleted,
     stale: info.stale,
     total_count: info.total_count,
     positive_count: info.positive_count,

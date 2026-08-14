@@ -28,7 +28,9 @@ export type TestMarkupDownloadSelectionChange =
 
 export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): TestSampleSummary[] {
   return (catalog?.classes || []).flatMap((classGroup) =>
-    (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []),
+    (classGroup.samples || []).length
+      ? classGroup.samples || []
+      : (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []),
   );
 }
 
@@ -36,14 +38,15 @@ export function testMarkupDownloadOptions(
   catalog: TestSampleCatalogResponse | null,
 ): TestMarkupDownloadOption[] {
   return (catalog?.classes || [])
-    .flatMap((classGroup) =>
-      (classGroup.datasets || []).flatMap((dataset) =>
-        (dataset.samples || []).map((sample) => ({
-          datasetName: dataset.name,
-          sample,
-        })),
-      ),
-    )
+    .flatMap((classGroup) => {
+      const samples = (classGroup.samples || []).length
+        ? classGroup.samples || []
+        : (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []);
+      return samples.map((sample) => ({
+        datasetName: sample.source_dataset_name || sample.dataset_name,
+        sample,
+      }));
+    })
     .sort((left, right) => {
       const classOrder = left.sample.class_name.localeCompare(right.sample.class_name, "ru");
       if (classOrder) return classOrder;
@@ -60,15 +63,15 @@ export function initialTestMarkupDownloadSelection(
   options: TestMarkupDownloadOption[],
 ): Set<string> {
   const selected = new Set<string>();
-  const selectedDatasets = new Set<string>();
+  const selectedClasses = new Set<string>();
   for (const { sample } of options) {
     if (
       sample.is_primary
       && sample.enabled_image_count > 0
-      && !selectedDatasets.has(sample.dataset_key)
+      && !selectedClasses.has(sample.class_key)
     ) {
       selected.add(sample.id);
-      selectedDatasets.add(sample.dataset_key);
+      selectedClasses.add(sample.class_key);
     }
   }
   return selected;
@@ -90,7 +93,7 @@ export function changeTestMarkupDownloadSelection(
   }
 
   for (const candidate of options) {
-    if (candidate.sample.dataset_key === option.sample.dataset_key) {
+    if (candidate.sample.class_key === option.sample.class_key) {
       next.delete(candidate.sample.id);
     }
   }
@@ -100,9 +103,9 @@ export function changeTestMarkupDownloadSelection(
 
 export function testMarkupStats(
   catalog: TestSampleCatalogResponse | null,
-  datasetKey: string,
+  classKey: string,
 ): TestMarkupStats {
-  const samples = flattenTestMarkups(catalog).filter((sample) => sample.dataset_key === datasetKey);
+  const samples = flattenTestMarkups(catalog).filter((sample) => sample.class_key === classKey);
   return {
     count: samples.length,
     hasPrimary: samples.some((sample) => sample.is_primary),
@@ -114,8 +117,8 @@ export function sortTestMarkupDatasets(
   catalog: TestSampleCatalogResponse | null,
 ): DatasetInfo[] {
   return [...datasets].sort((left, right) => {
-    const primaryDifference = Number(testMarkupStats(catalog, left.key).hasPrimary)
-      - Number(testMarkupStats(catalog, right.key).hasPrimary);
+    const primaryDifference = Number(testMarkupStats(catalog, left.class_key || left.key).hasPrimary)
+      - Number(testMarkupStats(catalog, right.class_key || right.key).hasPrimary);
     if (primaryDifference) return primaryDifference;
     const leftLabel = `${left.class_name || left.name}\u0000${left.dataset_name || left.name}`;
     const rightLabel = `${right.class_name || right.name}\u0000${right.dataset_name || right.name}`;

@@ -1209,7 +1209,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
               </div>
               <div className="test-sample-batch-grid">
                 {displayedRows.map((row) => {
-                  const stats = testMarkupStats(catalog, row.dataset.key);
+                  const stats = testMarkupStats(catalog, row.dataset.class_key || row.dataset.key);
                   return (
                   <div className={`test-sample-batch-row ${row.selected ? "" : "disabled-row"}`} key={row.dataset.key}>
                     <label className="test-sample-batch-choice">
@@ -1315,7 +1315,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
       body: (
         <p>
           Разметка «{sample.name}» и все её файлы будут удалены без возможности восстановления.
-          {sample.is_primary ? " Она назначена основной, поэтому тестовый F1 сетей станет недоступным до назначения новой." : ""}
+          {sample.is_primary ? " Она назначена основной для класса, поэтому тестовый F1 его сетей станет недоступным до назначения новой." : ""}
         </p>
       ),
       footer: (
@@ -1588,7 +1588,7 @@ function TestSampleCatalog({
   const samples = flattenTestMarkups(catalog).sort((left, right) => {
     const classOrder = left.class_name.localeCompare(right.class_name, "ru");
     if (classOrder) return classOrder;
-    const datasetOrder = left.dataset_name.localeCompare(right.dataset_name, "ru");
+    const datasetOrder = left.source_dataset_name.localeCompare(right.source_dataset_name, "ru");
     if (datasetOrder) return datasetOrder;
     return right.created_at.localeCompare(left.created_at);
   });
@@ -1599,8 +1599,9 @@ function TestSampleCatalog({
         <article className="test-markup-card" key={sample.id}>
           <div className="test-markup-card-header">
             <a href={`#/test-markups/${sample.id}`}>
-              <strong>{sample.dataset_name}</strong>
+              <strong>{sample.class_name}</strong>
               <span>{sample.name}</span>
+              <small className="muted">На основе: {sample.source_dataset_name}</small>
             </a>
             <div className="inline-row">
               {sample.is_primary ? <Star className="primary-star" size={20} fill="currentColor" aria-label="Основная разметка" /> : null}
@@ -1649,6 +1650,7 @@ function TestSampleEditorPage({
   const [loaded, setLoaded] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
+  const [pseudoLaunching, setPseudoLaunching] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -1692,11 +1694,13 @@ function TestSampleEditorPage({
 
   const evaluationActive = sample?.evaluation.status === "queued"
     || sample?.evaluation.status === "running";
+  const pseudoActive = sample?.pseudo_markup.status === "queued"
+    || sample?.pseudo_markup.status === "running";
   useEffect(() => {
-    if (!evaluationActive) return undefined;
+    if (!evaluationActive && !pseudoActive) return undefined;
     const timer = window.setTimeout(() => void refreshSample(), PROGRESS_REFRESH_MS);
     return () => window.clearTimeout(timer);
-  }, [evaluationActive, refreshSample, sample]);
+  }, [evaluationActive, pseudoActive, refreshSample, sample]);
 
   const changed = Boolean(sample && draft && testMarkupDraftChanged(sample, draft));
   const dirty = changed || previewPending;
@@ -1756,6 +1760,20 @@ function TestSampleEditorPage({
       if (payload) setSample(payload);
     } finally {
       setRecalculating(false);
+    }
+  };
+
+  const launchPseudoMarkup = async () => {
+    setPseudoLaunching(true);
+    try {
+      const created = await run(() =>
+        apiJson<JobDetail>(`/test-samples/${sampleId}/pseudo-markup`, {
+          method: "POST",
+        }),
+      );
+      if (created) await refreshSample();
+    } finally {
+      setPseudoLaunching(false);
     }
   };
 
@@ -1852,8 +1870,8 @@ function TestSampleEditorPage({
       body: (
         <p>
           {makePrimary
-            ? "После общего сохранения эта разметка заменит текущую основную разметку датасета, а оценки сетей автоматически пересчитаются."
-            : "После общего сохранения датасет останется без основной тестовой разметки, а его тестовые метрики станут недоступными."}
+            ? "После общего сохранения эта разметка заменит текущую основную разметку класса, а оценки сетей всех его датасетов автоматически пересчитаются."
+            : "После общего сохранения класс останется без основной тестовой разметки, а тестовые метрики его сетей станут недоступными."}
         </p>
       ),
       footer: (
@@ -1907,7 +1925,7 @@ function TestSampleEditorPage({
         <p>
           Разметка «{sample.name}» и все её файлы будут удалены без возможности восстановления.
           {dirty ? " Несохранённый черновик будет отброшен." : ""}
-          {sample.is_primary ? " Это основная разметка: тестовый F1 всех сетей датасета станет недоступным." : ""}
+          {sample.is_primary ? " Это основная разметка класса: тестовый F1 всех его сетей станет недоступным." : ""}
         </p>
       ),
       footer: (
@@ -1958,7 +1976,7 @@ function TestSampleEditorPage({
     <>
       <PageHeader
         title={draft.name}
-        subtitle={`${sample.dataset_name} · создана ${formatDateTime(sample.created_at)}`}
+        subtitle={`${sample.class_name} · создана ${formatDateTime(sample.created_at)}`}
         actions={
           <>
             <a className="secondary" href="#/test-markups">Каталог</a>
@@ -1979,10 +1997,10 @@ function TestSampleEditorPage({
       <section className="panel">
         <PanelHeader
           title="Состав разметки"
-          subtitle={`${sample.dataset_name}${sample.dataset_version ? ` · версия ${sample.dataset_version}` : ""}`}
+          subtitle={`Создана на основе датасета: ${sample.source_dataset_name}${sample.source_dataset_version ? ` · версия ${sample.source_dataset_version}` : ""}`}
           aside={
             <div className="button-row">
-              <button className="secondary" type="button" disabled={evaluating || saving || !hasEnabledTiles} onClick={() => void evaluate()}>
+              <button className="secondary" type="button" disabled={evaluating || saving || !hasEnabledTiles || sample.pseudo_markup.status !== "ready"} onClick={() => void evaluate()}>
                 <RefreshCw size={16} />
                 {evaluating ? "Расчёт..." : "Оценить состав по псевдоразметке"}
               </button>
@@ -2014,6 +2032,33 @@ function TestSampleEditorPage({
           title="Оптимизация состава"
           subtitle="Оптимизатор использует псевдоразметку основной сети, рассматривает все тайлы и подбирает состав с максимальным агрегированным F1"
         />
+        <div className="test-sample-evaluation-source">
+          <span><strong>Основная сеть:</strong> {sample.pseudo_markup.model_name || "не назначена"}</span>
+          <span><strong>Обучающий датасет сети:</strong> {sample.pseudo_markup.training_dataset_name || "не определён"}</span>
+          <span>
+            <strong>Псевдоразметка исходного датасета:</strong>{" "}
+            {{
+              ready: "готова",
+              queued: "в очереди",
+              running: "выполняется",
+              unavailable: "отсутствует",
+              error: "ошибка",
+            }[sample.pseudo_markup.status]}
+          </span>
+        </div>
+        {sample.pseudo_markup.can_create ? (
+          <div className="button-row">
+            <button className="secondary" type="button" disabled={pseudoLaunching} onClick={() => void launchPseudoMarkup()}>
+              <Play size={15} />
+              {pseudoLaunching ? "Постановка..." : "Создать псевдоразметку основной сетью"}
+            </button>
+          </div>
+        ) : null}
+        {sample.pseudo_markup.job_id && pseudoActive ? (
+          <div className="info-box">
+            Псевдоразметка формируется. <a href={`#/jobs/${sample.pseudo_markup.job_id}`}>Открыть задание</a>
+          </div>
+        ) : sample.pseudo_markup.error ? <div className="info-box">{sample.pseudo_markup.error}</div> : null}
         <form className="form-stack" onSubmit={optimize}>
           <div className="form-grid">
             <label className="field">
@@ -2060,7 +2105,7 @@ function TestSampleEditorPage({
             </label>
           </div>
           <div className="button-row">
-            <button className="primary" type="submit" disabled={optimizing || !optimizationValid}>
+            <button className="primary" type="submit" disabled={optimizing || !optimizationValid || sample.pseudo_markup.status !== "ready"}>
               <BarChart3 size={16} />
               {optimizing ? "Оптимизация..." : "Оптимизировать"}
             </button>
@@ -2210,9 +2255,13 @@ function TestSampleEvaluationPanel({
         <span>
           <strong>{direct ? "Рассчитано сетью:" : "Псевдоразметка сети:"}</strong>{" "}
           {evaluation.model_name || (direct ? "ещё не рассчитано" : "нет подходящей псевдоразметки")}
+          {evaluation.training_dataset_name ? ` · датасет обучения: ${evaluation.training_dataset_name}` : ""}
         </span>
         {direct && evaluation.target_model_name && evaluation.target_model_name !== evaluation.model_name ? (
-          <span><strong>Текущая основная сеть:</strong> {evaluation.target_model_name}</span>
+          <span>
+            <strong>Текущая основная сеть:</strong> {evaluation.target_model_name}
+            {evaluation.target_training_dataset_name ? ` · датасет обучения: ${evaluation.target_training_dataset_name}` : ""}
+          </span>
         ) : null}
         {!direct && evaluation.markup_created_at ? <span><strong>Псевдоразметка:</strong> {formatDateTime(evaluation.markup_created_at)}</span> : null}
         {direct && evaluation.threshold != null ? <span><strong>Порог:</strong> {evaluation.threshold.toFixed(3)}</span> : null}

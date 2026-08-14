@@ -140,6 +140,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             annotation_name,
             base_revision=request.base_revision,
             geojson=request.geojson,
+            deleted=request.deleted,
             username=username,
         )
 
@@ -326,7 +327,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
 
     @app.delete(
         "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}",
-        response_model=DatasetEditorMutationResult,
+        response_model=DatasetEditorDraftInfo,
     )
     def delete_scene(
         dataset_key: str,
@@ -334,7 +335,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         request: DatasetEditorDeleteSceneRequest,
         db: Session = Depends(ctx.get_db),
         username: str = Depends(ctx.authenticated),
-    ) -> DatasetEditorMutationResult:
+    ) -> DatasetEditorDraftInfo:
         return _git_call(
             delete_editor_scene,
             db,

@@ -112,6 +112,7 @@ class DatasetEditorDraftRow(Base):
     username: Mapped[str] = mapped_column(String(180))
     base_revision: Mapped[str] = mapped_column(String(128))
     geojson: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -408,8 +409,8 @@ class TestSampleRow(Base):
         Index("ix_test_samples_class_dataset", "class_key", "dataset_key"),
         Index("ix_test_samples_created_at", "created_at"),
         Index(
-            "uq_test_samples_primary_dataset_key",
-            "dataset_key",
+            "uq_test_samples_primary_class_key",
+            "class_key",
             unique=True,
             postgresql_where=text("is_primary"),
             sqlite_where=text("is_primary = 1"),

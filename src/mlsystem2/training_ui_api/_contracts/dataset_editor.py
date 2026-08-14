@@ -50,6 +50,7 @@ class DatasetEditorDraftSummary(BaseModel):
 
     annotation_name: str
     base_revision: str
+    deleted: bool = False
     stale: bool = False
     total_count: int = Field(ge=0)
     positive_count: int = Field(ge=0)
@@ -116,6 +117,7 @@ class DatasetEditorSaveDraftRequest(BaseModel):
 
     base_revision: str = Field(min_length=1, max_length=128)
     geojson: dict[str, Any]
+    deleted: bool = False
 
 
 class DatasetEditorDiscardDraftsResult(BaseModel):

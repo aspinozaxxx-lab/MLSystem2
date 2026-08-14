@@ -493,22 +493,71 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     )
     assert env.live_annotation.read_bytes() == live_before
     assert not (env.live_annotation.parent / "batch_SCN02.geojson").exists()
+    already_added = env.client.post(scenes_url, json={"folder_path": "batch"})
+    assert already_added.status_code == 400
+    assert "уже добавлены" in already_added.json()["detail"]
+    duplicate_single = env.client.post(
+        scenes_url,
+        json={"image_paths": ["batch/SCN02.tif"]},
+    )
+    assert duplicate_single.status_code == 409
+    _write_raster(env.editor_root.parent / "images" / "kanopus" / "batch" / "SCN04.tif", value=44)
+    mixed_folder = env.client.post(scenes_url, json={"folder_path": "batch"})
+    assert mixed_folder.status_code == 200
+    assert [item["annotation_name"] for item in mixed_folder.json()["scenes"]] == [
+        "batch_SCN04.geojson"
+    ]
 
     scene = next(
         item
         for item in env.client.get(scenes_url).json()["scenes"]
         if item["annotation_name"] == "batch_SCN02.geojson"
     )
+    head_after_add = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
     deleted = env.client.request(
         "DELETE",
         f"{scenes_url}/{quote(scene['annotation_name'], safe='')}",
         json={"revision": scene["revision"]},
     )
     assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head_after_add
+    remaining = env.client.get(scenes_url).json()["scenes"]
+    assert {item["annotation_name"] for item in remaining} == {
+        "Olskij_SCN01.part.geojson",
+        "batch_SCN02.geojson",
+        "batch_SCN03.geojson",
+        "batch_SCN04.geojson",
+    }
+    pending = next(item for item in remaining if item["annotation_name"] == "batch_SCN02.geojson")
+    assert pending["draft"]["deleted"] is True
+
+    draft_url = (
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/"
+        f"{quote(scene['annotation_name'], safe='')}"
+    )
+    assert env.client.delete(draft_url).json()["deleted_count"] == 1
+    restored = next(
+        item
+        for item in env.client.get(scenes_url).json()["scenes"]
+        if item["annotation_name"] == "batch_SCN02.geojson"
+    )
+    assert restored["draft"] is None
+
+    assert env.client.request(
+        "DELETE",
+        f"{scenes_url}/{quote(scene['annotation_name'], safe='')}",
+        json={"revision": scene["revision"]},
+    ).status_code == 200
+    published = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish"
+    )
+    assert published.status_code == 200
     remaining = env.client.get(scenes_url).json()["scenes"]
     assert {item["annotation_name"] for item in remaining} == {
         "Olskij_SCN01.part.geojson",
         "batch_SCN03.geojson",
+        "batch_SCN04.geojson",
     }
 
 

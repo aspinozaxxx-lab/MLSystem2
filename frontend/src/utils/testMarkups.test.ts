@@ -24,15 +24,9 @@ function catalog(): TestSampleCatalogResponse {
       {
         key: "class",
         name: "Класс",
-        datasets: [
-          {
-            key: "ready",
-            name: "Готовый",
-            samples: [
-              { id: "one", dataset_key: "ready", is_primary: true } as never,
-              { id: "two", dataset_key: "ready", is_primary: false } as never,
-            ],
-          },
+        samples: [
+          { id: "one", class_key: "class", dataset_key: "ready", is_primary: true } as never,
+          { id: "two", class_key: "class", dataset_key: "strict", is_primary: false } as never,
         ],
       },
     ],
@@ -52,6 +46,8 @@ function downloadCatalog(): TestSampleCatalogResponse {
     name,
     dataset_key: datasetKey,
     dataset_name: `Вырубки\\${datasetKey}`,
+    source_dataset_name: datasetKey,
+    class_key: "deforestation",
     class_name: "Вырубки",
     is_primary: isPrimary,
     enabled_image_count: enabledImageCount,
@@ -63,24 +59,20 @@ function downloadCatalog(): TestSampleCatalogResponse {
       {
         key: "deforestation",
         name: "Вырубки",
-        datasets: [
-          {
-            key: "main",
-            name: "main",
-            samples: [
-              sample("new", "main", "Новая", "2026-07-30T10:00:00Z", false, 2),
-              sample("primary", "main", "Основная", "2026-07-29T10:00:00Z", true, 2),
-              sample("old", "main", "Старая", "2026-07-28T10:00:00Z", false, 2),
-            ],
-          },
-          {
-            key: "empty",
-            name: "empty",
-            samples: [
-              sample("empty-primary", "empty", "Пустая", "2026-07-30T10:00:00Z", true, 0),
-            ],
-          },
+        samples: [
+          sample("new", "main", "Новая", "2026-07-30T10:00:00Z", false, 2),
+          sample("primary", "main", "Основная", "2026-07-29T10:00:00Z", true, 2),
+          sample("old", "strict", "Старая", "2026-07-28T10:00:00Z", false, 2),
         ],
+      },
+      {
+        key: "empty-class",
+        name: "Абразия",
+        samples: [{
+          ...sample("empty-primary", "empty", "Пустая", "2026-07-30T10:00:00Z", true, 0),
+          class_key: "empty-class",
+          class_name: "Абразия",
+        }],
       },
     ],
   };
@@ -88,13 +80,13 @@ function downloadCatalog(): TestSampleCatalogResponse {
 
 describe("тестовые разметки", () => {
   it("считает разметки и наличие основной", () => {
-    expect(testMarkupStats(catalog(), "ready")).toEqual({ count: 2, hasPrimary: true });
+    expect(testMarkupStats(catalog(), "class")).toEqual({ count: 2, hasPrimary: true });
     expect(testMarkupStats(catalog(), "missing")).toEqual({ count: 0, hasPrimary: false });
   });
 
   it("показывает датасеты без основной разметки первыми", () => {
-    const ready = { key: "ready", class_name: "Класс", dataset_name: "Готовый" } as DatasetInfo;
-    const missing = { key: "missing", class_name: "Класс", dataset_name: "Новый" } as DatasetInfo;
+    const ready = { key: "ready", class_key: "class", class_name: "Класс", dataset_name: "Готовый" } as DatasetInfo;
+    const missing = { key: "missing", class_key: "missing", class_name: "Новый класс", dataset_name: "Новый" } as DatasetInfo;
     expect(sortTestMarkupDatasets([ready, missing], catalog()).map((item) => item.key)).toEqual([
       "missing",
       "ready",
@@ -132,7 +124,7 @@ describe("тестовые разметки", () => {
     expect(initialTestMarkupDownloadSelection(options)).toEqual(new Set(["primary"]));
   });
 
-  it("оставляет одну разметку датасета и снимает все отметки", () => {
+  it("оставляет одну разметку класса и снимает все отметки", () => {
     const options = testMarkupDownloadOptions(downloadCatalog());
     const initial = initialTestMarkupDownloadSelection(options);
     const replaced = changeTestMarkupDownloadSelection(

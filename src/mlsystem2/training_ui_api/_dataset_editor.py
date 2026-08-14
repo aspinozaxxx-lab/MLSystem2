@@ -217,6 +217,7 @@ def save_editor_draft(
     *,
     base_revision: str,
     geojson: dict[str, Any],
+    deleted: bool = False,
     username: str,
 ) -> DatasetEditorDraftInfo:
     """Сохранить проверенный черновик в БД без Git-коммита и инференса."""
@@ -239,6 +240,7 @@ def save_editor_draft(
                 username=username,
                 base_revision=base_revision,
                 geojson=normalized_geojson,
+                deleted=deleted,
                 created_at=created_at,
                 updated_at=created_at,
             )
@@ -246,6 +248,7 @@ def save_editor_draft(
         else:
             row.base_revision = base_revision
             row.geojson = normalized_geojson
+            row.deleted = deleted
             row.updated_at = datetime.now(timezone.utc)
         session.flush()
         return _draft_info(row, dataset, scene.revision)
@@ -297,6 +300,12 @@ def publish_editor_drafts(
         scenes=[
             (row.annotation_name, row.base_revision, dict(row.geojson))
             for row in rows
+            if not row.deleted
+        ],
+        deletions=[
+            (row.annotation_name, row.base_revision)
+            for row in rows
+            if row.deleted
         ],
         username=username,
     )
@@ -643,9 +652,15 @@ def add_editor_scenes(
         existing = {path.name.casefold() for path in _direct_files(source_dir, ".geojson")}
         collisions = sorted(name for key, (name, _path) in names.items() if key in existing)
         if collisions:
-            raise DatasetEditorConflict(
-                "Снимки уже добавлены в датасет: " + ", ".join(collisions)
-            )
+            if folder_path is None:
+                raise DatasetEditorConflict(
+                    "Снимки уже добавлены в датасет: " + ", ".join(collisions)
+                )
+            names = {
+                key: value for key, value in names.items() if key not in existing
+            }
+            if not names:
+                raise TrainingUIAPIError("Все TIFF из выбранной папки уже добавлены в датасет")
         source_dir.mkdir(parents=True, exist_ok=True)
         created: list[Path] = []
         relative_files: list[PurePosixPath] = []
@@ -713,11 +728,14 @@ def publish_editor_scenes(
     dataset_key: str,
     *,
     scenes: list[tuple[str, str, dict[str, Any]]],
+    deletions: list[tuple[str, str]] | None = None,
     username: str,
 ) -> DatasetEditorMutationResult:
-    if not scenes:
+    deletions = deletions or []
+    if not scenes and not deletions:
         raise TrainingUIAPIError("Для публикации нужен хотя бы один снимок")
     normalized_names = [name.casefold() for name, _revision, _geojson in scenes]
+    normalized_names.extend(name.casefold() for name, _revision in deletions)
     if len(normalized_names) != len(set(normalized_names)):
         raise TrainingUIAPIError("Список публикации содержит повторяющиеся снимки")
 
@@ -725,6 +743,7 @@ def publish_editor_scenes(
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
+        resolved_deletions: list[tuple[str, str, Path, PurePosixPath]] = []
         conflicts: list[str] = []
         for annotation_name, revision, geojson in scenes:
             scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
@@ -735,6 +754,16 @@ def publish_editor_scenes(
                 conflicts.append(scene.annotation_name)
             resolved.append(
                 (scene.annotation_name, revision, geojson, annotation_path, relative_path)
+            )
+        for annotation_name, revision in deletions:
+            scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+            annotation_path = _annotation_path(source_dir, scene.annotation_name)
+            relative_path = _repo_relative(config, annotation_path)
+            current_revision = _blob_revision(config, "HEAD", relative_path)
+            if current_revision != revision:
+                conflicts.append(scene.annotation_name)
+            resolved_deletions.append(
+                (scene.annotation_name, revision, annotation_path, relative_path)
             )
         if conflicts:
             raise DatasetEditorConflict(
@@ -763,22 +792,32 @@ def publish_editor_scenes(
             )
 
         relative_paths = [item[4] for item in prepared]
+        deletion_paths = [item[3] for item in resolved_deletions]
+        all_relative_paths = [*relative_paths, *deletion_paths]
         try:
             for _name, _revision, geojson, annotation_path, _relative_path in prepared:
                 _write_geojson_atomic(annotation_path, geojson)
-            _git(config, "add", "--", *(path.as_posix() for path in relative_paths))
-            subject = (
-                f"Обновить разметку {prepared[0][0]}"
-                if len(prepared) == 1
-                else (
+            if relative_paths:
+                _git(config, "add", "--", *(path.as_posix() for path in relative_paths))
+            if deletion_paths:
+                _git(config, "rm", "--", *(path.as_posix() for path in deletion_paths))
+            change_count = len(prepared) + len(resolved_deletions)
+            if change_count == 1 and prepared:
+                subject = f"Обновить разметку {prepared[0][0]}"
+            elif change_count == 1:
+                subject = f"Удалить снимок {resolved_deletions[0][0]}"
+            else:
+                subject = (
                     f"Обновить разметку датасета {dataset.dataset_name or dataset.name} "
-                    f"({len(prepared)} снимка)"
+                    f"({change_count} снимка)"
                 )
-            )
             commit = _commit(config, subject, username)
             commit = _push_with_retry(
                 config,
-                expected_revisions={item[4]: item[1] for item in prepared},
+                expected_revisions={
+                    **{item[4]: item[1] for item in prepared},
+                    **{item[3]: item[1] for item in resolved_deletions},
+                },
             )
         except Exception:
             _git_optional(
@@ -787,19 +826,31 @@ def publish_editor_scenes(
                 "--staged",
                 "--worktree",
                 "--",
-                *(path.as_posix() for path in relative_paths),
+                *(path.as_posix() for path in all_relative_paths),
             )
             raise
         updated_scenes = {
             item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
         }
-        session.execute(
-            delete(DatasetEditorDraftRow).where(
-                DatasetEditorDraftRow.dataset_key == dataset.key,
-                DatasetEditorDraftRow.username == username,
-                DatasetEditorDraftRow.annotation_name.in_([item[0] for item in prepared]),
+        if prepared:
+            session.execute(
+                delete(DatasetEditorDraftRow).where(
+                    DatasetEditorDraftRow.dataset_key == dataset.key,
+                    DatasetEditorDraftRow.username == username,
+                    DatasetEditorDraftRow.annotation_name.in_(
+                        [item[0] for item in prepared]
+                    ),
+                )
             )
-        )
+        if resolved_deletions:
+            session.execute(
+                delete(DatasetEditorDraftRow).where(
+                    DatasetEditorDraftRow.dataset_key == dataset.key,
+                    DatasetEditorDraftRow.annotation_name.in_(
+                        [item[0] for item in resolved_deletions]
+                    ),
+                )
+            )
         session.flush()
         return DatasetEditorMutationResult(
             commit=commit,
@@ -816,43 +867,25 @@ def delete_editor_scene(
     *,
     revision: str,
     username: str,
-) -> DatasetEditorMutationResult:
-    with _editor_lock(config, restore_ownership=True):
-        _synchronize_editor_clone(config)
+) -> DatasetEditorDraftInfo:
+    """Пометить снимок на удаление в пользовательском черновике."""
+
+    with _editor_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
-        annotation_path = _annotation_path(source_dir, annotation_name)
-        relative_path = _repo_relative(config, annotation_path)
-        current_revision = _blob_revision(config, "HEAD", relative_path)
-        if current_revision != revision:
+        scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+        if scene.revision != revision:
             raise DatasetEditorConflict("Разметка уже изменена другим пользователем")
-        _git(config, "rm", "--", relative_path.as_posix())
-        try:
-            commit = _commit(config, f"Удалить снимок {annotation_name}", username)
-            commit = _push_with_retry(
-                config,
-                expected_revisions={relative_path: revision},
-            )
-        except Exception:
-            _git_optional(
-                config,
-                "restore",
-                "--staged",
-                "--worktree",
-                "--",
-                relative_path.as_posix(),
-            )
-            raise
-        session.execute(
-            delete(DatasetEditorDraftRow).where(
-                DatasetEditorDraftRow.dataset_key == dataset.key,
-                DatasetEditorDraftRow.annotation_name == annotation_name,
-            )
-        )
-        session.flush()
-        return DatasetEditorMutationResult(
-            commit=commit,
-            publication_status=_publication_status(config, commit),
-        )
+        geojson = _read_geojson(_annotation_path(source_dir, scene.annotation_name))
+    return save_editor_draft(
+        session,
+        config,
+        dataset_key,
+        annotation_name,
+        base_revision=revision,
+        geojson=geojson,
+        deleted=True,
+        username=username,
+    )
 
 
 def delete_editor_dataset(
@@ -2008,6 +2041,7 @@ def _draft_summary(
     return DatasetEditorDraftSummary(
         annotation_name=row.annotation_name,
         base_revision=row.base_revision,
+        deleted=row.deleted,
         stale=row.base_revision != current_revision,
         total_count=positive + hard_negative,
         positive_count=positive,

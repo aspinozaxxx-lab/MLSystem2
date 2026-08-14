@@ -83,6 +83,7 @@ from ._models import (
     PseudoMarkupResultRow,
     QueueControlRow,
     StoredFileRow,
+    TestSampleRow,
     TrainingResultTestMetricRow,
     TrainingResultRow,
     TrainingTemplateRow,
@@ -97,6 +98,7 @@ from ._templates import (
 )
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
+    current_primary_training_result,
     mark_test_samples_stale_for_pseudo_markup,
     primary_test_sample,
     queue_class_test_f1,
@@ -1480,6 +1482,62 @@ def create_pseudo_markup_job(
     )
     session.flush()
     return _job_detail(session, row)
+
+
+def ensure_test_sample_pseudo_markup_job(
+    session: Session,
+    sample_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+) -> JobDetail:
+    """Идемпотентно запустить штатную псевдоразметку источника тестового набора."""
+
+    sample = session.scalar(
+        select(TestSampleRow)
+        .where(TestSampleRow.id == sample_id)
+        .with_for_update()
+    )
+    if sample is None:
+        raise TrainingUIAPIError("Тестовая разметка не найдена")
+    primary = current_primary_training_result(session, sample.class_key)
+    if primary is None:
+        raise TrainingUIAPIError("Для класса не назначена успешная основная сеть")
+    existing = session.scalar(
+        select(PseudoMarkupResultRow)
+        .where(
+            PseudoMarkupResultRow.dataset_key == sample.dataset_key,
+            PseudoMarkupResultRow.training_result_id == primary.id,
+            PseudoMarkupResultRow.status.in_(("ok", "running")),
+        )
+        .order_by(
+            PseudoMarkupResultRow.updated_at.desc(),
+            PseudoMarkupResultRow.created_at.desc(),
+            PseudoMarkupResultRow.id.desc(),
+        )
+        .limit(1)
+    )
+    if existing is not None and existing.job_id is not None:
+        job = session.get(JobRow, existing.job_id)
+        ready_file_exists = bool(
+            existing.status == "ok"
+            and existing.geojson_file is not None
+            and Path(existing.geojson_file.path).is_file()
+        )
+        if job is not None and (existing.status == "running" or ready_file_exists) and job.status not in {
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        }:
+            return _job_detail(session, job)
+    return create_pseudo_markup_job(
+        session,
+        class_key=primary.class_key,
+        dataset_key=sample.dataset_key,
+        image_folder_key=None,
+        training_result_id=primary.id,
+        scenes_name=None,
+        scenes_content_type=None,
+        scenes_bytes=None,
+        config=config,
+    )
 
 
 def delete_pseudo_markup_result(

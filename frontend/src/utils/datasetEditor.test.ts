@@ -24,7 +24,11 @@ import {
   type PublishableDraft,
 } from "./datasetEditor";
 
-const snapshot = (roles: string[], newFeatureIndexes: number[] = []): DraftSnapshot => ({
+const snapshot = (
+  roles: string[],
+  newFeatureIndexes: number[] = [],
+  deleted = false,
+): DraftSnapshot => ({
   geojson: {
     type: "FeatureCollection",
     features: roles.map((role) => ({
@@ -34,6 +38,7 @@ const snapshot = (roles: string[], newFeatureIndexes: number[] = []): DraftSnaps
     })),
   },
   newFeatureIndexes,
+  deleted,
 });
 
 const draft = (name: string, baseline: DraftSnapshot, current: DraftSnapshot): PublishableDraft => ({
@@ -301,6 +306,16 @@ describe("черновики редактора датасетов", () => {
     const undone = undoDraft({ baseline, current, history: [previous] });
     expect(undone?.current).toEqual(previous);
     expect(undone?.history).toEqual([]);
+  });
+
+  it("считает удаление снимка изменением и отменяет его через общую историю", () => {
+    const baseline = snapshot(["positive"]);
+    const deleted = snapshot(["positive"], [], true);
+    const state = { baseline, current: deleted, history: [baseline] };
+
+    expect(draftChanged(state)).toBe(true);
+    expect(snapshotsEqual(baseline, deleted)).toBe(false);
+    expect(undoDraft(state)?.current.deleted).toBe(false);
   });
 
   it("формирует одну публикацию только из изменённых снимков", () => {

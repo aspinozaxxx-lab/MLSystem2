@@ -20,6 +20,7 @@ export function preventMapMiddleButtonDefault(
 export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];
+  deleted?: boolean;
 };
 
 export type DraftState = {
@@ -57,12 +58,14 @@ export function cloneSnapshot(snapshot: DraftSnapshot): DraftSnapshot {
   return {
     geojson: JSON.parse(JSON.stringify(snapshot.geojson)) as JsonObject,
     newFeatureIndexes: [...snapshot.newFeatureIndexes],
+    ...(snapshot.deleted === undefined ? {} : { deleted: snapshot.deleted }),
   };
 }
 
 export function snapshotsEqual(left: DraftSnapshot, right: DraftSnapshot): boolean {
   return (
     canonicalJson(left.geojson) === canonicalJson(right.geojson) &&
+    Boolean(left.deleted) === Boolean(right.deleted) &&
     left.newFeatureIndexes.length === right.newFeatureIndexes.length &&
     left.newFeatureIndexes.every((value, index) => value === right.newFeatureIndexes[index])
   );
@@ -280,7 +283,10 @@ export function featureClassCounts(geojson: JsonObject): Record<string, number> 
 }
 
 export function draftChanged(draft: DraftState): boolean {
-  return canonicalJson(draft.baseline.geojson) !== canonicalJson(draft.current.geojson);
+  return (
+    canonicalJson(draft.baseline.geojson) !== canonicalJson(draft.current.geojson) ||
+    Boolean(draft.baseline.deleted) !== Boolean(draft.current.deleted)
+  );
 }
 
 function canonicalJson(value: unknown): string {
@@ -386,6 +392,7 @@ export function acceptPublishedDraft<T extends PublishableDraft>(
   const saved = cloneSnapshot({
     geojson: draft.current.geojson,
     newFeatureIndexes: [],
+    deleted: false,
   });
   return {
     ...draft,
