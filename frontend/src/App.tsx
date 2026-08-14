@@ -3593,10 +3593,7 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
               key={dataset.key}
               title={dataset.is_primary ? "Основной датасет класса" : undefined}
             >
-              <span className="dataset-link-name">
-                {dataset.dataset_name || dataset.name}
-                {dataset.is_primary ? <small className="badge ok">основной</small> : null}
-              </span>
+              <span>{dataset.dataset_name || dataset.name}</span>
               {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
                 <strong
                   className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}

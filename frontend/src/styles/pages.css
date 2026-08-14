@@ -299,13 +299,6 @@
   font-weight: 600;
 }
 
-.dataset-link .dataset-link-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
 .dataset-link small {
   color: var(--muted);
   white-space: nowrap;
