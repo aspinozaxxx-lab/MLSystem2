@@ -11,7 +11,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.api import (
+    is_per_image_footprint_name,
+    resolve_scene_images,
+)
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from .contracts import ClassInfo, DatasetFormat, DatasetInfo, ImageFolderInfo
@@ -246,6 +249,7 @@ def per_image_annotation_files(annotations_dir: Path) -> list[str]:
                 item
                 for item in Path(annotations_dir).iterdir()
                 if item.is_file() and item.suffix.casefold() == ".geojson"
+                and not is_per_image_footprint_name(item.name)
             ),
             key=lambda item: item.name.casefold(),
         )
@@ -356,6 +360,7 @@ def _per_image_count(
         1
         for item in annotations_dir.iterdir()
         if item.is_file() and item.suffix.casefold() == ".geojson"
+        and not is_per_image_footprint_name(item.name)
     )
     if geojson_count == 0:
         diagnostics.append(
@@ -395,13 +400,28 @@ def _looks_like_dataset_folder(path: Path) -> bool:
 
 
 def _first_file(path: Path, suffix: str) -> Path | None:
-    files = sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() == suffix)
+    files = sorted(
+        item
+        for item in path.iterdir()
+        if item.is_file()
+        and item.suffix.lower() == suffix
+        and not (
+            suffix.casefold() == ".geojson"
+            and is_per_image_footprint_name(item.name)
+        )
+    )
     return files[0] if files else None
 
 
 def _annotation_files(path: Path) -> tuple[Path | None, Path | None, list[str]]:
     geojson_files = sorted(
-        (item for item in path.iterdir() if item.is_file() and item.suffix.lower() == ".geojson"),
+        (
+            item
+            for item in path.iterdir()
+            if item.is_file()
+            and item.suffix.lower() == ".geojson"
+            and not is_per_image_footprint_name(item.name)
+        ),
         key=lambda item: item.name.casefold(),
     )
     hard_negative_files = [

@@ -247,6 +247,7 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
     assert _git(env.editor_root, "show", "-s", "--format=%B", commit).stdout.endswith(
         "MLSystem2-User: editor\n\n"
     )
+    assert _git(env.editor_root, "show", "-s", "--format=%an", commit).stdout.strip() == "editor"
 
     stale = env.client.put(
         detail_url,
@@ -476,6 +477,13 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     assert added.status_code == 200
     assert len(added.json()["scenes"]) == 2
     assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (commits_before + 1)
+    footprint_path = env.editor_dataset / "batch_SCN02_footprint.geojson"
+    assert footprint_path.is_file()
+    footprint = json.loads(footprint_path.read_text(encoding="utf-8"))
+    assert len(footprint["features"]) == 1
+    assert footprint["features"][0]["properties"] == {
+        "_mlsystem2_type": "valid_data_footprint"
+    }
     assert env.live_annotation.read_bytes() == live_before
     assert not (env.live_annotation.parent / "batch_SCN02.geojson").exists()
     already_added = env.client.post(scenes_url, json={"folder_path": "batch"})
@@ -545,6 +553,8 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
         "batch_SCN03.geojson",
         "batch_SCN04.geojson",
     }
+    assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
+    assert not footprint_path.exists()
 
 
 def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
@@ -564,6 +574,7 @@ def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
     assert _git(env.editor_root, "show", "-s", "--format=%B", commit).stdout.endswith(
         "MLSystem2-User: editor\n\n"
     )
+    assert _git(env.editor_root, "show", "-s", "--format=%an", commit).stdout.strip() == "editor"
 
     catalog = env.client.get("/api/v1/dataset-catalog")
     assert catalog.status_code == 200

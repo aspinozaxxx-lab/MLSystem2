@@ -334,6 +334,8 @@ def test_prepare_per_image_dataset_matches_names_and_counts_roles(tmp_path: Path
         annotations / "Магадан_SCN07.geojson",
         ["positive"],
     )
+    footprint_file = annotations / "Ольский_SCN06_footprint.geojson"
+    footprint_file.write_text("{}", encoding="utf-8")
 
     result = prepare_dataset(
         DatasetPreparationRequest(
@@ -355,6 +357,11 @@ def test_prepare_per_image_dataset_matches_names_and_counts_roles(tmp_path: Path
         "Ольский/SCN06",
     ]
     assert all(scene.annotation_file is not None for scene in result.dataset.scenes)
+    footprint_by_scene = {
+        scene.scene_id: scene.footprint_file for scene in result.dataset.scenes
+    }
+    assert footprint_by_scene["Ольский/SCN06"] == footprint_file.resolve().as_posix()
+    assert footprint_by_scene["Магадан/SCN07"] is None
 
 
 def test_prepare_per_image_dataset_accepts_empty_feature_collection(tmp_path: Path) -> None:

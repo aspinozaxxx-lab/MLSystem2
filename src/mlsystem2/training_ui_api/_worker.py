@@ -23,7 +23,10 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from mlsystem2.dataset_preparing.api import load_dataset_manifest
+from mlsystem2.dataset_preparing.api import (
+    is_per_image_footprint_name,
+    load_dataset_manifest,
+)
 from mlsystem2.mlflow_adapter.api import (
     get_best_training_checkpoint,
     get_finished_run_artifact,
@@ -1087,7 +1090,7 @@ def _dataset_config(
     snapshot_dir = run_dir / "dataset_snapshot"
     if dataset.annotations_dir:
         source_dir = Path(dataset.annotations_dir).resolve()
-        annotation_files = sorted(
+        geojson_files = sorted(
             (
                 path
                 for path in source_dir.iterdir()
@@ -1095,10 +1098,15 @@ def _dataset_config(
             ),
             key=lambda path: path.name.casefold(),
         )
+        annotation_files = [
+            path
+            for path in geojson_files
+            if not is_per_image_footprint_name(path.name)
+        ]
         if not annotation_files:
             raise RuntimeError(f"Per-image датасет пуст: {row.dataset_name}")
         snapshot_dir.mkdir(parents=True, exist_ok=True)
-        for source_file in annotation_files:
+        for source_file in geojson_files:
             shutil.copy2(source_file, snapshot_dir / source_file.name)
         manifest_file = source_dir / ".mlsystem2-dataset.json"
         if manifest_file.is_file():

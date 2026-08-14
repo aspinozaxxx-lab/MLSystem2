@@ -210,6 +210,7 @@ const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
   NGB: [4, 2, 3],
 };
 const styleCache = new Map<string, Style>();
+const pseudoStyleCache = new Map<string, Style>();
 const EDITABLE_VERTICES_STYLE = new Style({
   geometry: (feature) => new MultiPoint(
     editableVertexCoordinates((feature as Feature<Geometry>).getGeometry()),
@@ -224,10 +225,6 @@ const SELECTED_VERTEX_IMAGE = new CircleStyle({
   radius: 7,
   fill: new Fill({ color: "#38BDF8" }),
   stroke: new Stroke({ color: "#FFFFFF", width: 2 }),
-});
-const PSEUDO_MARKUP_STYLE = new Style({
-  fill: new Fill({ color: "rgb(34 211 238 / 18%)" }),
-  stroke: new Stroke({ color: "#22D3EE", width: 2, lineDash: [7, 5] }),
 });
 
 export function DatasetEditorPage({
@@ -283,6 +280,7 @@ export function DatasetEditorPage({
   const drawInProgressRef = useRef(false);
   const selectedVerticesRef = useRef<VertexSelection[]>([]);
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
+  const scenesLoadRequestRef = useRef(0);
   const sceneLoadRequestRef = useRef(0);
   const pseudoLoadRequestRef = useRef(0);
   const pseudoCacheRef = useRef<Map<string, PseudoMarkupInfo>>(new Map());
@@ -434,6 +432,7 @@ export function DatasetEditorPage({
 
   const loadScenes = useCallback(
     async (key: string, preferredAnnotation = "") => {
+      const requestId = ++scenesLoadRequestRef.current;
       if (!key) {
         setScenes([]);
         setAnnotationName("");
@@ -445,7 +444,11 @@ export function DatasetEditorPage({
           `/dataset-editor/datasets/${encodeURIComponent(key)}/scenes`,
         ),
       );
-      if (!payload) return;
+      if (
+        !payload
+        || requestId !== scenesLoadRequestRef.current
+        || datasetKeyRef.current !== key
+      ) return;
       setScenes(payload.scenes);
       const next =
         payload.scenes.find((item) => item.annotation_name === preferredAnnotation)
@@ -500,7 +503,12 @@ export function DatasetEditorPage({
           `/dataset-editor/datasets/${encodeURIComponent(key)}/scenes/${encodeURIComponent(name)}`,
         ),
       );
-      if (!payload || requestId !== sceneLoadRequestRef.current) return;
+      if (
+        !payload
+        || requestId !== sceneLoadRequestRef.current
+        || datasetKeyRef.current !== key
+        || activeAnnotationRef.current !== name
+      ) return;
       const baseline = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false };
       const draftSnapshot = payload.draft
         ? {
@@ -919,7 +927,10 @@ export function DatasetEditorPage({
     const pseudoLayer = new VectorLayer({
       source: pseudoSource,
       visible: false,
-      style: PSEUDO_MARKUP_STYLE,
+      style: (feature) => pseudoMarkupStyle(
+        feature as Feature<Geometry>,
+        objectTypeChoices,
+      ),
     });
     const vectorLayer = new VectorLayer({
       source: vectorSource,
@@ -2208,6 +2219,31 @@ function RebuildChangeList({ title, items }: { title: string; items: string[] })
       <ul>{items.map((item, index) => <li key={`${index}:${item}`}>{item}</li>)}</ul>
     </section>
   );
+}
+
+export function pseudoMarkupStyle(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+): Style {
+  const sourceColor = feature.get("object_type_color");
+  const slug = feature.get("object_type_slug");
+  const rawId = feature.get("object_type_id");
+  const objectType = objectTypes.find((item) =>
+    (typeof slug === "string" && item.slug === slug)
+    || (rawId !== undefined && rawId !== null && item.id === Number(rawId))
+  );
+  const color = typeof sourceColor === "string" && /^#[0-9a-f]{6}$/i.test(sourceColor)
+    ? sourceColor.toUpperCase()
+    : objectType?.color || "#22D3EE";
+  const key = color.toUpperCase();
+  const cached = pseudoStyleCache.get(key);
+  if (cached) return cached;
+  const style = new Style({
+    fill: new Fill({ color: hexToRgba(color, 0.18) }),
+    stroke: new Stroke({ color, width: 2, lineDash: [7, 5] }),
+  });
+  pseudoStyleCache.set(key, style);
+  return style;
 }
 
 function featureStyle(

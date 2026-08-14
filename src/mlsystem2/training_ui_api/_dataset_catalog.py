@@ -12,7 +12,11 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mlsystem2.dataset_preparing.api import load_dataset_manifest, resolve_scene_images
+from mlsystem2.dataset_preparing.api import (
+    is_per_image_footprint_name,
+    load_dataset_manifest,
+    resolve_scene_images,
+)
 from mlsystem2.dataset_preparing.contracts import (
     DatasetManifest,
     DatasetPreparationError,
@@ -911,6 +915,8 @@ def _per_image_object_counts(
     hard_negative = 0
     try:
         for path in folder.glob("*.geojson"):
+            if is_per_image_footprint_name(path.name):
+                continue
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
             for feature in payload.get("features", []):
                 properties = feature.get("properties") or {}
@@ -952,6 +958,7 @@ def _per_image_catalog_count(
             path
             for path in annotations_dir.iterdir()
             if path.is_file() and path.suffix.casefold() == ".geojson"
+            and not is_per_image_footprint_name(path.name)
         ),
         key=lambda item: item.name.casefold(),
     )

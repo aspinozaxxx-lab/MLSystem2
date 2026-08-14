@@ -24,6 +24,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
 )
 from mlsystem2.training_ui_api._combined_dataset import build_combined_dataset
 from mlsystem2.training_ui_api._markup_export import IntersectingImage, IntersectingImages
+from mlsystem2.training_ui_api.contracts import DatasetInfo
 
 
 def test_combined_builder_applies_priority_background_and_stable_ids(
@@ -241,17 +242,43 @@ def test_rebuild_replace_is_atomic_and_removes_obsolete_geojson(tmp_path: Path) 
         manifest,
         [_origin_feature("source:a", "replacement", box(0, 0, 1, 1))],
     )
+    images_root = tmp_path / "images"
+    image_folder = images_root / "images"
+    image_folder.mkdir(parents=True)
+    with rasterio.open(
+        image_folder / "replacement.tif",
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 4, 1, 1),
+        nodata=0,
+    ) as raster:
+        raster.write(np.ones((1, 4, 4), dtype=np.uint8))
+    dataset_info = DatasetInfo(
+        key="combined",
+        name="combined",
+        images_dir=str(images_root),
+    )
 
     _replace_dataset_files_atomically(
         dataset,
-        {"replacement.geojson": payload},
+        {"images_replacement.geojson": payload},
         manifest.model_dump(mode="json"),
+        dataset_info,
     )
 
     assert not (dataset / "obsolete.geojson").exists()
     assert json.loads(
-        (dataset / "replacement.geojson").read_text(encoding="utf-8")
+        (dataset / "images_replacement.geojson").read_text(encoding="utf-8")
     ) == json.loads(json.dumps(payload))
+    footprint = json.loads(
+        (dataset / "images_replacement_footprint.geojson").read_text(encoding="utf-8")
+    )
+    assert len(footprint["features"]) == 1
     assert (dataset / "keep.md").read_text(encoding="utf-8") == "keep"
     saved_manifest = json.loads(
         (dataset / ".mlsystem2-dataset.json").read_text(encoding="utf-8")

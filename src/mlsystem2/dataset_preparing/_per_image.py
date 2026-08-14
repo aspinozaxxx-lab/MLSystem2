@@ -8,11 +8,15 @@ from pathlib import Path
 from ._scene_matching import IMAGE_EXTENSIONS, index_image_files
 
 
+PER_IMAGE_FOOTPRINT_SUFFIX = "_footprint.geojson"
+
+
 @dataclass(frozen=True, slots=True)
 class PerImageAnnotationMatch:
     scene_id: str
     image_path: Path
     annotation_file: Path
+    footprint_file: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,35 @@ class PerImageAnnotationResolution:
 def per_image_annotation_name(image_path: str | Path) -> str:
     path = Path(image_path)
     return f"{path.parent.name}_{path.stem}.geojson"
+
+
+def per_image_footprint_name(image_path: str | Path) -> str:
+    return footprint_name_for_annotation(per_image_annotation_name(image_path))
+
+
+def footprint_name_for_annotation(annotation_file: str | Path) -> str:
+    name = Path(annotation_file).name
+    if Path(name).suffix.casefold() != ".geojson" or is_per_image_footprint_name(name):
+        raise ValueError(f"Некорректное имя per-image разметки: {name}")
+    return f"{Path(name).stem}_footprint.geojson"
+
+
+def is_per_image_footprint_name(value: str | Path) -> bool:
+    return Path(value).name.casefold().endswith(PER_IMAGE_FOOTPRINT_SUFFIX)
+
+
+def per_image_annotation_files(annotations_dir: str | Path) -> list[Path]:
+    root = Path(annotations_dir)
+    return sorted(
+        (
+            path.resolve()
+            for path in root.iterdir()
+            if path.is_file()
+            and path.suffix.casefold() == ".geojson"
+            and not is_per_image_footprint_name(path)
+        ),
+        key=lambda path: path.name.casefold(),
+    )
 
 
 def resolve_per_image_annotations(
@@ -45,14 +78,7 @@ def resolve_per_image_annotations(
         key = per_image_annotation_name(image_path).casefold()
         images_by_annotation.setdefault(key, []).append(Path(image_path).resolve())
 
-    annotation_files = sorted(
-        (
-            path.resolve()
-            for path in annotation_root.iterdir()
-            if path.is_file() and path.suffix.casefold() == ".geojson"
-        ),
-        key=lambda path: path.name.casefold(),
-    )
+    annotation_files = per_image_annotation_files(annotation_root)
     matches: list[PerImageAnnotationMatch] = []
     missing: list[str] = []
     ambiguous: dict[str, tuple[Path, ...]] = {}
@@ -90,6 +116,11 @@ def resolve_per_image_annotations(
                 scene_id=scene_id,
                 image_path=image_path,
                 annotation_file=annotation_file,
+                footprint_file=(
+                    annotation_root / footprint_name_for_annotation(annotation_file)
+                    if (annotation_root / footprint_name_for_annotation(annotation_file)).is_file()
+                    else None
+                ),
             )
         )
     return PerImageAnnotationResolution(
@@ -103,6 +134,11 @@ def resolve_per_image_annotations(
 __all__ = [
     "PerImageAnnotationMatch",
     "PerImageAnnotationResolution",
+    "PER_IMAGE_FOOTPRINT_SUFFIX",
+    "footprint_name_for_annotation",
+    "is_per_image_footprint_name",
     "per_image_annotation_name",
+    "per_image_annotation_files",
+    "per_image_footprint_name",
     "resolve_per_image_annotations",
 ]

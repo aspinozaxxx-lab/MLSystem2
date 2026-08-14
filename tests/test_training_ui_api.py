@@ -68,6 +68,36 @@ def test_frontend_credentials_accept_configured_username_and_legacy_alias(monkey
     assert _auth.verify_credentials("mluser", "wrong", config) is False
 
 
+def test_frontend_credentials_support_canonical_users_roles_and_aliases(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_USERS_JSON",
+        json.dumps(
+            [
+                {
+                    "username": "Aspinoza",
+                    "password": "admin-password",
+                    "role": "admin",
+                    "aliases": ["mlsystem"],
+                },
+                {
+                    "username": "Alice",
+                    "password": "user-password",
+                    "role": "user",
+                },
+            ]
+        ),
+    )
+    config = get_config()
+
+    admin = _auth.authenticate_user("mlsystem", "admin-password", config)
+    user = _auth.authenticate_user("Alice", "user-password", config)
+    assert admin is not None and (admin.username, admin.role) == ("Aspinoza", "admin")
+    assert user is not None and (user.username, user.role) == ("Alice", "user")
+    assert _auth.authenticate_user("mluser", "admin-password", config) is None
+
+
 def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 1}) is True
     assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True

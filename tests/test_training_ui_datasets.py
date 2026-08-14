@@ -190,6 +190,8 @@ def test_list_datasets_detects_per_image_format_and_counts_geojson(
     dataset.mkdir(parents=True)
     (dataset / "Olskij_SCN06.geojson").write_text("{}", encoding="utf-8")
     (dataset / "Olskij_SCN07.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "Olskij_SCN06_footprint.geojson").write_text("{}", encoding="utf-8")
+    (dataset / "Olskij_SCN07_footprint.geojson").write_text("{}", encoding="utf-8")
     images_root = tmp_path / "prepared_images"
     images = images_root / "kanopus" / "Olskij"
     images.mkdir(parents=True)

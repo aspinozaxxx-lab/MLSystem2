@@ -32,6 +32,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.dataset_preparing.api import (
+    footprint_name_for_annotation,
+    is_per_image_footprint_name,
     load_dataset_manifest,
     per_image_annotation_name,
 )
@@ -94,8 +96,6 @@ _ROLE_PROPERTY = "_mlsystem2_role"
 _CLASS_PROPERTY = "_mlsystem2_class"
 _ROLES = {"positive", "hard_negative"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40,64}")
-_SERVICE_AUTHOR_NAME = "MLSystem2 Dataset Editor"
-_SERVICE_AUTHOR_EMAIL = "mlsystem2-dataset-editor@localhost"
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 _URGENT_PRIORITY = "urgent"
@@ -127,7 +127,7 @@ def list_editor_datasets(
                 continue
             if source_dir.is_dir() and _direct_files(source_dir, ".txt"):
                 continue
-            geojson_files = _direct_files(source_dir, ".geojson")
+            geojson_files = _direct_annotation_files(source_dir)
             has_dataset_subdirectories = source_dir.is_dir() and any(
                 item.is_dir() and not item.name.startswith(".") for item in source_dir.iterdir()
             )
@@ -662,7 +662,7 @@ def add_editor_scenes(
                     f"Несколько TIFF дают одинаковое имя GeoJSON: {annotation_name}"
                 )
             names[key] = (annotation_name, image_path)
-        existing = {path.name.casefold() for path in _direct_files(source_dir, ".geojson")}
+        existing = {path.name.casefold() for path in _direct_annotation_files(source_dir)}
         collisions = sorted(name for key, (name, _path) in names.items() if key in existing)
         if collisions:
             if folder_path is None:
@@ -680,8 +680,18 @@ def add_editor_scenes(
                 payload = _empty_annotation_payload(image_path, dataset)
                 target = source_dir / annotation_name
                 _write_geojson_atomic(target, payload)
-                created.append(target)
-                relative_files.append(_repo_relative(config, target))
+                footprint_target = source_dir / footprint_name_for_annotation(annotation_name)
+                _write_geojson_atomic(
+                    footprint_target,
+                    _footprint_geojson_payload(image_path),
+                )
+                created.extend((target, footprint_target))
+                relative_files.extend(
+                    (
+                        _repo_relative(config, target),
+                        _repo_relative(config, footprint_target),
+                    )
+                )
             _git(config, "add", "--", *(path.as_posix() for path in relative_files))
             commit = _commit(
                 config,
@@ -755,6 +765,7 @@ def publish_editor_scenes(
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         resolved_deletions: list[tuple[str, str, Path, PurePosixPath]] = []
+        footprint_deletions: list[tuple[PurePosixPath, str | None]] = []
         conflicts: list[str] = []
         for annotation_name, revision, geojson in scenes:
             scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
@@ -776,6 +787,15 @@ def publish_editor_scenes(
             resolved_deletions.append(
                 (scene.annotation_name, revision, annotation_path, relative_path)
             )
+            footprint_path = source_dir / footprint_name_for_annotation(scene.annotation_name)
+            if footprint_path.is_file():
+                footprint_relative = _repo_relative(config, footprint_path)
+                footprint_deletions.append(
+                    (
+                        footprint_relative,
+                        _blob_revision(config, "HEAD", footprint_relative),
+                    )
+                )
         if conflicts:
             raise DatasetEditorConflict(
                 "Разметка уже изменена другим пользователем: " + ", ".join(conflicts)
@@ -804,14 +824,27 @@ def publish_editor_scenes(
 
         relative_paths = [item[4] for item in prepared]
         deletion_paths = [item[3] for item in resolved_deletions]
-        all_relative_paths = [*relative_paths, *deletion_paths]
+        footprint_deletion_paths = [item[0] for item in footprint_deletions]
+        all_relative_paths = [
+            *relative_paths,
+            *deletion_paths,
+            *footprint_deletion_paths,
+        ]
         try:
             for _name, _revision, geojson, annotation_path, _relative_path in prepared:
                 _write_geojson_atomic(annotation_path, geojson)
             if relative_paths:
                 _git(config, "add", "--", *(path.as_posix() for path in relative_paths))
             if deletion_paths:
-                _git(config, "rm", "--", *(path.as_posix() for path in deletion_paths))
+                _git(
+                    config,
+                    "rm",
+                    "--",
+                    *(
+                        path.as_posix()
+                        for path in [*deletion_paths, *footprint_deletion_paths]
+                    ),
+                )
             change_count = len(prepared) + len(resolved_deletions)
             if change_count == 1 and prepared:
                 subject = f"Обновить разметку {prepared[0][0]}"
@@ -828,6 +861,7 @@ def publish_editor_scenes(
                 expected_revisions={
                     **{item[4]: item[1] for item in prepared},
                     **{item[3]: item[1] for item in resolved_deletions},
+                    **dict(footprint_deletions),
                 },
             )
         except Exception:
@@ -1161,6 +1195,7 @@ def rebuild_editor_dataset(
             source_dir,
             output_files,
             candidate_manifest,
+            dataset,
         )
         target_relative = _repo_relative(config, source_dir)
         try:
@@ -1214,7 +1249,7 @@ def rebuild_editor_dataset(
 
 
 def _target_geojson_payloads(source_dir: Path) -> dict[str, dict[str, Any]]:
-    return {path.name: _read_geojson(path) for path in _direct_files(source_dir, ".geojson")}
+    return {path.name: _read_geojson(path) for path in _direct_annotation_files(source_dir)}
 
 
 def _source_rebuild_changes(
@@ -1399,6 +1434,7 @@ def _replace_dataset_files_atomically(
     source_dir: Path,
     payloads: dict[str, dict[str, Any]],
     manifest_payload: dict[str, Any],
+    dataset: DatasetInfo,
 ) -> None:
     parent = source_dir.parent
     temporary = parent / f".{source_dir.name}.rebuild-{uuid.uuid4().hex}"
@@ -1415,7 +1451,13 @@ def _replace_dataset_files_atomically(
                 else:
                     shutil.copy2(item, destination)
         for name, payload in payloads.items():
-            _write_geojson_atomic(temporary / _safe_annotation_name(name), payload)
+            annotation_name = _safe_annotation_name(name)
+            image_path = _image_path_for_annotation(dataset, annotation_name)
+            _write_geojson_atomic(temporary / annotation_name, payload)
+            _write_geojson_atomic(
+                temporary / footprint_name_for_annotation(annotation_name),
+                _footprint_geojson_payload(image_path),
+            )
         _write_json_atomic(temporary / ".mlsystem2-dataset.json", manifest_payload)
         if source_dir.exists():
             os.replace(source_dir, backup)
@@ -1451,7 +1493,9 @@ def _rebuild_tracked_paths(
     target_relative = _repo_relative(config, source_dir)
     paths.add(target_relative / ".mlsystem2-dataset.json")
     for name in candidate_payloads:
-        paths.add(target_relative / _safe_annotation_name(name))
+        annotation_name = _safe_annotation_name(name)
+        paths.add(target_relative / annotation_name)
+        paths.add(target_relative / footprint_name_for_annotation(annotation_name))
     return paths
 
 
@@ -1918,7 +1962,7 @@ def _scene_infos(
 ) -> list[DatasetEditorSceneInfo]:
     if not source_dir.is_dir():
         return []
-    annotation_paths = _direct_files(source_dir, ".geojson")
+    annotation_paths = _direct_annotation_files(source_dir)
     revisions = _blob_revisions(config, "HEAD", _repo_relative(config, source_dir))
     result: list[DatasetEditorSceneInfo] = []
     for path in annotation_paths:
@@ -1996,6 +2040,14 @@ def _matched_image_path(
     safe_name = _safe_annotation_name(annotation_name)
     if not (source_dir / safe_name).is_file():
         raise TrainingUIAPIError(f"GeoJSON датасета не найден: {safe_name}")
+    return _image_path_for_annotation(dataset, safe_name)
+
+
+def _image_path_for_annotation(
+    dataset: DatasetInfo,
+    annotation_name: str,
+) -> Path:
+    safe_name = _safe_annotation_name(annotation_name)
     candidates = build_per_image_index(_dataset_images_root(dataset)).get(
         safe_name.casefold(),
         [],
@@ -2118,7 +2170,11 @@ def _annotation_path(source_dir: Path, annotation_name: str) -> Path:
 
 def _safe_annotation_name(value: str) -> str:
     name = Path(value).name
-    if name != value or Path(name).suffix.casefold() != ".geojson":
+    if (
+        name != value
+        or Path(name).suffix.casefold() != ".geojson"
+        or is_per_image_footprint_name(name)
+    ):
         raise TrainingUIAPIError("Некорректное имя GeoJSON")
     return name
 
@@ -2150,6 +2206,27 @@ def _empty_annotation_payload(
             }
         )
     return payload
+
+
+def _footprint_geojson_payload(image_path: Path) -> dict[str, Any]:
+    try:
+        with rasterio.open(image_path) as source:
+            if source.crs is None:
+                raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path.name}")
+            crs_name = source.crs.to_string()
+    except rasterio.errors.RasterioError as exc:
+        raise TrainingUIAPIError(f"Не удалось открыть TIFF {image_path.name}: {exc}") from exc
+    return {
+        "type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": crs_name}},
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"_mlsystem2_type": "valid_data_footprint"},
+                "geometry": dict(mapping(_valid_data_footprint(image_path))),
+            }
+        ],
+    }
 
 
 def _validate_editor_geojson(
@@ -2535,6 +2612,14 @@ def _direct_files(path: Path, suffix: str) -> list[Path]:
     )
 
 
+def _direct_annotation_files(path: Path) -> list[Path]:
+    return [
+        item
+        for item in _direct_files(path, ".geojson")
+        if not is_per_image_footprint_name(item.name)
+    ]
+
+
 def _repo_relative(config: TrainingUIAPIConfig, path: Path) -> PurePosixPath:
     root = config.mlmarkup_editor_root.resolve()
     try:
@@ -2727,17 +2812,25 @@ def _git_optional(
 
 def _commit(config: TrainingUIAPIConfig, subject: str, username: str) -> str:
     safe_username = " ".join(username.replace("\r", " ").replace("\n", " ").split())
+    author_name = safe_username or "unknown"
+    author_email = (
+        "dataset-editor+"
+        f"{hashlib.sha256(author_name.encode('utf-8')).hexdigest()[:16]}"
+        "@mlsystem2.local"
+    )
     _git(
         config,
         "-c",
-        f"user.name={_SERVICE_AUTHOR_NAME}",
+        f"user.name={author_name}",
         "-c",
-        f"user.email={_SERVICE_AUTHOR_EMAIL}",
+        f"user.email={author_email}",
         "commit",
+        "--author",
+        f"{author_name} <{author_email}>",
         "-m",
         subject,
         "-m",
-        f"MLSystem2-User: {safe_username or 'unknown'}",
+        f"MLSystem2-User: {author_name}",
     )
     return _git(config, "rev-parse", "HEAD").stdout.strip()
 

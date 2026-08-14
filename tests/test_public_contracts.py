@@ -8,7 +8,11 @@ EXPECTED_API = {
     "dataset_preparing.api": [
         "prepare_dataset",
         "resolve_scene_images",
+        "footprint_name_for_annotation",
+        "is_per_image_footprint_name",
         "per_image_annotation_name",
+        "per_image_annotation_files",
+        "per_image_footprint_name",
         "load_dataset_manifest",
     ],
     "tile_preparation.api": ["create_tile_dataloader"],

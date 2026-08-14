@@ -99,6 +99,9 @@ def _resolve_per_image_scene_images(
                 scene_id=item.scene_id,
                 image_path=item.image_path.as_posix(),
                 annotation_file=item.annotation_file.as_posix(),
+                footprint_file=(
+                    item.footprint_file.as_posix() if item.footprint_file is not None else None
+                ),
                 request_scenes=[item.annotation_file.name],
             )
             for item in resolution.matches

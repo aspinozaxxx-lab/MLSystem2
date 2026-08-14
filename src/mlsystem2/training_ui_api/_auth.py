@@ -11,30 +11,39 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response, status
 
-from ._config import TrainingUIAPIConfig
+from ._config import FrontendUser, TrainingUIAPIConfig
+
+
+def authenticate_user(
+    username: str,
+    password: str,
+    config: TrainingUIAPIConfig,
+) -> FrontendUser | None:
+    for user in config.frontend_users:
+        username_matches = any(
+            hmac.compare_digest(username, allowed_username)
+            for allowed_username in (user.username, *user.aliases)
+        )
+        password_matches = bool(user.password) and hmac.compare_digest(
+            password,
+            user.password,
+        )
+        if username_matches and password_matches:
+            return user
+    return None
 
 
 def verify_credentials(username: str, password: str, config: TrainingUIAPIConfig) -> bool:
-    if not config.frontend_password:
-        return False
-    username_matches = any(
-        hmac.compare_digest(username, allowed_username)
-        for allowed_username in (
-            config.frontend_username,
-            *config.frontend_username_aliases,
-        )
-    )
-    password_matches = hmac.compare_digest(password, config.frontend_password)
-    return username_matches and password_matches
+    return authenticate_user(username, password, config) is not None
 
 
-def login_response(response: Response, username: str, config: TrainingUIAPIConfig) -> None:
+def login_response(response: Response, user: FrontendUser, config: TrainingUIAPIConfig) -> None:
     if not config.session_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Не задан MLSYSTEM2_TRAINING_UI_SESSION_SECRET",
         )
-    payload = {"user": username, "ts": int(time.time())}
+    payload = {"user": user.username, "ts": int(time.time())}
     response.set_cookie(
         config.session_cookie_name,
         _encode_cookie(payload, config.session_secret),
@@ -50,7 +59,10 @@ def logout_response(response: Response, config: TrainingUIAPIConfig) -> None:
     response.delete_cookie(config.session_cookie_name, path="/")
 
 
-def current_user(request: Request, config: TrainingUIAPIConfig) -> str | None:
+def current_principal(
+    request: Request,
+    config: TrainingUIAPIConfig,
+) -> FrontendUser | None:
     value = request.cookies.get(config.session_cookie_name)
     if not value or not config.session_secret:
         return None
@@ -63,7 +75,22 @@ def current_user(request: Request, config: TrainingUIAPIConfig) -> str | None:
         return None
     if int(time.time()) - ts > config.session_ttl_seconds:
         return None
-    return user
+    return next(
+        (
+            configured
+            for configured in config.frontend_users
+            if any(
+                hmac.compare_digest(user, identity)
+                for identity in (configured.username, *configured.aliases)
+            )
+        ),
+        None,
+    )
+
+
+def current_user(request: Request, config: TrainingUIAPIConfig) -> str | None:
+    principal = current_principal(request, config)
+    return principal.username if principal is not None else None
 
 
 def require_user(request: Request, config: TrainingUIAPIConfig) -> str:
@@ -74,7 +101,7 @@ def require_user(request: Request, config: TrainingUIAPIConfig) -> str:
 
 
 def require_pseudolabel_user(request: Request, config: TrainingUIAPIConfig) -> str:
-    """Proverit session cookie ili otdelnyi bearer token QGIS."""
+    """Проверить session cookie или отдельный bearer-токен QGIS."""
 
     user = current_user(request, config)
     if user is not None:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 
 def _int_env(name: str, default: int) -> int:
@@ -39,6 +41,14 @@ def _string_tuple_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
 
 
+@dataclass(frozen=True, slots=True)
+class FrontendUser:
+    username: str
+    password: str
+    role: Literal["admin", "user"]
+    aliases: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class TrainingUIAPIConfig:
     host: str
@@ -56,6 +66,7 @@ class TrainingUIAPIConfig:
     frontend_username: str
     frontend_username_aliases: tuple[str, ...]
     frontend_password: str
+    frontend_users: tuple[FrontendUser, ...]
     session_secret: str
     session_cookie_name: str
     session_ttl_seconds: int
@@ -87,6 +98,18 @@ class TrainingUIAPIConfig:
 
 
 def get_config() -> TrainingUIAPIConfig:
+    frontend_username = os.getenv(
+        "MLSYSTEM2_TRAINING_UI_USER",
+        os.getenv("MLSYSTEM_FRONTEND_USER", "mlsystem"),
+    )
+    frontend_username_aliases = _string_tuple_env(
+        "MLSYSTEM2_TRAINING_UI_USER_ALIASES",
+        ("mluser",),
+    )
+    frontend_password = os.getenv(
+        "MLSYSTEM2_TRAINING_UI_PASSWORD",
+        os.getenv("MLSYSTEM_FRONTEND_PASSWORD", ""),
+    )
     return TrainingUIAPIConfig(
         host=os.getenv("MLSYSTEM2_TRAINING_UI_API_HOST", "0.0.0.0"),
         port=_int_env("MLSYSTEM2_TRAINING_UI_API_PORT", 8091),
@@ -118,17 +141,16 @@ def get_config() -> TrainingUIAPIConfig:
             "MLSYSTEM2_MLFLOW_TRACKING_URI",
             os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
         ).rstrip("/"),
-        frontend_username=os.getenv(
-            "MLSYSTEM2_TRAINING_UI_USER",
-            os.getenv("MLSYSTEM_FRONTEND_USER", "mlsystem"),
-        ),
-        frontend_username_aliases=_string_tuple_env(
-            "MLSYSTEM2_TRAINING_UI_USER_ALIASES",
-            ("mluser",),
-        ),
-        frontend_password=os.getenv(
-            "MLSYSTEM2_TRAINING_UI_PASSWORD",
-            os.getenv("MLSYSTEM_FRONTEND_PASSWORD", ""),
+        frontend_username=frontend_username,
+        frontend_username_aliases=frontend_username_aliases,
+        frontend_password=frontend_password,
+        frontend_users=_frontend_users_env(
+            FrontendUser(
+                username=frontend_username,
+                password=frontend_password,
+                role="admin",
+                aliases=frontend_username_aliases,
+            )
         ),
         session_secret=os.getenv(
             "MLSYSTEM2_TRAINING_UI_SESSION_SECRET",
@@ -230,3 +252,47 @@ def _optional_positive_float_env(name: str) -> float | None:
 def _optional_path_env(name: str) -> Path | None:
     value = os.getenv(name, "").strip()
     return Path(value) if value else None
+
+
+def _frontend_users_env(default: FrontendUser) -> tuple[FrontendUser, ...]:
+    raw = os.getenv("MLSYSTEM2_TRAINING_UI_USERS_JSON")
+    if raw is None or not raw.strip():
+        return (default,)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("MLSYSTEM2_TRAINING_UI_USERS_JSON содержит некорректный JSON") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("MLSYSTEM2_TRAINING_UI_USERS_JSON должен быть непустым списком")
+    users: list[FrontendUser] = []
+    identities: set[str] = set()
+    for index, item in enumerate(payload, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Пользователь #{index} должен быть объектом")
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "")
+        role = str(item.get("role") or "user").strip().casefold()
+        raw_aliases = item.get("aliases", [])
+        if not username or not password:
+            raise ValueError(f"У пользователя #{index} обязательны username и password")
+        if role not in {"admin", "user"}:
+            raise ValueError(f"У пользователя {username} неизвестная роль: {role}")
+        if not isinstance(raw_aliases, list) or not all(
+            isinstance(alias, str) and alias.strip() for alias in raw_aliases
+        ):
+            raise ValueError(f"aliases пользователя {username} должен быть списком строк")
+        aliases = tuple(dict.fromkeys(alias.strip() for alias in raw_aliases))
+        for identity in (username, *aliases):
+            key = identity.casefold()
+            if key in identities:
+                raise ValueError(f"Логин или alias повторяется: {identity}")
+            identities.add(key)
+        users.append(
+            FrontendUser(
+                username=username,
+                password=password,
+                role=cast(Literal["admin", "user"], role),
+                aliases=aliases,
+            )
+        )
+    return tuple(users)

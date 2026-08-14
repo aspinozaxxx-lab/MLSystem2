@@ -20,7 +20,10 @@ from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
-from mlsystem2.dataset_preparing.api import per_image_annotation_name
+from mlsystem2.dataset_preparing.api import (
+    is_per_image_footprint_name,
+    per_image_annotation_name,
+)
 from mlsystem2.dataset_preparing.contracts import (
     DatasetClassDefinition,
     DatasetManifest,
@@ -77,11 +80,13 @@ def build_combined_dataset(
             path
             for path in sorted(source_dir.glob("*.geojson"), key=lambda item: item.name.casefold())
             if "hard_negative" not in path.stem.casefold()
+            and not is_per_image_footprint_name(path.name)
         ]
         hard_negative_files = [
             path
             for path in sorted(source_dir.glob("*.geojson"), key=lambda item: item.name.casefold())
             if "hard_negative" in path.stem.casefold()
+            and not is_per_image_footprint_name(path.name)
         ]
         if len(positive_files) != 1:
             raise TrainingUIAPIError(

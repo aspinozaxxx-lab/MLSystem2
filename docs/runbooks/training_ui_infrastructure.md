@@ -49,9 +49,7 @@ MLSYSTEM2_MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 MLSYSTEM2_MLFLOW_UI_URL=/mlflow/
 MLSYSTEM2_GRAFANA_URL=/grafana/
 MLSYSTEM2_MINIO_UI_URL=/minio/browser/mlsystems/images/
-MLSYSTEM2_TRAINING_UI_USER=mlsystem
-MLSYSTEM2_TRAINING_UI_USER_ALIASES=mluser
-MLSYSTEM2_TRAINING_UI_PASSWORD=<тот же пароль, что в старом MLSystem>
+MLSYSTEM2_TRAINING_UI_USERS_JSON='[{"username":"<администратор>","password":"<пароль>","role":"admin","aliases":["mlsystem"]},{"username":"<пользователь>","password":"<пароль>","role":"user"}]'
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
 MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=false
 MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS=5
@@ -70,8 +68,11 @@ MLSYSTEM2_PSEUDOLABEL_PREFETCH_BATCHES=2
 MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS=8
 ```
 
-`MLSYSTEM2_TRAINING_UI_USER_ALIASES` задаёт через запятую дополнительные логины с тем же паролем:
-это сохраняет вход `mluser` в веб-интерфейс, пока QGIS-плагин использует основной логин `mlsystem`.
+`MLSYSTEM2_TRAINING_UI_USERS_JSON` задаёт канонических пользователей, индивидуальные пароли, роли и optional aliases.
+Cookie и черновики используют каноническое имя даже при входе через alias; оно же становится реальным Git author
+публикации. Роли `admin|user` уже возвращаются API, но ограничения функций по ним пока не применяются. Alias
+`mlsystem` сохраняет совместимость QGIS-плагина. Если JSON не задан, временно действует прежний одиночный контракт
+`MLSYSTEM2_TRAINING_UI_USER`, `MLSYSTEM2_TRAINING_UI_USER_ALIASES`, `MLSYSTEM2_TRAINING_UI_PASSWORD`.
 `MLSYSTEM2_PSEUDOLABEL_API_TOKEN` нужен только отдельным неинтерактивным клиентам. QGIS-плагин
 входит по логину и паролю, поэтому для него токен оставляют пустым. Нулевой
 `MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2` разрешает AOI любой площади;

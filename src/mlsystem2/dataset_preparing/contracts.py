@@ -145,6 +145,7 @@ class PreparedScene(BaseModel):
     scene_id: str
     image_path: str
     annotation_file: str | None = None
+    footprint_file: str | None = None
 
 
 class PreparedDataset(BaseModel):
@@ -224,6 +225,7 @@ class ResolvedSceneImage(BaseModel):
     scene_id: str
     image_path: str
     annotation_file: str | None = None
+    footprint_file: str | None = None
     request_scenes: list[str] = Field(default_factory=list)
 
 

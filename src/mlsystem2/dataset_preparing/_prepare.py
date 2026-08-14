@@ -279,6 +279,9 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         annotation_by_scene = {
             item.scene_id: item.annotation_file for item in resolution.matches
         }
+        footprint_by_scene = {
+            item.scene_id: item.footprint_file for item in resolution.matches
+        }
         dataset = PreparedDataset(
             format=("per_image_multiclass" if manifest is not None else "per_image_binary"),
             scenes=[
@@ -288,6 +291,11 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
                     annotation_file=annotation_by_scene[
                         raster.scene_id
                     ].resolve().as_posix(),
+                    footprint_file=(
+                        footprint_by_scene[raster.scene_id].resolve().as_posix()
+                        if footprint_by_scene[raster.scene_id] is not None
+                        else None
+                    ),
                 )
                 for raster in validation.rasters
             ],
