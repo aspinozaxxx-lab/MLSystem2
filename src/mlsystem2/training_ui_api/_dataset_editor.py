@@ -332,7 +332,7 @@ def editor_scene_pseudo_markup(
     if primary is None:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
-            message="Для класса не назначена успешная основная сеть.",
+            message="Для класса нет успешной сети.",
         )
     compatibility_error = _editor_pseudo_compatibility_error(dataset, primary)
     if compatibility_error is not None:

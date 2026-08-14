@@ -2415,8 +2415,6 @@ def _latest_pseudo_markup(
     class_key: str | None = None,
 ) -> PseudoMarkupResultRow | None:
     primary = current_primary_training_result(session, class_key or dataset_key)
-    if primary is None:
-        primary = primary_training_result(session, class_key or dataset_key)
     conditions = [
             PseudoMarkupResultRow.status == "ok",
             PseudoMarkupResultRow.dataset_key == dataset_key,
@@ -2590,7 +2588,7 @@ def queue_test_sample_evaluation(
         _cancel_test_sample_evaluation_job(session, sample)
         _set_test_sample_evaluation_unavailable(
             sample,
-            "Для класса не назначена успешная основная сеть.",
+            "Для класса нет успешной сети.",
         )
         return False
 
@@ -2694,13 +2692,9 @@ def current_primary_training_result(
     session: Session,
     class_key: str,
 ) -> TrainingResultRow | None:
-    """Вернуть только явно назначенную успешную основную сеть класса."""
+    """Вернуть эффективную успешную сеть класса без её неявного назначения."""
 
-    class_row = dataset_class_row(session, class_key)
-    if class_row is None or class_row.primary_training_result_id is None:
-        return None
-    result = session.get(TrainingResultRow, class_row.primary_training_result_id)
-    return result if result is not None and result.status == "ok" else None
+    return primary_training_result(session, class_key)
 
 
 def test_sample_model_compatibility_error(
@@ -3272,7 +3266,7 @@ def test_sample_pseudo_markup_info(
     if target is None:
         return TestSamplePseudoMarkupInfo(
             status="unavailable",
-            error="Для класса не назначена успешная основная сеть.",
+            error="Для класса нет успешной сети.",
         )
     common = {
         "training_result_id": target.id,

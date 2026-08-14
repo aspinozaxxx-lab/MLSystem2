@@ -2037,6 +2037,9 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             for tile in sample_row.tiles
         ] == saved_tile_f1
 
+        # Дальше тест проверяет только устаревание псевдоразметки без прямого инференса.
+        training.status = "error"
+        session.flush()
         update_test_sample_tile(
             session,
             sample_id,
@@ -2369,7 +2372,7 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         assert raced.evaluation.job_id != retry_job.id
 
 
-def test_direct_test_sample_evaluation_requires_primary_and_compatible_schema(
+def test_direct_test_sample_evaluation_uses_latest_network_and_compatible_schema(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2411,7 +2414,7 @@ def test_direct_test_sample_evaluation_requires_primary_and_compatible_schema(
         session.flush()
         class_row = dataset_class_row(session, detail.class_key)
         assert class_row is not None
-        class_row.primary_training_result_id = result.id
+        assert class_row.primary_training_result_id is None
         sample.task = "multiclass"
         sample.class_schema = [
             {"id": 1, "slug": "first", "name": "Первый", "color": "#F59E0B"},
@@ -2437,6 +2440,8 @@ def test_direct_test_sample_evaluation_requires_primary_and_compatible_schema(
         assert reconcile_test_sample_evaluations(session, config) == 1
         compatible = _test_sample_detail(session, detail.id)
         assert compatible.evaluation.status == "queued"
+        assert compatible.evaluation.target_training_result_id == result.id
+        assert class_row.primary_training_result_id is None
 
 
 def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
@@ -3003,8 +3008,10 @@ def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_ide
         queued_jobs = session.scalars(
             select(JobRow).where(JobRow.status == "queued")
         ).all()
-        assert len(queued_jobs) == 2
+        assert len(queued_jobs) == 3
         assert all(job.config["test_sample_tile_indices"] == [2] for job in queued_jobs)
+        assert sum(job.config["metric_target"] == "training_result" for job in queued_jobs) == 2
+        assert sum(job.config["metric_target"] == "test_sample" for job in queued_jobs) == 1
 
         update_test_sample(
             session,
@@ -3016,7 +3023,7 @@ def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_ide
             ),
             config,
         )
-        assert len(session.scalars(select(JobRow).where(JobRow.status == "queued")).all()) == 2
+        assert len(session.scalars(select(JobRow).where(JobRow.status == "queued")).all()) == 3
         assert reconcile_training_result_test_f1(session, config) == 0
 
         for metric in metrics:

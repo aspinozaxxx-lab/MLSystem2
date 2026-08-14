@@ -18,7 +18,6 @@ from pyproj import Geod, Transformer
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mlsystem2.dataset_preparing.api import resolve_scene_images
@@ -31,10 +30,12 @@ from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import (
+    dataset_class_row,
     find_managed_class,
     find_managed_dataset,
-    dataset_class_row,
     list_managed_classes,
+    primary_training_result,
+    successful_training_results,
 )
 from ._datasets import CUSTOM_KEY, imagery_images_dir, resolve_scenes_file_images
 from ._external_models import (
@@ -412,23 +413,10 @@ def _select_model(
         return None
     class_row = dataset_class_row(session, class_info.key)
     if class_row is not None and class_row.primary_training_result_id is not None:
-        primary_result = session.get(TrainingResultRow, class_row.primary_training_result_id)
-        rows = [primary_result] if primary_result is not None else []
+        effective_result = primary_training_result(session, class_info.key)
+        rows = [effective_result] if effective_result is not None else []
     else:
-        rows = session.scalars(
-            select(TrainingResultRow)
-            .where(
-                TrainingResultRow.class_key == dataset.key,
-                TrainingResultRow.status == ResultStatus.OK.value,
-                TrainingResultRow.trained_at.is_not(None),
-                TrainingResultRow.mlflow_run_id.is_not(None),
-            )
-            .order_by(
-                TrainingResultRow.trained_at.desc(),
-                TrainingResultRow.created_at.desc(),
-                TrainingResultRow.id.desc(),
-            )
-        ).all()
+        rows = successful_training_results(session, class_info.key)
     for row in rows:
         if (
             row.status != ResultStatus.OK.value

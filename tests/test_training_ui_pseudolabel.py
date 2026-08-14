@@ -490,7 +490,7 @@ def test_pseudolabel_pins_external_model_resolution_and_manifest(tmp_path: Path,
         )
         session.add(result)
         session.flush()
-        class_row.primary_training_result_id = result.id
+        assert class_row.primary_training_result_id is None
         session.commit()
         class_key = class_row.key
 

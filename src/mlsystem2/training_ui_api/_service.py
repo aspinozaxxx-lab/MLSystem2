@@ -1500,7 +1500,7 @@ def ensure_test_sample_pseudo_markup_job(
         raise TrainingUIAPIError("Тестовая разметка не найдена")
     primary = current_primary_training_result(session, sample.class_key)
     if primary is None:
-        raise TrainingUIAPIError("Для класса не назначена успешная основная сеть")
+        raise TrainingUIAPIError("Для класса нет успешной сети")
     existing = session.scalar(
         select(PseudoMarkupResultRow)
         .where(
@@ -2538,8 +2538,11 @@ def _training_result_info(
 
 
 def _is_primary_training_result(session: Session, row: TrainingResultRow) -> bool:
-    selected = primary_training_result(session, row.dataset_key or row.class_key)
-    return selected is not None and selected.id == row.id
+    class_row = dataset_class_row(session, row.dataset_key or row.class_key)
+    return (
+        class_row is not None
+        and class_row.primary_training_result_id == row.id
+    )
 
 
 def _pseudo_markup_info(

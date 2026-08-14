@@ -130,21 +130,21 @@ def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
     return tuple(result)
 
 
-def primary_training_result(
+def successful_training_results(
     session: Session,
     class_or_dataset_key: str,
-) -> TrainingResultRow | None:
-    """Вернуть явно выбранную основную сеть или совместимый последний результат."""
+    *,
+    limit: int | None = None,
+) -> list[TrainingResultRow]:
+    """Вернуть успешные сети класса от новой к старой."""
 
     class_row = dataset_class_row(session, class_or_dataset_key)
-    if class_row is not None and class_row.primary_training_result_id is not None:
-        return session.get(TrainingResultRow, class_row.primary_training_result_id)
     dataset_keys = (
         session.scalars(select(DatasetRow.key).where(DatasetRow.class_id == class_row.id)).all()
         if class_row is not None
         else [class_or_dataset_key]
     )
-    return session.scalar(
+    statement = (
         select(TrainingResultRow)
         .where(
             (
@@ -159,7 +159,26 @@ def primary_training_result(
             TrainingResultRow.created_at.desc(),
             TrainingResultRow.id.desc(),
         )
-        .limit(1)
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return list(session.scalars(statement).all())
+
+
+def primary_training_result(
+    session: Session,
+    class_or_dataset_key: str,
+) -> TrainingResultRow | None:
+    """Вернуть эффективную сеть класса: явно выбранную либо последнюю успешную."""
+
+    class_row = dataset_class_row(session, class_or_dataset_key)
+    if class_row is not None and class_row.primary_training_result_id is not None:
+        selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
+        if selected is not None and selected.status == "ok":
+            return selected
+    return next(
+        iter(successful_training_results(session, class_or_dataset_key, limit=1)),
+        None,
     )
 
 

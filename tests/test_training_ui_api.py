@@ -146,6 +146,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             architecture="smp_segformer_b2",
             model_name="первая",
             mlflow_run_id="first-run",
+            trained_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
             status="ok",
         )
         second = TrainingResultRow(
@@ -156,6 +157,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
             architecture="smp_segformer_b2",
             model_name="вторая",
             mlflow_run_id="second-run",
+            trained_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
             status="ok",
         )
         sample = _TestSampleRow(
@@ -184,6 +186,14 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         )
         session.add_all([dataset, first, second, sample])
         session.flush()
+
+        effective = _service.primary_training_result(session, class_row.key)
+        unmarked = _service.dataset_results(session, dataset.key, config)
+        assert effective is not None
+        assert effective.id == second.id
+        assert class_row.primary_training_result_id is None
+        assert all(item.is_primary is False for item in unmarked.results)
+
         class_row.primary_training_result_id = first.id
         session.flush()
 
@@ -248,6 +258,74 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert updated_template_job.id != templated_job.id
         assert updated_template_job.config["inference_template_id"] == str(updated_template.id)
         assert updated_template_job.config["inference_template_version"] == 2
+
+
+def test_successful_training_does_not_assign_primary_star(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    reconciled_class_keys: list[set[str]] = []
+
+    monkeypatch.setattr(
+        _worker,
+        "queue_training_result_test_f1",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        _worker,
+        "reconcile_test_sample_evaluations",
+        lambda _session, _config, *, class_keys: reconciled_class_keys.append(class_keys) or 0,
+    )
+
+    with session_factory() as session:
+        class_row = DatasetClassRow(key="forest", name="Лес")
+        session.add(class_row)
+        session.flush()
+        dataset = DatasetRow(
+            key="forest-main",
+            class_id=class_row.id,
+            name="main",
+            source_type="mlmarkup",
+            source_path="Лес/main",
+        )
+        job = JobRow(
+            type=JobType.TRAINING.value,
+            source=JobSource.MANUAL.value,
+            status=JobStatus.RUNNING.value,
+            queue_position=1,
+            dataset_key=dataset.key,
+            dataset_name="Лес\\main",
+            model_name="segformer b2",
+            architecture="smp_segformer_b2",
+            config={},
+        )
+        session.add_all([dataset, job])
+        session.flush()
+        result = TrainingResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name="Лес\\main",
+            architecture="smp_segformer_b2",
+            model_name="segformer b2",
+            status=ResultStatus.RUNNING.value,
+            job_id=job.id,
+        )
+        session.add(result)
+        session.flush()
+
+        _worker._finish_training_job(session, job, config, succeeded=True)
+
+        assert result.status == ResultStatus.OK.value
+        assert class_row.primary_training_result_id is None
+        assert _service.primary_training_result(session, class_row.key).id == result.id
+        assert reconciled_class_keys == [{class_row.key}]
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(

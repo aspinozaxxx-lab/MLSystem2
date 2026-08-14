@@ -84,11 +84,12 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
 - `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает единственную основную разметку класса.
 - `GET /api/v1/results/datasets/{dataset_key}`, `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup` и `POST /api/v1/results/datasets/{dataset_key}/test-f1` - результаты датасета, ручная псевдоразметка и постановка недостающих либо устаревших оценок в inference-очередь.
-- `POST /api/v1/results/training/{result_id}/primary` - назначение успешной сети основной для её класса; этот выбор используется QGIS, групповым экспортом и публичным F1.
+- `POST /api/v1/results/training/{result_id}/primary` - явное назначение успешной сети основной для её класса; без назначения расчёты используют последнюю успешную сеть без звезды.
 - `GET /api/v1/pseudolabel/classes`, `POST /api/v1/pseudolabel/jobs`, `GET|DELETE /api/v1/pseudolabel/jobs/{job_id}` и `GET /api/v1/pseudolabel/jobs/{job_id}/result` - серверное распознавание AOI без передачи клиентских растров; полный контракт описан в `docs/pseudolabel_api.md`.
 
-Сохранённая контрольная метрика каждой тестовой разметки получается прямым инференсом явно назначенной основной
-сети класса и фиксирует сеть, её обучающий датасет, ревизию состава, effective inference-шаблон, профиль и версию
+Сохранённая контрольная метрика каждой тестовой разметки получается прямым инференсом эффективной сети класса:
+явно назначенной либо, при отсутствии назначения, последней успешной. Неявный выбор не сохраняется и не показывает
+звезду. Метрика фиксирует сеть, её обучающий датасет, ревизию состава, effective inference-шаблон, профиль и версию
 evaluator. Поле датасета тестовой разметки означает только источник её тайлов. Псевдоразметка этого источника
 используется отдельно для создания набора, черновых `evaluate-preview`/`optimize-preview` и поснимочного кэша
 оптимизатора. Матрица `training_result_test_metrics` остаётся независимым контуром: все успешные сети всех

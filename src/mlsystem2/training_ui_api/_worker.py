@@ -1286,14 +1286,11 @@ def _finish_training_job(
         result.updated_at = _now()
     session.flush()
     if succeeded:
-        newly_primary_class_keys: set[str] = set()
+        affected_class_keys: set[str] = set()
         for result in training_results:
             class_row = dataset_class_row(session, result.dataset_key or result.class_key)
-            if class_row is not None and class_row.primary_training_result_id is None:
-                class_row.primary_training_result_id = result.id
-                class_row.updated_at = _now()
-                newly_primary_class_keys.add(class_row.key)
-                session.flush()
+            if class_row is not None:
+                affected_class_keys.add(class_row.key)
             try:
                 queue_training_result_test_f1(
                     session,
@@ -1306,16 +1303,16 @@ def _finish_training_job(
                     "Не удалось поставить автоматический расчёт тестового F1 для сети %s",
                     result.id,
                 )
-        if newly_primary_class_keys:
+        if affected_class_keys:
             try:
                 reconcile_test_sample_evaluations(
                     session,
                     config,
-                    class_keys=newly_primary_class_keys,
+                    class_keys=affected_class_keys,
                 )
             except Exception:  # noqa: BLE001
                 LOGGER.exception(
-                    "Не удалось поставить прямые оценки тестовых разметок после назначения основной сети"
+                    "Не удалось сверить прямые оценки тестовых разметок после обучения сети"
                 )
         session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
