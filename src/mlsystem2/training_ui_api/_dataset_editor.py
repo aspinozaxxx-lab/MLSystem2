@@ -1519,7 +1519,6 @@ def _latest_covering_pseudo_result(
     rows = session.scalars(
         select(PseudoMarkupResultRow)
         .where(
-            PseudoMarkupResultRow.dataset_key == dataset.key,
             PseudoMarkupResultRow.training_result_id == training_result_id,
             PseudoMarkupResultRow.status == ResultStatus.OK.value,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
@@ -1539,33 +1538,53 @@ def _latest_covering_pseudo_result(
             for row in rows
             if row.geojson_file is not None
             and Path(row.geojson_file.path).is_file()
-            and _pseudo_result_covers_image(row, dataset, image_path)
+            and _pseudo_result_covers_image(session, row, dataset, image_path)
         ),
         None,
     )
 
 
 def _pseudo_result_covers_image(
+    session: Session,
     result: PseudoMarkupResultRow,
     dataset: DatasetInfo,
     image_path: Path,
 ) -> bool:
     if result.scenes_file is None:
         return False
-    root = _dataset_images_root(dataset).resolve()
     try:
-        expected = image_path.resolve().relative_to(root).with_suffix("").as_posix().casefold()
         entries = result.scenes_file.path and Path(result.scenes_file.path).read_text(
             encoding="utf-8-sig"
         ).splitlines()
-    except (OSError, ValueError):
+    except OSError:
         return False
+    resolved_image = image_path.resolve()
+    expected = {_scene_reference_key(resolved_image.as_posix())}
+    source_job = session.get(JobRow, result.job_id) if result.job_id is not None else None
+    source_root = (source_job.config or {}).get("images_root") if source_job is not None else None
+    root = (
+        Path(str(source_root)).resolve()
+        if source_root
+        else _dataset_images_root(dataset).resolve()
+    )
+    try:
+        expected.add(_scene_reference_key(resolved_image.relative_to(root).as_posix()))
+    except ValueError:
+        pass
     normalized = {
-        Path(line.strip().replace("\\", "/")).with_suffix("").as_posix().casefold()
+        _scene_reference_key(line)
         for line in entries
         if line.strip() and not line.lstrip().startswith("#")
     }
-    return expected in normalized
+    return not expected.isdisjoint(normalized)
+
+
+def _scene_reference_key(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if path.suffix.casefold() in RASTER_SUFFIXES:
+        path = path.with_suffix("")
+    return path.as_posix().casefold()
 
 
 def _raster_revision(image_path: Path) -> str:

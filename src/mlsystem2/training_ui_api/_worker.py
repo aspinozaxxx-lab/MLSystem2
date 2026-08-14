@@ -486,7 +486,6 @@ def _start_inference_job(
 ) -> None:
     is_test_f1 = _is_test_sample_f1_job(row)
     is_pseudolabel_aoi = _is_pseudolabel_aoi_job(row)
-    is_dataset_editor_pseudo = _is_dataset_editor_pseudo_job(row)
     run_dir = config.scratch_root / "jobs" / str(row.id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -498,16 +497,12 @@ def _start_inference_job(
             if is_test_f1
             else "pseudolabel_config.yaml"
             if is_pseudolabel_aoi
-            else "dataset_editor_pseudo_config.yaml"
-            if is_dataset_editor_pseudo
             else "pseudo_config.yaml"
         )
         if is_test_f1:
             payload = _build_test_sample_f1_config(session, row, config, run_dir)
         elif is_pseudolabel_aoi:
             payload = _build_pseudolabel_aoi_config(row, config, run_dir)
-        elif is_dataset_editor_pseudo:
-            payload = _build_dataset_editor_pseudo_config(session, row, config, run_dir)
         else:
             payload = _build_pseudo_markup_config(session, row, config, run_dir)
         _write_yaml(config_path, payload)
@@ -669,14 +664,67 @@ def _build_pseudo_markup_config(
     config: TrainingUIAPIConfig,
     run_dir: Path,
 ) -> dict[str, Any]:
-    result = _first_pseudo_markup_result(session, row)
-    if result is None or result.scenes_file is None:
-        raise RuntimeError("Для псевдоразметки не найден txt со снимками.")
-    training_result = (
-        session.get(TrainingResultRow, result.training_result_id)
-        if result.training_result_id is not None
-        else None
-    )
+    if _is_dataset_editor_pseudo_job(row):
+        state = (row.config or {}).get("editor_pseudo")
+        if not isinstance(state, dict):
+            raise RuntimeError("В задании редактора отсутствуют параметры псевдоразметки.")
+        try:
+            training_result_id = uuid.UUID(str(state.get("training_result_id")))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "В задании редактора повреждён идентификатор основной сети."
+            ) from exc
+        training_result = session.get(TrainingResultRow, training_result_id)
+        if training_result is None or training_result.status != ResultStatus.OK.value:
+            raise RuntimeError("Основная сеть для псевдоразметки снимка больше недоступна.")
+        scenes_path = run_dir / "editor_scene.txt"
+        scenes_path.write_text(f"{state.get('image_relative')}\n", encoding="utf-8")
+        snapshot = state
+        scenes_file = str(scenes_path)
+        images_root = str(state.get("images_root") or config.images_root)
+        annotation_files: list[str] = []
+        class_key = training_result.class_key
+        class_name = training_result.class_display_name
+        source_model = training_result.model_name
+    else:
+        result = _first_pseudo_markup_result(session, row)
+        if result is None or result.scenes_file is None:
+            raise RuntimeError("Для псевдоразметки не найден txt со снимками.")
+        training_result = (
+            session.get(TrainingResultRow, result.training_result_id)
+            if result.training_result_id is not None
+            else None
+        )
+        snapshot = dict(row.config or {})
+        scenes_file = result.scenes_file.path
+        images_root = str(snapshot.get("images_root") or config.images_root)
+        annotation_files = [
+            str(value)
+            for value in (snapshot.get("annotation_files") or [])
+            if value
+        ]
+        if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
+            dataset = find_managed_dataset(session, config, result.dataset_key)
+            if dataset is not None:
+                annotation_files = (
+                    per_image_annotation_files(Path(dataset.annotations_dir))
+                    if dataset.annotations_dir
+                    else [
+                        path
+                        for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+                        if path
+                    ]
+                )
+        class_key = result.class_key
+        class_name = (
+            training_result.class_display_name
+            if training_result is not None
+            else result.class_key
+        )
+        source_model = (
+            training_result.model_name if training_result is not None else row.model_name
+        )
+
     source_training_job = (
         session.get(JobRow, training_result.job_id)
         if training_result is not None and training_result.job_id is not None
@@ -704,7 +752,7 @@ def _build_pseudo_markup_config(
     core_size = tile_size - 2 * context
     if context < 0 or core_size <= 0:
         raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
-    threshold = _optional_float(row.config, "checkpoint_threshold")
+    threshold = _optional_float(snapshot, "checkpoint_threshold")
     if threshold is None and training_result is not None and external_manifest is None:
         raise RuntimeError(
             "Для псевдоразметки по результату обучения не найден MLflow val/best_threshold "
@@ -712,44 +760,33 @@ def _build_pseudo_markup_config(
         )
     if threshold is None:
         threshold = _float_value(flat, "train.threshold", 0.5)
-    annotation_files = [
-        str(value)
-        for value in (row.config.get("annotation_files") or [])
-        if value
-    ]
-    if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
-        dataset = find_managed_dataset(session, config, result.dataset_key)
-        if dataset is not None:
-            annotation_files = (
-                per_image_annotation_files(Path(dataset.annotations_dir))
-                if dataset.annotations_dir
-                else [
-                    path
-                    for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
-                    if path
-                ]
-            )
     return {
         "run_root": str(run_dir / "scratch"),
         "inference_backend": "pytorch_one_off",
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
-        "scenes_file": result.scenes_file.path,
-        "images_root": str(row.config.get("images_root") or config.images_root),
+        "scenes_file": scenes_file,
+        "images_root": images_root,
         "annotation_files": annotation_files,
-        "class_key": result.class_key,
-        "class_name": training_result.class_display_name if training_result is not None else result.class_key,
-        "source_model": training_result.model_name if training_result is not None else row.model_name,
+        "class_key": class_key,
+        "class_name": class_name,
+        "source_model": source_model,
+        "task": training_result.task if training_result is not None else "binary",
+        "object_types": (
+            list(training_result.class_schema or []) if training_result is not None else []
+        ),
         "mlflow_tracking_uri": config.mlflow_tracking_uri,
-        "mlflow_run_id": row.config.get("mlflow_run_id"),
-        "checkpoint_uri": row.config.get("checkpoint_uri"),
-        "checkpoint_artifact_path": row.config.get("checkpoint_artifact_path") or "checkpoints/best.pt",
-        "checkpoint_f1_score": row.config.get("checkpoint_f1_score"),
-        "checkpoint_epoch": row.config.get("checkpoint_epoch"),
+        "mlflow_run_id": snapshot.get("mlflow_run_id"),
+        "checkpoint_uri": snapshot.get("checkpoint_uri"),
+        "checkpoint_artifact_path": (
+            snapshot.get("checkpoint_artifact_path") or "checkpoints/best.pt"
+        ),
+        "checkpoint_f1_score": snapshot.get("checkpoint_f1_score"),
+        "checkpoint_epoch": snapshot.get("checkpoint_epoch"),
         "external_model": external_model_payload(external_manifest),
-        "imagery_type": row.config.get("imagery_type"),
-        "input_channels": _int_value(row.config, "input_channels", 4),
-        "postprocess_config": row.config.get("inference_template_config") or {},
+        "imagery_type": snapshot.get("imagery_type"),
+        "input_channels": _int_value(snapshot, "input_channels", 4),
+        "postprocess_config": snapshot.get("inference_template_config") or {},
         "threshold": threshold,
         "tile_size": tile_size,
         "context": context,
@@ -836,89 +873,6 @@ def _build_pseudolabel_aoi_config(
         "tile_read_workers": config.pseudolabel_tile_read_workers,
         "prefetch_batches": config.pseudolabel_prefetch_batches,
         "external_http_workers": config.pseudolabel_external_http_workers,
-        "device": "cuda",
-    }
-
-
-def _build_dataset_editor_pseudo_config(
-    session: Session,
-    row: JobRow,
-    config: TrainingUIAPIConfig,
-    run_dir: Path,
-) -> dict[str, Any]:
-    state = (row.config or {}).get("editor_pseudo")
-    if not isinstance(state, dict):
-        raise RuntimeError("В задании редактора отсутствуют параметры псевдоразметки.")
-    try:
-        training_result_id = uuid.UUID(str(state.get("training_result_id")))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("В задании редактора повреждён идентификатор основной сети.") from exc
-    training_result = session.get(TrainingResultRow, training_result_id)
-    if training_result is None or training_result.status != ResultStatus.OK.value:
-        raise RuntimeError("Основная сеть для псевдоразметки снимка больше недоступна.")
-    source_job = (
-        session.get(JobRow, training_result.job_id)
-        if training_result.job_id is not None
-        else None
-    )
-    flat = dict(source_job.config or {}) if source_job is not None else {}
-    external_model = state.get("external_model")
-    external_model = external_model if isinstance(external_model, dict) else None
-    tile_size = (
-        _int_value(external_model, "tile_size", 768)
-        if external_model is not None
-        else _int_value(flat, "tile_preparation.tile_size", 768)
-    )
-    context = (
-        _int_value(external_model, "context", 0)
-        if external_model is not None
-        else _int_value(flat, "tile_preparation.context", 0)
-    )
-    core_size = tile_size - 2 * context
-    if context < 0 or core_size <= 0:
-        raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
-    threshold = _optional_float(state, "checkpoint_threshold")
-    if threshold is None and external_model is None:
-        raise RuntimeError("У основной сети отсутствует confidence threshold.")
-    scenes_path = run_dir / "editor_scene.txt"
-    scenes_path.write_text(f"{state.get('image_relative')}\n", encoding="utf-8")
-    return {
-        "run_root": str(run_dir / "scratch"),
-        "inference_backend": "pytorch_one_off",
-        "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
-        "report_path": str(run_dir / "scratch" / "report.json"),
-        "scenes_file": str(scenes_path),
-        "images_root": str(state.get("images_root") or config.images_root),
-        "annotation_files": [],
-        "class_id": state.get("class_id"),
-        "class_key": state.get("class_id"),
-        "class_name": state.get("class_name"),
-        "source_model": state.get("model_name") or training_result.model_name,
-        "task": state.get("task") or training_result.task,
-        "object_types": state.get("object_types") or training_result.class_schema,
-        "mlflow_tracking_uri": config.mlflow_tracking_uri,
-        "mlflow_run_id": state.get("mlflow_run_id"),
-        "checkpoint_uri": state.get("checkpoint_uri"),
-        "checkpoint_artifact_path": state.get("checkpoint_artifact_path") or "checkpoints/best.pt",
-        "checkpoint_f1_score": state.get("checkpoint_f1_score"),
-        "checkpoint_epoch": state.get("checkpoint_epoch"),
-        "external_model": external_model,
-        "imagery_type": state.get("imagery_type"),
-        "input_channels": _int_value(state, "input_channels", 4),
-        "postprocess_config": state.get("inference_template_config") or {},
-        "threshold": threshold,
-        "tile_size": tile_size,
-        "context": context,
-        "stride": (
-            _int_value(external_model, "stride", core_size)
-            if external_model is not None
-            else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
-        ),
-        "batch_size": (
-            1
-            if external_model is not None
-            else _int_value(flat, "train.batch_size", 1)
-        ),
         "device": "cuda",
     }
 

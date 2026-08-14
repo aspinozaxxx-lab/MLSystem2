@@ -77,7 +77,7 @@ def editor_environment(
             ),
         ]
     )
-    live_annotation = live_dataset / "Olskij_SCN01.geojson"
+    live_annotation = live_dataset / "Olskij_SCN01.part.geojson"
     live_annotation.write_text(
         json.dumps(initial_payload, ensure_ascii=False),
         encoding="utf-8",
@@ -88,7 +88,7 @@ def editor_environment(
     batch = images_root / "kanopus" / "batch"
     olskij.mkdir(parents=True)
     batch.mkdir(parents=True)
-    scene_image = olskij / "SCN01.tif"
+    scene_image = olskij / "SCN01.part.tif"
     _write_raster(scene_image, value=11, nodata_corner=True)
     _write_raster(batch / "SCN02.tif", value=22)
     _write_raster(batch / "SCN03.tiff", value=33)
@@ -364,7 +364,9 @@ def test_dataset_editor_publishes_multiple_scenes_atomically(
     assert added.status_code == 200
 
     scenes = env.client.get(scenes_url).json()["scenes"]
-    first = next(item for item in scenes if item["annotation_name"] == "Olskij_SCN01.geojson")
+    first = next(
+        item for item in scenes if item["annotation_name"] == "Olskij_SCN01.part.geojson"
+    )
     second = next(item for item in scenes if item["annotation_name"] == "batch_SCN02.geojson")
 
     def detail(scene: dict[str, object]) -> dict[str, object]:
@@ -505,7 +507,7 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     assert deleted.status_code == 200
     remaining = env.client.get(scenes_url).json()["scenes"]
     assert {item["annotation_name"] for item in remaining} == {
-        "Olskij_SCN01.geojson",
+        "Olskij_SCN01.part.geojson",
         "batch_SCN03.geojson",
     }
 
@@ -583,7 +585,7 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
     stored_root = get_config().stored_files_root
     stored_root.mkdir(parents=True, exist_ok=True)
     scenes_path = stored_root / "covered-scenes.txt"
-    scenes_path.write_text("Olskij/SCN01\n", encoding="utf-8")
+    scenes_path.write_text("Olskij/SCN01.part\n", encoding="utf-8")
     to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
     inside = transform_geometry(to_wgs84.transform, box(1, 1, 3, 3))
     outside = transform_geometry(to_wgs84.transform, box(20, 20, 21, 21))
@@ -620,7 +622,7 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
         session.flush()
         session.add(
             PseudoMarkupResultRow(
-                dataset_key=env.dataset_key,
+                dataset_key="другой-датасет-того-же-класса",
                 training_result_id=result_id,
                 class_key=env.dataset_key,
                 source_dataset_name="Реки / test",
@@ -647,6 +649,11 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
     assert payload["training_result_id"] == str(result_id)
     assert payload["object_count"] == 1
     assert payload["geojson"]["crs"]["properties"]["name"] == "EPSG:4326"
+    with create_session_factory(get_config())() as session:
+        assert not any(
+            (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
+            for row in session.scalars(select(JobRow)).all()
+        )
 
 
 def test_dataset_editor_queues_one_urgent_scene_inference(
@@ -699,7 +706,7 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
         ]
         assert len(editor_jobs) == 1
         assert editor_jobs[0].config["priority"] == "urgent"
-        assert editor_jobs[0].config["editor_pseudo"]["image_relative"] == "Olskij/SCN01"
+        assert editor_jobs[0].config["editor_pseudo"]["image_relative"] == "Olskij/SCN01.part"
         job_id = editor_jobs[0].id
         editor_jobs[0].status = "failed"
         editor_jobs[0].error = "тестовая ошибка"
@@ -723,9 +730,11 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
         assert job is not None and job.tmp_path is not None
         run_dir = Path(job.tmp_path)
         runner_config = yaml.safe_load(
-            (run_dir / "dataset_editor_pseudo_config.yaml").read_text(encoding="utf-8")
+            (run_dir / "pseudo_config.yaml").read_text(encoding="utf-8")
         )
         assert runner_config["scenes_file"].endswith("editor_scene.txt")
+        assert runner_config["inference_backend"] == "pytorch_one_off"
+        assert runner_config["class_key"] == env.dataset_key
         assert runner_config["checkpoint_uri"] == "s3://artifacts/best.pt"
         assert Path(runner_config["images_root"]).name == "kanopus"
         output = run_dir / "scratch" / "pseudo_markup.geojson"
