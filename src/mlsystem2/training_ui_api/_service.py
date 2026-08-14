@@ -272,24 +272,20 @@ def result_classes(
     output: list[ResultClassInfo] = []
     for class_info in catalog:
         primary_model = primary_training_result(session, class_info.key)
+        test_f1 = None
+        test_f1_status = None
+        test_f1_training_result_id = None
+        if (
+            primary_model is not None
+            and primary_test_sample(session, class_info.key) is not None
+        ):
+            info = training_result_test_f1_info(session, primary_model, config)
+            if info is not None and info.f1 is not None:
+                test_f1 = info.f1
+                test_f1_status = "current" if info.status == "current" else "stale"
+                test_f1_training_result_id = primary_model.id
         result_datasets: list[ResultDatasetInfo] = []
         for dataset in class_info.datasets:
-            test_f1 = None
-            test_f1_status = None
-            test_f1_training_result_id = None
-            if primary_test_sample(session, dataset.key) is not None:
-                result = (
-                    primary_model
-                    if primary_model is not None
-                    and dataset.key in {primary_model.dataset_key, primary_model.class_key}
-                    else None
-                )
-                if result is not None:
-                    info = training_result_test_f1_info(session, result, config)
-                    if info is not None and info.f1 is not None:
-                        test_f1 = info.f1
-                        test_f1_status = "current" if info.status == "current" else "stale"
-                        test_f1_training_result_id = result.id
             result_datasets.append(
                 ResultDatasetInfo(
                     key=dataset.key,

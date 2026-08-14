@@ -3201,7 +3201,7 @@ function DatasetResultsPage({
       {payload.primary_test_sample ? (
         <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
           <div>
-            <strong>{payload.test_f1_status === "current" ? `${qualityMetricShort(payload.quality_metric)} (test) актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${qualityMetricShort(payload.quality_metric)} (test)` : `${qualityMetricShort(payload.quality_metric)} (test) не актуален`}</strong>
+            <strong>{payload.test_f1_status === "current" ? `${qualityMetricShort(payload.quality_metric)} актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${qualityMetricShort(payload.quality_metric)}` : `${qualityMetricShort(payload.quality_metric)} не актуален`}</strong>
             <span>Основная разметка: {payload.primary_test_sample.name} · {payload.primary_test_sample.enabled_image_count} тайлов</span>
           </div>
           {payload.test_f1_status !== "current" ? (
@@ -3587,10 +3587,23 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
       <div className="dataset-list">
         {datasets.length ? (
           datasets.map((dataset) => (
-            <a className="dataset-link" href={`#/results/${encodeURIComponent(dataset.key)}`} key={dataset.key}>
-              <span>{dataset.dataset_name || dataset.name}</span>
+            <a
+              className={`dataset-link${dataset.is_primary ? " primary-dataset" : ""}`}
+              href={`#/results/${encodeURIComponent(dataset.key)}`}
+              key={dataset.key}
+              title={dataset.is_primary ? "Основной датасет класса" : undefined}
+            >
+              <span className="dataset-link-name">
+                {dataset.dataset_name || dataset.name}
+                {dataset.is_primary ? <small className="badge ok">основной</small> : null}
+              </span>
               {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
-                <strong className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}>{qualityMetricShort(dataset.quality_metric)} (test) {formatTestF1Percent(dataset.test_f1)}</strong>
+                <strong
+                  className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
+                  title="F1 эффективной сети класса"
+                >
+                  {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
+                </strong>
               ) : null}
               <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
             </a>
@@ -3684,7 +3697,7 @@ function ResultsTable({
                   <th>МОДЕЛЬ</th>
                   <th>Статус</th>
                   <th>F1 (val)</th>
-                  <th>F1 (test)</th>
+                  <th>F1</th>
                   <th>Epoch</th>
                   <th>Создано</th>
                   <th aria-label="Действия"></th>
@@ -3720,10 +3733,10 @@ function ResultsTable({
                   <td title={`${qualityMetricShort(result.quality_metric)} (val)`}>
                     <span className="source-lines"><small>{qualityMetricShort(result.quality_metric)} (val)</small><strong className="technical-value">{formatF1Score(result.f1_score)}</strong></span>
                   </td>
-                  <td title={`${qualityMetricShort(result.quality_metric)} (test)`}>
+                  <td title={qualityMetricShort(result.quality_metric)}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
                       <span className="source-lines">
-                        <small>{qualityMetricShort(result.quality_metric)} (test)</small>
+                        <small>{qualityMetricShort(result.quality_metric)}</small>
                         <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
                           {formatTestF1Percent(result.test_f1.f1)}
                         </span>

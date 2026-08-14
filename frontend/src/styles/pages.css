@@ -288,9 +288,22 @@
   background: var(--accent-soft);
 }
 
+.dataset-link.primary-dataset,
+.dataset-link.primary-dataset:hover {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
 .dataset-link span {
   color: var(--text);
   font-weight: 600;
+}
+
+.dataset-link .dataset-link-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .dataset-link small {

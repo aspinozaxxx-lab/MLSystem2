@@ -276,6 +276,79 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert updated_template_job.config["inference_template_version"] == 2
 
 
+def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkeypatch) -> None:
+    result_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    effective_result = TrainingResultRow(
+        id=result_id,
+        source="manual",
+        dataset_key="forest-main-new",
+        class_key="forest-main-new",
+        class_display_name="Лес\\main_new",
+        architecture="smp_segformer_b2",
+        model_name="последняя сеть",
+        status="ok",
+    )
+    datasets = [
+        SimpleNamespace(
+            key="forest-main",
+            name="main",
+            dataset_name="Лес\\main",
+            class_key="forest",
+            class_name="Лес",
+            quality_metric="pixel",
+            is_primary=True,
+            image_count=12,
+        ),
+        SimpleNamespace(
+            key="forest-main-new",
+            name="main_new",
+            dataset_name="Лес\\main_new",
+            class_key="forest",
+            class_name="Лес",
+            quality_metric="pixel",
+            is_primary=False,
+            image_count=8,
+        ),
+    ]
+    class_info = SimpleNamespace(
+        key="forest",
+        name="Лес",
+        updated_at=None,
+        datasets=datasets,
+        is_custom=False,
+        quality_metric="pixel",
+    )
+    metric_calls: list[UUID] = []
+
+    monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: [class_info])
+    monkeypatch.setattr(
+        _service,
+        "primary_training_result",
+        lambda *_args: effective_result,
+    )
+    monkeypatch.setattr(_service, "primary_test_sample", lambda *_args: object())
+
+    def metric_info(*_args):
+        metric_calls.append(result_id)
+        return SimpleNamespace(f1=0.81, status="current")
+
+    monkeypatch.setattr(_service, "training_result_test_f1_info", metric_info)
+
+    response = _service.result_classes(SimpleNamespace(), SimpleNamespace())
+
+    assert metric_calls == [result_id]
+    assert [item.is_primary for item in response.classes[0].datasets] == [True, False]
+    assert [item.test_f1 for item in response.classes[0].datasets] == [0.81, 0.81]
+    assert [item.test_f1_status for item in response.classes[0].datasets] == [
+        "current",
+        "current",
+    ]
+    assert [item.test_f1_training_result_id for item in response.classes[0].datasets] == [
+        result_id,
+        result_id,
+    ]
+
+
 def test_successful_training_does_not_assign_primary_star(
     tmp_path: Path,
     monkeypatch,
