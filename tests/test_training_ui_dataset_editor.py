@@ -697,11 +697,16 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
     scene = env.client.get(
         f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
     ).json()["scenes"][0]
-    response = env.client.post(
+    endpoint = (
         "/api/v1/dataset-editor/datasets/"
         f"{quote(env.dataset_key, safe='')}/scenes/"
         f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
     )
+    read_only = env.client.get(endpoint)
+    assert read_only.status_code == 200
+    assert read_only.json()["status"] == "ready"
+    assert read_only.json()["source"] == "dataset"
+    response = env.client.post(endpoint)
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ready"
@@ -791,11 +796,16 @@ def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
     scenes_payload = scenes_response.json()
     assert scenes_payload["dataset"]["primary_training_result_id"] == str(local_result_id)
     scene = scenes_payload["scenes"][0]
-    response = env.client.post(
+    endpoint = (
         "/api/v1/dataset-editor/datasets/"
         f"{quote(env.dataset_key, safe='')}/scenes/"
         f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
     )
+    read_only = env.client.get(endpoint)
+    assert read_only.status_code == 200
+    assert read_only.json()["status"] == "ready"
+    assert read_only.json()["training_result_id"] == str(local_result_id)
+    response = env.client.post(endpoint)
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ready"

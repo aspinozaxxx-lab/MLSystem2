@@ -270,10 +270,9 @@
 .dataset-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 4px;
   min-height: 40px;
-  padding: 8px 12px;
+  padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
@@ -294,14 +293,46 @@
   background: var(--ok-soft);
 }
 
-.dataset-link span {
+.dataset-result-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  color: inherit;
+  text-decoration: none;
+  flex: 1 1 auto;
+}
+
+.dataset-result-link span {
   color: var(--text);
   font-weight: 600;
 }
 
-.dataset-link small {
+.dataset-result-link small {
   color: var(--muted);
   white-space: nowrap;
+}
+
+.dataset-editor-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--grovika-radius-control);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.dataset-editor-link:hover,
+.dataset-editor-link:focus-visible {
+  border-color: var(--grovika-cyan-text);
+  background: var(--surface);
+  color: var(--grovika-cyan-text);
 }
 
 .result-card-f1 {

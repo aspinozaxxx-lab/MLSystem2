@@ -12,6 +12,7 @@ import {
   Layers3,
   ListChecks,
   LogOut,
+  PencilLine,
   Play,
   Plus,
   RefreshCw,
@@ -289,7 +290,11 @@ function RoutedPage(props: {
   if (head === "dataset-editor") {
     return (
       <Suspense fallback={<LoadingPage text="Загрузка редактора датасетов" />}>
-        <DatasetEditorPage run={props.run} registerRouteGuard={props.registerRouteGuard} />
+        <DatasetEditorPage
+          run={props.run}
+          registerRouteGuard={props.registerRouteGuard}
+          initialDatasetKey={second ? decodeURIComponent(second) : undefined}
+        />
       </Suspense>
     );
   }
@@ -3196,7 +3201,18 @@ function DatasetResultsPage({
       <PageHeader
         title={payload.dataset_name}
         subtitle={`Обновление датасета: ${formatDate(payload.dataset_updated_at)}`}
-        actions={<a className="secondary" href="#/results">Все классы</a>}
+        actions={
+          <>
+            <a
+              className="secondary"
+              href={`#/dataset-editor/${encodeURIComponent(datasetKey)}`}
+            >
+              <PencilLine size={16} />
+              Редактор датасета
+            </a>
+            <a className="secondary" href="#/results">Все классы</a>
+          </>
+        }
       />
       {payload.primary_test_sample ? (
         <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
@@ -3587,23 +3603,35 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
       <div className="dataset-list">
         {datasets.length ? (
           datasets.map((dataset) => (
-            <a
+            <div
               className={`dataset-link${dataset.is_primary ? " primary-dataset" : ""}`}
-              href={`#/results/${encodeURIComponent(dataset.key)}`}
               key={dataset.key}
               title={dataset.is_primary ? "Основной датасет класса" : undefined}
             >
-              <span>{dataset.dataset_name || dataset.name}</span>
-              {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
-                <strong
-                  className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
-                  title="F1 эффективной сети класса"
-                >
-                  {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
-                </strong>
-              ) : null}
-              <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
-            </a>
+              <a
+                className="dataset-result-link"
+                href={`#/results/${encodeURIComponent(dataset.key)}`}
+              >
+                <span>{dataset.dataset_name || dataset.name}</span>
+                {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
+                  <strong
+                    className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
+                    title="F1 эффективной сети класса"
+                  >
+                    {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
+                  </strong>
+                ) : null}
+                <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
+              </a>
+              <a
+                className="dataset-editor-link"
+                href={`#/dataset-editor/${encodeURIComponent(dataset.key)}`}
+                title="Открыть редактор датасета"
+                aria-label={`Открыть редактор датасета ${dataset.dataset_name || dataset.name}`}
+              >
+                <PencilLine size={15} />
+              </a>
+            </div>
           ))
         ) : (
           <div className="empty-state">Датасетов пока нет</div>

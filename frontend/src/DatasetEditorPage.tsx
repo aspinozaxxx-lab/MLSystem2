@@ -230,9 +230,11 @@ const SELECTED_VERTEX_IMAGE = new CircleStyle({
 export function DatasetEditorPage({
   run,
   registerRouteGuard,
+  initialDatasetKey,
 }: {
   run: Runner;
   registerRouteGuard: (guard: (() => boolean) | null) => void;
+  initialDatasetKey?: string;
 }) {
   const [datasets, setDatasets] = useState<EditorDataset[]>([]);
   const [classKey, setClassKey] = useState("");
@@ -284,6 +286,7 @@ export function DatasetEditorPage({
   const sceneLoadRequestRef = useRef(0);
   const pseudoLoadRequestRef = useRef(0);
   const pseudoCacheRef = useRef<Map<string, PseudoMarkupInfo>>(new Map());
+  const appliedInitialDatasetKeyRef = useRef<string | null>(null);
   const draftSaveTimersRef = useRef<Map<string, number>>(new Map());
   const draftSaveInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const datasetKeyRef = useRef(datasetKey);
@@ -429,6 +432,18 @@ export function DatasetEditorPage({
       setDatasetKey(classDatasets[0]?.key || "");
     }
   }, [classDatasets, datasetKey]);
+
+  useEffect(() => {
+    if (
+      !initialDatasetKey
+      || appliedInitialDatasetKeyRef.current === initialDatasetKey
+    ) return;
+    const initialDataset = datasets.find((item) => item.key === initialDatasetKey);
+    if (!initialDataset) return;
+    appliedInitialDatasetKeyRef.current = initialDatasetKey;
+    setClassKey(initialDataset.class_key);
+    setDatasetKey(initialDataset.key);
+  }, [datasets, initialDatasetKey]);
 
   const loadScenes = useCallback(
     async (key: string, preferredAnnotation = "") => {
@@ -766,7 +781,7 @@ export function DatasetEditorPage({
 
   const loadPseudoMarkup = useCallback(
     async (ensure: boolean, retry = false) => {
-      if (!datasetKey || !annotationName) return;
+      if (!datasetKey || !annotationName) return null;
       const requestId = ++pseudoLoadRequestRef.current;
       const cacheKey = activePseudoCacheKey;
       const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup${retry ? "?retry=true" : ""}`;
@@ -778,8 +793,9 @@ export function DatasetEditorPage({
         );
         pseudoCacheRef.current.set(cacheKey, payload);
         if (requestId === pseudoLoadRequestRef.current) setPseudoMarkup(payload);
+        return payload;
       } catch (error) {
-        if (requestId !== pseudoLoadRequestRef.current) return;
+        if (requestId !== pseudoLoadRequestRef.current) return null;
         const failed: PseudoMarkupInfo = {
           status: "failed",
           source: null,
@@ -795,6 +811,7 @@ export function DatasetEditorPage({
         };
         pseudoCacheRef.current.set(cacheKey, failed);
         setPseudoMarkup(failed);
+        return failed;
       } finally {
         if (requestId === pseudoLoadRequestRef.current) setPseudoRequestPending(false);
       }
@@ -835,7 +852,14 @@ export function DatasetEditorPage({
       return;
     }
     setPseudoVisible(true);
-    if (!pseudoMarkup) void loadPseudoMarkup(true);
+    if (!pseudoMarkup || pseudoMarkup.status === "unavailable") {
+      void (async () => {
+        const existing = await loadPseudoMarkup(false);
+        if (existing?.status === "unavailable") {
+          await loadPseudoMarkup(true);
+        }
+      })();
+    }
   };
 
   const captureActiveSnapshot = useCallback((): DraftSnapshot | null => {
