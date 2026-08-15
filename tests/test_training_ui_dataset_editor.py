@@ -38,6 +38,7 @@ from mlsystem2.training_ui_api._models import (
     TrainingResultRow,
 )
 from mlsystem2.training_ui_api._dataset_editor import _footprint_covers_geometry
+from mlsystem2.training_ui_api._managed_migration import _git_geojson_payloads
 
 
 @dataclass(frozen=True)
@@ -1049,6 +1050,27 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert empty_deleted.status_code == 200, empty_deleted.text
     assert env.client.get(empty_url).status_code == 400
+
+
+def test_managed_migration_reads_cyrillic_git_paths(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    initial_commit = _git(
+        env.editor_root,
+        "rev-list",
+        "--max-parents=0",
+        "HEAD",
+    ).stdout.strip()
+
+    payloads = _git_geojson_payloads(
+        get_config(),
+        initial_commit,
+        "Реки/test",
+    )
+
+    assert set(payloads) == {env.live_annotation.name}
+    assert len(payloads[env.live_annotation.name]["features"]) == 3
 
 
 def test_dataset_editor_queues_one_urgent_scene_inference(

@@ -449,6 +449,8 @@ def _combined_addition_commit(config, target_path: str) -> str:
 def _git_geojson_payloads(config, commit: str, target_path: str) -> dict[str, dict[str, Any]]:
     result = _git(
         config,
+        "-c",
+        "core.quotePath=false",
         "ls-tree",
         "-r",
         "--name-only",
