@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy import delete, select
+from shapely.geometry import shape
 
 from mlsystem2.dataset_preparing.api import (
     footprint_name_for_annotation,
@@ -328,7 +329,7 @@ def _prepare_target_migration(
         for origin in sorted(set(baseline_by_origin) | set(current_by_origin)):
             old = baseline_by_origin.get(origin)
             new = current_by_origin.get(origin)
-            if old is not None and new is not None and _file_feature_hash(old) == _file_feature_hash(new):
+            if old is not None and new is not None and _migration_features_equal(old, new):
                 continue
             if old is None:
                 added += 1
@@ -487,6 +488,39 @@ def _file_feature_hash(feature: dict[str, Any]) -> str:
 
     payload = json.dumps(feature, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _migration_features_equal(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    previous_properties = previous.get("properties") or {}
+    current_properties = current.get("properties") or {}
+    semantic_keys = ("_mlsystem2_role", "_mlsystem2_class")
+    if any(previous_properties.get(key) != current_properties.get(key) for key in semantic_keys):
+        return False
+    previous_user_properties = {
+        key: value
+        for key, value in previous_properties.items()
+        if not key.startswith("_mlsystem2_")
+    }
+    current_user_properties = {
+        key: value
+        for key, value in current_properties.items()
+        if not key.startswith("_mlsystem2_")
+    }
+    if previous_user_properties != current_user_properties:
+        return False
+    try:
+        previous_geometry = shape(previous.get("geometry"))
+        current_geometry = shape(current.get("geometry"))
+        if previous_geometry.equals(current_geometry):
+            return True
+        difference_area = previous_geometry.symmetric_difference(current_geometry).area
+        tolerance = max(previous_geometry.area, current_geometry.area, 1.0) * 1e-12
+        return difference_area <= tolerance
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _ordinary_editor_dataset_version(config, dataset: DatasetRow) -> str:

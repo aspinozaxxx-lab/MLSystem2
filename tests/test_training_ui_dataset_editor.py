@@ -38,7 +38,10 @@ from mlsystem2.training_ui_api._models import (
     TrainingResultRow,
 )
 from mlsystem2.training_ui_api._dataset_editor import _footprint_covers_geometry
-from mlsystem2.training_ui_api._managed_migration import _git_geojson_payloads
+from mlsystem2.training_ui_api._managed_migration import (
+    _git_geojson_payloads,
+    _migration_features_equal,
+)
 
 
 @dataclass(frozen=True)
@@ -1071,6 +1074,21 @@ def test_managed_migration_reads_cyrillic_git_paths(
 
     assert set(payloads) == {env.live_annotation.name}
     assert len(payloads[env.live_annotation.name]["features"]) == 3
+
+
+def test_managed_migration_ignores_serialization_noise_but_detects_markup_change() -> None:
+    previous = _feature(1, "positive", [[1, 1], [3, 1], [3, 3], [1, 3], [1, 1]])
+    reordered = deepcopy(previous)
+    reordered["geometry"]["coordinates"] = [
+        [[1.0, 1.0], [1.0, 3.0], [3.0, 3.0], [3.0, 1.0], [1.0, 1.0]]
+    ]
+    moved = deepcopy(previous)
+    moved["geometry"]["coordinates"] = [
+        [[1, 1], [4, 1], [4, 3], [1, 3], [1, 1]]
+    ]
+
+    assert _migration_features_equal(previous, reordered)
+    assert not _migration_features_equal(previous, moved)
 
 
 def test_dataset_editor_queues_one_urgent_scene_inference(
