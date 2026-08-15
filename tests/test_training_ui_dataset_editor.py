@@ -119,6 +119,8 @@ def editor_environment(
         text=True,
         encoding="utf-8",
     )
+    _git(editor_root, "config", "user.name", "Тест")
+    _git(editor_root, "config", "user.email", "test@example.invalid")
 
     release_marker = tmp_path / "release-marker"
     database_path = tmp_path / "ui.db"
