@@ -192,7 +192,10 @@ def migrate_combined_datasets(*, apply: bool, username: str) -> list[MigrationSt
                         promote_pseudo=False,
                     )
             automation = ensure_automation_control(session)
-            automation.enabled = automation_was_enabled
+            # Git push запускает асинхронную публикацию MLMarkup. До появления
+            # нового release-marker live-каталог ещё имеет прежнюю версию, и
+            # раннее включение автоматизации создаёт ложные training jobs.
+            automation.enabled = False
             session.commit()
         except Exception:
             session.rollback()
@@ -201,6 +204,11 @@ def migrate_combined_datasets(*, apply: bool, username: str) -> list[MigrationSt
             session.commit()
             raise
         print(f"MLMarkup commit: {commit}")
+        if automation_was_enabled:
+            print(
+                "Автоматизация оставлена выключенной до завершения деплоя MLMarkup; "
+                "после проверки release-marker её нужно включить вручную."
+            )
         return stats
 
 
