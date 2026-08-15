@@ -78,6 +78,8 @@ from ._model_export import (
 )
 from ._models import (
     CustomDatasetRow,
+    DatasetClassRow,
+    DatasetRow,
     InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -417,7 +419,10 @@ def _ensure_seed_inference_templates(session: Session) -> None:
         (row.architecture, row.dataset_key): row
         for row in session.scalars(select(InferenceTemplateRow)).all()
     }
-    seed_payloads = initial_inference_templates()
+    seed_payloads = [
+        _resolve_inference_seed_dataset(session, payload)
+        for payload in initial_inference_templates()
+    ]
     base_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is None]
     dataset_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is not None]
     for payload in base_payloads:
@@ -468,6 +473,44 @@ def _ensure_seed_inference_templates(session: Session) -> None:
             row.baseline_default_config,
             fallback=payload["baseline_default_config"],
         )
+
+
+def _resolve_inference_seed_dataset(
+    session: Session,
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    """Привязать именованный seed-шаблон к действующей строке каталога."""
+
+    payload = dict(source)
+    dataset_key = payload.get("dataset_key")
+    if not isinstance(dataset_key, str) or not dataset_key:
+        return payload
+    active_key = session.scalar(
+        select(DatasetRow.key).where(
+            DatasetRow.key == dataset_key,
+            DatasetRow.deleted_at.is_(None),
+        )
+    )
+    if active_key is not None:
+        return payload
+    dataset_name = payload.get("dataset_name")
+    display_name = dataset_name if isinstance(dataset_name, str) else dataset_key
+    class_name, separator, short_name = display_name.partition("\\")
+    if not separator or not class_name or not short_name:
+        return payload
+    active_key = session.scalar(
+        select(DatasetRow.key)
+        .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
+        .where(
+            DatasetClassRow.name == class_name,
+            DatasetRow.name == short_name,
+            DatasetRow.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if active_key is not None:
+        payload["dataset_key"] = active_key
+    return payload
 
 
 def training_templates(session: Session) -> TrainingTemplateListResponse:

@@ -25,6 +25,7 @@ from mlsystem2.training_ui_api._database import Base, configure_schema, create_s
 from mlsystem2.training_ui_api._models import (
     DatasetClassRow,
     DatasetRow,
+    InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
@@ -304,6 +305,68 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert updated_template_job.id != templated_job.id
         assert updated_template_job.config["inference_template_id"] == str(updated_template.id)
         assert updated_template_job.config["inference_template_version"] == 2
+
+
+def test_seed_inference_template_uses_active_dataset_key_after_migration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        class_row = DatasetClassRow(key="rivers", name="Реки")
+        session.add(class_row)
+        session.flush()
+        active_key = "f9776773-5273-41f8-8d10-0b06c68b19e6"
+        session.add_all(
+            [
+                DatasetRow(
+                    key=active_key,
+                    class_id=class_row.id,
+                    name="main",
+                    source_type="mlmarkup",
+                    source_path="Реки/main",
+                    legacy_version=False,
+                ),
+                DatasetRow(
+                    key="Реки\\main",
+                    class_id=class_row.id,
+                    name="main [legacy]",
+                    source_type="mlmarkup",
+                    source_path="__archive__/Реки/main",
+                    deleted_at=datetime(2026, 8, 15, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        session.flush()
+
+        ensure_seed_templates(session)
+        session.flush()
+        river_templates = session.scalars(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.architecture == "smp_segformer_b2",
+                InferenceTemplateRow.dataset_key.is_not(None),
+            )
+        ).all()
+        assert len(river_templates) == 1
+        assert river_templates[0].dataset_key == active_key
+        template_id = river_templates[0].id
+
+        ensure_seed_templates(session)
+        session.flush()
+        river_templates = session.scalars(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.architecture == "smp_segformer_b2",
+                InferenceTemplateRow.dataset_key.is_not(None),
+            )
+        ).all()
+        assert [(row.id, row.dataset_key) for row in river_templates] == [
+            (template_id, active_key)
+        ]
 
 
 def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkeypatch) -> None:
