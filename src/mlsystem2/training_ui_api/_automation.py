@@ -77,6 +77,11 @@ ACTIVE_JOB_STATUSES = {
     JobStatus.RUNNING.value,
     JobStatus.PAUSED.value,
 }
+CURRENT_AUTOMATION_RESULT_STATUSES = {
+    ResultStatus.RUNNING.value,
+    ResultStatus.OK.value,
+    ResultStatus.ERROR.value,
+}
 MLFLOW_RUN_ID_FILE = "mlflow_run_id"
 LOGGER = logging.getLogger(__name__)
 
@@ -466,6 +471,7 @@ def _current_training_result(
             TrainingResultRow.dataset_key == dataset_key,
             TrainingResultRow.architecture == architecture,
             TrainingResultRow.dataset_version == dataset_version,
+            TrainingResultRow.status.in_(CURRENT_AUTOMATION_RESULT_STATUSES),
         )
         .order_by(TrainingResultRow.created_at.desc())
     )
@@ -526,6 +532,7 @@ def _current_pseudo_result(
             PseudoMarkupResultRow.source == JobSource.AUTOMATION.value,
             PseudoMarkupResultRow.training_result_id == training_result.id,
             PseudoMarkupResultRow.dataset_version == dataset_version,
+            PseudoMarkupResultRow.status.in_(CURRENT_AUTOMATION_RESULT_STATUSES),
         )
         .order_by(PseudoMarkupResultRow.created_at.desc())
     )

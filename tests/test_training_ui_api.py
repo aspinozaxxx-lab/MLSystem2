@@ -3215,6 +3215,86 @@ def test_training_ui_disabling_automation_cancels_running_jobs_and_kills_mlflow(
         assert killed_runs == [(config.mlflow_tracking_uri, "run-auto-kill")]
 
 
+def test_automation_current_results_ignore_newer_cancelled_attempts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    older = datetime(2026, 8, 15, 10, tzinfo=timezone.utc)
+    newer = older + timedelta(minutes=1)
+
+    with session_factory() as session:
+        inherited = TrainingResultRow(
+            source=JobSource.AUTOMATION.value,
+            dataset_key="dataset-key",
+            dataset_version="managed:2:git:current",
+            class_key="dataset-key",
+            class_display_name="Вырубки\\main",
+            architecture="smp_segformer_b2",
+            model_name="SegFormer B2",
+            status=ResultStatus.OK.value,
+            created_at=older,
+        )
+        cancelled = TrainingResultRow(
+            source=JobSource.AUTOMATION.value,
+            dataset_key="dataset-key",
+            dataset_version="managed:2:git:current",
+            class_key="dataset-key",
+            class_display_name="Вырубки\\main",
+            architecture="smp_segformer_b2",
+            model_name="SegFormer B2",
+            status=ResultStatus.CANCELLED.value,
+            created_at=newer,
+        )
+        session.add_all([inherited, cancelled])
+        session.flush()
+        inherited_pseudo = PseudoMarkupResultRow(
+            source=JobSource.AUTOMATION.value,
+            dataset_key="dataset-key",
+            dataset_version="managed:2:git:current",
+            training_result_id=inherited.id,
+            class_key="dataset-key",
+            source_dataset_name="Вырубки\\main",
+            status=ResultStatus.OK.value,
+            created_at=older,
+        )
+        cancelled_pseudo = PseudoMarkupResultRow(
+            source=JobSource.AUTOMATION.value,
+            dataset_key="dataset-key",
+            dataset_version="managed:2:git:current",
+            training_result_id=inherited.id,
+            class_key="dataset-key",
+            source_dataset_name="Вырубки\\main",
+            status=ResultStatus.CANCELLED.value,
+            created_at=newer,
+        )
+        session.add_all([inherited_pseudo, cancelled_pseudo])
+        session.flush()
+
+        assert (
+            _automation._current_training_result(
+                session,
+                dataset_key="dataset-key",
+                architecture="smp_segformer_b2",
+                dataset_version="managed:2:git:current",
+            )
+            is inherited
+        )
+        assert (
+            _automation._current_pseudo_result(
+                session,
+                inherited,
+                "managed:2:git:current",
+            )
+            is inherited_pseudo
+        )
+
+
 def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry_failed(
     tmp_path: Path,
     monkeypatch,
