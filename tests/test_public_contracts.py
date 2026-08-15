@@ -13,6 +13,7 @@ EXPECTED_API = {
         "per_image_annotation_name",
         "per_image_annotation_files",
         "per_image_footprint_name",
+        "resolve_per_image_annotations",
         "load_dataset_manifest",
     ],
     "tile_preparation.api": ["create_tile_dataloader"],

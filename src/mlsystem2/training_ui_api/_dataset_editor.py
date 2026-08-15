@@ -57,9 +57,17 @@ from ._models import (
     DatasetEditorDraftRow,
     DatasetRow,
     JobRow,
+    ManagedDatasetSceneRow,
+    ManagedDatasetSourceRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
+)
+from ._managed_datasets import (
+    SOURCE_MANAGED,
+    invalidate_managed_cache,
+    managed_sources,
+    materialize_managed_dataset,
 )
 from ._pseudolabel import _select_model
 from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
@@ -101,6 +109,7 @@ _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 _URGENT_PRIORITY = "urgent"
 _EDITOR_SYNC_TTL_SECONDS = 60.0
 _EDITOR_PSEUDO_ALGORITHM_VERSION = 1
+_MANAGED_OWNER_PROPERTY = "_mlsystem2_managed_dataset_key"
 
 
 class DatasetEditorConflict(RuntimeError):
@@ -120,7 +129,15 @@ def list_editor_datasets(
         result: list[DatasetEditorDatasetInfo] = []
         for dataset in list_managed_datasets(session, config, include_custom=False):
             try:
-                source_dir = _editor_source_dir(config, dataset)
+                if dataset.managed:
+                    dataset, source_dir = _editor_dataset_context(
+                        session,
+                        config,
+                        dataset.key,
+                        allow_missing=True,
+                    )
+                else:
+                    source_dir = _editor_source_dir(config, dataset)
             except TrainingUIAPIError:
                 continue
             if source_dir.exists() and not source_dir.is_dir():
@@ -672,6 +689,14 @@ def add_editor_scenes(
             names = {key: value for key, value in names.items() if key not in existing}
             if not names:
                 raise TrainingUIAPIError("Все TIFF из выбранной папки уже добавлены в датасет")
+        if dataset.managed:
+            return _add_managed_editor_scenes(
+                session,
+                config,
+                dataset,
+                names,
+                username=username,
+            )
         source_dir.mkdir(parents=True, exist_ok=True)
         created: list[Path] = []
         relative_files: list[PurePosixPath] = []
@@ -763,6 +788,16 @@ def publish_editor_scenes(
     with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        if dataset.managed:
+            return _publish_managed_editor_scenes(
+                session,
+                config,
+                dataset,
+                source_dir,
+                scenes=scenes,
+                deletions=deletions,
+                username=username,
+            )
         resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         resolved_deletions: list[tuple[str, str, Path, PurePosixPath]] = []
         footprint_deletions: list[tuple[PurePosixPath, str | None]] = []
@@ -962,6 +997,42 @@ def delete_editor_dataset(
         )
         if row is None:
             raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
+        if row.source_type == SOURCE_MANAGED:
+            class_row = session.get(DatasetClassRow, row.class_id)
+            if class_row is not None and class_row.primary_dataset_id == row.id:
+                class_row.primary_dataset_id = None
+            row.deleted_at = datetime.now(timezone.utc)
+            row.config_revision += 1
+            session.execute(
+                delete(DatasetEditorDraftRow).where(
+                    DatasetEditorDraftRow.dataset_key == dataset_key
+                )
+            )
+            invalidate_managed_cache(config, dataset_key)
+            session.flush()
+            commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+            return DatasetEditorMutationResult(
+                commit=commit,
+                publication_status=_publication_status(config, commit),
+            )
+        dependent = session.execute(
+            select(DatasetRow.name, DatasetClassRow.name)
+            .join(
+                ManagedDatasetSourceRow,
+                ManagedDatasetSourceRow.managed_dataset_id == DatasetRow.id,
+            )
+            .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
+            .where(
+                ManagedDatasetSourceRow.source_dataset_id == row.id,
+                DatasetRow.deleted_at.is_(None),
+            )
+            .limit(1)
+        ).first()
+        if dependent is not None:
+            raise TrainingUIAPIError(
+                "Нельзя удалить исходный датасет, пока он входит в управляемый: "
+                f"{dependent[1]} / {dependent[0]}."
+            )
         source_dir = _editor_source_dir(config, dataset)
         source_relative = _repo_relative(config, source_dir)
         if len(source_relative.parts) < 2:
@@ -1548,6 +1619,32 @@ def _editor_dataset_context(
     allow_missing: bool = False,
 ) -> tuple[DatasetInfo, Path]:
     dataset = _managed_editor_dataset(session, config, dataset_key)
+    if dataset.managed:
+        row = session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.key == dataset_key,
+                DatasetRow.deleted_at.is_(None),
+            )
+        )
+        if row is None:
+            raise TrainingUIAPIError(f"Датасет редактора не найден: {dataset_key}")
+        materialized = materialize_managed_dataset(
+            session,
+            config,
+            row,
+            source_root=config.mlmarkup_editor_root,
+            scope="editor",
+        )
+        dataset = dataset.model_copy(
+            update={
+                "path": str(materialized.path),
+                "annotations_dir": str(materialized.path),
+                "version": materialized.version,
+                "updated_at": materialized.updated_at,
+                "source_available": True,
+            }
+        )
+        return dataset, materialized.path
     source_dir = _editor_source_dir(config, dataset)
     if source_dir.exists() and not source_dir.is_dir():
         raise TrainingUIAPIError("Источник датасета не является папкой")
@@ -1947,6 +2044,8 @@ def _editor_dataset_info(
             for item in dataset.object_types
         ],
         combined=dataset.combined,
+        managed=dataset.managed,
+        managed_sources=list(dataset.managed_sources),
         source_status=dataset.source_status,
         source_changes=list(dataset.source_changes),
         class_counts=dict(dataset.class_counts),
@@ -1963,11 +2062,15 @@ def _scene_infos(
     if not source_dir.is_dir():
         return []
     annotation_paths = _direct_annotation_files(source_dir)
-    revisions = _blob_revisions(config, "HEAD", _repo_relative(config, source_dir))
+    revisions = (
+        {}
+        if dataset.managed
+        else _blob_revisions(config, "HEAD", _repo_relative(config, source_dir))
+    )
     result: list[DatasetEditorSceneInfo] = []
     for path in annotation_paths:
-        relative_path = _repo_relative(config, path)
-        revision = revisions.get(relative_path)
+        relative_path = None if dataset.managed else _repo_relative(config, path)
+        revision = _file_revision(path) if dataset.managed else revisions.get(relative_path)
         if revision is None:
             raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {path.name}")
         result.append(
@@ -1983,6 +2086,475 @@ def _scene_infos(
     return result
 
 
+def _add_managed_editor_scenes(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset: DatasetInfo,
+    names: dict[str, tuple[str, Path]],
+    *,
+    username: str,
+) -> DatasetEditorMutationResult:
+    row = session.scalar(
+        select(DatasetRow).where(
+            DatasetRow.key == dataset.key,
+            DatasetRow.deleted_at.is_(None),
+        )
+    )
+    if row is None:
+        raise TrainingUIAPIError(f"Управляемый датасет не найден: {dataset.key}")
+    del username  # Добавление пустой сцены меняет только состав в БД, публикации ещё нет.
+    images_root = _dataset_images_root(dataset)
+    for annotation_name, image_path in names.values():
+        try:
+            relative = image_path.resolve().relative_to(images_root).as_posix()
+        except ValueError as exc:
+            raise TrainingUIAPIError(
+                f"Снимок выходит за каталог управляемого датасета: {image_path}"
+            ) from exc
+        session.add(
+            ManagedDatasetSceneRow(
+                managed_dataset_id=row.id,
+                annotation_name=annotation_name,
+                image_relative_path=relative,
+            )
+        )
+    row.config_revision += 1
+    session.flush()
+    invalidate_managed_cache(config, dataset.key)
+    refreshed, source_dir = _editor_dataset_context(session, config, dataset.key)
+    added_names = {name for name, _image_path in names.values()}
+    commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+    return DatasetEditorMutationResult(
+        commit=commit,
+        publication_status=_publication_status(config, commit),
+        scenes=[
+            scene
+            for scene in _scene_infos(config, refreshed, source_dir)
+            if scene.annotation_name in added_names
+        ],
+    )
+
+
+def _publish_managed_editor_scenes(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset: DatasetInfo,
+    materialized_dir: Path,
+    *,
+    scenes: list[tuple[str, str, dict[str, Any]]],
+    deletions: list[tuple[str, str]],
+    username: str,
+) -> DatasetEditorMutationResult:
+    row = session.scalar(
+        select(DatasetRow).where(
+            DatasetRow.key == dataset.key,
+            DatasetRow.deleted_at.is_(None),
+        )
+    )
+    if row is None:
+        raise TrainingUIAPIError(f"Управляемый датасет не найден: {dataset.key}")
+    source_specs = managed_sources(session, row.id)
+    source_by_key = {item.dataset.key: item for item in source_specs}
+    source_by_slug = {
+        item.relation.object_type_slug: item
+        for item in source_specs
+    }
+
+    normalized: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    conflicts: list[str] = []
+    for annotation_name, revision, geojson in scenes:
+        safe_name = _safe_annotation_name(annotation_name)
+        current_path = materialized_dir / safe_name
+        if _file_revision(current_path) != revision:
+            conflicts.append(safe_name)
+            continue
+        previous = _read_geojson(current_path)
+        image_path = _matched_image_path(dataset, materialized_dir, safe_name)
+        candidate = _normalize_editor_geojson(geojson, previous, dataset)
+        _validate_editor_geojson(candidate, image_path, dataset)
+        _validate_preserved_properties(previous, candidate)
+        normalized.append((safe_name, previous, candidate))
+    for annotation_name, revision in deletions:
+        safe_name = _safe_annotation_name(annotation_name)
+        if _file_revision(materialized_dir / safe_name) != revision:
+            conflicts.append(safe_name)
+    if conflicts:
+        raise DatasetEditorConflict(
+            "Разметка уже изменилась вместе с исходными датасетами: " + ", ".join(conflicts)
+        )
+
+    mutations: dict[tuple[str, str], tuple[Path, dict[str, Any], str | None]] = {}
+    created_paths: list[Path] = []
+
+    def source_payload(source_key: str, annotation_name: str) -> tuple[Path, dict[str, Any], str | None]:
+        cache_key = (source_key, annotation_name)
+        cached = mutations.get(cache_key)
+        if cached is not None:
+            return cached
+        source = source_by_key[source_key]
+        folder = config.mlmarkup_editor_root.joinpath(
+            *PurePosixPath(source.dataset.source_path).parts
+        )
+        path = folder / annotation_name
+        relative = _repo_relative(config, path)
+        revision = _blob_revision(config, "HEAD", relative)
+        if path.is_file():
+            payload = _read_geojson(path)
+        else:
+            source_info = find_managed_dataset(session, config, source_key)
+            if source_info is None:
+                raise TrainingUIAPIError(f"Исходный датасет не найден: {source_key}")
+            image_path = _image_path_for_annotation(dataset, annotation_name)
+            folder.mkdir(parents=True, exist_ok=True)
+            payload = _empty_annotation_payload(image_path, source_info)
+            payload[_MANAGED_OWNER_PROPERTY] = dataset.key
+            created_paths.append(path)
+        mutations[cache_key] = (path, payload, revision)
+        return mutations[cache_key]
+
+    for annotation_name, previous, candidate in normalized:
+        previous_by_origin = _features_by_origin(previous)
+        candidate_by_origin = _features_by_origin(candidate)
+        previous_crs = _geojson_crs(previous)
+        candidate_crs = _geojson_crs(candidate)
+        for origin_key in sorted(set(previous_by_origin) | set(candidate_by_origin)):
+            old_feature = previous_by_origin.get(origin_key)
+            new_feature = candidate_by_origin.get(origin_key)
+            if old_feature is not None and new_feature is not None:
+                if _managed_editor_features_equal(old_feature, new_feature):
+                    continue
+            old_properties = (
+                old_feature.get("properties") or {}
+                if isinstance(old_feature, dict)
+                else {}
+            )
+            old_source_key = old_properties.get("_mlsystem2_source_dataset_key")
+            old_source = source_by_key.get(str(old_source_key))
+            old_role = str(old_properties.get(_ROLE_PROPERTY) or "positive")
+            if old_source is None and old_role == "positive":
+                old_source = source_by_slug.get(str(old_properties.get(_CLASS_PROPERTY)))
+            old_sources = (
+                source_specs
+                if old_feature is not None and old_role == "hard_negative"
+                else ([old_source] if old_source is not None else [])
+            )
+            new_sources = []
+            if new_feature is not None:
+                new_properties = new_feature.get("properties") or {}
+                if new_properties.get(_ROLE_PROPERTY) == "positive":
+                    new_source = source_by_slug.get(str(new_properties.get(_CLASS_PROPERTY)))
+                    if new_source is not None:
+                        new_sources = [new_source]
+                else:
+                    new_sources = list(source_specs)
+                if not new_sources:
+                    raise TrainingUIAPIError(
+                        f"Не найден исходный датасет для объекта {origin_key}."
+                    )
+
+            for source in old_sources:
+                path, payload, revision = source_payload(
+                    source.dataset.key,
+                    annotation_name,
+                )
+                removed = _remove_managed_source_feature(
+                    payload,
+                    source_identity=old_properties.get("_mlsystem2_source_identity"),
+                    source_origin_key=old_properties.get("_mlsystem2_source_origin_key"),
+                    fallback_geometry=(old_feature or {}).get("geometry"),
+                    fallback_crs=previous_crs,
+                    fallback_role=old_role,
+                )
+                mutations[(source.dataset.key, annotation_name)] = (
+                    path,
+                    removed,
+                    revision,
+                )
+            for source in new_sources:
+                path, payload, revision = source_payload(
+                    source.dataset.key,
+                    annotation_name,
+                )
+                added = _append_managed_source_feature(
+                    payload,
+                    new_feature,
+                    source_crs=candidate_crs,
+                    origin_key=origin_key,
+                )
+                mutations[(source.dataset.key, annotation_name)] = (
+                    path,
+                    added,
+                    revision,
+                )
+
+    explicit_deletion_names = {
+        name
+        for name in session.scalars(
+            select(ManagedDatasetSceneRow.annotation_name).where(
+                ManagedDatasetSceneRow.managed_dataset_id == row.id,
+                ManagedDatasetSceneRow.annotation_name.in_(
+                    [item[0] for item in deletions]
+                ),
+            )
+        ).all()
+    }
+    deletion_paths: dict[PurePosixPath, str | None] = {}
+    for annotation_name, _revision in deletions:
+        safe_name = _safe_annotation_name(annotation_name)
+        for source in source_specs:
+            folder = config.mlmarkup_editor_root.joinpath(
+                *PurePosixPath(source.dataset.source_path).parts
+            )
+            for name in (safe_name, footprint_name_for_annotation(safe_name)):
+                path = folder / name
+                if not path.is_file():
+                    continue
+                relative = _repo_relative(config, path)
+                deletion_paths[relative] = _blob_revision(config, "HEAD", relative)
+
+    for key, (path, payload, revision) in list(mutations.items()):
+        features = payload.get("features")
+        if (
+            isinstance(features, list)
+            and not features
+            and payload.get(_MANAGED_OWNER_PROPERTY) == dataset.key
+        ):
+            if revision is not None:
+                relative = _repo_relative(config, path)
+                deletion_paths[relative] = revision
+                footprint = path.parent / footprint_name_for_annotation(path.name)
+                if footprint.is_file():
+                    footprint_relative = _repo_relative(config, footprint)
+                    deletion_paths[footprint_relative] = _blob_revision(
+                        config,
+                        "HEAD",
+                        footprint_relative,
+                    )
+            mutations.pop(key)
+
+    expected_revisions: dict[PurePosixPath, str | None] = {}
+    written_paths: list[PurePosixPath] = []
+    try:
+        for (_source_key, annotation_name), (path, payload, revision) in mutations.items():
+            _write_geojson_atomic(path, payload)
+            relative = _repo_relative(config, path)
+            expected_revisions[relative] = revision
+            written_paths.append(relative)
+            footprint = path.parent / footprint_name_for_annotation(annotation_name)
+            if not footprint.is_file():
+                _write_geojson_atomic(
+                    footprint,
+                    _footprint_geojson_payload(_image_path_for_annotation(dataset, annotation_name)),
+                )
+                footprint_relative = _repo_relative(config, footprint)
+                expected_revisions[footprint_relative] = None
+                written_paths.append(footprint_relative)
+                created_paths.append(footprint)
+        if written_paths:
+            _git(config, "add", "--", *(path.as_posix() for path in written_paths))
+        if deletion_paths:
+            _git(config, "rm", "--", *(path.as_posix() for path in deletion_paths))
+            expected_revisions.update(deletion_paths)
+        if not written_paths and not deletion_paths and not explicit_deletion_names:
+            raise TrainingUIAPIError("В публикации нет фактических изменений исходных датасетов.")
+        if written_paths or deletion_paths:
+            commit = _commit(
+                config,
+                f"Опубликовать правки управляемого датасета {dataset.dataset_name or dataset.name}",
+                username,
+            )
+            commit = _push_with_retry(config, expected_revisions=expected_revisions)
+        else:
+            commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+    except Exception:
+        for path in created_paths:
+            if _repo_relative(config, path) in {
+                relative for relative, revision in expected_revisions.items() if revision is None
+            }:
+                path.unlink(missing_ok=True)
+        restore_paths = [*written_paths, *deletion_paths]
+        if restore_paths:
+            _git_optional(
+                config,
+                "restore",
+                "--staged",
+                "--worktree",
+                "--",
+                *(path.as_posix() for path in restore_paths),
+            )
+        raise
+
+    if explicit_deletion_names:
+        session.execute(
+            delete(ManagedDatasetSceneRow).where(
+                ManagedDatasetSceneRow.managed_dataset_id == row.id,
+                ManagedDatasetSceneRow.annotation_name.in_(explicit_deletion_names),
+            )
+        )
+        row.config_revision += 1
+        session.flush()
+    invalidate_managed_cache(config, dataset.key)
+    refreshed, refreshed_dir = _editor_dataset_context(session, config, dataset.key)
+    if normalized:
+        session.execute(
+            delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == dataset.key,
+                DatasetEditorDraftRow.username == username,
+                DatasetEditorDraftRow.annotation_name.in_([item[0] for item in normalized]),
+            )
+        )
+    if deletions:
+        session.execute(
+            delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == dataset.key,
+                DatasetEditorDraftRow.annotation_name.in_([item[0] for item in deletions]),
+            )
+        )
+    session.flush()
+    refreshed_scenes = {
+        item.annotation_name: item
+        for item in _scene_infos(config, refreshed, refreshed_dir)
+    }
+    return DatasetEditorMutationResult(
+        commit=commit,
+        publication_status=_publication_status(config, commit),
+        scenes=[
+            refreshed_scenes[name]
+            for name, _previous, _candidate in normalized
+            if name in refreshed_scenes
+        ],
+    )
+
+
+def _remove_managed_source_feature(
+    payload: dict[str, Any],
+    *,
+    source_identity: Any,
+    source_origin_key: Any,
+    fallback_geometry: Any,
+    fallback_crs: PyprojCRS,
+    fallback_role: str | None = None,
+) -> dict[str, Any]:
+    features = [item for item in payload.get("features") or [] if isinstance(item, dict)]
+    for index, feature in enumerate(features, start=1):
+        properties = feature.get("properties") or {}
+        identity = _managed_source_identity(feature, properties, index)
+        origin = properties.get("_mlsystem2_origin_key")
+        if (
+            isinstance(source_identity, str)
+            and identity == source_identity
+        ) or (
+            isinstance(source_origin_key, str)
+            and source_origin_key
+            and origin == source_origin_key
+        ):
+            return {**payload, "features": [*features[: index - 1], *features[index:]]}
+    if fallback_geometry is None:
+        return payload
+    target_crs = _geojson_crs(payload)
+    geometry = shape(fallback_geometry)
+    if fallback_crs != target_crs:
+        transformer = Transformer.from_crs(fallback_crs, target_crs, always_xy=True)
+        geometry = transform_geometry(transformer.transform, geometry)
+    output: list[dict[str, Any]] = []
+    for feature in features:
+        properties = feature.get("properties") or {}
+        role = str(properties.get(_ROLE_PROPERTY) or "positive")
+        if fallback_role is not None and role != fallback_role:
+            output.append(feature)
+            continue
+        try:
+            current = _polygonal_geometry(shape(feature.get("geometry")))
+            remainder = _polygonal_geometry(current.difference(geometry))
+        except Exception:
+            output.append(feature)
+            continue
+        if remainder.is_empty or remainder.area <= 0:
+            continue
+        output.append({**feature, "geometry": dict(mapping(remainder))})
+    return {**payload, "features": output}
+
+
+def _managed_editor_features_equal(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    previous_properties = previous.get("properties") or {}
+    candidate_properties = candidate.get("properties") or {}
+    if previous_properties.get(_ROLE_PROPERTY) != candidate_properties.get(_ROLE_PROPERTY):
+        return False
+    if previous_properties.get(_CLASS_PROPERTY) != candidate_properties.get(_CLASS_PROPERTY):
+        return False
+    try:
+        return shape(previous.get("geometry")).equals(shape(candidate.get("geometry")))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _append_managed_source_feature(
+    payload: dict[str, Any],
+    feature: dict[str, Any],
+    *,
+    source_crs: PyprojCRS,
+    origin_key: str,
+) -> dict[str, Any]:
+    target_crs = _geojson_crs(payload)
+    geometry = _polygonal_geometry(shape(feature.get("geometry")))
+    if source_crs != target_crs:
+        transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        geometry = _polygonal_geometry(transform_geometry(transformer.transform, geometry))
+    properties = dict(feature.get("properties") or {})
+    properties = {
+        key: value for key, value in properties.items() if not key.startswith("_mlsystem2_")
+    }
+    source_properties = feature.get("properties") or {}
+    role = str(source_properties.get(_ROLE_PROPERTY) or "positive")
+    properties[_ROLE_PROPERTY] = role
+    source_origin = source_properties.get("_mlsystem2_source_origin_key")
+    properties["_mlsystem2_origin_key"] = (
+        source_origin
+        if isinstance(source_origin, str) and source_origin
+        else origin_key
+    )
+    added = {
+        "type": "Feature",
+        "id": feature.get("id") or str(uuid.uuid4()),
+        "properties": properties,
+        "geometry": dict(mapping(geometry)),
+    }
+    return {**payload, "features": [*(payload.get("features") or []), added]}
+
+
+def _managed_source_identity(
+    feature: dict[str, Any],
+    properties: dict[str, Any],
+    index: int,
+) -> str:
+    clean_properties = {
+        key: value for key, value in properties.items() if not key.startswith("_mlsystem2_")
+    }
+    content_payload = json.dumps(
+        {
+            "geometry": feature.get("geometry"),
+            "properties": clean_properties,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    content = hashlib.sha256(content_payload.encode("utf-8")).hexdigest()
+    if feature.get("id") is not None:
+        return "feature-id:" + json.dumps(
+            feature["id"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ) + f"|content:{content}"
+    for key in ("id", "fid"):
+        if properties.get(key) is not None:
+            return f"property-{key}:" + json.dumps(
+                properties[key], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ) + f"|content:{content}"
+    return f"index:{index}|content:{content}"
+
+
 def _scene_info_for_annotation(
     config: TrainingUIAPIConfig,
     dataset: DatasetInfo,
@@ -1993,8 +2565,11 @@ def _scene_info_for_annotation(
 ) -> DatasetEditorSceneInfo:
     annotation_path = _annotation_path(source_dir, annotation_name)
     if revision is None:
-        relative_annotation = _repo_relative(config, annotation_path)
-        revision = _blob_revision(config, "HEAD", relative_annotation)
+        if dataset.managed:
+            revision = _file_revision(annotation_path)
+        else:
+            relative_annotation = _repo_relative(config, annotation_path)
+            revision = _blob_revision(config, "HEAD", relative_annotation)
     if revision is None:
         raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {annotation_path.name}")
     positive, hard_negative, class_counts = _editor_counts(
@@ -2597,6 +3172,13 @@ def _write_geojson_atomic(path: Path, payload: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _file_revision(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _direct_files(path: Path, suffix: str) -> list[Path]:

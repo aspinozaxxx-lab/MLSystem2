@@ -44,6 +44,7 @@ from ._models import (
     AutomationRuleRow,
     DatasetClassRow,
     DatasetRow,
+    ManagedDatasetSourceRow,
     InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -64,8 +65,16 @@ from .contracts import (
     DatasetSourceInfo,
     ImageryTypeInfo,
     ManagedDatasetCreate,
+    ManagedDatasetCompositionCreate,
     ManagedDatasetUpdate,
     TrainingUIAPIError,
+)
+from ._managed_datasets import (
+    SOURCE_MANAGED,
+    managed_dataset_version,
+    managed_manifest,
+    managed_source_infos,
+    materialize_managed_dataset,
 )
 
 
@@ -220,6 +229,7 @@ def list_managed_datasets(
     per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
     datasets = [
         _dataset_info(
+            session,
             dataset,
             class_row,
             config,
@@ -303,7 +313,7 @@ def find_managed_dataset(
     ).one_or_none()
     if row is None:
         return None
-    return _dataset_info(*row, config)
+    return _dataset_info(session, *row, config)
 
 
 def find_managed_class(
@@ -462,6 +472,98 @@ def create_managed_dataset(
     return managed_dataset_catalog(session, config)
 
 
+def create_managed_dataset_composition(
+    session: Session,
+    request: ManagedDatasetCompositionCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    """Создать виртуальный multiclass-датасет из binary per-image источников."""
+
+    class_row = _class_row(session, request.class_key)
+    name = _clean_name(request.name, "Название датасета")
+    _ensure_dataset_name_available(session, class_row.id, name)
+    requested_by_key = {item.dataset_key: item for item in request.sources}
+    source_rows = session.execute(
+        select(DatasetRow, DatasetClassRow)
+        .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
+        .where(
+            DatasetRow.key.in_(requested_by_key),
+            DatasetRow.deleted_at.is_(None),
+        )
+    ).all()
+    if len(source_rows) != len(requested_by_key):
+        found = {row.key for row, _class in source_rows}
+        missing = sorted(set(requested_by_key) - found)
+        raise TrainingUIAPIError("Не найдены исходные датасеты: " + ", ".join(missing))
+    source_class_ids = {source_class.id for _dataset, source_class in source_rows}
+    if len(source_class_ids) != len(source_rows):
+        raise TrainingUIAPIError(
+            "В одном управляемом датасете пока допускается один источник от каждого класса."
+        )
+    for source, source_class in source_rows:
+        if source.source_type != SOURCE_MLMARKUP:
+            raise TrainingUIAPIError("Управляемый датасет нельзя использовать как источник другого.")
+        if source_class.imagery_type != class_row.imagery_type:
+            raise TrainingUIAPIError(
+                f"Тип снимков источника «{source_class.name}» не совпадает с целевым классом."
+            )
+        source_path = _resolved_source_path(config.mlmarkup_root, source.source_path)
+        if _first_file(source_path, ".txt") is not None:
+            raise TrainingUIAPIError(
+                f"Источник «{source_class.name}\\{source.name}» должен быть per-image."
+            )
+        if load_dataset_manifest(source_path) is not None:
+            raise TrainingUIAPIError(
+                f"Источник «{source_class.name}\\{source.name}» должен быть binary."
+            )
+
+    dataset = DatasetRow(
+        key=str(uuid.uuid4()),
+        class_id=class_row.id,
+        name=name,
+        source_type=SOURCE_MANAGED,
+        source_path=f"managed/{uuid.uuid4()}",
+        config_revision=1,
+        legacy_version=False,
+    )
+    session.add(dataset)
+    session.flush()
+    palette = (
+        "#3B82F6",
+        "#22C55E",
+        "#F59E0B",
+        "#8B5CF6",
+        "#EF4444",
+        "#06B6D4",
+        "#EC4899",
+        "#84CC16",
+    )
+    ordered_sources = sorted(
+        source_rows,
+        key=lambda row: (
+            -requested_by_key[row[0].key].priority,
+            row[1].name.casefold(),
+            row[0].name.casefold(),
+        ),
+    )
+    for index, (source, source_class) in enumerate(ordered_sources, start=1):
+        requested = requested_by_key[source.key]
+        session.add(
+            ManagedDatasetSourceRow(
+                managed_dataset_id=dataset.id,
+                source_dataset_id=source.id,
+                priority=requested.priority,
+                object_type_id=index,
+                object_type_slug=f"type_{source_class.id.hex}",
+                object_type_name=source_class.name,
+                color=(requested.color or palette[(index - 1) % len(palette)]).upper(),
+            )
+        )
+    _assign_main_if_available(class_row, dataset)
+    session.flush()
+    return managed_dataset_catalog(session, config)
+
+
 def update_managed_dataset(
     session: Session,
     dataset_key: str,
@@ -469,6 +571,10 @@ def update_managed_dataset(
     config: TrainingUIAPIConfig,
 ) -> DatasetCatalogInfo:
     row = _dataset_row(session, dataset_key)
+    if row.source_type == SOURCE_MANAGED and request.source_path is not None:
+        raise TrainingUIAPIError(
+            "Источник виртуального управляемого датасета меняется через его состав."
+        )
     desired_name = (
         _clean_name(request.name, "Название датасета")
         if request.name is not None
@@ -690,6 +796,7 @@ def _historical_dataset_keys(session: Session) -> set[str]:
 
 
 def _dataset_info(
+    session: Session,
     dataset: DatasetRow,
     class_row: DatasetClassRow,
     config: TrainingUIAPIConfig,
@@ -697,6 +804,14 @@ def _dataset_info(
     image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
     per_image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
 ) -> DatasetInfo:
+    if dataset.source_type == SOURCE_MANAGED:
+        return _managed_dataset_info(
+            session,
+            dataset,
+            class_row,
+            config,
+            per_image_indexes=per_image_indexes,
+        )
     source_path = _resolved_source_path(config.mlmarkup_root, dataset.source_path)
     images_dir = imagery_images_dir(config.images_root, class_row.imagery_type)
     source_inside_root = _is_within_root(source_path, Path(config.mlmarkup_root).resolve())
@@ -836,6 +951,103 @@ def _dataset_info(
         manifest_path=(
             str(source_path / ".mlsystem2-dataset.json")
             if manifest is not None
+            else None
+        ),
+    )
+
+
+def _managed_dataset_info(
+    session: Session,
+    dataset: DatasetRow,
+    class_row: DatasetClassRow,
+    config: TrainingUIAPIConfig,
+    *,
+    per_image_indexes: dict[Path, dict[str, list[Path]]] | None,
+) -> DatasetInfo:
+    images_dir = imagery_images_dir(config.images_root, class_row.imagery_type)
+    diagnostics: list[str] = []
+    manifest = managed_manifest(session, dataset)
+    managed_source_list = managed_source_infos(session, dataset.id)
+    annotations_dir: Path | None = None
+    version: str | None = None
+    updated_at = None
+    class_counts = {item.slug: 0 for item in manifest.classes}
+    hard_negative_count = 0
+    try:
+        materialized = materialize_managed_dataset(
+            session,
+            config,
+            dataset,
+            source_root=config.mlmarkup_root,
+            scope="live",
+        )
+        annotations_dir = materialized.path
+        version = materialized.version
+        updated_at = materialized.updated_at
+        manifest = materialized.manifest
+        class_counts = materialized.class_counts
+        hard_negative_count = materialized.hard_negative_count
+    except TrainingUIAPIError as exc:
+        diagnostics.append(str(exc))
+        try:
+            version, updated_at = managed_dataset_version(
+                session,
+                dataset,
+                config.mlmarkup_root,
+            )
+        except TrainingUIAPIError:
+            version = f"managed:unavailable:{dataset.config_revision}"
+    image_count = 0
+    if annotations_dir is not None and images_dir.is_dir():
+        if per_image_indexes is None:
+            index = build_per_image_index(images_dir)
+        else:
+            index = per_image_indexes.get(images_dir)
+            if index is None:
+                index = build_per_image_index(images_dir)
+                per_image_indexes[images_dir] = index
+        image_count = _per_image_catalog_count(annotations_dir, index, diagnostics)
+    display_name = f"{class_row.name}\\{dataset.name}"
+    return DatasetInfo(
+        key=dataset.key,
+        name=display_name,
+        dataset_name=dataset.name,
+        class_key=class_row.key,
+        class_name=class_row.name,
+        path=str(annotations_dir) if annotations_dir is not None else None,
+        format=DatasetFormat.PER_IMAGE_MULTICLASS,
+        annotations_dir=str(annotations_dir) if annotations_dir is not None else None,
+        image_count=image_count,
+        version=version,
+        updated_at=updated_at,
+        quality_metric=class_row.quality_metric,
+        imagery_type=class_row.imagery_type,
+        input_channels=IMAGERY_CHANNELS[class_row.imagery_type],
+        images_dir=str(images_dir),
+        source_type=SOURCE_MANAGED,
+        source_path=dataset.source_path,
+        source_available=not diagnostics,
+        is_primary=class_row.primary_dataset_id == dataset.id,
+        diagnostics=diagnostics,
+        task="multiclass",
+        object_types=[
+            DatasetObjectType(
+                id=item.id,
+                slug=item.slug,
+                name=item.name,
+                color=item.color,
+                priority=item.priority,
+            )
+            for item in manifest.classes
+        ],
+        managed=True,
+        managed_sources=managed_source_list,
+        source_status="current" if not diagnostics else "unavailable",
+        class_counts=class_counts,
+        hard_negative_count=hard_negative_count,
+        manifest_path=(
+            str(annotations_dir / ".mlsystem2-dataset.json")
+            if annotations_dir is not None
             else None
         ),
     )

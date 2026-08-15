@@ -277,6 +277,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/managed-datasets/compose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Managed Dataset Composition */
+        post: operations["post_managed_dataset_composition_api_v1_managed_datasets_compose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/managed-datasets/{dataset_key}": {
         parameters: {
             query?: never;
@@ -1823,6 +1840,13 @@ export interface components {
              */
             combined: boolean;
             /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
+            /** Managed Sources */
+            managed_sources?: components["schemas"]["ManagedDatasetSourceInfo"][];
+            /**
              * Source Status
              * @default unknown
              * @enum {string}
@@ -2265,6 +2289,13 @@ export interface components {
              */
             combined: boolean;
             /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
+            /** Managed Sources */
+            managed_sources?: components["schemas"]["ManagedDatasetSourceInfo"][];
+            /**
              * Source Status
              * @default unknown
              * @enum {string}
@@ -2593,6 +2624,27 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** ManagedDatasetCompositionCreate */
+        ManagedDatasetCompositionCreate: {
+            /** Class Key */
+            class_key: string;
+            /** Name */
+            name: string;
+            /** Sources */
+            sources: components["schemas"]["ManagedDatasetCompositionSourceCreate"][];
+        };
+        /** ManagedDatasetCompositionSourceCreate */
+        ManagedDatasetCompositionSourceCreate: {
+            /** Dataset Key */
+            dataset_key: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
+            /** Color */
+            color?: string | null;
+        };
         /** ManagedDatasetCreate */
         ManagedDatasetCreate: {
             /** Class Key */
@@ -2601,6 +2653,25 @@ export interface components {
             name: string;
             /** Source Path */
             source_path: string;
+        };
+        /** ManagedDatasetSourceInfo */
+        ManagedDatasetSourceInfo: {
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Priority */
+            priority: number;
+            /** Object Type Id */
+            object_type_id: number;
+            /** Object Type Slug */
+            object_type_slug: string;
+            /** Color */
+            color: string;
         };
         /** ManagedDatasetUpdate */
         ManagedDatasetUpdate: {
@@ -4344,6 +4415,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ManagedDatasetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetCatalogInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_managed_dataset_composition_api_v1_managed_datasets_compose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedDatasetCompositionCreate"];
             };
         };
         responses: {

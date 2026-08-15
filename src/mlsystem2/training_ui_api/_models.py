@@ -94,6 +94,75 @@ class DatasetRow(Base):
     )
 
 
+class ManagedDatasetSourceRow(Base):
+    """Источник виртуального управляемого датасета."""
+
+    __tablename__ = "managed_dataset_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "managed_dataset_id",
+            "source_dataset_id",
+            name="uq_managed_dataset_sources_pair",
+        ),
+        UniqueConstraint(
+            "managed_dataset_id",
+            "object_type_slug",
+            name="uq_managed_dataset_sources_slug",
+        ),
+        UniqueConstraint(
+            "managed_dataset_id",
+            "object_type_id",
+            name="uq_managed_dataset_sources_type_id",
+        ),
+        Index("ix_managed_dataset_sources_target", "managed_dataset_id"),
+        Index("ix_managed_dataset_sources_source", "source_dataset_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    managed_dataset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="CASCADE"),
+    )
+    source_dataset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="RESTRICT"),
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    object_type_id: Mapped[int] = mapped_column(Integer)
+    object_type_slug: Mapped[str] = mapped_column(String(180))
+    object_type_name: Mapped[str] = mapped_column(String(240))
+    color: Mapped[str] = mapped_column(String(7))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ManagedDatasetSceneRow(Base):
+    """Явно добавленная сцена виртуального управляемого датасета."""
+
+    __tablename__ = "managed_dataset_scenes"
+    __table_args__ = (
+        UniqueConstraint(
+            "managed_dataset_id",
+            "annotation_name",
+            name="uq_managed_dataset_scenes_annotation",
+        ),
+        Index("ix_managed_dataset_scenes_target", "managed_dataset_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    managed_dataset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="CASCADE"),
+    )
+    annotation_name: Mapped[str] = mapped_column(String(512))
+    image_relative_path: Mapped[str] = mapped_column(String(2048))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class DatasetEditorDraftRow(Base):
     __tablename__ = "dataset_editor_drafts"
     __table_args__ = (

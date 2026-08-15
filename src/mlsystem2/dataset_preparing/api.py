@@ -5,11 +5,13 @@ from __future__ import annotations
 from ._prepare import prepare_dataset as _prepare_dataset
 from ._manifest import load_dataset_manifest as _load_dataset_manifest
 from ._per_image import (
+    PerImageAnnotationResolution,
     footprint_name_for_annotation as _footprint_name_for_annotation,
     is_per_image_footprint_name as _is_per_image_footprint_name,
     per_image_annotation_files as _per_image_annotation_files,
     per_image_annotation_name as _per_image_annotation_name,
     per_image_footprint_name as _per_image_footprint_name,
+    resolve_per_image_annotations as _resolve_per_image_annotations,
 )
 from ._scene_resolution import resolve_scene_images as _resolve_scene_images
 from .contracts import (
@@ -49,6 +51,13 @@ def per_image_annotation_files(annotations_dir: str) -> list[str]:
     return [path.as_posix() for path in _per_image_annotation_files(annotations_dir)]
 
 
+def resolve_per_image_annotations(
+    images_dir: str,
+    annotations_dir: str,
+) -> PerImageAnnotationResolution:
+    return _resolve_per_image_annotations(images_dir, annotations_dir)
+
+
 def load_dataset_manifest(annotations_dir_or_file: str) -> DatasetManifest | None:
     return _load_dataset_manifest(annotations_dir_or_file)
 
@@ -61,5 +70,6 @@ __all__ = [
     "per_image_annotation_name",
     "per_image_annotation_files",
     "per_image_footprint_name",
+    "resolve_per_image_annotations",
     "load_dataset_manifest",
 ]

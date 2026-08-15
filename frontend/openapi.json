@@ -482,6 +482,44 @@
         }
       }
     },
+    "/api/v1/managed-datasets/compose": {
+      "post": {
+        "summary": "Post Managed Dataset Composition",
+        "operationId": "post_managed_dataset_composition_api_v1_managed_datasets_compose_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedDatasetCompositionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/managed-datasets/{dataset_key}": {
       "patch": {
         "summary": "Patch Managed Dataset",
@@ -4980,6 +5018,18 @@
             "title": "Combined",
             "default": false
           },
+          "managed": {
+            "type": "boolean",
+            "title": "Managed",
+            "default": false
+          },
+          "managed_sources": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedDatasetSourceInfo"
+            },
+            "type": "array",
+            "title": "Managed Sources"
+          },
           "source_status": {
             "type": "string",
             "enum": [
@@ -6212,6 +6262,18 @@
             "title": "Combined",
             "default": false
           },
+          "managed": {
+            "type": "boolean",
+            "title": "Managed",
+            "default": false
+          },
+          "managed_sources": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedDatasetSourceInfo"
+            },
+            "type": "array",
+            "title": "Managed Sources"
+          },
           "source_status": {
             "type": "string",
             "enum": [
@@ -7146,6 +7208,71 @@
         ],
         "title": "MLflowExperimentInfo"
       },
+      "ManagedDatasetCompositionCreate": {
+        "properties": {
+          "class_key": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Class Key"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedDatasetCompositionSourceCreate"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "class_key",
+          "name",
+          "sources"
+        ],
+        "title": "ManagedDatasetCompositionCreate"
+      },
+      "ManagedDatasetCompositionSourceCreate": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Dataset Key"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "default": 0
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9A-Fa-f]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key"
+        ],
+        "title": "ManagedDatasetCompositionSourceCreate"
+      },
       "ManagedDatasetCreate": {
         "properties": {
           "class_key": {
@@ -7175,6 +7302,56 @@
           "source_path"
         ],
         "title": "ManagedDatasetCreate"
+      },
+      "ManagedDatasetSourceInfo": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "object_type_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Object Type Id"
+          },
+          "object_type_slug": {
+            "type": "string",
+            "title": "Object Type Slug"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key",
+          "dataset_name",
+          "class_key",
+          "class_name",
+          "priority",
+          "object_type_id",
+          "object_type_slug",
+          "color"
+        ],
+        "title": "ManagedDatasetSourceInfo"
       },
       "ManagedDatasetUpdate": {
         "properties": {

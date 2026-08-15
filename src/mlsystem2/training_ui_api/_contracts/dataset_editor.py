@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .catalog import ManagedDatasetSourceInfo
+
 
 class DatasetEditorObjectType(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -32,6 +34,8 @@ class DatasetEditorDatasetInfo(BaseModel):
     task: Literal["binary", "multiclass"] = "binary"
     object_types: list[DatasetEditorObjectType] = Field(default_factory=list)
     combined: bool = False
+    managed: bool = False
+    managed_sources: list[ManagedDatasetSourceInfo] = Field(default_factory=list)
     source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
     source_changes: list[str] = Field(default_factory=list)
     class_counts: dict[str, int] = Field(default_factory=dict)

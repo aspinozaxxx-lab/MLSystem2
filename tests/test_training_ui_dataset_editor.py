@@ -32,6 +32,7 @@ from mlsystem2.training_ui_api._models import (
     DatasetEditorDraftRow,
     DatasetRow,
     JobRow,
+    ManagedDatasetSceneRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
@@ -816,6 +817,236 @@ def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
             (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
             for row in session.scalars(select(JobRow)).all()
         )
+
+
+def test_managed_dataset_publication_writes_new_object_to_selected_source(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    annotation_name = env.live_annotation.name
+    second_relative = Path("Озера") / "main"
+    second_payload = _annotation_payload(
+        [_feature(20, "positive", [[4, 4], [5, 4], [5, 5], [4, 5], [4, 4]])]
+    )
+    live_root = env.live_annotation.parents[2]
+    live_second = live_root / second_relative
+    editor_second = env.editor_root / second_relative
+    live_second.mkdir(parents=True)
+    editor_second.mkdir(parents=True)
+    for target in (live_second / annotation_name, editor_second / annotation_name):
+        target.write_text(json.dumps(second_payload, ensure_ascii=False), encoding="utf-8")
+    _git(env.editor_root, "add", second_relative.as_posix())
+    _git(env.editor_root, "commit", "-m", "Добавить второй исходный датасет")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+
+    catalog_response = env.client.post("/api/v1/dataset-catalog/sync")
+    assert catalog_response.status_code == 200
+    catalog = catalog_response.json()
+    rivers = next(item for item in catalog["classes"] if item["name"] == "Реки")
+    lakes = next(item for item in catalog["classes"] if item["name"] == "Озера")
+    target_class_response = env.client.post(
+        "/api/v1/dataset-classes",
+        json={"name": "Реки и озера", "imagery_type": "kanopus"},
+    )
+    assert target_class_response.status_code == 200
+    target_class = next(
+        item for item in target_class_response.json()["classes"] if item["name"] == "Реки и озера"
+    )
+    composed_response = env.client.post(
+        "/api/v1/managed-datasets/compose",
+        json={
+            "class_key": target_class["key"],
+            "name": "main",
+            "sources": [
+                {
+                    "dataset_key": next(
+                        item["key"]
+                        for item in rivers["datasets"]
+                        if item["dataset_name"] == "test"
+                    ),
+                    "priority": 100,
+                },
+                {"dataset_key": lakes["datasets"][0]["key"], "priority": 0},
+            ],
+        },
+    )
+    assert composed_response.status_code == 200, composed_response.text
+    managed = next(
+        item
+        for item in composed_response.json()["classes"]
+        if item["key"] == target_class["key"]
+    )["datasets"][0]
+    assert managed["managed"] is True
+
+    scenes_response = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
+    )
+    assert scenes_response.status_code == 200, scenes_response.text
+    scene = scenes_response.json()["scenes"][0]
+    detail_response = env.client.get(
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(managed['key'], safe='')}/scenes/{quote(annotation_name, safe='')}"
+    )
+    assert detail_response.status_code == 200
+    payload = detail_response.json()["geojson"]
+    lake_type = next(
+        item
+        for item in scenes_response.json()["dataset"]["object_types"]
+        if item["name"] == "Озера"
+    )
+    payload["features"].append(
+        {
+            "type": "Feature",
+            "id": "new-lake",
+            "properties": {
+                "_mlsystem2_role": "positive",
+                "_mlsystem2_class": lake_type["slug"],
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0.5, 4], [1.5, 4], [1.5, 5], [0.5, 5], [0.5, 4]]],
+            },
+        }
+    )
+    publish = env.client.put(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
+        json={
+            "scenes": [
+                {
+                    "annotation_name": annotation_name,
+                    "revision": scene["revision"],
+                    "geojson": payload,
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 200, publish.text
+    saved = json.loads((editor_second / annotation_name).read_text(encoding="utf-8"))
+    assert sum(
+        feature["properties"]["_mlsystem2_role"] == "positive"
+        for feature in saved["features"]
+    ) == 2
+    assert any(feature.get("id") == "new-lake" for feature in saved["features"])
+    assert not (env.editor_root / "Реки и озера" / "main").exists()
+
+    added_image = env.editor_root.parent / "images" / "kanopus" / "batch" / "MANAGED04.tif"
+    _write_raster(added_image, value=44)
+    added = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
+        json={"image_paths": ["batch/MANAGED04.tif"]},
+    )
+    assert added.status_code == 200, added.text
+    added_scene = added.json()["scenes"][0]
+    added_annotation = added_scene["annotation_name"]
+    river_target = env.editor_dataset / added_annotation
+    lake_target = editor_second / added_annotation
+    assert not river_target.exists()
+    assert not lake_target.exists()
+    with create_session_factory(get_config())() as session:
+        explicit = session.scalar(
+            select(ManagedDatasetSceneRow).where(
+                ManagedDatasetSceneRow.annotation_name == added_annotation
+            )
+        )
+        assert explicit is not None
+        assert explicit.image_relative_path == "batch/MANAGED04.tif"
+
+    added_detail_url = (
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(managed['key'], safe='')}/scenes/{quote(added_annotation, safe='')}"
+    )
+    added_detail = env.client.get(added_detail_url)
+    assert added_detail.status_code == 200, added_detail.text
+    added_payload = added_detail.json()["geojson"]
+    added_payload["features"] = [
+        {
+            "type": "Feature",
+            "id": "managed-lake",
+            "properties": {
+                "_mlsystem2_role": "positive",
+                "_mlsystem2_class": lake_type["slug"],
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]]],
+            },
+        },
+        {
+            "type": "Feature",
+            "id": "managed-hard-negative",
+            "properties": {"_mlsystem2_role": "hard_negative"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[4, 4], [5, 4], [5, 5], [4, 5], [4, 4]]],
+            },
+        },
+    ]
+    published_added = env.client.put(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
+        json={
+            "scenes": [
+                {
+                    "annotation_name": added_annotation,
+                    "revision": added_scene["revision"],
+                    "geojson": added_payload,
+                }
+            ]
+        },
+    )
+    assert published_added.status_code == 200, published_added.text
+    river_features = json.loads(river_target.read_text(encoding="utf-8"))["features"]
+    lake_features = json.loads(lake_target.read_text(encoding="utf-8"))["features"]
+    assert [item["properties"]["_mlsystem2_role"] for item in river_features] == [
+        "hard_negative"
+    ]
+    assert {item["properties"]["_mlsystem2_role"] for item in lake_features} == {
+        "positive",
+        "hard_negative",
+    }
+    refreshed_added = env.client.get(added_detail_url).json()
+    assert refreshed_added["scene"]["positive_count"] == 1
+    assert refreshed_added["scene"]["hard_negative_count"] == 1
+
+    marked_deleted = env.client.request(
+        "DELETE",
+        added_detail_url,
+        json={"revision": refreshed_added["scene"]["revision"]},
+    )
+    assert marked_deleted.status_code == 200
+    assert marked_deleted.json()["deleted"] is True
+    published_deletion = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/drafts/publish"
+    )
+    assert published_deletion.status_code == 200, published_deletion.text
+    assert not river_target.exists()
+    assert not lake_target.exists()
+    with create_session_factory(get_config())() as session:
+        assert session.scalar(
+            select(ManagedDatasetSceneRow).where(
+                ManagedDatasetSceneRow.annotation_name == added_annotation
+            )
+        ) is None
+
+    empty_image = added_image.with_name("MANAGED05.tif")
+    _write_raster(empty_image, value=55)
+    empty_added = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
+        json={"image_paths": ["batch/MANAGED05.tif"]},
+    ).json()["scenes"][0]
+    empty_url = (
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(managed['key'], safe='')}/scenes/{quote(empty_added['annotation_name'], safe='')}"
+    )
+    assert env.client.request(
+        "DELETE",
+        empty_url,
+        json={"revision": empty_added["revision"]},
+    ).status_code == 200
+    empty_deleted = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/drafts/publish"
+    )
+    assert empty_deleted.status_code == 200, empty_deleted.text
+    assert env.client.get(empty_url).status_code == 400
 
 
 def test_dataset_editor_queues_one_urgent_scene_inference(

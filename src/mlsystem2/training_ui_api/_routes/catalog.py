@@ -12,6 +12,7 @@ from mlsystem2.training_ui_api._service import (
     create_custom_dataset,
     create_dataset_class,
     create_managed_dataset,
+    create_managed_dataset_composition,
     create_mlflow_experiment,
     dataset_catalog,
     datasets,
@@ -37,6 +38,7 @@ from mlsystem2.training_ui_api.contracts import (
     MLflowExperimentCreate,
     MLflowExperimentInfo,
     ManagedDatasetCreate,
+    ManagedDatasetCompositionCreate,
     ManagedDatasetUpdate,
     ModelListResponse,
 )
@@ -135,6 +137,14 @@ def register_catalog_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> DatasetCatalogInfo:
         return create_managed_dataset(db, request, ctx.config)
+
+    @app.post("/api/v1/managed-datasets/compose", response_model=DatasetCatalogInfo)
+    def post_managed_dataset_composition(
+        request: ManagedDatasetCompositionCreate,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> DatasetCatalogInfo:
+        return create_managed_dataset_composition(db, request, ctx.config)
 
     @app.patch("/api/v1/managed-datasets/{dataset_key}", response_model=DatasetCatalogInfo)
     def patch_managed_dataset(

@@ -30,6 +30,19 @@ class DatasetObjectType(BaseModel):
     priority: int = 0
 
 
+class ManagedDatasetSourceInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str
+    dataset_name: str
+    class_key: str
+    class_name: str
+    priority: int
+    object_type_id: int = Field(gt=0)
+    object_type_slug: str
+    color: str
+
+
 class AppLink(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,6 +100,8 @@ class DatasetInfo(BaseModel):
     task: Literal["binary", "multiclass"] = "binary"
     object_types: list[DatasetObjectType] = Field(default_factory=list)
     combined: bool = False
+    managed: bool = False
+    managed_sources: list[ManagedDatasetSourceInfo] = Field(default_factory=list)
     source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
     source_changes: list[str] = Field(default_factory=list)
     class_counts: dict[str, int] = Field(default_factory=dict)
@@ -205,6 +220,29 @@ class ManagedDatasetUpdate(BaseModel):
         return self
 
 
+class ManagedDatasetCompositionSourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str = Field(min_length=1, max_length=180)
+    priority: int = 0
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class ManagedDatasetCompositionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    class_key: str = Field(min_length=1, max_length=180)
+    name: str = Field(min_length=1, max_length=240)
+    sources: list[ManagedDatasetCompositionSourceCreate] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_unique_sources(self) -> Self:
+        keys = [item.dataset_key for item in self.sources]
+        if len(keys) != len(set(keys)):
+            raise ValueError("sources не должен содержать повторяющиеся датасеты")
+        return self
+
+
 class ClassListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -246,6 +284,9 @@ __all__ = [
     "ImageFolderInfo",
     "ImageFolderListResponse",
     "ManagedDatasetCreate",
+    "ManagedDatasetCompositionCreate",
+    "ManagedDatasetCompositionSourceCreate",
+    "ManagedDatasetSourceInfo",
     "ManagedDatasetUpdate",
     "MLflowExperimentCreate",
     "MLflowExperimentInfo",

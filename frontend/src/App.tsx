@@ -2499,13 +2499,39 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     });
   };
 
+  const openManagedDatasetCreator = (
+    classInfo: NonNullable<DatasetCatalogInfo["classes"]>[number],
+  ) => {
+    if (!catalog) return;
+    showModal({
+      title: "Новый управляемый датасет",
+      wide: true,
+      body: (
+        <CreateManagedDatasetForm
+          targetClass={classInfo}
+          catalog={catalog}
+          run={run}
+          onCancel={closeModal}
+          onCreated={async (payload) => {
+            closeModal();
+            await applyCatalog(payload);
+          }}
+        />
+      ),
+    });
+  };
+
   const confirmDatasetDeletion = (dataset: DatasetInfo) => {
     showModal({
       title: `Удалить датасет «${dataset.dataset_name || dataset.name}»?`,
       body: (
         <div className="form-stack">
           <p>
-            Папка <strong>{dataset.source_path}</strong> будет удалена из MLMarkup отдельным Git-коммитом.
+            {dataset.managed ? (
+              <>Управляемый датасет будет удалён из каталога. Исходные датасеты и их разметка останутся.</>
+            ) : (
+              <>Папка <strong>{dataset.source_path}</strong> будет удалена из MLMarkup отдельным Git-коммитом.</>
+            )}
           </p>
           <div className="notice warning">
             Запись датасета, задания и результаты останутся в PostgreSQL и MLflow. Восстановления через
@@ -2637,7 +2663,16 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                   <div className="dataset-card-header">
                     <div className="source-lines">
                       <strong>{dataset.dataset_name || dataset.name}</strong>
-                      <span className="muted">MLMarkup: {dataset.source_path}</span>
+                      {dataset.managed ? (
+                        <>
+                          <span className="badge neutral">управляемый</span>
+                          <span className="muted">
+                            Источники: {(dataset.managed_sources || []).map((source) => (
+                              `${source.class_name}\\${source.dataset_name} · ${source.priority}`
+                            )).join("; ")}
+                          </span>
+                        </>
+                      ) : <span className="muted">MLMarkup: {dataset.source_path}</span>}
                       <span className="muted">Снимки: {imageryTypeLabel(classInfo.imagery_type)}</span>
                     </div>
                     <div className="inline-row">
@@ -2645,13 +2680,15 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                       <span className={`badge ${(dataset.diagnostics || []).length ? "warning" : "ok"}`}>
                         {(dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
                       </span>
-                      <button
-                        className="secondary"
-                        type="button"
-                        onClick={() => openDatasetEditor(classInfo.key, dataset)}
-                      >
-                        Параметры
-                      </button>
+                      {!dataset.managed ? (
+                        <button
+                          className="secondary"
+                          type="button"
+                          onClick={() => openDatasetEditor(classInfo.key, dataset)}
+                        >
+                          Параметры
+                        </button>
+                      ) : null}
                       <button
                         className="danger icon-button"
                         type="button"
@@ -2682,6 +2719,13 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                 onClick={() => openDatasetEditor(classInfo.key)}
               >
                 <Plus size={15} /> Добавить датасет
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => openManagedDatasetCreator(classInfo)}
+              >
+                <Layers3 size={15} /> Создать управляемый
               </button>
             </div>
           </section>
@@ -4268,6 +4312,145 @@ function queuePriority(job: JobSummary): number {
   if (job.status === "paused") return 1;
   if (job.status === "queued") return 2;
   return 3;
+}
+
+type ManagedDatasetDraftSource = {
+  dataset: DatasetInfo;
+  selected: boolean;
+  priority: number;
+  color: string;
+};
+
+function CreateManagedDatasetForm({
+  targetClass,
+  catalog,
+  run,
+  onCancel,
+  onCreated,
+}: {
+  targetClass: NonNullable<DatasetCatalogInfo["classes"]>[number];
+  catalog: DatasetCatalogInfo;
+  run: Runner;
+  onCancel: () => void;
+  onCreated: (catalog: DatasetCatalogInfo) => Promise<void>;
+}) {
+  const palette = ["#3B82F6", "#22C55E", "#F59E0B", "#8B5CF6", "#EF4444", "#06B6D4"];
+  const candidates = useMemo(
+    () => (catalog.classes || []).flatMap((classInfo) => (classInfo.datasets || [])
+      .filter((dataset) => (
+        !dataset.managed
+        && dataset.format === "per_image"
+        && dataset.source_available
+        && classInfo.imagery_type === targetClass.imagery_type
+      ))
+      .map((dataset) => ({ dataset, classInfo }))),
+    [catalog.classes, targetClass.imagery_type],
+  );
+  const [name, setName] = useState("main");
+  const [sources, setSources] = useState<ManagedDatasetDraftSource[]>(() =>
+    candidates.map(({ dataset }, index) => ({
+      dataset,
+      selected: false,
+      priority: Math.max(0, 100 - index * 10),
+      color: palette[index % palette.length],
+    })),
+  );
+  const selected = sources.filter((item) => item.selected);
+  const selectedClassKeys = new Set(selected.map((item) => item.dataset.class_key));
+  const valid = name.trim().length > 0 && selected.length >= 2
+    && selectedClassKeys.size === selected.length;
+
+  const updateSource = (datasetKey: string, patch: Partial<ManagedDatasetDraftSource>) => {
+    setSources((current) => current.map((item) => (
+      item.dataset.key === datasetKey ? { ...item, ...patch } : item
+    )));
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!valid) return;
+    const payload = await run(() => apiJson<DatasetCatalogInfo>("/managed-datasets/compose", {
+      method: "POST",
+      body: {
+        class_key: targetClass.key,
+        name: name.trim(),
+        sources: selected.map((item) => ({
+          dataset_key: item.dataset.key,
+          priority: item.priority,
+          color: item.color,
+        })),
+      },
+    }));
+    if (payload) await onCreated(payload);
+  };
+
+  return (
+    <form className="form-stack" onSubmit={submit}>
+      <p className="muted">
+        Разметка строится из выбранных binary per-image датасетов. Большее число означает более высокий
+        приоритет в местах наложения.
+      </p>
+      <label>
+        Название датасета
+        <input value={name} onChange={(event) => setName(event.target.value)} maxLength={240} required />
+      </label>
+      <div className="managed-source-picker">
+        {sources.map((item) => {
+          const sourceClass = candidates.find(({ dataset }) => dataset.key === item.dataset.key)?.classInfo;
+          const duplicateClass = !item.selected && selected.some(
+            (selectedItem) => selectedItem.dataset.class_key === item.dataset.class_key,
+          );
+          return (
+            <label
+              className={`managed-source-row${item.selected ? " selected" : ""}`}
+              key={item.dataset.key}
+            >
+              <input
+                type="checkbox"
+                checked={item.selected}
+                disabled={duplicateClass}
+                onChange={(event) => updateSource(item.dataset.key, { selected: event.target.checked })}
+              />
+              <span className="managed-source-name">
+                <strong>{sourceClass?.name}\\{item.dataset.dataset_name}</strong>
+                <small>{item.dataset.image_count ?? 0} снимков</small>
+              </span>
+              <span>
+                Приоритет
+                <input
+                  type="number"
+                  value={item.priority}
+                  disabled={!item.selected}
+                  onChange={(event) => updateSource(item.dataset.key, {
+                    priority: Number.parseInt(event.target.value || "0", 10),
+                  })}
+                />
+              </span>
+              <span>
+                Цвет
+                <input
+                  type="color"
+                  value={item.color}
+                  disabled={!item.selected}
+                  onChange={(event) => updateSource(item.dataset.key, { color: event.target.value })}
+                />
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      {!candidates.length ? (
+        <div className="notice warning">Нет доступных binary per-image датасетов с тем же типом снимков.</div>
+      ) : null}
+      {selected.length >= 2 && selectedClassKeys.size !== selected.length ? (
+        <div className="notice warning">Выберите не более одного датасета каждого исходного класса.</div>
+      ) : null}
+      <div className="button-row modal-form-actions">
+        <button className="secondary" type="button" onClick={onCancel}>Отмена</button>
+        <button className="primary" type="submit" disabled={!valid}>Создать</button>
+      </div>
+    </form>
+  );
 }
 
 function automationRuleKey(datasetKey: string, architecture: string): string {

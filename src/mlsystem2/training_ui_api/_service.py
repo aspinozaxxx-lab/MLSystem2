@@ -142,6 +142,7 @@ from .contracts import (
     MLflowExperimentInfo,
     ModelListResponse,
     ManagedDatasetCreate,
+    ManagedDatasetCompositionCreate,
     ManagedDatasetUpdate,
     PseudoMarkupResultInfo,
     PrimaryTestSampleInfo,
@@ -255,6 +256,16 @@ def create_managed_dataset(
     config: TrainingUIAPIConfig,
 ) -> DatasetCatalogInfo:
     return _create_managed_dataset(session, request, config)
+
+
+def create_managed_dataset_composition(
+    session: Session,
+    request: ManagedDatasetCompositionCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    from ._dataset_catalog import create_managed_dataset_composition as create_composition
+
+    return create_composition(session, request, config)
 
 
 def update_managed_dataset(

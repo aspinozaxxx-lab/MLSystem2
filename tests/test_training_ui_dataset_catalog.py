@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from pathlib import Path
 
 import pytest
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+from shapely.geometry import box, mapping, shape
 from sqlalchemy import func, select
 
 from mlsystem2.training_ui_api._config import get_config
@@ -12,6 +17,7 @@ from mlsystem2.training_ui_api._database import Base, configure_schema, create_s
 from mlsystem2.training_ui_api._dataset_catalog import (
     create_dataset_class,
     create_managed_dataset,
+    create_managed_dataset_composition,
     list_managed_classes,
     list_managed_datasets,
     set_primary_dataset,
@@ -25,6 +31,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetClassUpdate,
     DatasetPrimaryDatasetUpdate,
     ManagedDatasetCreate,
+    ManagedDatasetCompositionCreate,
     ManagedDatasetUpdate,
     TrainingUIAPIError,
 )
@@ -247,6 +254,129 @@ def test_primary_dataset_must_belong_to_class(
                 DatasetPrimaryDatasetUpdate(dataset_key=second.datasets[0].key),
                 config,
             )
+
+
+def test_managed_composition_is_virtual_and_follows_source_versions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    image = config.images_root / "kanopus" / "images" / "scene.tif"
+    image.parent.mkdir(parents=True)
+    with rasterio.open(
+        image,
+        "w",
+        driver="GTiff",
+        width=10,
+        height=10,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 10, 1, 1),
+        nodata=0,
+    ) as target:
+        target.write(np.ones((1, 10, 10), dtype=np.uint8))
+    first_path = config.mlmarkup_root / "Первый" / "main"
+    second_path = config.mlmarkup_root / "Второй" / "main"
+    annotation_name = "images_scene.geojson"
+    _write_per_image_source(first_path, annotation_name, box(1, 1, 7, 7), "first")
+    _write_per_image_source(second_path, annotation_name, box(5, 5, 9, 9), "second")
+
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        source_classes = {
+            item.name: item
+            for item in list_managed_classes(session, config, include_custom=False)
+        }
+        target_catalog = create_dataset_class(
+            session,
+            DatasetClassCreate(name="Составной", imagery_type="kanopus"),
+            config,
+        )
+        target_class = next(item for item in target_catalog.classes if item.name == "Составной")
+        catalog = create_managed_dataset_composition(
+            session,
+            ManagedDatasetCompositionCreate(
+                class_key=target_class.key,
+                name="main",
+                sources=[
+                    {
+                        "dataset_key": source_classes["Первый"].datasets[0].key,
+                        "priority": 100,
+                        "color": "#112233",
+                    },
+                    {
+                        "dataset_key": source_classes["Второй"].datasets[0].key,
+                        "priority": 0,
+                        "color": "#445566",
+                    },
+                ],
+            ),
+            config,
+        )
+        managed = next(item for item in catalog.classes if item.key == target_class.key).datasets[0]
+        assert managed.managed is True
+        assert managed.source_type == "managed"
+        assert managed.annotations_dir is not None
+        assert managed.image_count == 1
+        assert managed.class_counts == {
+            managed.object_types[0].slug: 1,
+            managed.object_types[1].slug: 1,
+        }
+        assert managed.version is not None and managed.version.startswith("managed:")
+        assert not (config.mlmarkup_root / "Составной" / "main").exists()
+        payload = json.loads(
+            (Path(managed.annotations_dir) / annotation_name).read_text(encoding="utf-8")
+        )
+        by_class = {
+            feature["properties"]["_mlsystem2_class"]: feature
+            for feature in payload["features"]
+        }
+        assert all(
+            feature["properties"].get("_mlsystem2_source_dataset_key")
+            for feature in payload["features"]
+        )
+        first_slug = managed.object_types[0].slug
+        second_slug = managed.object_types[1].slug
+        assert shape(by_class[first_slug]["geometry"]).intersection(
+            shape(by_class[second_slug]["geometry"])
+        ).area == 0
+
+        old_version = managed.version
+        _write_per_image_source(first_path, annotation_name, box(1, 1, 8, 8), "first")
+        refreshed = next(
+            item
+            for item in list_managed_datasets(session, config, include_custom=False)
+            if item.key == managed.key
+        )
+        assert refreshed.version != old_version
+
+
+def _write_per_image_source(
+    path: Path,
+    annotation_name: str,
+    geometry,
+    feature_id: str,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / annotation_name).write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+                "features": [
+                    {
+                        "type": "Feature",
+                        "id": feature_id,
+                        "properties": {"_mlsystem2_role": "positive"},
+                        "geometry": mapping(geometry),
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_new_ortho_source_is_detected_from_scene_folder(

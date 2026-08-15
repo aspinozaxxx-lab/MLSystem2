@@ -95,6 +95,8 @@ class DatasetSourceRevision(BaseModel):
 
     path: str = Field(min_length=1)
     class_slug: str = Field(min_length=1)
+    dataset_key: str | None = Field(default=None, min_length=1)
+    priority: int = 0
     git_revision: str = Field(min_length=1)
     tree_revision: str = Field(min_length=1)
     file_hashes: dict[str, str] = Field(default_factory=dict)
@@ -108,6 +110,7 @@ class DatasetManifest(BaseModel):
     schema_version: Literal[1]
     task: Literal["multiclass"]
     combined: bool = False
+    managed: bool = False
     classes: list[DatasetClassDefinition] = Field(min_length=2)
     sources: list[DatasetSourceRevision] = Field(default_factory=list)
     build_id: str | None = None
@@ -130,12 +133,13 @@ class DatasetManifest(BaseModel):
             )
         if self.combined:
             source_slugs = [item.class_slug for item in self.sources]
-            _validate_unique_values(source_slugs, "source class_slug")
             unknown = sorted(set(source_slugs) - {item.slug for item in self.classes})
             if unknown:
                 raise ValueError(
                     "sources содержит неизвестные class_slug: " + ", ".join(unknown)
                 )
+            source_keys = [item.dataset_key or item.path for item in self.sources]
+            _validate_unique_values(source_keys, "source dataset")
         return self
 
 
