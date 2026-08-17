@@ -10,6 +10,7 @@ import type {
 import {
   applyTestMarkupPreview,
   changeTestMarkupDownloadSelection,
+  containedImageOneToOneScale,
   initialTestMarkupDownloadSelection,
   isDatasetReadyForTestMarkup,
   sortTestMarkupDatasets,
@@ -185,5 +186,13 @@ describe("тестовые разметки", () => {
       replaced,
       { type: "clear" },
     )).toEqual(new Set());
+  });
+
+  it("считает масштаб 1:1 от вписывания по обеим сторонам области просмотра", () => {
+    expect(containedImageOneToOneScale(1400, 420, 3584, 3584, 12)).toBeCloseTo(3584 / 420);
+    expect(containedImageOneToOneScale(1000, 800, 2000, 1000, 12)).toBe(2);
+    expect(containedImageOneToOneScale(1000, 500, 1000, 2000, 12)).toBe(4);
+    expect(containedImageOneToOneScale(1000, 800, 400, 300, 12)).toBe(1);
+    expect(containedImageOneToOneScale(0, 800, 3584, 3584, 12)).toBe(1);
   });
 });

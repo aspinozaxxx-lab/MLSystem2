@@ -99,6 +99,7 @@ import {
 import {
   applyTestMarkupPreview,
   changeTestMarkupDownloadSelection,
+  containedImageOneToOneScale,
   flattenTestMarkups,
   initialTestMarkupDownloadSelection,
   isDatasetReadyForTestMarkup,
@@ -2249,9 +2250,16 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
   }, [scale]);
 
   const oneToOneScale = useCallback(() => {
+    const viewport = viewportRef.current;
     const image = imageRef.current;
-    if (!image || !image.clientWidth) return TILE_VIEWER_MIN_SCALE;
-    return Math.min(TILE_VIEWER_MAX_SCALE, image.naturalWidth / image.clientWidth);
+    if (!viewport || !image) return TILE_VIEWER_MIN_SCALE;
+    return containedImageOneToOneScale(
+      viewport.clientWidth,
+      viewport.clientHeight,
+      image.naturalWidth,
+      image.naturalHeight,
+      TILE_VIEWER_MAX_SCALE,
+    );
   }, []);
 
   return (
@@ -2301,7 +2309,7 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
           else zoomTo(Math.max(2, oneToOneScale()), { x: event.clientX, y: event.clientY });
         }}
         onPointerDown={(event) => {
-          if (event.button !== 0 || scale <= TILE_VIEWER_MIN_SCALE) return;
+          if (event.button !== 0) return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
           dragRef.current = {

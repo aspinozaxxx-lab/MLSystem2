@@ -166,3 +166,24 @@ export function applyTestMarkupPreview(
 export function sortedIndices(values: number[]): number[] {
   return [...values].sort((left, right) => left - right);
 }
+
+export function containedImageOneToOneScale(
+  viewportWidth: number,
+  viewportHeight: number,
+  imageWidth: number,
+  imageHeight: number,
+  maxScale: number,
+): number {
+  const dimensions = [viewportWidth, viewportHeight, imageWidth, imageHeight];
+  if (
+    dimensions.some((value) => !Number.isFinite(value) || value <= 0)
+    || !Number.isFinite(maxScale)
+    || maxScale < 1
+  ) return 1;
+
+  const fittedPixelRatio = Math.min(
+    viewportWidth / imageWidth,
+    viewportHeight / imageHeight,
+  );
+  return Math.min(maxScale, Math.max(1, 1 / fittedPixelRatio));
+}
