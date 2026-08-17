@@ -9,6 +9,20 @@ export type SortDirection = "ascending" | "descending";
 export const RASTER_MAX_SCALE = 10;
 export const RASTER_CONTRAST = 0.15;
 
+export function isCurrentDatasetScene(
+  requestedDatasetKey: string,
+  loadedDatasetKey: string,
+  requestedAnnotation: string,
+  activeAnnotation: string,
+): boolean {
+  return Boolean(
+    requestedDatasetKey
+    && requestedDatasetKey === loadedDatasetKey
+    && requestedAnnotation
+    && requestedAnnotation === activeAnnotation
+  );
+}
+
 export function preventMapMiddleButtonDefault(
   event: Pick<MouseEvent, "button" | "preventDefault">,
 ): boolean {

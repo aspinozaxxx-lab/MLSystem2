@@ -14,6 +14,7 @@ import {
   featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
+  isCurrentDatasetScene,
   preventMapMiddleButtonDefault,
   publishScenes,
   sceneClassCounts,
@@ -55,6 +56,15 @@ const draft = (name: string, baseline: DraftSnapshot, current: DraftSnapshot): P
 });
 
 describe("черновики редактора датасетов", () => {
+  it("не запрашивает сцену предыдущего датасета после переключения", () => {
+    expect(isCurrentDatasetScene("новый", "старый", "старая.geojson", "старая.geojson"))
+      .toBe(false);
+    expect(isCurrentDatasetScene("новый", "новый", "старая.geojson", ""))
+      .toBe(false);
+    expect(isCurrentDatasetScene("новый", "новый", "новая.geojson", "новая.geojson"))
+      .toBe(true);
+  });
+
   it("расширяет нативную шкалу GeoTIFF до 1000%", () => {
     expect(extendRasterResolutions([8, 4, 2, 1], 1)).toEqual([
       8,

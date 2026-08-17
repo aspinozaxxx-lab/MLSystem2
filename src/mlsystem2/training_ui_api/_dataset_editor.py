@@ -50,7 +50,7 @@ from ._dataset_catalog import (
     find_managed_dataset,
     list_managed_datasets,
 )
-from ._datasets import RASTER_SUFFIXES, build_per_image_index
+from ._datasets import RASTER_SUFFIXES, build_image_index, build_per_image_index
 from ._external_models import external_model_payload
 from ._models import (
     DatasetClassRow,
@@ -1771,7 +1771,34 @@ def _pseudo_result_covers_image(
         for line in entries
         if line.strip() and not line.lstrip().startswith("#")
     }
-    return not expected.isdisjoint(normalized)
+    if not expected.isdisjoint(normalized):
+        return True
+
+    # Старые полные псевдоразметки могли сохранять в scenes_file только имя файла
+    # TIFF, хотя per-image GeoJSON уже кодировал подпапку в имени. Такой результат
+    # можно переиспользовать лишь при однозначном сопоставлении имени внутри
+    # того же корня снимков: иначе одинаковые имена из разных папок смешают сцены.
+    return _unique_basename_reference_matches(normalized, root, resolved_image)
+
+
+def _unique_basename_reference_matches(
+    normalized_references: set[str],
+    images_root: Path,
+    image_path: Path,
+) -> bool:
+    resolved_image = image_path.resolve()
+    basename = _scene_reference_key(resolved_image.name)
+    if basename not in {
+        reference
+        for reference in normalized_references
+        if "/" not in reference
+    }:
+        return False
+    candidates = {
+        candidate.resolve()
+        for candidate in build_image_index(images_root).get(basename.lower(), [])
+    }
+    return candidates == {resolved_image}
 
 
 def _scene_reference_key(value: str) -> str:

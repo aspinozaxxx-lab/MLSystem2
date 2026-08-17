@@ -51,6 +51,7 @@ import {
   featureClassCounts,
   featureCounts,
   geometryInsideFootprint,
+  isCurrentDatasetScene,
   preventMapMiddleButtonDefault,
   RASTER_CONTRAST,
   sceneClassCounts,
@@ -284,6 +285,7 @@ export function DatasetEditorPage({
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const scenesLoadRequestRef = useRef(0);
   const sceneLoadRequestRef = useRef(0);
+  const loadedScenesDatasetKeyRef = useRef("");
   const pseudoLoadRequestRef = useRef(0);
   const pseudoCacheRef = useRef<Map<string, PseudoMarkupInfo>>(new Map());
   const appliedInitialDatasetKeyRef = useRef<string | null>(null);
@@ -449,6 +451,8 @@ export function DatasetEditorPage({
     async (key: string, preferredAnnotation = "") => {
       const requestId = ++scenesLoadRequestRef.current;
       if (!key) {
+        loadedScenesDatasetKeyRef.current = "";
+        activeAnnotationRef.current = "";
         setScenes([]);
         setAnnotationName("");
         setDetail(null);
@@ -464,6 +468,7 @@ export function DatasetEditorPage({
         || requestId !== scenesLoadRequestRef.current
         || datasetKeyRef.current !== key
       ) return;
+      loadedScenesDatasetKeyRef.current = key;
       setScenes(payload.scenes);
       const next =
         payload.scenes.find((item) => item.annotation_name === preferredAnnotation)
@@ -472,6 +477,7 @@ export function DatasetEditorPage({
           ?.annotation_name ||
         payload.scenes[0]?.annotation_name ||
         "";
+      activeAnnotationRef.current = next;
       setAnnotationName(next);
       if (!next) setDetail(null);
     },
@@ -479,6 +485,12 @@ export function DatasetEditorPage({
   );
 
   useEffect(() => {
+    scenesLoadRequestRef.current += 1;
+    sceneLoadRequestRef.current += 1;
+    loadedScenesDatasetKeyRef.current = "";
+    activeAnnotationRef.current = "";
+    setScenes([]);
+    setAnnotationName("");
     resetDrafts();
     setDetail(null);
     setBrowser(null);
@@ -498,7 +510,12 @@ export function DatasetEditorPage({
   const loadScene = useCallback(
     async (key: string, name: string) => {
       const requestId = ++sceneLoadRequestRef.current;
-      if (!key || !name) {
+      if (!isCurrentDatasetScene(
+        key,
+        loadedScenesDatasetKeyRef.current,
+        name,
+        activeAnnotationRef.current,
+      )) {
         setDetail(null);
         return;
       }
@@ -522,6 +539,7 @@ export function DatasetEditorPage({
         !payload
         || requestId !== sceneLoadRequestRef.current
         || datasetKeyRef.current !== key
+        || loadedScenesDatasetKeyRef.current !== key
         || activeAnnotationRef.current !== name
       ) return;
       const baseline = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false };
@@ -781,7 +799,12 @@ export function DatasetEditorPage({
 
   const loadPseudoMarkup = useCallback(
     async (ensure: boolean, retry = false) => {
-      if (!datasetKey || !annotationName) return null;
+      if (!isCurrentDatasetScene(
+        datasetKey,
+        loadedScenesDatasetKeyRef.current,
+        annotationName,
+        activeAnnotationRef.current,
+      )) return null;
       const requestId = ++pseudoLoadRequestRef.current;
       const cacheKey = activePseudoCacheKey;
       const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup${retry ? "?retry=true" : ""}`;
@@ -1271,7 +1294,10 @@ export function DatasetEditorPage({
   };
 
   const selectScene = (name: string) => {
-    if (name !== annotationName) setAnnotationName(name);
+    if (name !== annotationName) {
+      activeAnnotationRef.current = name;
+      setAnnotationName(name);
+    }
   };
 
   const changeRole = (nextRole: ObjectSelection) => {

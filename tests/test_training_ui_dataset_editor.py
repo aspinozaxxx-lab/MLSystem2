@@ -37,7 +37,10 @@ from mlsystem2.training_ui_api._models import (
     StoredFileRow,
     TrainingResultRow,
 )
-from mlsystem2.training_ui_api._dataset_editor import _footprint_covers_geometry
+from mlsystem2.training_ui_api._dataset_editor import (
+    _footprint_covers_geometry,
+    _unique_basename_reference_matches,
+)
 from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
     _migration_features_equal,
@@ -636,6 +639,27 @@ def test_dataset_editor_footprint_allows_only_numerical_boundary_sliver() -> Non
     assert not _footprint_covers_geometry(footprint, box(-0.01, 1, 2, 2))
 
 
+def test_pseudo_basename_reference_requires_unique_tiff(tmp_path: Path) -> None:
+    images_root = tmp_path / "images"
+    first = images_root / "first" / "same.scene.tif"
+    duplicate = images_root / "second" / "same.scene.tiff"
+    unique = images_root / "second" / "unique.scene.tif"
+    for path in (first, duplicate, unique):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test")
+
+    assert not _unique_basename_reference_matches(
+        {"same.scene"},
+        images_root,
+        first,
+    )
+    assert _unique_basename_reference_matches(
+        {"unique.scene"},
+        images_root,
+        unique,
+    )
+
+
 def test_dataset_editor_returns_primary_network_pseudo_fragment(
     editor_environment: _EditorEnvironment,
 ) -> None:
@@ -736,7 +760,8 @@ def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
     stored_root = get_config().stored_files_root
     stored_root.mkdir(parents=True, exist_ok=True)
     scenes_path = stored_root / "covered-scenes-without-primary.txt"
-    scenes_path.write_text("Olskij/SCN01.part\n", encoding="utf-8")
+    # Исторические задания иногда сохраняли только имя файла без подпапки.
+    scenes_path.write_text("SCN01.part\n", encoding="utf-8")
     pseudo_path = stored_root / "full-pseudo-without-primary.geojson"
     pseudo_path.write_text(
         json.dumps({"type": "FeatureCollection", "features": []}),
