@@ -53,6 +53,10 @@ from ._external_models import (
     external_model_payload,
     external_result_manifest,
 )
+from ._inference_backend import (
+    GEOALERT_INFERENCE_BACKEND,
+    inference_backend_for_imagery,
+)
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -515,6 +519,7 @@ def _start_inference_job(
             run_dir,
             config_path,
             test_f1=is_test_f1,
+            inference_backend=str(payload.get("inference_backend") or ""),
         )
         process = popen_factory(
             ["bash", str(script_path)],
@@ -764,9 +769,15 @@ def _build_pseudo_markup_config(
         )
     if threshold is None:
         threshold = _float_value(flat, "train.threshold", 0.5)
+    class_row = dataset_class_row(session, class_key)
+    imagery_type = str(
+        snapshot.get("imagery_type")
+        or (class_row.imagery_type if class_row is not None else "kanopus")
+    )
+    inference_backend = inference_backend_for_imagery(imagery_type)
     return {
         "run_root": str(run_dir / "scratch"),
-        "inference_backend": "pytorch_one_off",
+        "inference_backend": inference_backend,
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
         "scenes_file": scenes_file,
@@ -788,7 +799,8 @@ def _build_pseudo_markup_config(
         "checkpoint_f1_score": snapshot.get("checkpoint_f1_score"),
         "checkpoint_epoch": snapshot.get("checkpoint_epoch"),
         "external_model": external_model_payload(external_manifest),
-        "imagery_type": snapshot.get("imagery_type"),
+        "imagery_type": imagery_type,
+        "model_imagery_type": imagery_type,
         "input_channels": _int_value(snapshot, "input_channels", 4),
         "postprocess_config": snapshot.get("inference_template_config") or {},
         "threshold": threshold,
@@ -805,6 +817,7 @@ def _build_pseudo_markup_config(
             else _int_value(flat, "train.batch_size", 1)
         ),
         "device": "cuda",
+        **_geoalert_runtime_config(config, inference_backend),
     }
 
 
@@ -824,11 +837,13 @@ def _build_pseudolabel_aoi_config(
         raise RuntimeError("У зафиксированной модели отсутствует порог распознавания.")
     images_root = str(state.get("images_root") or "")
     index_key = hashlib.sha256(images_root.encode("utf-8")).hexdigest()[:20] if images_root else ""
+    imagery_type = str(state.get("model_imagery_type") or state.get("imagery_type") or "kanopus")
+    inference_backend = inference_backend_for_imagery(imagery_type)
     return {
         "operation": PSEUDOLABEL_AOI_OPERATION,
         "job_id": str(row.id),
         "run_root": str(run_dir / "scratch"),
-        "inference_backend": "pytorch_one_off",
+        "inference_backend": inference_backend,
         "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
         "report_path": str(run_dir / "scratch" / "report.json"),
         "images_root": images_root,
@@ -878,6 +893,7 @@ def _build_pseudolabel_aoi_config(
         "prefetch_batches": config.pseudolabel_prefetch_batches,
         "external_http_workers": config.pseudolabel_external_http_workers,
         "device": "cuda",
+        **_geoalert_runtime_config(config, inference_backend),
     }
 
 
@@ -943,6 +959,12 @@ def _build_test_sample_f1_config(
         else None
     )
     flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
+    class_row = dataset_class_row(session, training_result.class_key)
+    imagery_type = str(
+        _flat_value(flat, "dataset.imagery_type", None)
+        or (class_row.imagery_type if class_row is not None else "kanopus")
+    )
+    inference_backend = inference_backend_for_imagery(imagery_type)
     try:
         external_manifest = external_result_manifest(session, training_result)
     except ExternalModelError as exc:
@@ -1012,6 +1034,7 @@ def _build_test_sample_f1_config(
         )
     return {
         "operation": TEST_SAMPLE_F1_OPERATION,
+        "inference_backend": inference_backend,
         "run_root": str(run_dir / "scratch"),
         "report_path": str(run_dir / "scratch" / "report.json"),
         "metric_target": row.config.get("metric_target"),
@@ -1032,6 +1055,8 @@ def _build_test_sample_f1_config(
         "checkpoint_f1_score": checkpoint_f1_score,
         "checkpoint_epoch": checkpoint_epoch,
         "external_model": external_model_payload(external_manifest),
+        "imagery_type": imagery_type,
+        "model_imagery_type": imagery_type,
         "input_channels": input_channels,
         "postprocess_config": row.config.get("inference_template_config") or {},
         "postprocess_profile": row.config.get("postprocess_profile"),
@@ -1042,6 +1067,22 @@ def _build_test_sample_f1_config(
         "stride": inference_stride,
         "batch_size": batch_size,
         "device": "cuda",
+        **_geoalert_runtime_config(config, inference_backend),
+    }
+
+
+def _geoalert_runtime_config(
+    config: TrainingUIAPIConfig,
+    inference_backend: str,
+) -> dict[str, str]:
+    if inference_backend != GEOALERT_INFERENCE_BACKEND:
+        return {}
+    return {
+        "geoalert_python_path": str(config.geoalert_python_path),
+        "geoalert_inference_root": str(config.geoalert_inference_root),
+        "geoalert_model_repository": str(config.geoalert_model_repository),
+        "geoalert_pipeline_root": str(config.geoalert_pipeline_root),
+        "geoalert_triton_http_url": config.geoalert_triton_http_url,
     }
 
 
@@ -1211,6 +1252,7 @@ def _write_pseudo_run_script(
     config_path: Path,
     *,
     test_f1: bool = False,
+    inference_backend: str = "",
 ) -> Path:
     script_path = run_dir / ("run_test_f1.sh" if test_f1 else "run_pseudo_markup.sh")
     log_path = run_dir / "logs" / ("test_sample_f1.log" if test_f1 else "pseudo_markup.log")
@@ -1218,7 +1260,11 @@ def _write_pseudo_run_script(
     command = [
         sys.executable,
         "-m",
-        "mlsystem2.training_ui_api._pseudo_runner",
+        (
+            "mlsystem2.training_ui_api._geoalert_runner"
+            if inference_backend == GEOALERT_INFERENCE_BACKEND
+            else "mlsystem2.training_ui_api._pseudo_runner"
+        ),
         "--config",
         str(config_path),
     ]

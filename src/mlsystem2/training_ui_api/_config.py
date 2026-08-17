@@ -95,6 +95,11 @@ class TrainingUIAPIConfig:
     training_torch_num_interop_threads: int = 2
     training_process_nice: int = 10
     training_process_io_priority: int = 7
+    geoalert_python_path: Path = Path("/opt/geoalert/inference/.venv/bin/python")
+    geoalert_inference_root: Path = Path("/opt/geoalert/inference")
+    geoalert_model_repository: Path = Path("/opt/geoalert/triton_models")
+    geoalert_pipeline_root: Path = Path("/opt/geoalert/pipelines/mlsystem2-runtime")
+    geoalert_triton_http_url: str = "http://127.0.0.1:8000"
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -239,6 +244,34 @@ def get_config() -> TrainingUIAPIConfig:
             7,
             max(0, _int_env("MLSYSTEM2_TRAINING_PROCESS_IO_PRIORITY", 7)),
         ),
+        geoalert_python_path=Path(
+            os.getenv(
+                "MLSYSTEM2_GEOALERT_PYTHON_PATH",
+                "/opt/geoalert/inference/.venv/bin/python",
+            )
+        ),
+        geoalert_inference_root=Path(
+            os.getenv(
+                "MLSYSTEM2_GEOALERT_INFERENCE_ROOT",
+                "/opt/geoalert/inference",
+            )
+        ),
+        geoalert_model_repository=Path(
+            os.getenv(
+                "MLSYSTEM2_GEOALERT_MODEL_REPOSITORY",
+                "/opt/geoalert/triton_models",
+            )
+        ),
+        geoalert_pipeline_root=Path(
+            os.getenv(
+                "MLSYSTEM2_GEOALERT_PIPELINE_ROOT",
+                "/opt/geoalert/pipelines/mlsystem2-runtime",
+            )
+        ),
+        geoalert_triton_http_url=os.getenv(
+            "MLSYSTEM2_GEOALERT_TRITON_HTTP_URL",
+            "http://127.0.0.1:8000",
+        ).rstrip("/"),
     )
 
 

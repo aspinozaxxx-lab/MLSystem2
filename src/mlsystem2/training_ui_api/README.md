@@ -27,6 +27,11 @@
 - `MLSYSTEM2_OPEN_WEBUI_URL` — ссылка на Open WebUI LLM-стека, default `/open-webui/`.
 - `MLSYSTEM2_TRAINING_UI_WORKER_ENABLED` — включает фоновый исполнитель очереди, default `true`.
 - `MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS` — период проверки очереди, default `5`.
+- `MLSYSTEM2_GEOALERT_PYTHON_PATH` — Python окружения Workflow Engine, default `/opt/geoalert/inference/.venv/bin/python`.
+- `MLSYSTEM2_GEOALERT_INFERENCE_ROOT` — рабочая установка Geoalert, default `/opt/geoalert/inference`.
+- `MLSYSTEM2_GEOALERT_MODEL_REPOSITORY` — model repository explicit-control Triton, default `/opt/geoalert/triton_models`.
+- `MLSYSTEM2_GEOALERT_PIPELINE_ROOT` — кеш сгенерированных pipeline, default `/opt/geoalert/pipelines/mlsystem2-runtime`.
+- `MLSYSTEM2_GEOALERT_TRITON_HTTP_URL` — локальный HTTP API Triton, default `http://127.0.0.1:8000`.
 
 ## Endpoints
 
@@ -342,7 +347,7 @@ MLflow run со статусом `KILLED`.
 а тот же процесс и MLflow-run продолжают работу. Обычный running-инференс не прерывается. Перед созданием job
 редактор ищет среди всех готовых результатов выбранной сети тот, чей `scenes_file` содержит выбранный TIFF;
 dataset key результата не ограничивает повторное использование. При отсутствии покрытия одноэлементный список
-сцен проходит через общий builder `pseudo_config.yaml` и тот же `pytorch_one_off` runner штатной псевдоразметки.
+сцен проходит через общий builder `pseudo_config.yaml` и выбранный по типу модели runner штатной псевдоразметки.
 
 Перед обработкой очередей worker синхронизирует автоматизацию. Если глобальный выключатель включен и для правила
 нет результата или job по текущей `dataset_version`, он ставит auto training job в experiment `MLSystem2 Automation`.
@@ -377,14 +382,20 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 
 Для job типа `pseudo-markup` worker берёт TXT выбранного legacy датасета, выбранной папки или загруженного файла;
 для per-image он временно формирует TXT из сопоставленных TIFF. Затем пишет в `pseudo_config.yaml`
-`inference_backend=pytorch_one_off`, скачивает `checkpoints/best.pt`
-через публичный `mlflow_adapter.api.download_run_artifact`, загружает checkpoint через `models.api.load_checkpoint`,
-разрешает точные имена сцен через `dataset_preparing.api.resolve_scene_images` и строит GeoJSON псевдоразметки
+backend по типу модели и скачивает `checkpoints/best.pt` через публичный
+`mlflow_adapter.api.download_run_artifact`. Для Канопуса `pytorch_one_off` загружает checkpoint через
+`models.api.load_checkpoint`. Для ортофото `geoalert_workflow_engine` кеширует экспорт конкретного checkpoint в
+GPU Triton repository, загружает модель через explicit model-control API и запускает pipeline штатным
+`urban.Compose`; после задания модель выгружается. Один ортофото-контур используется для полной и поснимочной
+псевдоразметки, AOI и тестового F1. Он не вызывает локальный predictor. Нативный pipeline использует
+`SplitRaster`, `Segmentation`, optional `MaskMorphology`, `VectorizeMasks` и vector postprocess bricks; внешние
+ЗУ500/ОКС500 сохраняют свои Geoalert pipeline. Оба runner разрешают точные имена сцен через
+`dataset_preparing.api.resolve_scene_images` и строят GeoJSON псевдоразметки
 в `EPSG:4326`. Для датасета в runner передаются его positive и optional hard-negative GeoJSON, поэтому одинаковые
 имена в подпапках выбираются тем же геометрическим алгоритмом, что при обучении; `.SCNxx` не считается расширением
 и не приводит к обработке соседних сцен. Результат сохраняется в `stored_files` для скачивания через
-`/api/v1/files/{file_id}/download`. Этот путь не создает Triton model archive, Geoalert pipeline YAML или запись в
-Triton model repository; после обработки или ошибки загрузки checkpoint раннер освобождает CUDA cache. Трёхканальный
+`/api/v1/files/{file_id}/download`. Канопус не создаёт Triton-артефакты и освобождает CUDA cache; ортофото
+переиспользует кеш model repository, но после каждого задания выгружает модель из GPU. Трёхканальный
 checkpoint принимает RGB и RGBA GeoTIFF: у RGBA читаются только первые три канала. Все остальные несовпадения
 числа каналов отклоняются; обучение и основной CLI-инференс остаются строгими. При выборе
 папки сервис создает stored txt с одной строкой-относительным путем папки. `PseudoMarkupResultInfo.image_count`
@@ -409,8 +420,8 @@ endpoint возвращает фрагмент `journalctl` по unit из `MLSY
 шаблон может ужесточить или ослабить только нужные параметры. Включенный `filter_compact_objects` удаляет
 компактные полигоны по isoperimetric quotient и отношению сторон minimum rotated rectangle; для рек это
 используется для отсечения озер и прудов.
-Перед записью итогового скачиваемого GeoJSON раннер сливает
+Перед записью итогового скачиваемого GeoJSON `pytorch_one_off` сливает
 пересекающиеся и касающиеся полигоны через `unary_union`; per-scene GeoJSON остаются диагностическими файлами
-без глобального слияния. Отчет псевдоразметки содержит `inference_backend=pytorch_one_off`, `triton_model=null`,
-выбранный профиль, число уникальных снимков, параметры постобработки, `feature_count_before_merge` и финальный
-`feature_count`; HTTP API и схема БД при этом не меняются.
+без глобального слияния. Для ортофото слияние и постобработка остаются внутри per-scene Geoalert pipeline, чтобы
+не повторять bricks локальным Shapely-кодом. Отчет всегда содержит фактический `inference_backend`; для Geoalert
+дополнительно записываются `triton_model` и список выполненных bricks. HTTP API и схема БД при этом не меняются.

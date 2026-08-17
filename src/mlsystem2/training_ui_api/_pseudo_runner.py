@@ -54,11 +54,12 @@ from ._external_models import (
     predict_external_scene,
     predict_external_test_tile,
 )
+from ._inference_backend import PYTORCH_INFERENCE_BACKEND
 from ._markup_export import find_intersecting_images
 from ._external_imagery import ExternalImageryError, prepare_external_imagery
 
 
-PSEUDO_INFERENCE_BACKEND = "pytorch_one_off"
+PSEUDO_INFERENCE_BACKEND = PYTORCH_INFERENCE_BACKEND
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,9 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     run_root.mkdir(parents=True, exist_ok=True)
     progress_path = run_root / "progress.json"
     tiles = list(config.get("tiles") or [])
+    precomputed = bool(tiles) and all(
+        tile.get("precomputed_prediction_path") for tile in tiles
+    )
     _write_test_f1_progress(progress_path, current=0, total=len(tiles), started=started)
     threshold: float | None = None
     inference_tile_size = int(config.get("tile_size") or 768)
@@ -257,7 +261,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     external_loaded = None
     model = None
     try:
-        external_manifest = external_model_manifest(config)
+        external_manifest = None if precomputed else external_model_manifest(config)
         threshold_value = config.get("threshold")
         threshold = (
             float(threshold_value)
@@ -268,8 +272,13 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 else None
             )
         )
-        checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
-        if external_manifest is not None:
+        if precomputed:
+            task = str(config.get("task") or "binary")
+            object_types = list(config.get("object_types") or [])
+            config = {**config, "task": task, "object_types": object_types}
+        else:
+            checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
+        if not precomputed and external_manifest is not None:
             external_loaded = load_external_model(
                 checkpoint_path,
                 external_manifest,
@@ -279,7 +288,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             torch = external_loaded.torch
             input_channels = external_manifest.input_channels
             _validate_configured_input_channels(config, input_channels)
-        else:
+        elif not precomputed:
             torch = _torch()
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
@@ -307,7 +316,18 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         class_object_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
         for number, tile in enumerate(tiles, start=1):
             tile_started = time.time()
-            if external_loaded is not None:
+            if tile.get("precomputed_prediction_path"):
+                prediction = np.load(Path(str(tile["precomputed_prediction_path"]))).astype(
+                    np.uint8,
+                    copy=False,
+                )
+                instance_path = tile.get("precomputed_instances_path")
+                predicted_instances = (
+                    np.load(Path(str(instance_path))).astype(np.int32, copy=False)
+                    if instance_path
+                    else None
+                )
+            elif external_loaded is not None:
                 external_prediction = predict_external_test_tile(
                     external_loaded,
                     Path(str(tile["image_path"])),

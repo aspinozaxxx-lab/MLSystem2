@@ -41,6 +41,10 @@ def build_triton_model_export_zip(
     checkpoint_bytes: bytes,
     sample_size: int | None,
     context: int | None = None,
+    threshold: float | None = None,
+    instance_kind: str = "KIND_CPU",
+    postprocess_config: dict[str, object] | None = None,
+    resolution_m: float | None = None,
 ) -> ModelExportArchive:
     """Собрать zip модели для загрузчика models-serving-service."""
 
@@ -55,7 +59,11 @@ def build_triton_model_export_zip(
         checkpoint_path.write_bytes(checkpoint_bytes)
         loaded = _load_binary_checkpoint(checkpoint_path)
         task, class_schema = _checkpoint_task_schema(loaded)
-        effective_threshold = _threshold_from_metadata(loaded.artifact.metadata)
+        metadata_threshold = _threshold_from_metadata(loaded.artifact.metadata)
+        effective_threshold = (
+            _validate_threshold(threshold) if threshold is not None else metadata_threshold
+        )
+        parsed_instance_kind = _validate_instance_kind(instance_kind)
         parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
             loaded.artifact.metadata,
             request_sample_size,
@@ -104,6 +112,7 @@ def build_triton_model_export_zip(
                 parsed_model_name,
                 input_channels,
                 foreground_channels=(len(class_schema) if task == "multiclass" else 1),
+                instance_kind=parsed_instance_kind,
             ),
         )
         _write_text(
@@ -114,6 +123,8 @@ def build_triton_model_export_zip(
                 input_channels,
                 class_schema=class_schema,
                 context=parsed_context,
+                postprocess_config=postprocess_config,
+                resolution_m=resolution_m,
             ),
         )
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
@@ -126,7 +137,7 @@ def build_triton_model_export_zip(
                 "pipeline": f"pipelines/{parsed_model_name}_triton.yaml",
                 "format": "onnx",
                 "triton_platform": "onnxruntime_onnx",
-                "triton_instance_kind": "KIND_CPU",
+                "triton_instance_kind": parsed_instance_kind,
                 "input_channels": input_channels,
                 "sample_size": parsed_sample_size,
                 "sample_size_source": sample_size_source,
@@ -134,12 +145,15 @@ def build_triton_model_export_zip(
                 "inference_context_source": context_source,
                 "inference_core_size": inference_core_size,
                 "threshold": effective_threshold,
-                "threshold_source": "checkpoint_metadata",
+                "threshold_source": (
+                    "request" if threshold is not None else "checkpoint_metadata"
+                ),
                 "task": task,
                 "class_schema": class_schema,
                 "onnx_opset": ONNX_OPSET,
                 "onnx_ir_version": ONNX_IR_VERSION,
                 "checkpoint_filename": checkpoint_filename,
+                "resolution_m": resolution_m,
                 "checkpoint_metadata": loaded.artifact.metadata,
             },
         )
@@ -225,6 +239,33 @@ def build_external_triton_model_export_zip(
     except Exception:
         shutil.rmtree(temp_root, ignore_errors=True)
         raise
+
+
+def build_geoalert_pipeline_yaml(
+    *,
+    model_name: str,
+    sample_size: int,
+    input_channels: int,
+    class_schema: list[dict[str, object]] | None = None,
+    context: int = 0,
+    postprocess_config: dict[str, object] | None = None,
+    resolution_m: float | None = None,
+    external_manifest: ExternalModelManifest | None = None,
+) -> str:
+    """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
+
+    parsed_model_name = _validate_model_name(model_name)
+    if external_manifest is not None:
+        return _external_pipeline_yaml(parsed_model_name, external_manifest)
+    return _pipeline_yaml(
+        parsed_model_name,
+        sample_size,
+        input_channels,
+        class_schema=class_schema,
+        context=context,
+        postprocess_config=postprocess_config,
+        resolution_m=resolution_m,
+    )
 
 
 def _rewrite_external_model_archive(
@@ -748,6 +789,7 @@ def _triton_config(
     model_name: str,
     input_channels: int,
     foreground_channels: int = 1,
+    instance_kind: str = "KIND_CPU",
 ) -> str:
     return f"""name: "{model_name}"
 platform: "onnxruntime_onnx"
@@ -768,7 +810,7 @@ output [
 ]
 instance_group [
   {{
-    kind: KIND_CPU
+    kind: {instance_kind}
     count: 1
   }}
 ]
@@ -781,6 +823,8 @@ def _pipeline_yaml(
     input_channels: int,
     class_schema: list[dict[str, object]] | None = None,
     context: int = 0,
+    postprocess_config: dict[str, object] | None = None,
+    resolution_m: float | None = None,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
     if input_channels == 3:
@@ -798,6 +842,13 @@ def _pipeline_yaml(
     labels_yaml = "\n".join(f"        - {label}" for label in labels)
     outputs_yaml = "\n".join(f"    - {output}" for output in outputs)
     vector_outputs_yaml = "\n".join(f"        - {Path(output).stem}" for output in outputs)
+    mask_postprocess_yaml = _mask_postprocess_yaml(labels, postprocess_config)
+    vector_postprocess_yaml = _vector_postprocess_yaml(labels, postprocess_config)
+    resolution_yaml = (
+        f"      crs: utm\n      res: [{float(resolution_m)}, {float(resolution_m)}]\n"
+        if resolution_m is not None and float(resolution_m) > 0
+        else ""
+    )
     return f"""version: 0.1.4
 config:
   _class: Compose
@@ -820,7 +871,7 @@ config:
 {bands_yaml}
       output_labels:
 {labels_yaml}
-      nodata: 0
+{resolution_yaml}      nodata: 0
       adapter:
         _class: TritonAdapter
         name: "{model_name}"
@@ -831,12 +882,129 @@ config:
         input_ndim: 4
         output_dtype: uint8
         output_ndim: 3
+{mask_postprocess_yaml}
     - _class: VectorizeMasks
       input_rasters:
 {labels_yaml}
       output_fcs:
 {vector_outputs_yaml}
+{vector_postprocess_yaml}
 """
+
+
+def _validate_instance_kind(value: str) -> str:
+    if value not in {"KIND_CPU", "KIND_GPU"}:
+        raise TrainingUIAPIError("instance_kind должен быть KIND_CPU или KIND_GPU.")
+    return value
+
+
+def _validate_threshold(value: object) -> float:
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TrainingUIAPIError("Порог инференса должен быть числом от 0 до 1.") from exc
+    if not 0.0 <= threshold <= 1.0:
+        raise TrainingUIAPIError("Порог инференса должен быть числом от 0 до 1.")
+    return threshold
+
+
+def _positive_number(config: dict[str, object], key: str) -> float | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _mask_postprocess_yaml(
+    labels: list[str],
+    config: dict[str, object] | None,
+) -> str:
+    values = dict(config or {})
+    labels_yaml = ", ".join(labels)
+    bricks: list[str] = []
+    min_objects = _positive_number(values, "postprocess.mask_min_object_pixels")
+    if min_objects is not None:
+        bricks.append(
+            "    - _class: MaskMorphology\n"
+            f"      input_masks: [{labels_yaml}]\n"
+            f"      out_masks: [{labels_yaml}]\n"
+            "      mask_operation: remove_small_objects\n"
+            f"      min_size: {int(min_objects)}\n"
+            "      sample_size: [2048, 2048]\n"
+            "      bound: 1"
+        )
+    min_holes = _positive_number(values, "postprocess.mask_min_hole_pixels")
+    if min_holes is not None:
+        bricks.append(
+            "    - _class: MaskMorphology\n"
+            f"      input_masks: [{labels_yaml}]\n"
+            f"      out_masks: [{labels_yaml}]\n"
+            "      mask_operation: remove_small_holes\n"
+            f"      area_threshold: {int(min_holes)}\n"
+            "      sample_size: [2048, 2048]\n"
+            "      bound: 1"
+        )
+    closing = _positive_number(values, "postprocess.binary_closing_radius")
+    if closing is not None:
+        radius = int(closing)
+        bricks.append(
+            "    - _class: MaskMorphology\n"
+            f"      input_masks: [{labels_yaml}]\n"
+            f"      out_masks: [{labels_yaml}]\n"
+            "      mask_operation: binary_closing\n"
+            "      selem: disk\n"
+            f"      selem_size: {radius}\n"
+            "      sample_size: [2048, 2048]\n"
+            f"      bound: {max(1, radius)}"
+        )
+    return "\n".join(bricks)
+
+
+def _vector_postprocess_yaml(
+    labels: list[str],
+    config: dict[str, object] | None,
+) -> str:
+    values = dict(config or {})
+    nested: list[str] = []
+    simplify = _positive_number(values, "postprocess.simplify_m")
+    if simplify is not None:
+        nested.append(f"        - _class: Simplify\n          rate: {simplify}")
+    min_area = _positive_number(values, "postprocess.min_area_m2")
+    if min_area is not None:
+        nested.append(
+            f"        - _class: FilterSmallObjects\n          min_area: {min_area}\n          area_tag: area"
+        )
+    min_hole_area = _positive_number(values, "postprocess.min_hole_area_m2")
+    if min_hole_area is not None:
+        nested.append(
+            f"        - _class: RemoveSmallHoles\n          min_hole_area: {min_hole_area}"
+        )
+    if bool(values.get("postprocess.filter_compact_objects.enabled")):
+        quotient = float(
+            values.get("postprocess.filter_compact_objects.min_isoperimetric_quotient")
+            or 0.25
+        )
+        ratio = float(values.get("postprocess.filter_compact_objects.max_bbox_ratio") or 3.5)
+        nested.append(
+            "        - _class: FilterCompactObjects\n"
+            f"          min_isoperimetric_quotient: {quotient}\n"
+            f"          max_bbox_ratio: {ratio}"
+        )
+    if not nested:
+        return ""
+    return "\n".join(
+        "    - _class: UnifiedVectorProcessing\n"
+        f"      input: {label}\n"
+        f"      output: {label}\n"
+        "      crs: utm\n"
+        "      bricks:\n"
+        + "\n".join(nested)
+        for label in labels
+    )
 
 
 def _write_text(path: Path, content: str) -> None:

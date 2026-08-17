@@ -2885,6 +2885,8 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
     assert pseudo_payload["annotation_files"] == []
     assert pseudo_payload["imagery_type"] == "ortho"
     assert pseudo_payload["input_channels"] == 3
+    assert pseudo_payload["inference_backend"] == "geoalert_workflow_engine"
+    assert pseudo_payload["model_imagery_type"] == "ortho"
 
 
 def test_training_ui_accepts_hard_negative_factor_without_dataset_file(
