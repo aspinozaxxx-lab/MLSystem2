@@ -26,6 +26,16 @@ export type TestMarkupDownloadSelectionChange =
   | { type: "clear" }
   | { type: "toggle"; sampleId: string; checked: boolean };
 
+export function isDatasetReadyForTestMarkup(dataset: DatasetInfo): boolean {
+  if (dataset.is_custom || (dataset.diagnostics || []).length) return false;
+  const legacyReady = Boolean(dataset.scenes_file && dataset.annotation_file);
+  const perImageReady = Boolean(
+    dataset.annotations_dir
+    && (dataset.image_count || 0) > 0,
+  );
+  return legacyReady || perImageReady;
+}
+
 export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): TestSampleSummary[] {
   return (catalog?.classes || []).flatMap((classGroup) =>
     (classGroup.samples || []).length

@@ -99,6 +99,7 @@ import {
   changeTestMarkupDownloadSelection,
   flattenTestMarkups,
   initialTestMarkupDownloadSelection,
+  isDatasetReadyForTestMarkup,
   sortTestMarkupDatasets,
   testMarkupDownloadOptions,
   testMarkupDraft,
@@ -1067,13 +1068,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
   const datasets = useMemo(
     () =>
       bootstrap.datasets
-        .filter(
-          (dataset) =>
-            !dataset.is_custom &&
-            Boolean(dataset.scenes_file) &&
-            Boolean(dataset.annotation_file) &&
-            !(dataset.diagnostics || []).length,
-        )
+        .filter(isDatasetReadyForTestMarkup)
         .sort((left, right) => testMarkupDatasetLabel(left).localeCompare(testMarkupDatasetLabel(right), "ru")),
     [bootstrap.datasets],
   );
@@ -1241,7 +1236,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
                 })}
               </div>
             </>
-          ) : <div className="empty-state">Нет датасетов с однозначными файлами сцен и положительной разметки.</div>}
+          ) : <div className="empty-state">Нет готовых датасетов с размеченными снимками.</div>}
         </section>
         <div className="button-row">
           <button className="primary" type="submit" disabled={busy || batchActive || minImageCount > maxImageCount || !rows.some((row) => row.selected)}>

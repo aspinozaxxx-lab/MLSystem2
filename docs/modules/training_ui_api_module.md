@@ -82,7 +82,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - постоянное превью и ZIP сохранённых включённых тайлов.
 - `POST /api/v1/test-samples/{sample_id}/download` - ZIP явно выбранных тайлов текущего черновика без изменения разметки в БД; флаг `include_previews` оставляет полный состав либо только TIFF и GeoJSON.
 - `POST /api/v1/test-samples/download` - несжатый ZIP явно выбранных сохранённых разметок, не более одной на класс; до восьми разметок готовятся параллельно, каждая в папке `<класс>_<исходный датасет>`.
-- `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания.
+- `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания для готовых датасетов старого и поснимочного формата; клиент применяет тот же критерий доступности, что и сервер.
 - `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает единственную основную разметку класса.
 - `GET /api/v1/results/datasets/{dataset_key}`, `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup` и `POST /api/v1/results/datasets/{dataset_key}/test-f1` - результаты датасета, ручная псевдоразметка и постановка недостающих либо устаревших оценок в inference-очередь.
 - `POST|DELETE /api/v1/results/training/{result_id}/primary` - явное назначение успешной сети основной для её класса или снятие отметки; без назначения расчёты используют последнюю успешную сеть без звезды.

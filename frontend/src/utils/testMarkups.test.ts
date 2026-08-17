@@ -11,6 +11,7 @@ import {
   applyTestMarkupPreview,
   changeTestMarkupDownloadSelection,
   initialTestMarkupDownloadSelection,
+  isDatasetReadyForTestMarkup,
   sortTestMarkupDatasets,
   testMarkupDownloadOptions,
   testMarkupDraft,
@@ -79,6 +80,51 @@ function downloadCatalog(): TestSampleCatalogResponse {
 }
 
 describe("тестовые разметки", () => {
+  it("показывает готовые датасеты старого и поснимочного формата при создании", () => {
+    const dataset = (update: Partial<DatasetInfo>): DatasetInfo => ({
+      key: "dataset",
+      name: "Класс\\датасет",
+      is_custom: false,
+      quality_metric: "pixel",
+      source_available: true,
+      is_primary: false,
+      task: "binary",
+      combined: false,
+      managed: false,
+      source_status: "current",
+      hard_negative_count: 0,
+      ...update,
+    });
+    const legacy = dataset({
+      key: "legacy",
+      scenes_file: "/data/scenes.txt",
+      annotation_file: "/data/markup.geojson",
+      diagnostics: [],
+    });
+    const perImage = dataset({
+      key: "per-image",
+      format: "per_image",
+      annotations_dir: "/data/markup",
+      image_count: 12,
+      diagnostics: [],
+    });
+    const empty = {
+      ...perImage,
+      key: "empty",
+      image_count: 0,
+    };
+    const invalid = {
+      ...perImage,
+      key: "invalid",
+      diagnostics: ["Для GeoJSON не найден TIFF"],
+    };
+
+    expect(isDatasetReadyForTestMarkup(legacy)).toBe(true);
+    expect(isDatasetReadyForTestMarkup(perImage)).toBe(true);
+    expect(isDatasetReadyForTestMarkup(empty)).toBe(false);
+    expect(isDatasetReadyForTestMarkup(invalid)).toBe(false);
+  });
+
   it("считает разметки и наличие основной", () => {
     expect(testMarkupStats(catalog(), "class")).toEqual({ count: 2, hasPrimary: true });
     expect(testMarkupStats(catalog(), "missing")).toEqual({ count: 0, hasPrimary: false });

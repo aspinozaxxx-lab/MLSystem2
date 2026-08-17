@@ -268,6 +268,22 @@ def test_markup_export_uses_only_positive_features_from_per_image_dataset(
         for feature in features
     )
 
+    pool_root = tmp_path / "per-image-pool"
+    pool_root.mkdir()
+    pool = _markup_export.generate_markup_pool_files(
+        dataset_key="Реки\\test",
+        tile_size=16,
+        min_final_image_count=1,
+        max_final_image_count=2,
+        min_object_count=2,
+        config=config,
+        output_root=pool_root,
+    )
+    assert pool.actual_object_count >= 2
+    assert pool.tiles
+    assert len(list(pool_root.glob("tile_*.tif"))) == len(pool.tiles)
+    assert len(list(pool_root.glob("tile_*.geojson"))) == len(pool.tiles)
+
 
 def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
     image = np.full((3, 9, 9), 100, dtype=np.uint8)
@@ -1834,6 +1850,60 @@ def test_test_sample_batch_latest_preserves_next_form_defaults(
         assert payload["image_count"] == 7
         assert payload["items"][0]["min_object_count"] == 41
         assert payload["items"][0]["metric"] == "pixel"
+
+
+def test_test_sample_batch_accepts_per_image_dataset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    dataset_root = config.mlmarkup_root / "Реки" / "main"
+    dataset_root.mkdir(parents=True)
+    image_path = config.images_root / "kanopus" / "region_a" / "scene_a.tif"
+    _write_cog(
+        image_path,
+        left=0,
+        top=64,
+        valid_slice=(slice(8, 56), slice(8, 56)),
+    )
+    _write_per_image_geojson(
+        dataset_root / "region_a_scene_a.geojson",
+        [(1, box(11, 49, 13, 51), "positive")],
+    )
+
+    with TestClient(create_app()) as client:
+        _login(client)
+        bootstrap_response = client.get("/api/v1/bootstrap")
+        assert bootstrap_response.status_code == 200
+        dataset = next(
+            item
+            for item in bootstrap_response.json()["datasets"]
+            if item["key"] == "Реки\\main"
+        )
+        assert dataset["format"] == "per_image"
+        assert dataset["scenes_file"] is None
+        assert dataset["annotation_file"] is None
+        assert dataset["annotations_dir"]
+        assert dataset["image_count"] == 1
+
+        created = client.post(
+            "/api/v1/test-sample-batches",
+            json={
+                "tile_size": 512,
+                "min_image_count": 1,
+                "image_count": 1,
+                "items": [
+                    {
+                        "dataset_key": "Реки\\main",
+                        "min_object_count": 1,
+                    }
+                ],
+            },
+        )
+
+        assert created.status_code == 200
+        assert created.json()["items"][0]["dataset_key"] == "Реки\\main"
+        assert created.json()["items"][0]["status"] == "queued"
 
 
 def test_test_sample_batch_request_keeps_exact_legacy_image_count() -> None:
