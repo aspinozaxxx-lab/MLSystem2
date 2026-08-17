@@ -954,6 +954,8 @@
 }
 
 .test-sample-tile-viewer-viewport img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
