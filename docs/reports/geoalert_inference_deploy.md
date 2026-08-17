@@ -46,7 +46,7 @@ Docker/NVIDIA check passed:
 Triton container:
 
 ```bash
-docker run -d --name geoalert-triton --gpus all --restart unless-stopped \
+docker run -d --name geoalert-triton --gpus all --restart unless-stopped --shm-size=1g \
   -p 127.0.0.1:8000:8000 -p 127.0.0.1:8001:8001 -p 127.0.0.1:8002:8002 \
   -v /opt/geoalert/triton_models:/models:ro \
   -v /opt/mlsystem2/repo/.venv:/mlsystem2-venv:ro \
@@ -60,7 +60,7 @@ Read-only mount `/mlsystem2-venv` предоставляет `torch/torchvision`
 
 Status:
 
-- container: `geoalert-triton`, running, restart policy `unless-stopped`
+- container: `geoalert-triton`, running, restart policy `unless-stopped`, `/dev/shm=1 GiB`
 - HTTP ready: `http://127.0.0.1:8000/v2/health/ready`
 - model endpoint: `http://127.0.0.1:8000/v2/models/mlsystem2_deforestation`
 - model status: `READY`

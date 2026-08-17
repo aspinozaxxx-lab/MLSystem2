@@ -356,6 +356,7 @@ docker run -d \
   --name geoalert-triton \
   --gpus all \
   --restart unless-stopped \
+  --shm-size=1g \
   -p 127.0.0.1:8000:8000 \
   -p 127.0.0.1:8001:8001 \
   -p 127.0.0.1:8002:8002 \

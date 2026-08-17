@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result.get("status") in {"ok", "partial"} else 1
+    return 0 if result.get("status") == "ok" else 1
 
 
 def run_geoalert(config: dict[str, Any]) -> dict[str, Any]:

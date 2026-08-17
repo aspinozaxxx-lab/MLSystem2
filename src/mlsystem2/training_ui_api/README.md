@@ -34,7 +34,7 @@
 - `MLSYSTEM2_GEOALERT_TRITON_HTTP_URL` — локальный HTTP API Triton, default `http://127.0.0.1:8000`.
 - `MLSYSTEM2_GEOALERT_TRITON_PYTHON_SITE_PACKAGES` — read-only путь внутри контейнера Triton к
   `site-packages` окружения MLSystem2 для Python-backend внешней модели ЗУ500, default
-  `/mlsystem2-venv/lib/python3.12/site-packages`.
+  `/mlsystem2-venv/lib/python3.12/site-packages`. Сам контейнер запускается с `/dev/shm` не менее `1 GiB`.
 
 ## Endpoints
 
@@ -396,7 +396,9 @@ GPU Triton repository, загружает модель через explicit model
 `dataset_preparing.api.resolve_scene_images` и строят GeoJSON псевдоразметки
 в `EPSG:4326`. Для датасета в runner передаются его positive и optional hard-negative GeoJSON, поэтому одинаковые
 имена в подпапках выбираются тем же геометрическим алгоритмом, что при обучении; `.SCNxx` не считается расширением
-и не приводит к обработке соседних сцен. Результат сохраняется в `stored_files` для скачивания через
+и не приводит к обработке соседних сцен. Полная псевдоразметка сохраняется в `stored_files` только при успешной
+обработке всех выбранных снимков; `partial`, failed/missing или несовпадение processed с числом уникальных сцен
+переводит job и результат в ошибку, а неполный GeoJSON не публикуется. Результат скачивается через
 `/api/v1/files/{file_id}/download`. Канопус не создаёт Triton-артефакты и освобождает CUDA cache; ортофото
 переиспользует кеш model repository, но после каждого задания выгружает модель из GPU. Трёхканальный
 checkpoint принимает RGB и RGBA GeoTIFF: у RGBA читаются только первые три канала. Все остальные несовпадения

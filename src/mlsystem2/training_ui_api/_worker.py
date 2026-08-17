@@ -1426,13 +1426,14 @@ def _finish_inference_job(
     if _is_dataset_editor_pseudo_job(row):
         _finish_dataset_editor_pseudo_job(session, row, config, succeeded=succeeded)
         return
-    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     row.finished_at = _now()
     row.process_pid = None
     output_path = _pseudo_output_path(row)
     report = _pseudo_report(row)
     report_allows_success = _pseudo_report_allows_success(report)
     succeeded = succeeded and report_allows_success
+    row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
+    row.error = None if succeeded else _pseudo_markup_error(report, row)
     has_geojson = output_path is not None and output_path.is_file()
     pseudo_results = _pseudo_markup_results(session, row)
     if succeeded and has_geojson:
@@ -1459,6 +1460,7 @@ def _finish_inference_job(
         result.updated_at = _now()
     if succeeded and file_row is None:
         row.status = JobStatus.FAILED.value
+        row.error = _pseudo_markup_error(report, row)
     session.flush()
     evaluated_dataset_keys: set[str] = set()
     for result in pseudo_results:
@@ -1936,13 +1938,68 @@ def _pseudo_report(row: JobRow) -> dict[str, Any] | None:
 def _pseudo_report_allows_success(report: dict[str, Any] | None) -> bool:
     if report is None:
         return False
-    if report.get("status") not in {"ok", "partial"}:
+    if report.get("status") != "ok":
         return False
     try:
         processed = int(report.get("processed") or 0)
+        failed = int(report.get("failed") or 0)
+        missing = int(report.get("missing_images") or 0)
     except (TypeError, ValueError):
         return False
-    return processed > 0
+    if processed <= 0 or failed != 0 or missing != 0:
+        return False
+    expected = report.get("unique_image_count")
+    if expected is None:
+        expected = report.get("input_scene_count")
+    if expected is None:
+        return True
+    try:
+        return processed == int(expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def _pseudo_markup_error(report: dict[str, Any] | None, row: JobRow) -> str:
+    if report is not None:
+        def report_count(key: str, default: int = 0) -> int:
+            try:
+                return int(report.get(key) or default)
+            except (TypeError, ValueError):
+                return default
+
+        error = report.get("error")
+        if error:
+            return f"Ошибка инференса: {error}"[:4000]
+        failures = report.get("failures")
+        if failures:
+            processed = report_count("processed")
+            expected = report_count(
+                "unique_image_count",
+                report_count("input_scene_count", processed),
+            )
+            first = failures[0] if isinstance(failures, list) else failures
+            if isinstance(first, dict):
+                first = first.get("error") or first
+            return (
+                f"Инференс обработал только {processed} из {expected} снимков. "
+                f"Первая ошибка: {first}"
+            )[:4000]
+        if report.get("status") == "partial":
+            processed = report_count("processed")
+            expected = report_count(
+                "unique_image_count",
+                report_count("input_scene_count", processed),
+            )
+            return f"Инференс обработал только {processed} из {expected} снимков."
+    if row.tmp_path:
+        path = Path(row.tmp_path) / "worker_error.txt"
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text:
+            return text[:4000]
+    return "Не удалось получить полную псевдоразметку."
 
 
 def _pseudolabel_aoi_report_allows_success(report: dict[str, Any] | None) -> bool:

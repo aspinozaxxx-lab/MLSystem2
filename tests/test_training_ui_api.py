@@ -101,9 +101,95 @@ def test_frontend_credentials_support_canonical_users_roles_and_aliases(
 
 def test_pseudo_report_success_requires_processed_scene() -> None:
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 1}) is True
-    assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is True
+    assert _worker._pseudo_report_allows_success({"status": "partial", "processed": 1}) is False
     assert _worker._pseudo_report_allows_success({"status": "ok", "processed": 0}) is False
     assert _worker._pseudo_report_allows_success({"status": "error", "processed": 1}) is False
+    assert (
+        _worker._pseudo_report_allows_success(
+            {"status": "ok", "processed": 1, "unique_image_count": 2}
+        )
+        is False
+    )
+    assert (
+        _worker._pseudo_report_allows_success(
+            {"status": "ok", "processed": 2, "unique_image_count": 2, "failed": 1}
+        )
+        is False
+    )
+
+
+def test_partial_pseudo_markup_is_not_published(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", str(tmp_path / "stored"))
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(
+            JobType.INFERENCE,
+            JobSource.MANUAL,
+            1,
+            datetime(2026, 8, 17, tzinfo=timezone.utc),
+        )
+        job.status = JobStatus.RUNNING.value
+        job.tmp_path = str(tmp_path / "job")
+        session.add(job)
+        session.flush()
+        result = PseudoMarkupResultRow(
+            source=JobSource.MANUAL.value,
+            dataset_key="zu500-main",
+            training_result_id=None,
+            class_key="zu500-main",
+            source_dataset_name="ЗУ500\\main",
+            image_count=2,
+            status=ResultStatus.RUNNING.value,
+            job_id=job.id,
+        )
+        session.add(result)
+        session.flush()
+
+        scratch = Path(job.tmp_path) / "scratch"
+        scratch.mkdir(parents=True)
+        (scratch / "pseudo_markup.geojson").write_text(
+            '{"type":"FeatureCollection","features":[]}',
+            encoding="utf-8",
+        )
+        (scratch / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "processed": 1,
+                    "unique_image_count": 2,
+                    "failed": 1,
+                    "failures": [
+                        {
+                            "scene_id": "failed-scene",
+                            "error": "Triton shared memory exhausted",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _worker._finish_inference_job(session, job, config, succeeded=True)
+        session.flush()
+
+        assert job.status == JobStatus.FAILED.value
+        assert job.error is not None
+        assert "1 из 2" in job.error
+        assert "shared memory exhausted" in job.error
+        assert result.status == ResultStatus.ERROR.value
+        assert result.geojson_file_id is None
+        assert session.scalar(select(StoredFileRow.id)) is None
 
 
 def test_aoi_report_requires_every_selected_image_to_finish() -> None:

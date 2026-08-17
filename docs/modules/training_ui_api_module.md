@@ -165,4 +165,6 @@ Per-image сцена состоит из supervision-разметки и compani
 
 Python-backend внешней модели ЗУ500 использует `torch/torchvision` из read-only mount окружения MLSystem2,
 заданного `MLSYSTEM2_GEOALERT_TRITON_PYTHON_SITE_PACKAGES`; вычисление всё равно исполняется внутри Triton и
-вызывается штатным бриком `NSPDParcels`.
+вызывается штатным бриком `NSPDParcels`. Для него контейнер Triton имеет `/dev/shm` не менее `1 GiB`.
+Полная псевдоразметка публикуется только при `processed == unique_image_count` без failed/missing; `partial`
+сохраняется как диагностика неуспешного job и не становится готовым результатом.
