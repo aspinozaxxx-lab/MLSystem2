@@ -116,6 +116,8 @@ _JPEG_PREVIEW_CHANNELS = {
 _JPEG_PREVIEW_MAX_BYTES = 300 * 1024
 _JPEG_QUALITY_MIN = 1
 _JPEG_QUALITY_MAX = 95
+_THUMBNAIL_MAX_SIZE = 384
+_THUMBNAIL_JPEG_QUALITY = 82
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
 _BATCH_FINISHED_ITEM_STATUSES = ("ok", "error")
 LOGGER = logging.getLogger(__name__)
@@ -216,6 +218,7 @@ def create_test_sample(
             building_root,
             dataset=dataset,
         )
+        _build_test_sample_thumbnails(building_root, generated.tiles)
         building_root.replace(final_root)
         row = _new_test_sample_row(
             sample_id,
@@ -532,6 +535,7 @@ def _create_grouped_test_sample(
             output_root=building_root,
             dataset=dataset,
         )
+        _build_test_sample_thumbnails(building_root, generated.tiles)
         building_root.replace(final_root)
         row = _new_test_sample_row(
             sample_id,
@@ -1567,6 +1571,65 @@ def test_sample_preview_path(
     if not path.is_file():
         raise TestSampleUnavailable(str(path))
     return path
+
+
+def test_sample_thumbnail_path(
+    session: Session,
+    sample_id: uuid.UUID,
+    tile_index: int,
+    config: TrainingUIAPIConfig,
+) -> Path:
+    row = _sample_row(session, sample_id)
+    if not any(tile.tile_index == tile_index for tile in row.tiles):
+        raise TestSampleUnavailable(str(tile_index))
+    root = _sample_root(config, row.id)
+    preview_path = root / f"tile_{tile_index:03d}_preview.png"
+    if not preview_path.is_file():
+        raise TestSampleUnavailable(str(preview_path))
+    thumbnail_path = root / f"tile_{tile_index:03d}_thumbnail.jpg"
+    _ensure_test_sample_thumbnail(preview_path, thumbnail_path)
+    return thumbnail_path
+
+
+def _build_test_sample_thumbnails(root: Path, tiles: list[Any]) -> None:
+    for tile in tiles:
+        preview_path = root / f"tile_{tile.index:03d}_preview.png"
+        if not preview_path.is_file():
+            raise TrainingUIAPIError(
+                f"Полноразмерное превью тестового тайла не найдено: {preview_path.name}"
+            )
+        _ensure_test_sample_thumbnail(
+            preview_path,
+            root / f"tile_{tile.index:03d}_thumbnail.jpg",
+        )
+
+
+def _ensure_test_sample_thumbnail(preview_path: Path, thumbnail_path: Path) -> None:
+    if (
+        thumbnail_path.is_file()
+        and thumbnail_path.stat().st_mtime_ns >= preview_path.stat().st_mtime_ns
+    ):
+        return
+    temporary_path = thumbnail_path.with_name(
+        f".{thumbnail_path.name}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        with Image.open(preview_path) as source:
+            thumbnail = source.convert("RGB")
+            thumbnail.thumbnail(
+                (_THUMBNAIL_MAX_SIZE, _THUMBNAIL_MAX_SIZE),
+                Image.Resampling.LANCZOS,
+            )
+            thumbnail.save(
+                temporary_path,
+                format="JPEG",
+                quality=_THUMBNAIL_JPEG_QUALITY,
+                optimize=True,
+                progressive=True,
+            )
+        temporary_path.replace(thumbnail_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def build_test_sample_download(
@@ -3394,6 +3457,10 @@ def _detail(session: Session, row: TestSampleRow) -> TestSampleDetail:
                     else tile.pixel_f1
                 ),
                 enabled=tile.enabled,
+                thumbnail_url=(
+                    f"/api/v1/test-samples/{row.id}/tiles/"
+                    f"{tile.tile_index}/thumbnail"
+                ),
                 preview_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/{tile.tile_index}/preview"
                 ),
@@ -3591,6 +3658,7 @@ __all__ = [
     "test_sample_catalog",
     "test_sample_detail",
     "test_sample_preview_path",
+    "test_sample_thumbnail_path",
     "training_result_test_f1_info",
     "test_sample_model_compatibility_error",
     "update_test_sample",

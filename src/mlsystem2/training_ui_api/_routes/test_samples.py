@@ -27,6 +27,7 @@ from mlsystem2.training_ui_api._test_samples import (
     test_sample_catalog,
     test_sample_detail,
     test_sample_preview_path,
+    test_sample_thumbnail_path,
     update_test_sample,
     update_test_sample_primary,
     update_test_sample_tile,
@@ -305,7 +306,38 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         path = _sample_or_404(
             lambda: test_sample_preview_path(db, sample_id, tile_index, ctx.config)
         )
-        return FileResponse(path, media_type="image/png")
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
+    @app.get(
+        "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail",
+        response_class=FileResponse,
+        responses={
+            200: {
+                "description": "Компактная JPEG-миниатюра тестового тайла.",
+                "content": {
+                    "image/jpeg": {"schema": {"type": "string", "format": "binary"}}
+                },
+            }
+        },
+    )
+    def get_test_sample_thumbnail(
+        sample_id: uuid.UUID,
+        tile_index: int,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> FileResponse:
+        path = _sample_or_404(
+            lambda: test_sample_thumbnail_path(db, sample_id, tile_index, ctx.config)
+        )
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
 
     @app.get(
         "/api/v1/test-samples/{sample_id}/download",

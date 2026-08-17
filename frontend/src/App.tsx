@@ -21,6 +21,8 @@ import {
   Star,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -118,6 +120,7 @@ type ModalState = {
   body: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  fullscreen?: boolean;
 };
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
@@ -1844,6 +1847,19 @@ function TestSampleEditorPage({
     invalidatePreview();
   };
 
+  const openTilePreview = (tile: NonNullable<TestSampleDetail["tiles"]>[number]) => {
+    showModal({
+      title: `Тайл ${String(tile.index).padStart(3, "0")} · ${tile.source_name}`,
+      fullscreen: true,
+      body: (
+        <TestSampleTileViewer
+          src={tile.preview_url}
+          alt={`Полноразмерный тайл ${tile.index}: ${tile.source_name}`}
+        />
+      ),
+    });
+  };
+
   const rename = () => {
     if (!draft) return;
     showModal({
@@ -2135,7 +2151,23 @@ function TestSampleEditorPage({
         <div className="markup-preview-grid">
           {(sample.tiles || []).map((tile) => (
             <article className={`markup-preview-card ${enabledIndices.has(tile.index) ? "" : "disabled"}`} key={tile.index}>
-              <img src={tile.preview_url} alt={`Тайл ${tile.index}: ${tile.source_name}`} loading="lazy" />
+              <button
+                className="test-sample-thumbnail"
+                type="button"
+                aria-label={`Открыть полноразмерный тайл ${tile.index}: ${tile.source_name}`}
+                title="Открыть полноразмерный тайл"
+                onClick={() => openTilePreview(tile)}
+              >
+                <img
+                  src={tile.thumbnail_url}
+                  alt={`Тайл ${tile.index}: ${tile.source_name}`}
+                  width="384"
+                  height="384"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <span className="test-sample-thumbnail-hint"><ZoomIn size={16} />Рассмотреть</span>
+              </button>
               <div className="markup-preview-meta">
                 <div className="test-sample-tile-heading">
                   <strong>Тайл {String(tile.index).padStart(3, "0")}</strong>
@@ -2166,6 +2198,165 @@ function TestSampleEditorPage({
         </div>
       </section>
     </>
+  );
+}
+
+const TILE_VIEWER_MIN_SCALE = 1;
+const TILE_VIEWER_MAX_SCALE = 12;
+const TILE_VIEWER_ZOOM_STEP = 1.25;
+
+type ViewerPoint = { x: number; y: number };
+type ViewerDrag = ViewerPoint & { pointerId: number; origin: ViewerPoint };
+
+function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const dragRef = useRef<ViewerDrag | null>(null);
+  const [scale, setScale] = useState(TILE_VIEWER_MIN_SCALE);
+  const [offset, setOffset] = useState<ViewerPoint>({ x: 0, y: 0 });
+  const [naturalSize, setNaturalSize] = useState<ViewerPoint | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  const resetView = useCallback(() => {
+    setScale(TILE_VIEWER_MIN_SCALE);
+    setOffset({ x: 0, y: 0 });
+  }, []);
+
+  const zoomTo = useCallback((requestedScale: number, clientPoint?: ViewerPoint) => {
+    const nextScale = Math.min(
+      TILE_VIEWER_MAX_SCALE,
+      Math.max(TILE_VIEWER_MIN_SCALE, requestedScale),
+    );
+    if (nextScale === scale) return;
+    const viewport = viewportRef.current;
+    const bounds = viewport?.getBoundingClientRect();
+    const anchor = bounds && clientPoint
+      ? {
+          x: clientPoint.x - bounds.left - bounds.width / 2,
+          y: clientPoint.y - bounds.top - bounds.height / 2,
+        }
+      : { x: 0, y: 0 };
+    const ratio = nextScale / scale;
+    setOffset((current) => nextScale === TILE_VIEWER_MIN_SCALE
+      ? { x: 0, y: 0 }
+      : {
+          x: anchor.x - (anchor.x - current.x) * ratio,
+          y: anchor.y - (anchor.y - current.y) * ratio,
+        });
+    setScale(nextScale);
+  }, [scale]);
+
+  const oneToOneScale = useCallback(() => {
+    const image = imageRef.current;
+    if (!image || !image.clientWidth) return TILE_VIEWER_MIN_SCALE;
+    return Math.min(TILE_VIEWER_MAX_SCALE, image.naturalWidth / image.clientWidth);
+  }, []);
+
+  return (
+    <div className="test-sample-tile-viewer">
+      <div className="test-sample-tile-viewer-toolbar">
+        <div className="button-row">
+          <button
+            className="secondary icon-button compact-action"
+            type="button"
+            disabled={!loaded || scale <= TILE_VIEWER_MIN_SCALE}
+            aria-label="Уменьшить"
+            title="Уменьшить"
+            onClick={() => zoomTo(scale / TILE_VIEWER_ZOOM_STEP)}
+          ><ZoomOut size={17} /></button>
+          <span className="test-sample-tile-viewer-scale">{Math.round(scale * 100)}%</span>
+          <button
+            className="secondary icon-button compact-action"
+            type="button"
+            disabled={!loaded || scale >= TILE_VIEWER_MAX_SCALE}
+            aria-label="Увеличить"
+            title="Увеличить"
+            onClick={() => zoomTo(scale * TILE_VIEWER_ZOOM_STEP)}
+          ><ZoomIn size={17} /></button>
+          <button className="secondary compact-action" type="button" disabled={!loaded} onClick={() => zoomTo(oneToOneScale())}>1:1</button>
+          <button className="secondary compact-action" type="button" disabled={!loaded} onClick={resetView}>Вписать</button>
+        </div>
+        <span className="muted">
+          {naturalSize ? `${naturalSize.x} × ${naturalSize.y} px · ` : ""}
+          колесо — масштаб, перетаскивание — перемещение, двойной клик — приблизить
+        </span>
+      </div>
+      <div
+        ref={viewportRef}
+        className={`test-sample-tile-viewer-viewport${dragging ? " dragging" : ""}`}
+        role="region"
+        aria-label="Просмотр полноразмерного тайла"
+        tabIndex={0}
+        onWheel={(event) => {
+          event.preventDefault();
+          zoomTo(
+            scale * (event.deltaY < 0 ? TILE_VIEWER_ZOOM_STEP : 1 / TILE_VIEWER_ZOOM_STEP),
+            { x: event.clientX, y: event.clientY },
+          );
+        }}
+        onDoubleClick={(event) => {
+          if (scale > TILE_VIEWER_MIN_SCALE) resetView();
+          else zoomTo(Math.max(2, oneToOneScale()), { x: event.clientX, y: event.clientY });
+        }}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || scale <= TILE_VIEWER_MIN_SCALE) return;
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          dragRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            origin: offset,
+          };
+          setDragging(true);
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current;
+          if (!drag || drag.pointerId !== event.pointerId) return;
+          setOffset({
+            x: drag.origin.x + event.clientX - drag.x,
+            y: drag.origin.y + event.clientY - drag.y,
+          });
+        }}
+        onPointerUp={(event) => {
+          if (dragRef.current?.pointerId !== event.pointerId) return;
+          dragRef.current = null;
+          setDragging(false);
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+          setDragging(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "+" || event.key === "=") zoomTo(scale * TILE_VIEWER_ZOOM_STEP);
+          if (event.key === "-") zoomTo(scale / TILE_VIEWER_ZOOM_STEP);
+          if (event.key === "0") resetView();
+        }}
+      >
+        {!loaded && !failed ? <div className="test-sample-tile-viewer-status">Загрузка полноразмерного тайла…</div> : null}
+        {failed ? <div className="test-sample-tile-viewer-status error-text">Не удалось загрузить полноразмерный тайл.</div> : null}
+        <img
+          ref={imageRef}
+          src={src}
+          alt={alt}
+          draggable={false}
+          style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }}
+          onLoad={(event) => {
+            setNaturalSize({ x: event.currentTarget.naturalWidth, y: event.currentTarget.naturalHeight });
+            setLoaded(true);
+            setFailed(false);
+            resetView();
+          }}
+          onError={() => {
+            setLoaded(false);
+            setFailed(true);
+          }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -3990,7 +4181,11 @@ function Modal({ modal, onClose }: { modal: ModalState | null; onClose: () => vo
   if (!modal) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal-card ${modal.wide ? "wide" : ""}`} role="dialog" aria-modal="true">
+      <section
+        className={`modal-card${modal.wide ? " wide" : ""}${modal.fullscreen ? " fullscreen" : ""}`}
+        role="dialog"
+        aria-modal="true"
+      >
         <header className="modal-header">
           <h2>{modal.title}</h2>
           <button className="ghost icon-button" type="button" onClick={onClose} aria-label="Закрыть">

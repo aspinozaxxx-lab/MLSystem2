@@ -966,6 +966,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Thumbnail */
+        get: operations["get_test_sample_thumbnail_api_v1_test_samples__sample_id__tiles__tile_index__thumbnail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/download": {
         parameters: {
             query?: never;
@@ -3717,6 +3734,8 @@ export interface components {
             f1_score?: number | null;
             /** Enabled */
             enabled: boolean;
+            /** Thumbnail Url */
+            thumbnail_url: string;
             /** Preview Url */
             preview_url: string;
         };
@@ -5979,6 +5998,38 @@ export interface operations {
                 };
                 content: {
                     "image/png": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_thumbnail_api_v1_test_samples__sample_id__tiles__tile_index__thumbnail_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+                tile_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Компактная JPEG-миниатюра тестового тайла. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
                 };
             };
             /** @description Validation Error */

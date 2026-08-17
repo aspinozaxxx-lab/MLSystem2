@@ -1581,6 +1581,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "f1_score" in openapi["components"]["schemas"]["TestSampleTileInfo"][
             "properties"
         ]
+        assert "thumbnail_url" in openapi["components"]["schemas"][
+            "TestSampleTileInfo"
+        ]["properties"]
         assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/reconcile" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
@@ -1588,6 +1591,10 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert "/api/v1/test-samples/{sample_id}/evaluate-preview" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/optimize-preview" in openapi["paths"]
+        thumbnail_contract = openapi["paths"][
+            "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail"
+        ]["get"]["responses"]["200"]["content"]
+        assert set(thumbnail_contract) == {"image/jpeg"}
         assert "post" in openapi["paths"][
             "/api/v1/test-samples/{sample_id}/download"
         ]
@@ -1662,6 +1669,41 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         preview = client.get(sample["tiles"][0]["preview_url"])
         assert preview.status_code == 200
         assert preview.headers["content-type"] == "image/png"
+        assert preview.headers["cache-control"] == (
+            "private, max-age=31536000, immutable"
+        )
+        thumbnail_url = sample["tiles"][0]["thumbnail_url"]
+        thumbnail = client.get(thumbnail_url)
+        assert thumbnail.status_code == 200
+        assert thumbnail.headers["content-type"] == "image/jpeg"
+        assert thumbnail.headers["cache-control"] == (
+            "private, max-age=31536000, immutable"
+        )
+        with Image.open(BytesIO(thumbnail.content)) as thumbnail_image:
+            assert thumbnail_image.format == "JPEG"
+            assert max(thumbnail_image.size) <= 384
+
+        sample_root = (
+            config.stored_files_root
+            / _test_samples.TEST_SAMPLE_ROOT_NAME
+            / sample_id
+        )
+        thumbnail_path = sample_root / "tile_001_thumbnail.jpg"
+        preview_path = sample_root / "tile_001_preview.png"
+        assert thumbnail_path.is_file()
+        thumbnail_path.unlink()
+        Image.new("RGB", (800, 400), color=(30, 90, 140)).save(
+            preview_path,
+            format="PNG",
+        )
+        regenerated = client.get(thumbnail_url)
+        assert regenerated.status_code == 200
+        with Image.open(BytesIO(regenerated.content)) as regenerated_image:
+            assert regenerated_image.size == (384, 192)
+        assert thumbnail_path.is_file()
+        assert client.get(
+            f"/api/v1/test-samples/{sample_id}/tiles/99/thumbnail"
+        ).status_code == 404
         renamed = client.patch(
             f"/api/v1/test-samples/{sample_id}",
             json={"name": "Переименованная выборка"},

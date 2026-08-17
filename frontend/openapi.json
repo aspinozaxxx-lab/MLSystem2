@@ -2544,6 +2544,56 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail": {
+      "get": {
+        "summary": "Get Test Sample Thumbnail",
+        "operationId": "get_test_sample_thumbnail_api_v1_test_samples__sample_id__tiles__tile_index__thumbnail_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "tile_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Tile Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Компактная JPEG-миниатюра тестового тайла.",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-samples/{sample_id}/download": {
       "get": {
         "summary": "Download Test Sample",
@@ -10155,6 +10205,10 @@
             "type": "boolean",
             "title": "Enabled"
           },
+          "thumbnail_url": {
+            "type": "string",
+            "title": "Thumbnail Url"
+          },
           "preview_url": {
             "type": "string",
             "title": "Preview Url"
@@ -10168,6 +10222,7 @@
           "territory",
           "object_count",
           "enabled",
+          "thumbnail_url",
           "preview_url"
         ],
         "title": "TestSampleTileInfo"

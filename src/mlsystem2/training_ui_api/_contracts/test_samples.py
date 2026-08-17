@@ -206,6 +206,7 @@ class TestSampleTileInfo(BaseModel):
     evaluation_metrics: dict[str, Any] = Field(default_factory=dict)
     f1_score: float | None = Field(default=None, ge=0.0, le=1.0)
     enabled: bool
+    thumbnail_url: str
     preview_url: str
 
 

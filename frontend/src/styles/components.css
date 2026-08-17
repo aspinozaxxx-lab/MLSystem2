@@ -477,6 +477,25 @@ tr:last-child td {
   width: min(900px, 100%);
 }
 
+.modal-card.fullscreen {
+  width: calc(100vw - 40px);
+  height: calc(100dvh - 40px);
+}
+
+.modal-card.fullscreen .modal-header h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-card.fullscreen .modal-body {
+  display: flex;
+  flex: 1 1 auto;
+  padding: 0;
+  overflow: hidden;
+}
+
 .modal-header,
 .modal-footer {
   display: flex;
