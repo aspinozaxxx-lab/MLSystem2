@@ -18,7 +18,7 @@ import yaml
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 from shapely.geometry import box
-from shapely.geometry import mapping
+from shapely.geometry import mapping, shape
 from shapely.ops import transform as transform_geometry
 from pyproj import Transformer
 from sqlalchemy import select
@@ -357,6 +357,56 @@ def test_dataset_editor_persists_discards_and_publishes_server_drafts(
     assert env.client.get(detail_url).json()["draft"] is None
     with create_session_factory(get_config())() as session:
         assert session.scalar(select(DatasetEditorDraftRow)) is None
+
+
+def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    scene = env.client.get(scenes_url).json()["scenes"][0]
+    annotation_path = quote(scene["annotation_name"], safe="")
+    detail = env.client.get(f"{scenes_url}/{annotation_path}").json()
+    payload = deepcopy(detail["geojson"])
+    payload["features"].extend(
+        [
+            _feature(
+                100,
+                "positive",
+                [[-1, 3], [2, 3], [2, 5], [-1, 5], [-1, 3]],
+            ),
+            _feature(
+                101,
+                "positive",
+                [[5, 1], [7, 1], [7, 3], [5, 3], [5, 1]],
+            ),
+            _feature(
+                102,
+                "positive",
+                [[20, 20], [21, 20], [21, 21], [20, 21], [20, 20]],
+            ),
+        ]
+    )
+
+    saved = env.client.put(
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_path}",
+        json={"base_revision": scene["revision"], "geojson": payload},
+    )
+
+    assert saved.status_code == 200
+    saved_payload = saved.json()["geojson"]
+    saved_by_id = {feature["id"]: feature for feature in saved_payload["features"]}
+    assert 100 in saved_by_id
+    assert 101 in saved_by_id
+    assert 102 not in saved_by_id
+    footprint = shape(detail["valid_data_footprint"])
+    for feature_id in (100, 101):
+        assert footprint.covers(shape(saved_by_id[feature_id]["geometry"]))
+    assert shape(saved_by_id[100]["geometry"]).bounds == pytest.approx((0, 3, 2, 5))
+    assert shape(saved_by_id[101]["geometry"]).area < 4
+    reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
+    assert reopened["draft"]["geojson"] == saved_payload
 
 
 def test_dataset_editor_publishes_multiple_scenes_atomically(

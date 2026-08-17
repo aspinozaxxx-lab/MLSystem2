@@ -50,7 +50,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `GET /api/v1/dataset-editor/datasets/{dataset_key}/rasters` и `GET /api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path}` - серверный выбор снимков и авторизованный TIFF с HTTP Range.
 - `GET|POST /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/pseudo-markup` - получить готовый фрагмент текущей основной сети либо идемпотентно поставить срочный поснимочный инференс.
 - `GET /api/v1/dataset-editor/pseudo-markup/{job_id}` - лёгкий polling поснимочного задания без Git-синхронизации и разрешения полного каталога.
-- `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}` и `DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts` - автоматически сохранить промежуточный пользовательский GeoJSON или пометку удаления без публикации либо удалить один/все свои черновики.
+- `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}` и `DELETE /api/v1/dataset-editor/datasets/{dataset_key}/drafts` - автоматически сохранить промежуточный пользовательский GeoJSON или пометку удаления без публикации либо удалить один/все свои черновики; при PUT полигональная геометрия восстанавливается и пересекается с valid-data footprint TIFF, поэтому частичный выход подрезается, а пустой результат удаляется без отказа всего черновика.
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish` - атомарно опубликовать все сохранённые изменения и удаления пользователя одним Git-коммитом.
 - `POST|PUT /api/v1/dataset-editor/datasets/{dataset_key}/scenes`, `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}` - добавить отсутствующие TIFF/папку, атомарно опубликовать несколько GeoJSON, совместимо сохранить один GeoJSON или создать отменяемую пометку удаления сцены.
 - `GET /api/v1/dataset-editor/publication/{commit}` - `publishing|published` по ancestry commit текущего live-релиза.
@@ -148,7 +148,9 @@ auto jobs: queued rows уходят из очередей, running process по�
 checkpoint засчитываются новой версии без переобучения. Повторный dry-run не должен находить изменений.
 
 Черновик редактора включает геометрию и отменяемую пометку удаления снимка. Он сохраняется только автоматически;
-ручной кнопки сохранения нет. В браузере TIFF уже добавленные снимки остаются в текущей сортировке, отмечаются
+ручной кнопки сохранения нет. Серверное автосохранение перед валидацией пересекает каждый полигон с фактическим
+footprint: частичный выход, включая nodata-провал, подрезается, полностью внешний объект удаляется, а нормализованный
+GeoJSON становится новым состоянием клиента. В браузере TIFF уже добавленные снимки остаются в текущей сортировке, отмечаются
 зелёной рамкой и недоступны для повторного выбора, а добавление всей папки пропускает их.
 
 Per-image сцена состоит из supervision-разметки и companion-файла `*_footprint.geojson` в CRS TIFF. Каталог,

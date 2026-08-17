@@ -253,6 +253,10 @@ def save_editor_draft(
         image_path = _matched_image_path(dataset, source_dir, scene.annotation_name)
         previous_payload = _read_geojson(annotation_path)
         normalized_geojson = _normalize_editor_geojson(geojson, previous_payload, dataset)
+        normalized_geojson = _clip_geojson_to_footprint(
+            normalized_geojson,
+            _valid_data_footprint(image_path),
+        )
         _validate_editor_geojson(normalized_geojson, image_path, dataset)
         _validate_preserved_properties(previous_payload, normalized_geojson)
         row = _editor_draft_row(session, dataset.key, scene.annotation_name, username)
@@ -3015,6 +3019,8 @@ def _clip_geojson_to_footprint(
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
         try:
             geometry = shape(feature.get("geometry"))
+            if isinstance(geometry, (Polygon, MultiPolygon)):
+                geometry = _polygonal_geometry(geometry)
             geometry = _polygonal_geometry(geometry.intersection(footprint))
         except Exception as exc:  # noqa: BLE001
             raise TrainingUIAPIError(
