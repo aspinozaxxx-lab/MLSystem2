@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import rasterio
+from affine import Affine
 from pyproj import CRS as PyprojCRS
 from pyproj import Geod, Transformer
 from rasterio.errors import NotGeoreferencedWarning
@@ -67,6 +68,7 @@ _ORIGIN_FRACTIONS = (
 )
 _MILP_TIME_LIMIT_SECONDS = 60.0
 _MILP_MAXIMUM_TIME_LIMIT_SECONDS = 60.0
+_INSTANCE_BOUNDARY_PREVIEW_VERSION = "instance-boundaries-v1"
 
 
 class MarkupExportUnavailable(FileNotFoundError):
@@ -2056,13 +2058,14 @@ def _write_selected_tiles(
                 )
             else:
                 raster_geometries.append((geometry, 255, 0))
+        ordered_raster_geometries = sorted(
+            raster_geometries,
+            key=lambda value: (value[2], -value[1]),
+        )
         mask = rasterize(
             [
                 (geometry, class_id)
-                for geometry, class_id, _priority in sorted(
-                    raster_geometries,
-                    key=lambda value: (value[2], -value[1]),
-                )
+                for geometry, class_id, _priority in ordered_raster_geometries
             ],
             out_shape=(tile_height, tile_width),
             transform=transform,
@@ -2070,9 +2073,20 @@ def _write_selected_tiles(
             dtype="uint8",
             all_touched=False,
         )
-        overlay = _overlay_image(image, mask, class_schema=class_schema)
+        object_edge = _instance_edge_mask(
+            [geometry for geometry, _class_id, _priority in ordered_raster_geometries],
+            out_shape=(tile_height, tile_width),
+            transform=transform,
+        )
+        overlay = _overlay_image(
+            image,
+            mask,
+            class_schema=class_schema,
+            object_edge=object_edge,
+        )
         _write_png(mask_path, mask[np.newaxis, :, :])
         _write_png(preview_path, overlay.transpose(2, 0, 1))
+        _write_preview_version(preview_path)
         tile_infos.append(
             GeneratedMarkupTile(
                 index=index,
@@ -2230,11 +2244,15 @@ def _overlay_image(
     mask: np.ndarray,
     *,
     class_schema: tuple[dict[str, Any], ...] = (),
+    object_edge: np.ndarray | None = None,
 ) -> np.ndarray:
     preview = _preview_rgb(image)
     result = preview.copy()
+    edge = _mask_edge(mask) if object_edge is None else np.asarray(object_edge, dtype=bool)
+    if edge.shape != mask.shape:
+        raise TrainingUIAPIError("Размер контура объектов не совпадает с размером маски.")
     if not class_schema:
-        result[_mask_edge(mask)] = np.asarray([255, 255, 0], dtype=np.uint8)
+        result[edge] = np.asarray([255, 255, 0], dtype=np.uint8)
         return result
     for item in class_schema:
         class_mask = mask == int(item["id"])
@@ -2244,8 +2262,81 @@ def _overlay_image(
         result[class_mask] = np.rint(
             result[class_mask].astype(np.float32) * 0.72 + color * 0.28
         ).astype(np.uint8)
-        result[_mask_edge(class_mask.astype(np.uint8))] = color.astype(np.uint8)
+        result[np.logical_and(edge, class_mask)] = color.astype(np.uint8)
     return result
+
+
+def _instance_edge_mask(
+    geometries: list[BaseGeometry] | tuple[BaseGeometry, ...],
+    *,
+    out_shape: tuple[int, int],
+    transform: Affine,
+) -> np.ndarray:
+    if not geometries:
+        return np.zeros(out_shape, dtype=bool)
+    labels = rasterize(
+        [(geometry, index) for index, geometry in enumerate(geometries, start=1)],
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        dtype="uint32",
+        all_touched=False,
+    )
+    return _label_edge(labels)
+
+
+def _label_edge(labels: np.ndarray) -> np.ndarray:
+    remaining = np.asarray(labels, dtype=np.uint32).copy()
+    edge = np.zeros(remaining.shape, dtype=bool)
+    for _ in range(2):
+        positive = remaining > 0
+        if not bool(np.any(positive)):
+            break
+        interior = _label_interior(remaining)
+        edge |= positive & ~interior
+        remaining[~interior] = 0
+    return edge
+
+
+def _label_interior(labels: np.ndarray) -> np.ndarray:
+    padded = np.pad(labels, 1, mode="constant", constant_values=0)
+    center = padded[1:-1, 1:-1]
+    interior = center > 0
+    for row_offset, column_offset in (
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ):
+        neighbor = padded[
+            1 + row_offset : 1 + row_offset + labels.shape[0],
+            1 + column_offset : 1 + column_offset + labels.shape[1],
+        ]
+        interior &= neighbor == center
+    return interior
+
+
+def _preview_version_path(preview_path: Path) -> Path:
+    return preview_path.with_name(f".{preview_path.stem}.version")
+
+
+def _write_preview_version(preview_path: Path) -> None:
+    marker_path = _preview_version_path(preview_path)
+    temporary_path = marker_path.with_name(
+        f"{marker_path.name}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        temporary_path.write_text(
+            _INSTANCE_BOUNDARY_PREVIEW_VERSION + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(marker_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _hex_rgb(color: str) -> tuple[int, int, int]:

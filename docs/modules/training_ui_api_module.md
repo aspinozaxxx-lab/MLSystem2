@@ -69,7 +69,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
   TXT и GeoJSON футпринтов выбранных снимков в WGS84. Пустой список допустим, а повтор относительного пути без
   расширения отклоняется как неоднозначность TXT.
 - `POST /api/v1/markup-export` - синхронно формирует временный набор тестовой разметки для датасета MLMarkup.
-- `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview` - возвращает PNG-превью тайла с контуром маски.
+- `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview` - возвращает PNG-превью тайла с отдельными контурами GeoJSON-объектов.
 - `GET /api/v1/markup-export/{export_id}/download` - возвращает плоский ZIP сформированного набора.
 - `GET /api/v1/test-samples` и `POST /api/v1/test-samples` - иерархический каталог и создание постоянной тестовой разметки.
 - `GET|PATCH|DELETE /api/v1/test-samples/{sample_id}` - просмотр, атомарное сохранение имени, основного статуса и полного состава либо удаление разметки.
@@ -80,7 +80,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/test-samples/{sample_id}/optimize` - подбирает состав из всех тайлов по основной метрике класса; request-поле старого клиента принимается, но не меняет выбор метрики.
 - `POST /api/v1/test-samples/{sample_id}/evaluate-preview` и `POST /api/v1/test-samples/{sample_id}/optimize-preview` - рассчитывают F1 или оптимальный состав черновика без записи в БД.
 - `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail` - возвращает постоянную JPEG-миниатюру до `384×384`; для старых наборов создаёт её один раз из полного PNG.
-- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - полноразмерный PNG тайла и ZIP сохранённых включённых тайлов.
+- `GET /api/v1/test-samples/{sample_id}/tiles/{tile_index}/preview` и `GET /api/v1/test-samples/{sample_id}/download` - полноразмерный PNG с отдельными контурами объектов и ZIP сохранённых включённых тайлов; GeoJSON копируется без изменения, а помеченные JPEG строят контуры по его instance-ID.
 - `POST /api/v1/test-samples/{sample_id}/download` - ZIP явно выбранных тайлов текущего черновика без изменения разметки в БД; флаг `include_previews` оставляет полный состав либо только TIFF и GeoJSON.
 - `POST /api/v1/test-samples/download` - несжатый ZIP явно выбранных сохранённых разметок, не более одной на класс; до восьми разметок готовятся параллельно, каждая в папке `<класс>_<исходный датасет>`.
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания для готовых датасетов старого и поснимочного формата; клиент применяет тот же критерий доступности, что и сервер.
@@ -96,6 +96,9 @@ evaluator. Поле датасета тестовой разметки озна�
 используется отдельно для создания набора, черновых `evaluate-preview`/`optimize-preview` и поснимочного кэша
 оптимизатора. Матрица `training_result_test_metrics` остаётся независимым контуром: все успешные сети всех
 датасетов класса оцениваются на единственной основной тестовой разметке класса.
+Семантическая PNG-маска объединяет пиксели одного класса и применяется только в пиксельном контуре оценки.
+Соприкасающиеся исходные объекты остаются отдельными feature в GeoJSON; визуализация и помеченные JPEG проводят
+границы по их instance-ID, а объектовая метрика сопоставляет эти векторные feature один к одному.
 Каталог результатов выделяет основной датасет и показывает F1 эффективной сети класса на всех карточках его
 датасетов, не создавая отдельных расчётов для каждой карточки.
 

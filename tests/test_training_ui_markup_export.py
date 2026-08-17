@@ -300,6 +300,52 @@ def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
     assert not bool(np.any(np.all(preview == np.asarray([255, 0, 0]), axis=2)))
 
 
+def test_markup_export_preview_keeps_boundary_between_touching_objects() -> None:
+    image = np.full((3, 9, 9), 100, dtype=np.uint8)
+    labels = np.zeros((9, 9), dtype=np.uint32)
+    labels[1:8, 1:4] = 1
+    labels[1:8, 4:8] = 2
+    mask = np.where(labels > 0, 255, 0).astype(np.uint8)
+
+    semantic_edge = _markup_export._mask_edge(mask)
+    object_edge = _markup_export._label_edge(labels)
+    preview = _markup_export._overlay_image(
+        image,
+        mask,
+        object_edge=object_edge,
+    )
+    yellow = np.all(preview == np.asarray([255, 255, 0]), axis=2)
+
+    assert not semantic_edge[4, 3]
+    assert not semantic_edge[4, 4]
+    assert object_edge[4, 3]
+    assert object_edge[4, 4]
+    assert yellow[4, 3]
+    assert yellow[4, 4]
+
+
+def test_multiclass_preview_colors_each_touching_object_boundary() -> None:
+    image = np.full((3, 9, 9), 100, dtype=np.uint8)
+    labels = np.zeros((9, 9), dtype=np.uint32)
+    labels[1:8, 1:4] = 1
+    labels[1:8, 4:8] = 2
+    class_mask = labels.astype(np.uint8)
+    object_edge = _markup_export._label_edge(labels)
+
+    preview = _markup_export._overlay_image(
+        image,
+        class_mask,
+        class_schema=(
+            {"id": 1, "slug": "left", "color": "#ff0000"},
+            {"id": 2, "slug": "right", "color": "#00ff00"},
+        ),
+        object_edge=object_edge,
+    )
+
+    assert np.array_equal(preview[4, 3], np.asarray([255, 0, 0]))
+    assert np.array_equal(preview[4, 4], np.asarray([0, 255, 0]))
+
+
 def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None:
     size = 128
     rows, columns = np.mgrid[:size, :size]
@@ -312,13 +358,17 @@ def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None
         ],
         axis=0,
     ).astype(np.uint8)
-    mask = np.zeros((size, size), dtype=np.uint8)
-    mask[24:104, 24:104] = 255
+    labels = np.zeros((size, size), dtype=np.uint32)
+    labels[24:104, 24:64] = 1
+    labels[24:104, 64:104] = 2
+    mask = np.where(labels > 0, 255, 0).astype(np.uint8)
+    object_edge = _markup_export._label_edge(labels)
 
     previews = _test_samples._test_sample_jpeg_previews(
         image,
         mask,
         tile_name="tile001",
+        object_edge=object_edge,
     )
 
     assert set(previews) == {
@@ -349,10 +399,12 @@ def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None
         mean_error = np.abs(decoded[name].astype(int) - expected.astype(int)).mean()
         assert mean_error < 8.0
 
-    edge = _markup_export._mask_edge(mask)
+    edge = object_edge
     yellow = np.asarray([255, 255, 0])
     edge_error = np.abs(decoded["rgb_markup"][edge].astype(int) - yellow).mean()
     assert edge_error < 55.0
+    assert edge[64, 63]
+    assert edge[64, 64]
     unchanged_error = np.abs(
         decoded["rgb_markup"][:12, :12].astype(int)
         - decoded["rgb"][:12, :12].astype(int)
@@ -1668,11 +1720,13 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
 
         preview = client.get(sample["tiles"][0]["preview_url"])
         assert preview.status_code == 200
+        assert "renderer=instance-boundaries-v1" in sample["tiles"][0]["preview_url"]
         assert preview.headers["content-type"] == "image/png"
         assert preview.headers["cache-control"] == (
             "private, max-age=31536000, immutable"
         )
         thumbnail_url = sample["tiles"][0]["thumbnail_url"]
+        assert "renderer=instance-boundaries-v1" in thumbnail_url
         thumbnail = client.get(thumbnail_url)
         assert thumbnail.status_code == 200
         assert thumbnail.headers["content-type"] == "image/jpeg"
@@ -1690,6 +1744,16 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         thumbnail_path = sample_root / "tile_001_thumbnail.jpg"
         preview_path = sample_root / "tile_001_preview.png"
+        preview_version_path = _markup_export._preview_version_path(preview_path)
+        assert preview_version_path.read_text(encoding="utf-8").strip() == (
+            _markup_export._INSTANCE_BOUNDARY_PREVIEW_VERSION
+        )
+        preview_version_path.unlink()
+        historical_preview = client.get(sample["tiles"][0]["preview_url"])
+        assert historical_preview.status_code == 200
+        assert preview_version_path.read_text(encoding="utf-8").strip() == (
+            _markup_export._INSTANCE_BOUNDARY_PREVIEW_VERSION
+        )
         assert thumbnail_path.is_file()
         thumbnail_path.unlink()
         Image.new("RGB", (800, 400), color=(30, 90, 140)).save(
@@ -1738,6 +1802,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
                 _downloaded_tile_names("tile001")
                 | _downloaded_tile_names("tile002")
             )
+            assert archive.read("tile001.geojson") == (
+                sample_root / "tile_001.geojson"
+            ).read_bytes()
         draft_without_previews = client.post(
             toggled["download_url"],
             json={
@@ -2224,6 +2291,15 @@ def test_object_f1_matching_uses_inclusive_half_iou() -> None:
 
     assert matched == _test_samples_metric_counts(1, 0, 0)
     assert missed == _test_samples_metric_counts(0, 1, 1)
+
+
+def test_object_f1_keeps_touching_source_features_as_separate_objects() -> None:
+    truth = [box(0, 0, 1, 1), box(1, 0, 2, 1)]
+    merged_prediction = [box(0, 0, 2, 1)]
+
+    counts = _object_counts(truth, merged_prediction, 0.5)
+
+    assert counts == _test_samples_metric_counts(1, 0, 1)
 
 
 def test_saved_test_samples_are_evaluated_by_current_primary_network(

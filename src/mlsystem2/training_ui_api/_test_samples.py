@@ -46,10 +46,16 @@ from ._dataset_catalog import (
     primary_training_result,
 )
 from ._markup_export import (
+    _INSTANCE_BOUNDARY_PREVIEW_VERSION,
+    _instance_edge_mask,
     _mask_edge,
+    _overlay_image,
+    _preview_version_path,
     _run_milp,
     _single_constraint,
     _stretch_channel,
+    _write_png,
+    _write_preview_version,
     generate_markup_files,
     generate_markup_pool_files,
 )
@@ -1567,10 +1573,12 @@ def test_sample_preview_path(
     row = _sample_row(session, sample_id)
     if not any(tile.tile_index == tile_index for tile in row.tiles):
         raise TestSampleUnavailable(str(tile_index))
-    path = _sample_root(config, row.id) / f"tile_{tile_index:03d}_preview.png"
-    if not path.is_file():
-        raise TestSampleUnavailable(str(path))
-    return path
+    root = _sample_root(config, row.id)
+    return _ensure_test_sample_preview(
+        root,
+        tile_index,
+        class_schema=tuple(row.class_schema or []),
+    )
 
 
 def test_sample_thumbnail_path(
@@ -1583,9 +1591,11 @@ def test_sample_thumbnail_path(
     if not any(tile.tile_index == tile_index for tile in row.tiles):
         raise TestSampleUnavailable(str(tile_index))
     root = _sample_root(config, row.id)
-    preview_path = root / f"tile_{tile_index:03d}_preview.png"
-    if not preview_path.is_file():
-        raise TestSampleUnavailable(str(preview_path))
+    preview_path = _ensure_test_sample_preview(
+        root,
+        tile_index,
+        class_schema=tuple(row.class_schema or []),
+    )
     thumbnail_path = root / f"tile_{tile_index:03d}_thumbnail.jpg"
     _ensure_test_sample_thumbnail(preview_path, thumbnail_path)
     return thumbnail_path
@@ -1602,6 +1612,92 @@ def _build_test_sample_thumbnails(root: Path, tiles: list[Any]) -> None:
             preview_path,
             root / f"tile_{tile.index:03d}_thumbnail.jpg",
         )
+
+
+def _ensure_test_sample_preview(
+    root: Path,
+    tile_index: int,
+    *,
+    class_schema: tuple[dict[str, Any], ...] = (),
+) -> Path:
+    base_name = f"tile_{tile_index:03d}"
+    preview_path = root / f"{base_name}_preview.png"
+    source_paths = tuple(
+        root / f"{base_name}{suffix}"
+        for suffix in (".tif", ".geojson", "_mask.png")
+    )
+    for source_path in source_paths:
+        if not source_path.is_file():
+            raise TestSampleUnavailable(str(source_path))
+    marker_path = _preview_version_path(preview_path)
+    marker_version = ""
+    try:
+        marker_version = marker_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    if (
+        preview_path.is_file()
+        and marker_version == _INSTANCE_BOUNDARY_PREVIEW_VERSION
+        and preview_path.stat().st_mtime_ns
+        >= max(path.stat().st_mtime_ns for path in source_paths)
+    ):
+        return preview_path
+
+    image, mask, object_edge = _test_sample_tile_render_data(root, tile_index)
+    overlay = _overlay_image(
+        image,
+        mask,
+        class_schema=class_schema,
+        object_edge=object_edge,
+    )
+    temporary_path = preview_path.with_name(
+        f".{preview_path.name}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        _write_png(temporary_path, overlay.transpose(2, 0, 1))
+        temporary_path.replace(preview_path)
+        _write_preview_version(preview_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return preview_path
+
+
+def _test_sample_tile_render_data(
+    root: Path,
+    tile_index: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    base_name = f"tile_{tile_index:03d}"
+    tif_path = root / f"{base_name}.tif"
+    mask_path = root / f"{base_name}_mask.png"
+    geojson_path = root / f"{base_name}.geojson"
+    for path in (tif_path, mask_path, geojson_path):
+        if not path.is_file():
+            raise TestSampleUnavailable(str(path))
+    with rasterio.open(tif_path) as dataset:
+        if dataset.crs is None:
+            raise TrainingUIAPIError(f"У тайла {base_name} отсутствует CRS.")
+        image = dataset.read()
+        raster_crs = PyprojCRS.from_user_input(dataset.crs)
+        tile_footprint = box(*dataset.bounds)
+        raster_transform = dataset.transform
+        out_shape = (dataset.height, dataset.width)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        with rasterio.open(mask_path) as dataset:
+            mask = dataset.read(1)
+    ground_truth = _load_geometries(geojson_path, default_crs=str(raster_crs))
+    geometries = _geometries_for_tile(
+        ground_truth.geometries,
+        ground_truth.crs,
+        raster_crs,
+        tile_footprint,
+    )
+    object_edge = _instance_edge_mask(
+        geometries,
+        out_shape=out_shape,
+        transform=raster_transform,
+    )
+    return image, mask, object_edge
 
 
 def _ensure_test_sample_thumbnail(preview_path: Path, thumbnail_path: Path) -> None:
@@ -1879,16 +1975,12 @@ def _test_sample_tile_download_entries(
     if not include_previews:
         return entries
 
-    tif_path = paths[".tif"]
-    mask_path = paths["_mask.png"]
-    with rasterio.open(tif_path) as dataset:
-        image = dataset.read()
-    with rasterio.open(mask_path) as dataset:
-        mask = dataset.read(1)
+    image, mask, object_edge = _test_sample_tile_render_data(source_root, tile_index)
     previews = _test_sample_jpeg_previews(
         image,
         mask,
         tile_name=archive_base_name,
+        object_edge=object_edge,
     )
     entries.extend(
         (
@@ -1927,6 +2019,7 @@ def _test_sample_jpeg_previews(
     mask: np.ndarray,
     *,
     tile_name: str,
+    object_edge: np.ndarray | None = None,
 ) -> dict[str, bytes]:
     channel_count = image.shape[0] if image.ndim == 3 else 0
     if channel_count == 3:
@@ -1944,7 +2037,11 @@ def _test_sample_jpeg_previews(
         )
 
     stretched = tuple(_stretch_channel(image[index]) for index in range(channel_count))
-    edge = _mask_edge(mask)
+    edge = _mask_edge(mask) if object_edge is None else np.asarray(object_edge, dtype=bool)
+    if edge.shape != mask.shape:
+        raise TrainingUIAPIError(
+            f"Размер контура объектов {tile_name} не совпадает с размером TIFF."
+        )
     result: dict[str, bytes] = {}
     for name, channel_indices in preview_channels.items():
         preview = np.stack(
@@ -3459,10 +3556,12 @@ def _detail(session: Session, row: TestSampleRow) -> TestSampleDetail:
                 enabled=tile.enabled,
                 thumbnail_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/"
-                    f"{tile.tile_index}/thumbnail"
+                    f"{tile.tile_index}/thumbnail?renderer="
+                    f"{_INSTANCE_BOUNDARY_PREVIEW_VERSION}"
                 ),
                 preview_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/{tile.tile_index}/preview"
+                    f"?renderer={_INSTANCE_BOUNDARY_PREVIEW_VERSION}"
                 ),
             )
             for tile in row.tiles
