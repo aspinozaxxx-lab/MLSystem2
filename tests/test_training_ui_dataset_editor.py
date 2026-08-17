@@ -41,6 +41,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     _footprint_covers_geometry,
     _unique_basename_reference_matches,
 )
+from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
 from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
     _migration_features_equal,
@@ -843,6 +844,81 @@ def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
     assert payload["status"] == "ready"
     assert payload["source"] == "dataset"
     assert payload["training_result_id"] == str(local_result_id)
+    with create_session_factory(get_config())() as session:
+        assert not any(
+            (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"
+            for row in session.scalars(select(JobRow)).all()
+        )
+
+
+def test_dataset_editor_reuses_migrated_pseudo_when_legacy_scene_list_is_deleted(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    stored_root = get_config().stored_files_root
+    stored_root.mkdir(parents=True, exist_ok=True)
+    missing_scenes_path = stored_root / "deleted-legacy-scenes.txt"
+    pseudo_path = stored_root / "migrated-full-pseudo.geojson"
+    pseudo_path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": []}),
+        encoding="utf-8",
+    )
+    with create_session_factory(get_config())() as session:
+        dataset = next(
+            item
+            for item in list_managed_datasets(session, get_config())
+            if item.key == env.dataset_key
+        )
+        scenes_file = StoredFileRow(
+            kind="scenes_txt",
+            original_name=missing_scenes_path.name,
+            content_type="text/plain",
+            path=str(missing_scenes_path),
+            size_bytes=0,
+        )
+        pseudo_file = StoredFileRow(
+            kind="pseudo_markup_geojson",
+            original_name=pseudo_path.name,
+            content_type="application/geo+json",
+            path=str(pseudo_path),
+            size_bytes=pseudo_path.stat().st_size,
+            object_count=0,
+        )
+        session.add_all([scenes_file, pseudo_file])
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                dataset_key=env.dataset_key,
+                dataset_version=dataset.version,
+                training_result_id=result_id,
+                class_key=env.dataset_key,
+                source_dataset_name="Реки / test",
+                image_count=1,
+                scenes_file_id=scenes_file.id,
+                geojson_file_id=pseudo_file.id,
+                status="ok",
+            )
+        )
+        session.commit()
+
+    scene = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    ).json()["scenes"][0]
+    endpoint = (
+        "/api/v1/dataset-editor/datasets/"
+        f"{quote(env.dataset_key, safe='')}/scenes/"
+        f"{quote(scene['annotation_name'], safe='')}/pseudo-markup"
+    )
+
+    read_only = env.client.get(endpoint)
+    assert read_only.status_code == 200
+    assert read_only.json()["status"] == "ready"
+    assert read_only.json()["source"] == "dataset"
+    assert read_only.json()["training_result_id"] == str(result_id)
+    response = env.client.post(endpoint)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
     with create_session_factory(get_config())() as session:
         assert not any(
             (row.config or {}).get("operation") == "dataset_editor_scene_pseudo"

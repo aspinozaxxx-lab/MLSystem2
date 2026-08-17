@@ -1746,6 +1746,15 @@ def _pseudo_result_covers_image(
     dataset: DatasetInfo,
     image_path: Path,
 ) -> bool:
+    # После миграции legacy -> per-image исходный TXT результата может быть уже удалён.
+    # Совпадающая управляемая ревизия означает, что результат построен для состава
+    # именно этого датасета, включая сцены без единого предсказанного объекта.
+    if (
+        result.dataset_key == dataset.key
+        and result.dataset_version is not None
+        and result.dataset_version == dataset.version
+    ):
+        return True
     if result.scenes_file is None:
         return False
     try:
