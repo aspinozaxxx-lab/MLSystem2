@@ -175,10 +175,14 @@ def build_external_triton_model_export_zip(
     model_name: str,
     source_archive: Path,
     manifest: ExternalModelManifest,
+    python_site_packages: str | None = None,
 ) -> ModelExportArchive:
     """Переупаковать проверенную внешнюю TorchScript-модель под выбранным именем."""
 
     parsed_model_name = _validate_model_name(model_name)
+    effective_python_site_packages = (
+        python_site_packages if manifest.adapter == "detectron2_instances" else None
+    )
     try:
         validate_external_archive(source_archive, manifest)
     except Exception as exc:
@@ -196,6 +200,7 @@ def build_external_triton_model_export_zip(
             target_archive=service_zip_path,
             source_root=manifest.model_root,
             target_root=parsed_model_name,
+            python_site_packages=effective_python_site_packages,
         )
         _write_text(
             pipeline_dir / f"{parsed_model_name}_triton.yaml",
@@ -227,6 +232,7 @@ def build_external_triton_model_export_zip(
                 ),
                 "source_archive_sha256": manifest.archive_sha256,
                 "external_adapter": manifest.adapter,
+                "python_site_packages": effective_python_site_packages,
             },
         )
         zip_path = temp_root / f"{parsed_model_name}_export.zip"
@@ -274,6 +280,7 @@ def _rewrite_external_model_archive(
     target_archive: Path,
     source_root: str,
     target_root: str,
+    python_site_packages: str | None = None,
 ) -> None:
     config_name = f"{source_root}/config.pbtxt"
     with zipfile.ZipFile(source_archive) as source, zipfile.ZipFile(
@@ -291,7 +298,26 @@ def _rewrite_external_model_archive(
             content = source.read(item)
             if normalized == config_name:
                 content = _renamed_triton_config(content, target_root)
+            elif python_site_packages is not None and relative == "1/model.py":
+                content = _python_backend_model_with_site_packages(
+                    content,
+                    python_site_packages,
+                )
             target.writestr(f"{target_root}/{relative}", content)
+
+
+def _python_backend_model_with_site_packages(content: bytes, site_packages: str) -> bytes:
+    if not site_packages.startswith("/") or any(
+        value in site_packages for value in ("\n", "\r", "\x00")
+    ):
+        raise TrainingUIAPIError("Путь site-packages для Triton Python backend должен быть абсолютным.")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TrainingUIAPIError("model.py внешней модели должен быть UTF-8.") from exc
+    text = re.sub(r"(?m)^\s*import\s+cv2\s*$", "", text)
+    prefix = f"import sys\nsys.path.insert(0, {site_packages!r})\n"
+    return (prefix + text.lstrip("\ufeff")).encode("utf-8")
 
 
 def _renamed_triton_config(content: bytes, model_name: str) -> bytes:

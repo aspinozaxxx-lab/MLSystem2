@@ -1083,6 +1083,7 @@ def _geoalert_runtime_config(
         "geoalert_model_repository": str(config.geoalert_model_repository),
         "geoalert_pipeline_root": str(config.geoalert_pipeline_root),
         "geoalert_triton_http_url": config.geoalert_triton_http_url,
+        "geoalert_triton_python_site_packages": config.geoalert_triton_python_site_packages,
     }
 
 

@@ -482,10 +482,12 @@ def _ensure_runtime_export(
     checkpoint_sha = _sha256_file(checkpoint)
     model_identity = json.dumps(
         {
+            "runtime_contract": 2,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
             "external": config.get("external_model"),
+            "python_site_packages": config.get("geoalert_triton_python_site_packages"),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -558,6 +560,10 @@ def _ensure_runtime_export(
             model_name=model_name,
             source_archive=checkpoint,
             manifest=external_manifest,
+            python_site_packages=str(
+                config.get("geoalert_triton_python_site_packages")
+                or "/mlsystem2-venv/lib/python3.12/site-packages"
+            ),
         )
     else:
         archive = build_triton_model_export_zip(

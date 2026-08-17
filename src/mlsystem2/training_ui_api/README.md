@@ -32,6 +32,9 @@
 - `MLSYSTEM2_GEOALERT_MODEL_REPOSITORY` — model repository explicit-control Triton, default `/opt/geoalert/triton_models`.
 - `MLSYSTEM2_GEOALERT_PIPELINE_ROOT` — кеш сгенерированных pipeline, default `/opt/geoalert/pipelines/mlsystem2-runtime`.
 - `MLSYSTEM2_GEOALERT_TRITON_HTTP_URL` — локальный HTTP API Triton, default `http://127.0.0.1:8000`.
+- `MLSYSTEM2_GEOALERT_TRITON_PYTHON_SITE_PACKAGES` — read-only путь внутри контейнера Triton к
+  `site-packages` окружения MLSystem2 для Python-backend внешней модели ЗУ500, default
+  `/mlsystem2-venv/lib/python3.12/site-packages`.
 
 ## Endpoints
 

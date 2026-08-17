@@ -356,10 +356,11 @@ docker run -d \
   --name geoalert-triton \
   --gpus all \
   --restart unless-stopped \
-  -p 8000:8000 \
-  -p 8001:8001 \
-  -p 8002:8002 \
+  -p 127.0.0.1:8000:8000 \
+  -p 127.0.0.1:8001:8001 \
+  -p 127.0.0.1:8002:8002 \
   -v /opt/geoalert/triton_models:/models:ro \
+  -v /opt/mlsystem2/repo/.venv:/mlsystem2-venv:ro \
   nvcr.io/nvidia/tritonserver:25.03-py3 \
   tritonserver \
   --model-repository=/models \
@@ -367,6 +368,11 @@ docker run -d \
   --log-verbose=0 \
   --model-control-mode=explicit
 ```
+
+Mount `/mlsystem2-venv` обязателен для Python-backend внешней модели ЗУ500: runtime-export добавляет
+`/mlsystem2-venv/lib/python3.12/site-packages` в `sys.path`, после чего Triton использует совместимые
+`torch/torchvision` и зарегистрированный `torchvision::nms`. Модели по-прежнему запускаются Triton и штатными
+бриками Geoalert; окружение MLSystem2 подключается только как read-only набор Python-зависимостей.
 
 Не добавляй `--load-model`, если нет отдельного решения держать конкретную production-модель в памяти. После старта проверь, что сервер жив и repository index не содержит загруженных `READY` моделей:
 

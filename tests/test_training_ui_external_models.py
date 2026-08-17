@@ -222,6 +222,49 @@ def test_external_export_renames_root_and_config(tmp_path: Path) -> None:
         result.cleanup()
 
 
+def test_zu_external_export_connects_python_backend_to_shared_torch(tmp_path: Path) -> None:
+    archive_path = tmp_path / "model.zip"
+    with zipfile.ZipFile(archive_path, mode="w") as archive:
+        archive.writestr(
+            "sample/config.pbtxt",
+            'name: "sample"\nbackend: "python"\n',
+        )
+        archive.writestr("sample/1/model.pt", b"torchscript")
+        archive.writestr(
+            "sample/1/model.py",
+            "import numpy as np\nimport cv2\nimport torch\nimport torchvision\n",
+        )
+    manifest = _zu_manifest(sha256(archive_path.read_bytes()).hexdigest())
+
+    result = build_external_triton_model_export_zip(
+        model_name="imported_zu",
+        source_archive=archive_path,
+        manifest=manifest,
+        python_site_packages="/mlsystem2-venv/lib/python3.12/site-packages",
+    )
+    try:
+        with zipfile.ZipFile(result.zip_path) as outer:
+            metadata = json.loads(outer.read("export_metadata.json"))
+            assert metadata["python_site_packages"] == (
+                "/mlsystem2-venv/lib/python3.12/site-packages"
+            )
+            service_archive = tmp_path / "zu-service.zip"
+            service_archive.write_bytes(
+                outer.read("models-serving-service/imported_zu.zip")
+            )
+        with zipfile.ZipFile(service_archive) as model_zip:
+            model_code = model_zip.read("imported_zu/1/model.py").decode("utf-8")
+            assert model_code.startswith(
+                "import sys\n"
+                "sys.path.insert(0, '/mlsystem2-venv/lib/python3.12/site-packages')\n"
+            )
+            assert "import torch" in model_code
+            assert "import torchvision" in model_code
+            assert "import cv2" not in model_code
+    finally:
+        result.cleanup()
+
+
 def test_instance_merge_keeps_touching_objects_separate_and_resolves_overlap() -> None:
     features = [
         {

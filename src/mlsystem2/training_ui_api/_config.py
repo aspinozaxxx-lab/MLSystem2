@@ -100,6 +100,7 @@ class TrainingUIAPIConfig:
     geoalert_model_repository: Path = Path("/opt/geoalert/triton_models")
     geoalert_pipeline_root: Path = Path("/opt/geoalert/pipelines/mlsystem2-runtime")
     geoalert_triton_http_url: str = "http://127.0.0.1:8000"
+    geoalert_triton_python_site_packages: str = "/mlsystem2-venv/lib/python3.12/site-packages"
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -272,6 +273,10 @@ def get_config() -> TrainingUIAPIConfig:
             "MLSYSTEM2_GEOALERT_TRITON_HTTP_URL",
             "http://127.0.0.1:8000",
         ).rstrip("/"),
+        geoalert_triton_python_site_packages=os.getenv(
+            "MLSYSTEM2_GEOALERT_TRITON_PYTHON_SITE_PACKAGES",
+            "/mlsystem2-venv/lib/python3.12/site-packages",
+        ),
     )
 
 

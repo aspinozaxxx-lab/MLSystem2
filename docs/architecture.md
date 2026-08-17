@@ -189,7 +189,9 @@ process и помечает известный MLflow run как `KILLED`; по�
 загружает её через explicit model-control API, запускает штатный Geoalert `Compose` в отдельном окружении и
 после задания выгружает модель. Нативные модели проходят через `SplitRaster`, `Segmentation`,
 `MaskMorphology`, `VectorizeMasks` и настроенные vector bricks; внешние ЗУ500 и ОКС500 используют их
-собственные pipeline с `NSPDParcels`, NMS, коррекцией топологии и footprint. Один и тот же backend применяется
+собственные pipeline с `NSPDParcels`, NMS, коррекцией топологии и footprint. Python-backend ЗУ500 получает
+`torch/torchvision` из read-only mount окружения MLSystem2; это runtime-зависимость Triton, а не альтернативный
+predictor. Один и тот же backend применяется
 для полной и поснимочной псевдоразметки, AOI и F1 тестовых разметок; альтернативного локального predictor для
 ортофото нет. Сцены разрешаются через публичный
 `dataset_preparing.resolve_scene_images`: точное имя `SCNxx` не расширяется до соседних сцен, а одинаковые

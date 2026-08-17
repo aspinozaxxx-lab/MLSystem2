@@ -47,11 +47,16 @@ Triton container:
 
 ```bash
 docker run -d --name geoalert-triton --gpus all --restart unless-stopped \
-  -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+  -p 127.0.0.1:8000:8000 -p 127.0.0.1:8001:8001 -p 127.0.0.1:8002:8002 \
   -v /opt/geoalert/triton_models:/models:ro \
+  -v /opt/mlsystem2/repo/.venv:/mlsystem2-venv:ro \
   nvcr.io/nvidia/tritonserver:25.03-py3 \
-  tritonserver --model-repository=/models --strict-model-config=true --log-verbose=0
+  tritonserver --model-repository=/models --strict-model-config=true --log-verbose=0 \
+  --model-control-mode=explicit
 ```
+
+Read-only mount `/mlsystem2-venv` предоставляет `torch/torchvision` Python-backend внешней модели ЗУ500;
+инференс остаётся внутри Triton и вызывается бриком Geoalert `NSPDParcels`.
 
 Status:
 
