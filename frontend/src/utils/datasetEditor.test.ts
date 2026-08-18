@@ -15,6 +15,7 @@ import {
   featureCounts,
   geometryInsideFootprint,
   isCurrentDatasetScene,
+  isUndoShortcut,
   preventMapMiddleButtonDefault,
   publishScenes,
   sceneClassCounts,
@@ -99,6 +100,44 @@ describe("черновики редактора датасетов", () => {
     expect(prevented).toBe(0);
     expect(preventMapMiddleButtonDefault({ button: 1, preventDefault })).toBe(true);
     expect(prevented).toBe(1);
+  });
+
+  it("распознаёт отмену на физической клавише Z в латинской и русской раскладках", () => {
+    expect(isUndoShortcut({
+      altKey: false,
+      code: "KeyZ",
+      ctrlKey: true,
+      key: "z",
+      metaKey: false,
+    })).toBe(true);
+    expect(isUndoShortcut({
+      altKey: false,
+      code: "KeyZ",
+      ctrlKey: true,
+      key: "я",
+      metaKey: false,
+    })).toBe(true);
+    expect(isUndoShortcut({
+      altKey: false,
+      code: "",
+      ctrlKey: false,
+      key: "Я",
+      metaKey: true,
+    })).toBe(true);
+    expect(isUndoShortcut({
+      altKey: true,
+      code: "KeyZ",
+      ctrlKey: true,
+      key: "я",
+      metaKey: false,
+    })).toBe(false);
+    expect(isUndoShortcut({
+      altKey: false,
+      code: "KeyY",
+      ctrlKey: true,
+      key: "н",
+      metaKey: false,
+    })).toBe(false);
   });
 
   it("принимает численную погрешность на границе footprint, но отклоняет реальный выход", () => {

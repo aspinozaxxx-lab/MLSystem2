@@ -31,6 +31,14 @@ export function preventMapMiddleButtonDefault(
   return true;
 }
 
+export function isUndoShortcut(
+  event: Pick<KeyboardEvent, "altKey" | "code" | "ctrlKey" | "key" | "metaKey">,
+): boolean {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
+  const key = event.key.toLocaleLowerCase("ru");
+  return event.code === "KeyZ" || key === "z" || key === "я";
+}
+
 export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];

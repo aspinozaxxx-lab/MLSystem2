@@ -8,6 +8,8 @@ import {
   Folder,
   FolderOpen,
   Layers,
+  Maximize2,
+  Minimize2,
   MousePointer2,
   PaintBucket,
   PencilLine,
@@ -52,6 +54,7 @@ import {
   featureCounts,
   geometryInsideFootprint,
   isCurrentDatasetScene,
+  isUndoShortcut,
   preventMapMiddleButtonDefault,
   RASTER_CONTRAST,
   sceneClassCounts,
@@ -256,12 +259,14 @@ export function DatasetEditorPage({
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [drawInProgress, setDrawInProgress] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
   const [rebuildPreview, setRebuildPreview] = useState<RebuildPreview | null>(null);
   const mapTargetRef = useRef<HTMLDivElement | null>(null);
+  const workspaceRef = useRef<HTMLElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
@@ -1437,7 +1442,7 @@ export function DatasetEditorPage({
         deleteSelectedVertices();
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "z") {
+      if (isUndoShortcut(event)) {
         event.preventDefault();
         undoCurrent();
       }
@@ -1445,6 +1450,34 @@ export function DatasetEditorPage({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [deleteSelectedVertices, undoCurrent]);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setFullscreen(document.fullscreenElement === workspaceRef.current);
+      window.requestAnimationFrame(() => mapRef.current?.updateSize());
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    try {
+      if (document.fullscreenElement === workspace) {
+        await document.exitFullscreen();
+        return;
+      }
+      if (!workspace.requestFullscreen) {
+        window.alert("Полноэкранный режим не поддерживается этим браузером.");
+        return;
+      }
+      if (document.fullscreenElement) await document.exitFullscreen();
+      await workspace.requestFullscreen();
+    } catch {
+      window.alert("Не удалось переключить полноэкранный режим.");
+    }
+  }, []);
 
   const toggleFill = () => {
     const next = !fillEnabledRef.current;
@@ -1735,7 +1768,10 @@ export function DatasetEditorPage({
             </div>
           </aside>
 
-          <section className="panel dataset-editor-workspace">
+          <section
+            className={`panel dataset-editor-workspace${fullscreen ? " fullscreen" : ""}`}
+            ref={workspaceRef}
+          >
             {detail && activeDraft ? (
               <>
                 <div className="dataset-editor-toolbar">
@@ -1836,7 +1872,7 @@ export function DatasetEditorPage({
                       type="button"
                       disabled={!drawInProgress && !activeDraft.history.length}
                       aria-label="Отменить последнее действие"
-                      title="Отменить последнее действие (Ctrl+Z)"
+                      title="Отменить последнее действие (Ctrl+Z / Ctrl+Я)"
                       onClick={undoCurrent}
                     >
                       <Undo2 size={17} />
@@ -1845,7 +1881,7 @@ export function DatasetEditorPage({
                       className="danger icon-button dataset-editor-icon-button"
                       type="button"
                       aria-label="Удалить выбранный полигон"
-                      title="Удалить выбранный полигон; действие можно отменить через Ctrl+Z"
+                      title="Удалить выбранный полигон; действие можно отменить через Ctrl+Z / Ctrl+Я"
                       onClick={deleteSelected}
                     >
                       <Trash2 size={17} />
@@ -1863,7 +1899,7 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин, Del — удалить выбранные; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z — отмена.
+                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин, Del — удалить выбранные; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена.
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
@@ -1952,6 +1988,16 @@ export function DatasetEditorPage({
                         </div>
                       </div>
                     ) : null}
+                    <button
+                      className={`${fullscreen ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
+                      type="button"
+                      aria-label={fullscreen ? "Выйти из полноэкранного режима" : "Открыть редактор на весь экран"}
+                      aria-pressed={fullscreen}
+                      title={fullscreen ? "Выйти из полноэкранного режима (Esc)" : "Открыть редактор на весь экран"}
+                      onClick={() => void toggleFullscreen()}
+                    >
+                      {fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+                    </button>
                   </div>
                   {pseudoVisible && pseudoMarkup ? (
                     <div className={`dataset-editor-pseudo-status ${pseudoMarkup.status}`} role="status">

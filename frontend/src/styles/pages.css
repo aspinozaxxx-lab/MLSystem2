@@ -1295,6 +1295,23 @@
   min-width: 0;
 }
 
+.dataset-editor-workspace:fullscreen,
+.dataset-editor-workspace.fullscreen {
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.dataset-editor-workspace:fullscreen .dataset-editor-map-shell,
+.dataset-editor-workspace.fullscreen .dataset-editor-map-shell {
+  min-height: 0;
+}
+
 .dataset-editor-toolbar {
   display: flex;
   flex-wrap: wrap;
