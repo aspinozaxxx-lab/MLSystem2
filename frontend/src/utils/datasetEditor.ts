@@ -39,6 +39,15 @@ export function isUndoShortcut(
   return event.code === "KeyZ" || key === "z" || key === "я";
 }
 
+export function selectedDeleteAction(
+  selectedVertexCount: number,
+  selectedFeatureCount: number,
+): "vertices" | "features" | null {
+  if (selectedVertexCount > 0) return "vertices";
+  if (selectedFeatureCount > 0) return "features";
+  return null;
+}
+
 export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];

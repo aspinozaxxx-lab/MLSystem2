@@ -59,6 +59,7 @@ import {
   RASTER_CONTRAST,
   sceneClassCounts,
   sceneCounts,
+  selectedDeleteAction,
   snapshotsEqual,
   sortEditorScenes,
   undoDraft,
@@ -1352,7 +1353,7 @@ export function DatasetEditorPage({
     await loadScenes(datasetKey);
   };
 
-  const deleteSelected = () => {
+  const deleteSelected = useCallback(() => {
     const selected = selectRef.current?.getFeatures();
     const source = vectorSourceRef.current;
     if (!selected || !source || selected.getLength() === 0) return;
@@ -1361,7 +1362,7 @@ export function DatasetEditorPage({
     selected.getArray().forEach((feature) => source.removeFeature(feature));
     selected.clear();
     if (before) recordCurrentChange(before);
-  };
+  }, [captureActiveSnapshot, recordCurrentChange, setSelectedVertices]);
 
   const restoreActiveSnapshot = useCallback((snapshot: DraftSnapshot) => {
     const source = vectorSourceRef.current;
@@ -1437,9 +1438,14 @@ export function DatasetEditorPage({
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInput(event.target)) return;
       if (event.key === "Delete" || event.key === "Backspace") {
-        if (!selectedVerticesRef.current.length) return;
+        const action = selectedDeleteAction(
+          selectedVerticesRef.current.length,
+          selectRef.current?.getFeatures().getLength() || 0,
+        );
+        if (!action) return;
         event.preventDefault();
-        deleteSelectedVertices();
+        if (action === "vertices") deleteSelectedVertices();
+        else deleteSelected();
         return;
       }
       if (isUndoShortcut(event)) {
@@ -1449,7 +1455,7 @@ export function DatasetEditorPage({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelectedVertices, undoCurrent]);
+  }, [deleteSelected, deleteSelectedVertices, undoCurrent]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1905,7 +1911,7 @@ export function DatasetEditorPage({
                       className="danger icon-button dataset-editor-icon-button"
                       type="button"
                       aria-label="Удалить выбранный полигон"
-                      title="Удалить выбранный полигон; действие можно отменить через Ctrl+Z / Ctrl+Я"
+                      title="Удалить выбранный полигон (Del); действие можно отменить через Ctrl+Z / Ctrl+Я"
                       onClick={deleteSelected}
                     >
                       <Trash2 size={17} />
@@ -1923,7 +1929,7 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин, Del — удалить выбранные; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена.
+                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена.
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" aria-label="Легенда типов объектов">

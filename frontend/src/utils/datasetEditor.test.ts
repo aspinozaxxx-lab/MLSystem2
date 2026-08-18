@@ -19,6 +19,7 @@ import {
   preventMapMiddleButtonDefault,
   publishScenes,
   sceneClassCounts,
+  selectedDeleteAction,
   snapshotsEqual,
   sortEditorScenes,
   undoDraft,
@@ -138,6 +139,12 @@ describe("черновики редактора датасетов", () => {
       key: "н",
       metaKey: false,
     })).toBe(false);
+  });
+
+  it("удаляет клавишей Del сначала вершины, а без них — выделенный полигон", () => {
+    expect(selectedDeleteAction(2, 1)).toBe("vertices");
+    expect(selectedDeleteAction(0, 1)).toBe("features");
+    expect(selectedDeleteAction(0, 0)).toBeNull();
   });
 
   it("принимает численную погрешность на границе footprint, но отклоняет реальный выход", () => {
