@@ -25,7 +25,12 @@ from mlsystem2.training_ui_api._dataset_catalog import (
     update_dataset_class,
     update_managed_dataset,
 )
-from mlsystem2.training_ui_api._models import DatasetClassRow, DatasetRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import (
+    DatasetClassRow,
+    DatasetEditorDraftRow,
+    DatasetRow,
+    TrainingResultRow,
+)
 from mlsystem2.training_ui_api.contracts import (
     DatasetClassCreate,
     DatasetClassUpdate,
@@ -342,7 +347,72 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
             shape(by_class[second_slug]["geometry"])
         ).area == 0
 
-        old_version = managed.version
+        original_version = managed.version
+        updated_catalog = update_managed_dataset(
+            session,
+            managed.key,
+            ManagedDatasetUpdate(
+                name="обновлённый",
+                sources=[
+                    {
+                        "dataset_key": source_classes["Первый"].datasets[0].key,
+                        "priority": -10,
+                        "color": "#AABBCC",
+                    },
+                    {
+                        "dataset_key": source_classes["Второй"].datasets[0].key,
+                        "priority": 200,
+                        "color": "#DDEEFF",
+                    },
+                ],
+            ),
+            config,
+        )
+        updated = next(
+            item
+            for item in updated_catalog.classes
+            if item.key == target_class.key
+        ).datasets[0]
+        assert updated.key == managed.key
+        assert updated.dataset_name == "обновлённый"
+        assert [item.class_name for item in updated.managed_sources] == ["Первый", "Второй"]
+        assert [item.priority for item in updated.managed_sources] == [-10, 200]
+        assert [item.color for item in updated.managed_sources] == ["#AABBCC", "#DDEEFF"]
+        assert updated.version != original_version
+
+        draft = DatasetEditorDraftRow(
+            dataset_key=managed.key,
+            annotation_name=annotation_name,
+            username="картограф",
+            base_revision="revision",
+            geojson={"type": "FeatureCollection", "features": []},
+        )
+        session.add(draft)
+        session.flush()
+        with pytest.raises(TrainingUIAPIError, match="черновики"):
+            update_managed_dataset(
+                session,
+                managed.key,
+                ManagedDatasetUpdate(
+                    sources=[
+                        {
+                            "dataset_key": source_classes["Первый"].datasets[0].key,
+                            "priority": -10,
+                            "color": "#AABBCC",
+                        },
+                        {
+                            "dataset_key": source_classes["Второй"].datasets[0].key,
+                            "priority": 200,
+                            "color": "#FFFFFF",
+                        },
+                    ]
+                ),
+                config,
+            )
+        session.delete(draft)
+        session.flush()
+
+        old_version = updated.version
         _write_per_image_source(first_path, annotation_name, box(1, 1, 8, 8), "first")
         refreshed = next(
             item

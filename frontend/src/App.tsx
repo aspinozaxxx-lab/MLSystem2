@@ -48,6 +48,8 @@ import type {
   CustomDatasetInfo,
   DatasetCatalogInfo,
   DatasetEditorMutationResult,
+  DatasetEditorUserDraftInfo,
+  DatasetEditorUserDraftListResponse,
   DatasetInfo,
   ImageryType,
   ImageFolderInfo,
@@ -2557,15 +2559,24 @@ function parseExportSampleSize(value: string): number | null | undefined {
 
 function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
   const [catalog, setCatalog] = useState<DatasetCatalogInfo | null>(null);
+  const [userDrafts, setUserDrafts] = useState<DatasetEditorUserDraftInfo[] | null>(null);
 
   const loadCatalog = useCallback(async () => {
     const payload = await run(() => apiJson<DatasetCatalogInfo>("/dataset-catalog"));
     if (payload) setCatalog(payload);
   }, [run]);
 
+  const loadUserDrafts = useCallback(async () => {
+    const payload = await run(() =>
+      apiJson<DatasetEditorUserDraftListResponse>("/dataset-editor/drafts"),
+    );
+    if (payload) setUserDrafts(payload.drafts);
+  }, [run]);
+
   useEffect(() => {
     void loadCatalog();
-  }, [loadCatalog]);
+    void loadUserDrafts();
+  }, [loadCatalog, loadUserDrafts]);
 
   const applyCatalog = async (payload: DatasetCatalogInfo | undefined) => {
     if (!payload) return;
@@ -2693,20 +2704,24 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     });
   };
 
-  const openManagedDatasetCreator = (
+  const openManagedDatasetParameters = (
     classInfo: NonNullable<DatasetCatalogInfo["classes"]>[number],
+    dataset?: DatasetInfo,
   ) => {
     if (!catalog) return;
     showModal({
-      title: "Новый управляемый датасет",
+      title: dataset
+        ? `Управляемый датасет «${dataset.dataset_name || dataset.name}»`
+        : "Новый управляемый датасет",
       wide: true,
       body: (
-        <CreateManagedDatasetForm
+        <ManagedDatasetForm
           targetClass={classInfo}
           catalog={catalog}
+          dataset={dataset}
           run={run}
           onCancel={closeModal}
-          onCreated={async (payload) => {
+          onSaved={async (payload) => {
             closeModal();
             await applyCatalog(payload);
           }}
@@ -2751,6 +2766,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
               );
               if (!result) return;
               await loadCatalog();
+              await loadUserDrafts();
               await reloadBootstrap();
               showModal({
                 title: "Датасет удалён",
@@ -2787,6 +2803,38 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           </button>
         )}
       />
+      {userDrafts?.length ? (
+        <section className="panel class-editor-user-drafts">
+          <PanelHeader
+            title="Мои черновики"
+            subtitle="Сохранённые, но ещё не опубликованные изменения"
+          />
+          <div className="class-editor-user-draft-list">
+            {userDrafts.map((draft) => (
+              <a
+                className="class-editor-user-draft"
+                href={`#/dataset-editor/${encodeURIComponent(draft.dataset_key)}`}
+                key={draft.dataset_key}
+              >
+                <FileText size={18} />
+                <span className="source-lines">
+                  <strong>{draft.class_name} · {draft.dataset_name}</strong>
+                  <span className="muted">
+                    Снимков с изменениями: {draft.scene_count}
+                    {draft.deleted_scene_count
+                      ? ` · на удаление: ${draft.deleted_scene_count}`
+                      : ""}
+                  </span>
+                  <span className="muted">Обновлено: {formatDateTime(draft.updated_at)}</span>
+                </span>
+                <span className="class-editor-user-draft-action">
+                  Продолжить <ExternalLink size={14} />
+                </span>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <section className="panel">
         <PanelHeader title="Новый класс" subtitle="Выберите тип снимков, затем добавьте датасеты" />
         <form className="inline-form" onSubmit={createClass}>
@@ -2874,15 +2922,15 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                       <span className={`badge ${(dataset.diagnostics || []).length ? "warning" : "ok"}`}>
                         {(dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
                       </span>
-                      {!dataset.managed ? (
-                        <button
-                          className="secondary"
-                          type="button"
-                          onClick={() => openDatasetEditor(classInfo.key, dataset)}
-                        >
-                          Параметры
-                        </button>
-                      ) : null}
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => dataset.managed
+                          ? openManagedDatasetParameters(classInfo, dataset)
+                          : openDatasetEditor(classInfo.key, dataset)}
+                      >
+                        Параметры
+                      </button>
                       <button
                         className="danger icon-button"
                         type="button"
@@ -2917,7 +2965,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
               <button
                 className="secondary"
                 type="button"
-                onClick={() => openManagedDatasetCreator(classInfo)}
+                onClick={() => openManagedDatasetParameters(classInfo)}
               >
                 <Layers3 size={15} /> Создать управляемый
               </button>
@@ -4519,18 +4567,20 @@ type ManagedDatasetDraftSource = {
   color: string;
 };
 
-function CreateManagedDatasetForm({
+function ManagedDatasetForm({
   targetClass,
   catalog,
+  dataset,
   run,
   onCancel,
-  onCreated,
+  onSaved,
 }: {
   targetClass: NonNullable<DatasetCatalogInfo["classes"]>[number];
   catalog: DatasetCatalogInfo;
+  dataset?: DatasetInfo;
   run: Runner;
   onCancel: () => void;
-  onCreated: (catalog: DatasetCatalogInfo) => Promise<void>;
+  onSaved: (catalog: DatasetCatalogInfo) => Promise<void>;
 }) {
   const palette = ["#3B82F6", "#22C55E", "#F59E0B", "#8B5CF6", "#EF4444", "#06B6D4"];
   const candidates = useMemo(
@@ -4544,15 +4594,21 @@ function CreateManagedDatasetForm({
       .map((dataset) => ({ dataset, classInfo }))),
     [catalog.classes, targetClass.imagery_type],
   );
-  const [name, setName] = useState("main");
-  const [sources, setSources] = useState<ManagedDatasetDraftSource[]>(() =>
-    candidates.map(({ dataset }, index) => ({
-      dataset,
-      selected: false,
-      priority: Math.max(0, 100 - index * 10),
-      color: palette[index % palette.length],
-    })),
-  );
+  const [name, setName] = useState(dataset?.dataset_name || "main");
+  const [sources, setSources] = useState<ManagedDatasetDraftSource[]>(() => {
+    const existing = new Map(
+      (dataset?.managed_sources || []).map((source) => [source.dataset_key, source]),
+    );
+    return candidates.map(({ dataset: candidate }, index) => {
+      const current = existing.get(candidate.key);
+      return {
+        dataset: candidate,
+        selected: Boolean(current),
+        priority: current?.priority ?? Math.max(0, 100 - index * 10),
+        color: current?.color || palette[index % palette.length],
+      };
+    });
+  });
   const selected = sources.filter((item) => item.selected);
   const selectedClassKeys = new Set(selected.map((item) => item.dataset.class_key));
   const valid = name.trim().length > 0 && selected.length >= 2
@@ -4567,19 +4623,24 @@ function CreateManagedDatasetForm({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!valid) return;
-    const payload = await run(() => apiJson<DatasetCatalogInfo>("/managed-datasets/compose", {
-      method: "POST",
-      body: {
-        class_key: targetClass.key,
-        name: name.trim(),
-        sources: selected.map((item) => ({
-          dataset_key: item.dataset.key,
-          priority: item.priority,
-          color: item.color,
-        })),
+    const payload = await run(() => apiJson<DatasetCatalogInfo>(
+      dataset
+        ? `/managed-datasets/${encodeURIComponent(dataset.key)}`
+        : "/managed-datasets/compose",
+      {
+        method: dataset ? "PATCH" : "POST",
+        body: {
+          ...(dataset ? {} : { class_key: targetClass.key }),
+          name: name.trim(),
+          sources: selected.map((item) => ({
+            dataset_key: item.dataset.key,
+            priority: item.priority,
+            color: item.color,
+          })),
+        },
       },
-    }));
-    if (payload) await onCreated(payload);
+    ));
+    if (payload) await onSaved(payload);
   };
 
   return (
@@ -4645,7 +4706,9 @@ function CreateManagedDatasetForm({
       ) : null}
       <div className="button-row modal-form-actions">
         <button className="secondary" type="button" onClick={onCancel}>Отмена</button>
-        <button className="primary" type="submit" disabled={!valid}>Создать</button>
+        <button className="primary" type="submit" disabled={!valid}>
+          {dataset ? "Сохранить" : "Создать"}
+        </button>
       </div>
     </form>
   );

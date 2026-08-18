@@ -45,6 +45,7 @@ import {
   appendHistory,
   cloneSnapshot,
   deleteEditableVertices,
+  datasetObjectTotals,
   draftChanged,
   editableVertexCoordinates,
   editableVertices,
@@ -332,6 +333,10 @@ export function DatasetEditorPage({
   const objectTypeChoices = useMemo(
     () => selectedDataset?.object_types || [],
     [selectedDataset],
+  );
+  const datasetTotals = useMemo(
+    () => datasetObjectTotals(scenes, drafts),
+    [drafts, scenes],
   );
   const activeClassCounts = useMemo(
     () => activeDraft ? featureClassCounts(activeDraft.current.geojson) : {},
@@ -1708,7 +1713,26 @@ export function DatasetEditorPage({
         <section className="dataset-editor-layout">
           <aside className="panel dataset-editor-scenes">
             <div className="dataset-editor-scenes-header">
-              <div><h2>Снимки</h2><p>{scenes.length} шт.</p></div>
+              <div>
+                <h2>Снимки</h2>
+                <p>{scenes.length} шт.</p>
+                <div className="dataset-editor-scenes-totals">
+                  {selectedDataset?.task === "multiclass"
+                    ? objectTypeChoices.map((item) => (
+                        <span key={item.slug} style={{ color: item.color }}>
+                          {item.name}: <strong>{datasetTotals.classCounts[item.slug] || 0}</strong>
+                        </span>
+                      ))
+                    : (
+                        <span style={{ color: POSITIVE_COLOR }}>
+                          Разметка: <strong>{datasetTotals.positive}</strong>
+                        </span>
+                      )}
+                  <span style={{ color: HARD_NEGATIVE_COLOR }}>
+                    Hard negative: <strong>{datasetTotals.hardNegative}</strong>
+                  </span>
+                </div>
+              </div>
               <button
                 className="secondary icon-button dataset-editor-small-icon"
                 type="button"

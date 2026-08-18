@@ -345,6 +345,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** User Drafts */
+        get: operations["user_drafts_api_v1_dataset_editor_drafts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets": {
         parameters: {
             query?: never;
@@ -2226,6 +2243,31 @@ export interface components {
             /** Scenes */
             scenes: components["schemas"]["DatasetEditorSceneInfo"][];
         };
+        /** DatasetEditorUserDraftInfo */
+        DatasetEditorUserDraftInfo: {
+            /** Dataset Key */
+            dataset_key: string;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Scene Count */
+            scene_count: number;
+            /** Deleted Scene Count */
+            deleted_scene_count: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** DatasetEditorUserDraftListResponse */
+        DatasetEditorUserDraftListResponse: {
+            /** Drafts */
+            drafts: components["schemas"]["DatasetEditorUserDraftInfo"][];
+        };
         /**
          * DatasetFormat
          * @enum {string}
@@ -2696,6 +2738,8 @@ export interface components {
             name?: string | null;
             /** Source Path */
             source_path?: string | null;
+            /** Sources */
+            sources?: components["schemas"]["ManagedDatasetCompositionSourceCreate"][] | null;
         };
         /** MarkupExportInfo */
         MarkupExportInfo: {
@@ -4574,6 +4618,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    user_drafts_api_v1_dataset_editor_drafts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorUserDraftListResponse"];
                 };
             };
         };

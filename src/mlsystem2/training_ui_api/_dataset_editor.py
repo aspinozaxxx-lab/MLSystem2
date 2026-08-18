@@ -91,6 +91,8 @@ from .contracts import (
     DatasetEditorSceneDetail,
     DatasetEditorSceneInfo,
     DatasetEditorSceneListResponse,
+    DatasetEditorUserDraftInfo,
+    DatasetEditorUserDraftListResponse,
     DatasetInfo,
     JobSource,
     JobStatus,
@@ -166,6 +168,59 @@ def list_editor_datasets(
             )
         result.sort(key=lambda item: (item.class_name.casefold(), item.dataset_name.casefold()))
         return DatasetEditorDatasetListResponse(datasets=result)
+
+
+def list_editor_user_drafts(
+    session: Session,
+    *,
+    username: str,
+) -> DatasetEditorUserDraftListResponse:
+    rows = session.execute(
+        select(
+            DatasetEditorDraftRow.dataset_key,
+            DatasetEditorDraftRow.deleted,
+            DatasetEditorDraftRow.updated_at,
+            DatasetRow.name,
+            DatasetClassRow.key,
+            DatasetClassRow.name,
+        )
+        .join(DatasetRow, DatasetRow.key == DatasetEditorDraftRow.dataset_key)
+        .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
+        .where(
+            DatasetEditorDraftRow.username == username,
+            DatasetRow.deleted_at.is_(None),
+        )
+    ).all()
+    grouped: dict[str, DatasetEditorUserDraftInfo] = {}
+    for dataset_key, deleted, updated_at, dataset_name, class_key, class_name in rows:
+        current = grouped.get(dataset_key)
+        if current is None:
+            grouped[dataset_key] = DatasetEditorUserDraftInfo(
+                dataset_key=dataset_key,
+                class_key=class_key,
+                class_name=class_name,
+                dataset_name=dataset_name,
+                scene_count=1,
+                deleted_scene_count=int(deleted),
+                updated_at=updated_at,
+            )
+            continue
+        grouped[dataset_key] = current.model_copy(
+            update={
+                "scene_count": current.scene_count + 1,
+                "deleted_scene_count": current.deleted_scene_count + int(deleted),
+                "updated_at": max(current.updated_at, updated_at),
+            }
+        )
+    drafts = sorted(
+        grouped.values(),
+        key=lambda item: (
+            -item.updated_at.timestamp(),
+            item.class_name.casefold(),
+            item.dataset_name.casefold(),
+        ),
+    )
+    return DatasetEditorUserDraftListResponse(drafts=drafts)
 
 
 def list_editor_scenes(

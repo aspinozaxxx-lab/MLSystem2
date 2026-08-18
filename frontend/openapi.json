@@ -624,6 +624,24 @@
         }
       }
     },
+    "/api/v1/dataset-editor/drafts": {
+      "get": {
+        "summary": "User Drafts",
+        "operationId": "user_drafts_api_v1_dataset_editor_drafts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorUserDraftListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets": {
       "get": {
         "summary": "Datasets",
@@ -6054,6 +6072,70 @@
         ],
         "title": "DatasetEditorSceneListResponse"
       },
+      "DatasetEditorUserDraftInfo": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "scene_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Scene Count"
+          },
+          "deleted_scene_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Deleted Scene Count"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key",
+          "class_key",
+          "class_name",
+          "dataset_name",
+          "scene_count",
+          "deleted_scene_count",
+          "updated_at"
+        ],
+        "title": "DatasetEditorUserDraftInfo"
+      },
+      "DatasetEditorUserDraftListResponse": {
+        "properties": {
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorUserDraftInfo"
+            },
+            "type": "array",
+            "title": "Drafts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "drafts"
+        ],
+        "title": "DatasetEditorUserDraftListResponse"
+      },
       "DatasetFormat": {
         "type": "string",
         "enum": [
@@ -7430,6 +7512,21 @@
               }
             ],
             "title": "Source Path"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ManagedDatasetCompositionSourceCreate"
+                },
+                "type": "array",
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
           }
         },
         "additionalProperties": false,

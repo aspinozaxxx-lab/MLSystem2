@@ -49,6 +49,24 @@ class DatasetEditorDatasetListResponse(BaseModel):
     datasets: list[DatasetEditorDatasetInfo]
 
 
+class DatasetEditorUserDraftInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str
+    class_key: str
+    class_name: str
+    dataset_name: str
+    scene_count: int = Field(gt=0)
+    deleted_scene_count: int = Field(ge=0)
+    updated_at: datetime
+
+
+class DatasetEditorUserDraftListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: list[DatasetEditorUserDraftInfo]
+
+
 class DatasetEditorDraftSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -290,4 +308,6 @@ __all__ = [
     "DatasetEditorSceneDetail",
     "DatasetEditorSceneInfo",
     "DatasetEditorSceneListResponse",
+    "DatasetEditorUserDraftInfo",
+    "DatasetEditorUserDraftListResponse",
 ]

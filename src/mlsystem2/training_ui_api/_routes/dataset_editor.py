@@ -23,6 +23,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     editor_scene_pseudo_markup,
     list_editor_datasets,
     list_editor_scenes,
+    list_editor_user_drafts,
     publish_editor_drafts,
     publish_editor_scenes,
     preview_editor_dataset_rebuild,
@@ -49,6 +50,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorSaveDraftRequest,
     DatasetEditorSceneDetail,
     DatasetEditorSceneListResponse,
+    DatasetEditorUserDraftListResponse,
 )
 
 from .common import RouteContext
@@ -58,6 +60,16 @@ _STREAM_CHUNK_SIZE = 1024 * 1024
 
 
 def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get(
+        "/api/v1/dataset-editor/drafts",
+        response_model=DatasetEditorUserDraftListResponse,
+    )
+    def user_drafts(
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorUserDraftListResponse:
+        return list_editor_user_drafts(db, username=username)
+
     @app.get(
         "/api/v1/dataset-editor/datasets",
         response_model=DatasetEditorDatasetListResponse,

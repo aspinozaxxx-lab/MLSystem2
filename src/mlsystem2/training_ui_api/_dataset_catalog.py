@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from mlsystem2.dataset_preparing.api import (
@@ -43,6 +43,7 @@ from ._datasets import (
 from ._models import (
     AutomationRuleRow,
     DatasetClassRow,
+    DatasetEditorDraftRow,
     DatasetRow,
     ManagedDatasetSourceRow,
     InferenceTemplateRow,
@@ -66,6 +67,7 @@ from .contracts import (
     ImageryTypeInfo,
     ManagedDatasetCreate,
     ManagedDatasetCompositionCreate,
+    ManagedDatasetCompositionSourceCreate,
     ManagedDatasetUpdate,
     TrainingUIAPIError,
 )
@@ -83,6 +85,16 @@ DEFAULT_IMAGERY_TYPE = "kanopus"
 IMAGERY_NAMES = {"kanopus": "Канопус", "ortho": "Ортофото"}
 QUALITY_PIXEL = "pixel"
 QUALITY_OBJECTS = "objects"
+MANAGED_DATASET_PALETTE = (
+    "#3B82F6",
+    "#22C55E",
+    "#F59E0B",
+    "#8B5CF6",
+    "#EF4444",
+    "#06B6D4",
+    "#EC4899",
+    "#84CC16",
+)
 _SYNC_LOCK = threading.RLock()
 _SYNC_TTL_SECONDS = 60.0
 _LAST_SYNC_BY_ROOT: dict[Path, tuple[float, tuple[tuple[str, int], ...]]] = {}
@@ -472,17 +484,16 @@ def create_managed_dataset(
     return managed_dataset_catalog(session, config)
 
 
-def create_managed_dataset_composition(
+def _managed_composition_source_specs(
     session: Session,
-    request: ManagedDatasetCompositionCreate,
     config: TrainingUIAPIConfig,
-) -> DatasetCatalogInfo:
-    """Создать виртуальный multiclass-датасет из binary per-image источников."""
-
-    class_row = _class_row(session, request.class_key)
-    name = _clean_name(request.name, "Название датасета")
-    _ensure_dataset_name_available(session, class_row.id, name)
-    requested_by_key = {item.dataset_key: item for item in request.sources}
+    class_row: DatasetClassRow,
+    requested_sources: list[ManagedDatasetCompositionSourceCreate],
+    existing_relations: list[ManagedDatasetSourceRow] | None = None,
+) -> list[
+    tuple[DatasetRow, DatasetClassRow, ManagedDatasetCompositionSourceCreate, int, str]
+]:
+    requested_by_key = {item.dataset_key: item for item in requested_sources}
     source_rows = session.execute(
         select(DatasetRow, DatasetClassRow)
         .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
@@ -517,6 +528,99 @@ def create_managed_dataset_composition(
                 f"Источник «{source_class.name}\\{source.name}» должен быть binary."
             )
 
+    existing_by_source = {
+        item.source_dataset_id: item for item in (existing_relations or [])
+    }
+    ordered_sources = sorted(
+        source_rows,
+        key=lambda item: (
+            0 if item[0].id in existing_by_source else 1,
+            (
+                existing_by_source[item[0].id].object_type_id
+                if item[0].id in existing_by_source
+                else -requested_by_key[item[0].key].priority
+            ),
+            item[1].name.casefold(),
+            item[0].name.casefold(),
+        ),
+    )
+    return [
+        (
+            source,
+            source_class,
+            requested_by_key[source.key],
+            index,
+            (
+                requested_by_key[source.key].color
+                or (
+                    existing_by_source[source.id].color
+                    if source.id in existing_by_source
+                    else None
+                )
+                or MANAGED_DATASET_PALETTE[(index - 1) % len(MANAGED_DATASET_PALETTE)]
+            ).upper(),
+        )
+        for index, (source, source_class) in enumerate(ordered_sources, start=1)
+    ]
+
+
+def _replace_managed_composition_sources(
+    session: Session,
+    dataset: DatasetRow,
+    specs: list[
+        tuple[DatasetRow, DatasetClassRow, ManagedDatasetCompositionSourceCreate, int, str]
+    ],
+) -> None:
+    session.execute(
+        delete(ManagedDatasetSourceRow).where(
+            ManagedDatasetSourceRow.managed_dataset_id == dataset.id
+        )
+    )
+    session.flush()
+    for source, source_class, requested, object_type_id, color in specs:
+        session.add(
+            ManagedDatasetSourceRow(
+                managed_dataset_id=dataset.id,
+                source_dataset_id=source.id,
+                priority=requested.priority,
+                object_type_id=object_type_id,
+                object_type_slug=f"type_{source_class.id.hex}",
+                object_type_name=source_class.name,
+                color=color,
+            )
+        )
+
+
+def _managed_composition_signature(
+    specs: list[
+        tuple[DatasetRow, DatasetClassRow, ManagedDatasetCompositionSourceCreate, int, str]
+    ],
+) -> list[tuple[uuid.UUID, int, int, str, str, str]]:
+    return [
+        (
+            source.id,
+            requested.priority,
+            object_type_id,
+            f"type_{source_class.id.hex}",
+            source_class.name,
+            color,
+        )
+        for source, source_class, requested, object_type_id, color in specs
+    ]
+
+
+def create_managed_dataset_composition(
+    session: Session,
+    request: ManagedDatasetCompositionCreate,
+    config: TrainingUIAPIConfig,
+) -> DatasetCatalogInfo:
+    """Создать виртуальный multiclass-датасет из binary per-image источников."""
+
+    class_row = _class_row(session, request.class_key)
+    name = _clean_name(request.name, "Название датасета")
+    _ensure_dataset_name_available(session, class_row.id, name)
+    specs = _managed_composition_source_specs(session, config, class_row, request.sources)
+
     dataset = DatasetRow(
         key=str(uuid.uuid4()),
         class_id=class_row.id,
@@ -528,37 +632,7 @@ def create_managed_dataset_composition(
     )
     session.add(dataset)
     session.flush()
-    palette = (
-        "#3B82F6",
-        "#22C55E",
-        "#F59E0B",
-        "#8B5CF6",
-        "#EF4444",
-        "#06B6D4",
-        "#EC4899",
-        "#84CC16",
-    )
-    ordered_sources = sorted(
-        source_rows,
-        key=lambda row: (
-            -requested_by_key[row[0].key].priority,
-            row[1].name.casefold(),
-            row[0].name.casefold(),
-        ),
-    )
-    for index, (source, source_class) in enumerate(ordered_sources, start=1):
-        requested = requested_by_key[source.key]
-        session.add(
-            ManagedDatasetSourceRow(
-                managed_dataset_id=dataset.id,
-                source_dataset_id=source.id,
-                priority=requested.priority,
-                object_type_id=index,
-                object_type_slug=f"type_{source_class.id.hex}",
-                object_type_name=source_class.name,
-                color=(requested.color or palette[(index - 1) % len(palette)]).upper(),
-            )
-        )
+    _replace_managed_composition_sources(session, dataset, specs)
     _assign_main_if_available(class_row, dataset)
     session.flush()
     return managed_dataset_catalog(session, config)
@@ -575,6 +649,8 @@ def update_managed_dataset(
         raise TrainingUIAPIError(
             "Источник виртуального управляемого датасета меняется через его состав."
         )
+    if row.source_type != SOURCE_MANAGED and request.sources is not None:
+        raise TrainingUIAPIError("Состав задаётся только для виртуального управляемого датасета.")
     desired_name = (
         _clean_name(request.name, "Название датасета")
         if request.name is not None
@@ -592,7 +668,52 @@ def update_managed_dataset(
         exclude_id=row.id,
     )
 
-    changed = desired_name != row.name or desired_source != row.source_path
+    composition_specs = None
+    composition_changed = False
+    if request.sources is not None:
+        class_row = session.get(DatasetClassRow, row.class_id)
+        if class_row is None:
+            raise TrainingUIAPIError(f"Класс датасета не найден: {dataset_key}")
+        current_relations = session.scalars(
+            select(ManagedDatasetSourceRow)
+            .where(ManagedDatasetSourceRow.managed_dataset_id == row.id)
+            .order_by(ManagedDatasetSourceRow.object_type_id)
+        ).all()
+        composition_specs = _managed_composition_source_specs(
+            session,
+            config,
+            class_row,
+            request.sources,
+            current_relations,
+        )
+        current_signature = [
+            (
+                relation.source_dataset_id,
+                relation.priority,
+                relation.object_type_id,
+                relation.object_type_slug,
+                relation.object_type_name,
+                relation.color.upper(),
+            )
+            for relation in current_relations
+        ]
+        composition_changed = current_signature != _managed_composition_signature(
+            composition_specs
+        )
+        if composition_changed and session.scalar(
+            select(DatasetEditorDraftRow.id)
+            .where(DatasetEditorDraftRow.dataset_key == row.key)
+            .limit(1)
+        ) is not None:
+            raise TrainingUIAPIError(
+                "Сначала опубликуйте или отмените все черновики управляемого датасета."
+            )
+
+    changed = (
+        desired_name != row.name
+        or desired_source != row.source_path
+        or composition_changed
+    )
     source_owner: DatasetRow | None = None
     if desired_source != row.source_path:
         source_owner = session.scalar(
@@ -612,6 +733,8 @@ def update_managed_dataset(
             source_owner.source_path = previous_source_path
             source_owner.config_revision += 1
             source_owner.legacy_version = False
+    if composition_changed and composition_specs is not None:
+        _replace_managed_composition_sources(session, row, composition_specs)
     row.name = desired_name
     if changed:
         row.config_revision += 1

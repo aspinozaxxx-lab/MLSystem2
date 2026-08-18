@@ -359,6 +359,63 @@ def test_dataset_editor_persists_discards_and_publishes_server_drafts(
         assert session.scalar(select(DatasetEditorDraftRow)) is None
 
 
+def test_dataset_editor_lists_only_current_users_drafts_by_dataset(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    scene = env.client.get(scenes_url).json()["scenes"][0]
+    annotation_path = quote(scene["annotation_name"], safe="")
+    detail = env.client.get(f"{scenes_url}/{annotation_path}").json()
+
+    assert env.client.get("/api/v1/dataset-editor/drafts").json() == {"drafts": []}
+    saved = env.client.put(
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_path}",
+        json={
+            "base_revision": scene["revision"],
+            "geojson": detail["geojson"],
+            "deleted": True,
+        },
+    )
+    assert saved.status_code == 200
+
+    now = datetime.now(timezone.utc)
+    with create_session_factory(get_config())() as session:
+        session.add(
+            DatasetEditorDraftRow(
+                dataset_key=env.dataset_key,
+                annotation_name=scene["annotation_name"],
+                username="другой-пользователь",
+                base_revision=scene["revision"],
+                geojson=detail["geojson"],
+                deleted=False,
+                created_at=now,
+                updated_at=now + timedelta(seconds=1),
+            )
+        )
+        session.commit()
+
+    response = env.client.get("/api/v1/dataset-editor/drafts")
+
+    assert response.status_code == 200
+    listed = response.json()["drafts"]
+    assert len(listed) == 1
+    updated_at = listed[0].pop("updated_at")
+    assert listed[0] == {
+        "dataset_key": env.dataset_key,
+        "class_key": "Реки",
+        "class_name": "Реки",
+        "dataset_name": "test",
+        "scene_count": 1,
+        "deleted_scene_count": 1,
+    }
+    assert datetime.fromisoformat(updated_at.removesuffix("Z")) == datetime.fromisoformat(
+        saved.json()["updated_at"].removesuffix("Z")
+    )
+    assert "/api/v1/dataset-editor/drafts" in env.client.get("/openapi.json").json()["paths"]
+
+
 def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
     editor_environment: _EditorEnvironment,
 ) -> None:

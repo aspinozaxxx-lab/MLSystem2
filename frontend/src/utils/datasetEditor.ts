@@ -81,6 +81,17 @@ export type CountedScene = {
   class_counts?: Record<string, number>;
 };
 
+export type CountedSceneDraft = {
+  deleted?: boolean;
+  positive_count: number;
+  hard_negative_count: number;
+  class_counts?: Record<string, number>;
+};
+
+export type CountedSceneWithDraft = CountedScene & {
+  draft?: CountedSceneDraft | null;
+};
+
 export type PublishableDraft = DraftState & {
   scene: CountedScene & { revision: string };
 };
@@ -380,6 +391,44 @@ export function sceneClassCounts(
   return draft
     ? featureClassCounts(draft.current.geojson)
     : { ...(scene.class_counts || {}) };
+}
+
+export function datasetObjectTotals(
+  scenes: CountedSceneWithDraft[],
+  drafts: Record<string, DraftState>,
+): { positive: number; hardNegative: number; classCounts: Record<string, number> } {
+  let positive = 0;
+  let hardNegative = 0;
+  const classCounts: Record<string, number> = {};
+  for (const scene of scenes) {
+    const localDraft = drafts[scene.annotation_name];
+    const serverDraft = scene.draft;
+    const deleted = localDraft
+      ? Boolean(localDraft.current.deleted)
+      : Boolean(serverDraft?.deleted);
+    if (deleted) continue;
+
+    const counts = localDraft
+      ? featureCounts(localDraft.current.geojson)
+      : serverDraft
+        ? {
+            positive: serverDraft.positive_count,
+            hardNegative: serverDraft.hard_negative_count,
+          }
+        : {
+            positive: scene.positive_count,
+            hardNegative: scene.hard_negative_count,
+          };
+    const currentClassCounts = localDraft
+      ? featureClassCounts(localDraft.current.geojson)
+      : serverDraft?.class_counts || scene.class_counts || {};
+    positive += counts.positive;
+    hardNegative += counts.hardNegative;
+    for (const [slug, count] of Object.entries(currentClassCounts)) {
+      classCounts[slug] = (classCounts[slug] || 0) + count;
+    }
+  }
+  return { positive, hardNegative, classCounts };
 }
 
 export function sortEditorScenes<T extends CountedScene>(

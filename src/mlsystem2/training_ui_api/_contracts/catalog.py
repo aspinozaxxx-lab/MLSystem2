@@ -207,25 +207,33 @@ class ManagedDatasetCreate(BaseModel):
     source_path: str = Field(min_length=1, max_length=1024)
 
 
-class ManagedDatasetUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, min_length=1, max_length=240)
-    source_path: str | None = Field(default=None, min_length=1, max_length=1024)
-
-    @model_validator(mode="after")
-    def validate_not_empty(self) -> Self:
-        if self.name is None and self.source_path is None:
-            raise ValueError("Нужно передать хотя бы одно изменение датасета.")
-        return self
-
-
 class ManagedDatasetCompositionSourceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset_key: str = Field(min_length=1, max_length=180)
     priority: int = 0
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class ManagedDatasetUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=240)
+    source_path: str | None = Field(default=None, min_length=1, max_length=1024)
+    sources: list[ManagedDatasetCompositionSourceCreate] | None = Field(
+        default=None,
+        min_length=2,
+    )
+
+    @model_validator(mode="after")
+    def validate_update(self) -> Self:
+        if self.name is None and self.source_path is None and self.sources is None:
+            raise ValueError("Нужно передать хотя бы одно изменение датасета.")
+        if self.sources is not None:
+            keys = [item.dataset_key for item in self.sources]
+            if len(keys) != len(set(keys)):
+                raise ValueError("sources не должен содержать повторяющиеся датасеты")
+        return self
 
 
 class ManagedDatasetCompositionCreate(BaseModel):

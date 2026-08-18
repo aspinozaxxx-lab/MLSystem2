@@ -6,6 +6,7 @@ import {
   acceptPublishedDraft,
   appendHistory,
   deleteEditableVertices,
+  datasetObjectTotals,
   draftChanged,
   editableVertexCoordinates,
   editableVertices,
@@ -23,6 +24,7 @@ import {
   snapshotsEqual,
   sortEditorScenes,
   undoDraft,
+  type CountedSceneWithDraft,
   type DraftSnapshot,
   type PublishableDraft,
 } from "./datasetEditor";
@@ -292,6 +294,61 @@ describe("черновики редактора датасетов", () => {
     };
     expect(featureClassCounts(geojson)).toEqual({ river: 1, lake: 1 });
     expect(sceneClassCounts(scene, currentDraft)).toEqual({ river: 1, lake: 1 });
+  });
+
+  it("суммирует объекты всего датасета по текущим черновикам и не считает удалённые снимки", () => {
+    const localGeojson = {
+      type: "FeatureCollection",
+      features: [
+        { properties: { _mlsystem2_role: "positive", _mlsystem2_class: "river" } },
+        { properties: { _mlsystem2_role: "hard_negative" } },
+      ],
+    };
+    const localDraft = {
+      baseline: { geojson: localGeojson, newFeatureIndexes: [] },
+      current: { geojson: localGeojson, newFeatureIndexes: [] },
+      history: [],
+    };
+    const scenes: CountedSceneWithDraft[] = [
+      {
+        annotation_name: "server.geojson",
+        total_count: 9,
+        positive_count: 9,
+        hard_negative_count: 0,
+        class_counts: { river: 9 },
+        draft: {
+          positive_count: 2,
+          hard_negative_count: 1,
+          class_counts: { lake: 2 },
+        },
+      },
+      {
+        annotation_name: "local.geojson",
+        total_count: 7,
+        positive_count: 7,
+        hard_negative_count: 0,
+        class_counts: { lake: 7 },
+      },
+      {
+        annotation_name: "deleted.geojson",
+        total_count: 4,
+        positive_count: 4,
+        hard_negative_count: 0,
+        class_counts: { river: 4 },
+        draft: {
+          deleted: true,
+          positive_count: 4,
+          hard_negative_count: 0,
+          class_counts: { river: 4 },
+        },
+      },
+    ];
+
+    expect(datasetObjectTotals(scenes, { "local.geojson": localDraft })).toEqual({
+      positive: 3,
+      hardNegative: 2,
+      classCounts: { lake: 2, river: 1 },
+    });
   });
 
   it("не считает изменением только другой порядок полей GeoJSON", () => {
