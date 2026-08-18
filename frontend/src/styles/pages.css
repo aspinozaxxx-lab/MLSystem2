@@ -1312,6 +1312,12 @@
   min-height: 0;
 }
 
+.dataset-editor-workspace.fullscreen:not(:fullscreen) {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
 .dataset-editor-toolbar {
   display: flex;
   flex-wrap: wrap;

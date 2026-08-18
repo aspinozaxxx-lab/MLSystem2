@@ -1460,24 +1460,48 @@ export function DatasetEditorPage({
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
+  useEffect(() => {
+    if (!fullscreen || document.fullscreenElement === workspaceRef.current) return;
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setFullscreen(false);
+      window.requestAnimationFrame(() => mapRef.current?.updateSize());
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [fullscreen]);
+
   const toggleFullscreen = useCallback(async () => {
     const workspace = workspaceRef.current;
     if (!workspace) return;
+    if (fullscreen && document.fullscreenElement !== workspace) {
+      setFullscreen(false);
+      window.requestAnimationFrame(() => mapRef.current?.updateSize());
+      return;
+    }
     try {
       if (document.fullscreenElement === workspace) {
         await document.exitFullscreen();
         return;
       }
       if (!workspace.requestFullscreen) {
-        window.alert("Полноэкранный режим не поддерживается этим браузером.");
+        setFullscreen(true);
+        window.requestAnimationFrame(() => mapRef.current?.updateSize());
         return;
       }
       if (document.fullscreenElement) await document.exitFullscreen();
       await workspace.requestFullscreen();
     } catch {
-      window.alert("Не удалось переключить полноэкранный режим.");
+      setFullscreen(true);
+      window.requestAnimationFrame(() => mapRef.current?.updateSize());
     }
-  }, []);
+  }, [fullscreen]);
 
   const toggleFill = () => {
     const next = !fillEnabledRef.current;
