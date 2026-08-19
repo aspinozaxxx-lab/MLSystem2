@@ -83,6 +83,7 @@ class DatasetRow(Base):
     name: Mapped[str] = mapped_column(String(240))
     source_type: Mapped[str] = mapped_column(String(32), default="mlmarkup")
     source_path: Mapped[str] = mapped_column(String(1024))
+    model_name_stem: Mapped[str | None] = mapped_column(String(160), nullable=True)
     config_revision: Mapped[int] = mapped_column(Integer, default=1)
     legacy_version: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

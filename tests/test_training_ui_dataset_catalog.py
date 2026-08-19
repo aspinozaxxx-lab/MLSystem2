@@ -73,10 +73,12 @@ def test_initial_import_preserves_legacy_keys_and_missing_history(
         assert datasets["Вырубки\\main"].dataset_name == "main"
         assert datasets["Вырубки\\main"].imagery_type == "kanopus"
         assert datasets["Вырубки\\main"].input_channels == 4
+        assert datasets["Вырубки\\main"].model_name_stem == "deforestation"
         assert datasets["Вырубки\\main"].is_primary is True
         assert datasets["Вырубки\\main"].version is not None
         assert datasets["Вырубки\\main"].version.startswith(("fs:", "git:"))
         assert datasets["Реки\\main"].source_available is False
+        assert datasets["Реки\\main"].model_name_stem == "rivers"
         rivers = next(
             item
             for item in list_managed_classes(session, config, include_custom=False)
@@ -107,6 +109,7 @@ def test_sync_adds_sources_idempotently_and_keeps_missing_source(
         assert new_dataset is not None
         uuid.UUID(new_dataset.key)
         assert new_dataset.name == "summer"
+        assert new_dataset.model_name_stem == "annotation"
         assert session.scalar(select(func.count()).select_from(DatasetRow)) == 2
 
         old_source = config.mlmarkup_root / "Пожары" / "summer"

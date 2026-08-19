@@ -98,6 +98,38 @@ MANAGED_DATASET_PALETTE = (
 _SYNC_LOCK = threading.RLock()
 _SYNC_TTL_SECONDS = 60.0
 _LAST_SYNC_BY_ROOT: dict[Path, tuple[float, tuple[tuple[str, int], ...]]] = {}
+_HISTORICAL_MODEL_NAME_STEMS = {
+    ("Абразия", "main"): "abrasion",
+    ("Ветровая эрозия", "main"): "wind_erosion",
+    ("Водная эрозия", "main"): "water_erosion",
+    ("Вырубки", "main"): "deforestation",
+    ("Вырубки", "strict"): "deforestationStrict",
+    ("Вырубки", "test"): "deforestation",
+    ("Гари", "main"): "burnt_forests",
+    ("Границы леса", "main"): "forest",
+    ("ЗУ500", "main"): "zu500",
+    ("Заболачивание", "main"): "swampings",
+    ("Засоления", "main"): "salty",
+    ("Захламнения", "main"): "landfills",
+    ("Захламнения", "test"): "landfills",
+    ("Карьеры", "main"): "careers",
+    ("ОКС500", "main"): "oks500",
+    ("Обвально-оползневые и осыпные", "main"): "landslides",
+    ("Озера", "main"): "lakes",
+    ("Опустынивание", "main"): "desertification",
+    ("Опустынивание и ветровая эрозия", "main"): (
+        "desertification_wind_erosion"
+    ),
+    ("Пашни", "main"): "areas_of_used_arable_land",
+    ("Переувлажнения", "main"): "floodings",
+    ("Переувлажнения", "test"): "floodings",
+    ("Переувлажнения и заболачивания", "main"): "floodings_swampings",
+    ("Переувлажнения и заболачивания", "test"): "floodings_swampings",
+    ("Разрушки", "main"): "damaged_oks",
+    ("Разрушки", "test"): "damaged_oks",
+    ("Реки", "main"): "rivers",
+    ("Реки", "test"): "rivers",
+}
 
 
 def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> None:
@@ -107,6 +139,7 @@ def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -
         initial_import = session.scalar(select(DatasetRow.id).limit(1)) is None
         _import_historical_dataset_keys(session, config)
         _import_mlmarkup_folders(session, config, preserve_legacy_keys=initial_import)
+        _ensure_model_name_stems(session, config)
         session.flush()
         root = Path(config.mlmarkup_root).resolve()
         _LAST_SYNC_BY_ROOT[root] = (time.monotonic(), _catalog_tree_stamp(root))
@@ -153,6 +186,53 @@ def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
     except OSError:
         return ()
     return tuple(result)
+
+
+def _ensure_model_name_stems(
+    session: Session,
+    config: TrainingUIAPIConfig,
+) -> None:
+    rows = session.execute(
+        select(DatasetRow, DatasetClassRow).join(
+            DatasetClassRow,
+            DatasetClassRow.id == DatasetRow.class_id,
+        )
+    ).all()
+    for dataset, class_row in rows:
+        _ensure_model_name_stem(session, dataset, class_row, config)
+
+
+def _ensure_model_name_stem(
+    session: Session,
+    dataset: DatasetRow,
+    class_row: DatasetClassRow,
+    config: TrainingUIAPIConfig,
+) -> None:
+    if dataset.model_name_stem:
+        return
+    dataset_name = dataset.name.split(" [legacy ", maxsplit=1)[0]
+    stem = _HISTORICAL_MODEL_NAME_STEMS.get((class_row.name, dataset_name))
+    if stem is None:
+        stem = _HISTORICAL_MODEL_NAME_STEMS.get((class_row.name, "main"))
+    if stem is None and dataset.source_type == SOURCE_MLMARKUP:
+        source_path = _resolved_source_path(config.mlmarkup_root, dataset.source_path)
+        if source_path.is_dir() and _first_file(source_path, ".txt") is not None:
+            annotation_file, _, _ = _annotation_files(source_path)
+            if annotation_file is not None:
+                stem = annotation_file.stem
+    if stem is None:
+        stem = session.scalar(
+            select(DatasetRow.model_name_stem)
+            .where(
+                DatasetRow.class_id == dataset.class_id,
+                DatasetRow.id != dataset.id,
+                DatasetRow.model_name_stem.is_not(None),
+            )
+            .order_by(DatasetRow.deleted_at.asc().nulls_first(), DatasetRow.created_at)
+            .limit(1)
+        )
+    if stem:
+        dataset.model_name_stem = stem[:160]
 
 
 def successful_training_results(
@@ -927,6 +1007,7 @@ def _dataset_info(
     image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
     per_image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
 ) -> DatasetInfo:
+    _ensure_model_name_stem(session, dataset, class_row, config)
     if dataset.source_type == SOURCE_MANAGED:
         return _managed_dataset_info(
             session,
@@ -1048,6 +1129,7 @@ def _dataset_info(
         images_dir=str(images_dir) if images_inside_root else None,
         source_type=dataset.source_type,
         source_path=dataset.source_path,
+        model_name_stem=dataset.model_name_stem,
         source_available=source_available,
         is_primary=class_row.primary_dataset_id == dataset.id,
         diagnostics=diagnostics,
@@ -1149,6 +1231,7 @@ def _managed_dataset_info(
         images_dir=str(images_dir),
         source_type=SOURCE_MANAGED,
         source_path=dataset.source_path,
+        model_name_stem=dataset.model_name_stem,
         source_available=not diagnostics,
         is_primary=class_row.primary_dataset_id == dataset.id,
         diagnostics=diagnostics,

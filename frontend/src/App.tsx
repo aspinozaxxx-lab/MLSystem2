@@ -82,8 +82,8 @@ import type {
   TestSampleSummary,
 } from "./api/types";
 import {
+  defaultTrainingZipModelName,
   displayStoredFileName,
-  exportModelNamePart,
   formatDate,
   formatDateTime,
   formatF1Score,
@@ -4760,16 +4760,6 @@ function ManagedDatasetForm({
 
 function automationRuleKey(datasetKey: string, architecture: string): string {
   return `${datasetKey}::${architecture}`;
-}
-
-function defaultTrainingZipModelName(result: TrainingResultInfo, datasets: DatasetInfo[]): string {
-  const dataset = datasets.find((item) => item.key === result.dataset_key);
-  const filename = String(dataset?.annotation_file || "").split(/[\\/]/).pop() || "";
-  const stem = filename.replace(/\.[^.]*$/, "");
-  const datasetPart = exportModelNamePart(stem || dataset?.class_key || dataset?.name || result.dataset_key || "model");
-  const suffix = dataset?.imagery_type === "ortho" ? "ortho" : "kanopus";
-  if (!datasetPart || datasetPart === suffix || datasetPart.endsWith(`_${suffix}`)) return datasetPart || suffix;
-  return `${datasetPart}_${suffix}`;
 }
 
 function showTrainingResultZipModal(

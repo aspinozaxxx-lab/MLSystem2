@@ -100,6 +100,34 @@ export function exportModelNamePart(value: unknown): string {
     .replace(/^[_-]+|[_-]+$/g, "");
 }
 
+export function defaultTrainingZipModelName(
+  result: { dataset_key?: string | null },
+  datasets: Array<{
+    key: string;
+    name?: string | null;
+    class_key?: string | null;
+    annotation_file?: string | null;
+    imagery_type?: "kanopus" | "ortho" | null;
+    model_name_stem?: string | null;
+  }>,
+): string {
+  const dataset = datasets.find((item) => item.key === result.dataset_key);
+  const filename = String(dataset?.annotation_file || "").split(/[\\/]/).pop() || "";
+  const annotationStem = filename.replace(/\.[^.]*$/, "");
+  const modelPart = exportModelNamePart(
+    dataset?.model_name_stem
+    || annotationStem
+    || dataset?.class_key
+    || dataset?.name
+    || result.dataset_key
+    || "model",
+  );
+  const prefix = dataset?.imagery_type === "ortho" ? "orto" : "kanopus";
+  if (!modelPart || modelPart === prefix) return modelPart || prefix;
+  if (modelPart.startsWith(`${prefix}_`)) return modelPart;
+  return `${prefix}_${modelPart}`;
+}
+
 export function isValidExportModelName(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(value);
 }

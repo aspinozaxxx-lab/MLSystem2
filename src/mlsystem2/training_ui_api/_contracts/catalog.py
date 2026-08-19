@@ -94,6 +94,7 @@ class DatasetInfo(BaseModel):
     images_dir: str | None = None
     source_type: str | None = None
     source_path: str | None = None
+    model_name_stem: str | None = None
     source_available: bool = True
     is_primary: bool = False
     diagnostics: list[str] = Field(default_factory=list)

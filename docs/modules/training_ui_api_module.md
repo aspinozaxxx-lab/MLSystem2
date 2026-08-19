@@ -22,7 +22,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
 - `BootstrapInfo` - стартовый DTO для React frontend: links, datasets, image folders, classes, models и оба набора templates одним ответом.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
-- `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetObjectType`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `DatasetInfo` содержит `format=legacy|per_image|per_image_multiclass`, `task`, `object_types`, `combined`, source status/changes, class counts, legacy-файлы либо `annotations_dir`.
+- `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetObjectType`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `DatasetInfo` содержит `format=legacy|per_image|per_image_multiclass`, `task`, `object_types`, `combined`, source status/changes, class counts, сохранённую историческую основу имени модели `model_name_stem`, legacy-файлы либо `annotations_dir`.
 - `DatasetCatalogInfo`, `DatasetSourceInfo`, `DatasetClassCreate`, `DatasetClassUpdate`, `DatasetPrimaryDatasetUpdate`, `ManagedDatasetCreate`, `ManagedDatasetUpdate` - чтение и изменение активных классов и датасетов; мягко удалённые строки остаются в Postgres, но в каталог не входят.
 - `ImageFolderInfo`, `ImageFolderListResponse` - папки подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT` с количеством TIFF.
 - `ModelInfo`, `ModelListResponse` - публичные модели из `models`.
@@ -64,6 +64,9 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/results/training/triton-zip` - JSON endpoint для сборки общего zip-архива нескольких успешных
   нативных и импортированных результатов; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД.
+- Одиночная и групповая формы экспорта предлагают редактируемое имя `kanopus_<model_name_stem>` либо
+  исторически совместимое `orto_<model_name_stem>`; основа сохраняется в каталоге при миграции legacy-датасетов
+  и не зависит от текущего per-image имени файла.
 - `POST /api/v1/scene-list-export` - multipart endpoint с `imagery_type=kanopus|ortho`, optional
   `include_footprints` и GeoJSON; рекурсивно находит TIFF с полигональными объектами. Без флага возвращает
   совместимый UTF-8 TXT относительных путей внутри корня типа снимков без расширений, с флагом — ZIP из этого

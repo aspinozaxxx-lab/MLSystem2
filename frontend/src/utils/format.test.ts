@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultTrainingZipModelName,
   displayStoredFileName,
   exportModelNamePart,
   formatFileSize,
@@ -19,6 +20,36 @@ describe("format helpers", () => {
     expect(exportModelNamePart("Rivers Kanopus 0806")).toBe("rivers_kanopus_0806");
     expect(isValidExportModelName("rivers_kanopus_0806")).toBe(true);
     expect(isValidExportModelName("Реки")).toBe(false);
+  });
+
+  it("предлагает сохранённое историческое имя модели с префиксом снимков", () => {
+    expect(defaultTrainingZipModelName(
+      { dataset_key: "deforestation-id" },
+      [{
+        key: "deforestation-id",
+        model_name_stem: "deforestation",
+        imagery_type: "kanopus",
+      }],
+    )).toBe("kanopus_deforestation");
+    expect(defaultTrainingZipModelName(
+      { dataset_key: "zu-id" },
+      [{
+        key: "zu-id",
+        model_name_stem: "zu500",
+        imagery_type: "ortho",
+      }],
+    )).toBe("orto_zu500");
+  });
+
+  it("сохраняет совместимый fallback для legacy annotation_file", () => {
+    expect(defaultTrainingZipModelName(
+      { dataset_key: "rivers" },
+      [{
+        key: "rivers",
+        annotation_file: "/data/MLMarkup/Реки/main/rivers.geojson",
+        imagery_type: "kanopus",
+      }],
+    )).toBe("kanopus_rivers");
   });
 
   it("учитывает явный признак основного датасета", () => {

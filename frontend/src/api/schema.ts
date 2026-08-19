@@ -2322,6 +2322,8 @@ export interface components {
             source_type?: string | null;
             /** Source Path */
             source_path?: string | null;
+            /** Model Name Stem */
+            model_name_stem?: string | null;
             /**
              * Source Available
              * @default true

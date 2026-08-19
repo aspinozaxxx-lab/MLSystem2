@@ -6356,6 +6356,17 @@
             ],
             "title": "Source Path"
           },
+          "model_name_stem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name Stem"
+          },
           "source_available": {
             "type": "boolean",
             "title": "Source Available",
