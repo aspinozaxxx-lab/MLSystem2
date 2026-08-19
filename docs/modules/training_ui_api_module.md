@@ -34,10 +34,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `DatasetResultsResponse`, `ResultClassInfo`, `ResultDatasetInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, task/class schema, структурированные per-class метрики, отдельный test F1, основная разметка и карточки классов; multiclass pseudo result дополнительно содержит ZIP-download по типам.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
-- `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт и сроком хранения.
+- `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт, режимом исключения граничных объектов и сроком хранения.
 - `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest`, `TestSampleDownloadRequest`, `TestSampleBulkDownloadRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации, запросы оценки, одиночного и группового скачивания.
 - `TestSampleMetric`, `TestSampleEvaluationInfo`, `TestSampleSummary`, `TestSampleDatasetGroup`, `TestSampleClassGroup`, `TestSampleCatalogResponse`, `TestSampleTileInfo`, `TestSampleDetail`, `TestSampleDraftPreview` - binary scalar и multiclass per-class/macro/micro/foreground метрики, task/schema/counts, каталог, редакторское описание с URL миниатюры и полноразмерного PNG и незаписываемый результат чернового расчёта.
-- `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; квадратный размер тайла выбирается из `512`, `768`, `1024`, `1536`, `2048`, `2560`, `3072`, `3584`, последний запуск хранит применённые настройки формы.
+- `TestSampleBatchItemCreate`, `TestSampleBatchCreate`, `TestSampleBatchItemInfo`, `TestSampleBatchInfo` - запрос и прогресс группового создания; квадратный размер тайла выбирается из `512`, `768`, `1024`, `1536`, `2048`, `2560`, `3072`, `3584`, последний запуск хранит применённые настройки формы, включая исключение выходящих за тайл объектов для объектовой F1.
 - `DatasetEditorDatasetInfo`, `DatasetEditorObjectType`, `DatasetEditorDatasetListResponse`, `DatasetEditorSceneInfo`, `DatasetEditorSceneListResponse`, `DatasetEditorSceneDetail`, `DatasetEditorPseudoMarkupInfo`, `DatasetEditorDraftSummary`, `DatasetEditorDraftInfo`, `DatasetEditorUserDraftInfo`, `DatasetEditorUserDraftListResponse` - каталог per-image датасетов и сцен с task/schema, class counts, source status, revision, пользовательским серверным черновиком, агрегированным списком черновиков пользователя, `valid_data_footprint` и состоянием псевдоразметки сцены.
 - `DatasetEditorRebuildPreview`, `DatasetEditorRebuildRequest`, `DatasetEditorRebuildResult`, `DatasetEditorRebuildChange` - preview token, source/local changes, конфликты и атомарная пересборка `merge|replace`.
 - `DatasetEditorRasterFolderInfo`, `DatasetEditorRasterInfo`, `DatasetEditorRasterBrowserResponse` - прямые папки и TIFF из разрешённого server-side каталога.
@@ -100,6 +100,9 @@ evaluator. Поле датасета тестовой разметки озна�
 Семантическая PNG-маска объединяет пиксели одного класса и применяется только в пиксельном контуре оценки.
 Соприкасающиеся исходные объекты остаются отдельными feature в GeoJSON; визуализация и помеченные JPEG проводят
 границы по их instance-ID, а объектовая метрика сопоставляет эти векторные feature один к одному.
+При включённом `exclude_boundary_objects` исходный объект должен полностью помещаться в footprint тайла;
+пересекающий границу объект целиком исключается из отбора, квот, GeoJSON, маски, превью и объектовой метрики.
+Флаг разрешён только для классов с основной объектовой метрикой и сохраняется в batch-запуске и тестовом наборе.
 Каталог результатов выделяет основной датасет и показывает F1 эффективной сети класса на всех карточках его
 датасетов, не создавая отдельных расчётов для каждой карточки.
 

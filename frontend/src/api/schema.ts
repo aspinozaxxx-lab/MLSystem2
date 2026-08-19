@@ -2764,6 +2764,11 @@ export interface components {
             requested_object_count: number;
             /** Actual Object Count */
             actual_object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
             /** Territory Count */
             territory_count: number;
             /** Warnings */
@@ -2802,6 +2807,11 @@ export interface components {
              * @default 150
              */
             object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
         };
         /** MarkupExportTileInfo */
         MarkupExportTileInfo: {
@@ -3350,6 +3360,11 @@ export interface components {
              * @enum {string}
              */
             metric: "pixel" | "objects";
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
         };
         /** TestSampleBatchItemInfo */
         TestSampleBatchItemInfo: {
@@ -3377,6 +3392,11 @@ export interface components {
              * @enum {string}
              */
             metric: "pixel" | "objects";
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
             /**
              * Status
              * @enum {string}
@@ -3455,6 +3475,11 @@ export interface components {
              * @default 150
              */
             object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
         };
         /** TestSampleDatasetGroup */
         TestSampleDatasetGroup: {
@@ -3518,6 +3543,11 @@ export interface components {
             actual_object_count: number;
             /** Enabled Object Count */
             enabled_object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
             /**
              * Is Primary
              * @default false
@@ -3738,6 +3768,11 @@ export interface components {
             actual_object_count: number;
             /** Enabled Object Count */
             enabled_object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
             /**
              * Is Primary
              * @default false

@@ -649,6 +649,36 @@
   padding: 8px 10px;
 }
 
+.test-sample-boundary-option {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.test-sample-boundary-option input {
+  width: 17px;
+  min-width: 17px;
+  min-height: 17px;
+  margin: 0;
+}
+
+.test-sample-boundary-option span {
+  display: grid;
+  gap: 1px;
+}
+
+.test-sample-boundary-option strong {
+  font-size: 12px;
+}
+
+.test-sample-boundary-option small {
+  color: var(--muted);
+}
+
 .test-sample-batch-progress {
   margin-top: 22px;
 }

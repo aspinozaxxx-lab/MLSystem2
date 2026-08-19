@@ -147,6 +147,7 @@ class GeneratedMarkupFiles:
     tile_height: int
     requested_object_count: int
     actual_object_count: int
+    exclude_boundary_objects: bool
     territory_count: int
     warnings: tuple[str, ...]
     tiles: tuple[GeneratedMarkupTile, ...]
@@ -500,6 +501,7 @@ def build_markup_export(
             image_count=len(tile_infos),
             requested_object_count=generated.requested_object_count,
             actual_object_count=generated.actual_object_count,
+            exclude_boundary_objects=generated.exclude_boundary_objects,
             territory_count=generated.territory_count,
             warnings=list(generated.warnings),
             expires_at=expires_at,
@@ -546,6 +548,7 @@ def generate_markup_files(
         tile_width=request.tile_width,
         tile_height=request.tile_height,
         max_grid_origins=max(32, request.image_count * 8),
+        exclude_boundary_objects=request.exclude_boundary_objects,
     )
     if len(candidates) < request.image_count:
         raise TrainingUIAPIError(
@@ -614,6 +617,7 @@ def generate_markup_files(
         tile_height=request.tile_height,
         requested_object_count=request.object_count,
         actual_object_count=actual_object_count,
+        exclude_boundary_objects=request.exclude_boundary_objects,
         territory_count=len({item.territory for item in selected}),
         warnings=tuple(warnings),
         tiles=tuple(tile_files),
@@ -630,6 +634,7 @@ def generate_markup_pool_files(
     config: TrainingUIAPIConfig,
     output_root: Path,
     dataset: DatasetInfo | None = None,
+    exclude_boundary_objects: bool = False,
 ) -> GeneratedMarkupFiles:
     """Создать максимально широкий пул, содержащий допустимую итоговую разметку."""
 
@@ -654,6 +659,7 @@ def generate_markup_pool_files(
         tile_width=tile_size,
         tile_height=tile_size,
         max_grid_origins=max(32, requested_pool_count * 8),
+        exclude_boundary_objects=exclude_boundary_objects,
     )
     if len(candidates) < min_final_image_count:
         raise TrainingUIAPIError(
@@ -748,6 +754,7 @@ def generate_markup_pool_files(
         tile_height=tile_size,
         requested_object_count=min_object_count,
         actual_object_count=actual_object_count,
+        exclude_boundary_objects=exclude_boundary_objects,
         territory_count=len({item.territory for item in selected}),
         warnings=tuple(warnings),
         tiles=tuple(tile_files),
@@ -1043,6 +1050,7 @@ def _build_candidates(
     tile_width: int,
     tile_height: int,
     max_grid_origins: int,
+    exclude_boundary_objects: bool = False,
 ) -> list[_Candidate]:
     candidates: dict[tuple[Path, int, int], _Candidate] = {}
     root = Path(images_root).resolve()
@@ -1097,10 +1105,11 @@ def _build_candidates(
                                     raster_footprint,
                                     predicate="intersects",
                                 )
-                                if transformed.geometries[int(index)]
-                                .intersection(raster_footprint)
-                                .area
-                                > 0.0
+                                if _include_feature_in_tile(
+                                    transformed.geometries[int(index)],
+                                    raster_footprint,
+                                    exclude_boundary_objects=exclude_boundary_objects,
+                                )
                             )
                         )
                         if not object_indices:
@@ -1137,6 +1146,17 @@ def _build_candidates(
             item.column,
         ),
     )
+
+
+def _include_feature_in_tile(
+    geometry: BaseGeometry,
+    raster_footprint: BaseGeometry,
+    *,
+    exclude_boundary_objects: bool,
+) -> bool:
+    if exclude_boundary_objects:
+        return raster_footprint.covers(geometry)
+    return geometry.intersection(raster_footprint).area > 0.0
 
 
 def _annotations_for_crs(

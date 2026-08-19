@@ -16,6 +16,7 @@ class MarkupExportRequest(BaseModel):
     tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
     object_count: int = Field(default=150, gt=0)
+    exclude_boundary_objects: bool = False
 
 
 class MarkupExportTileInfo(BaseModel):
@@ -40,6 +41,7 @@ class MarkupExportInfo(BaseModel):
     image_count: int = Field(gt=0)
     requested_object_count: int = Field(gt=0)
     actual_object_count: int = Field(gt=0)
+    exclude_boundary_objects: bool = False
     territory_count: int = Field(gt=0)
     warnings: list[str] = Field(default_factory=list)
     expires_at: datetime

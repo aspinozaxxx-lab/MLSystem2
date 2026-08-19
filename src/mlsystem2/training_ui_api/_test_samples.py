@@ -212,6 +212,10 @@ def create_test_sample(
         dataset = find_managed_dataset(session, config, request.dataset_key)
         if dataset is None or dataset.is_custom:
             raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
+        if request.exclude_boundary_objects and dataset.quality_metric != "objects":
+            raise TrainingUIAPIError(
+                "Исключать объекты на границе тайла можно только для объектовой метрики F1."
+            )
         generated = generate_markup_files(
             MarkupExportRequest(
                 dataset_key=request.dataset_key,
@@ -219,6 +223,7 @@ def create_test_sample(
                 tile_height=request.tile_height,
                 image_count=request.image_count,
                 object_count=request.object_count,
+                exclude_boundary_objects=request.exclude_boundary_objects,
             ),
             config,
             building_root,
@@ -275,6 +280,7 @@ def _new_test_sample_row(
         requested_object_count=generated.requested_object_count,
         actual_object_count=generated.actual_object_count,
         territory_count=generated.territory_count,
+        exclude_boundary_objects=generated.exclude_boundary_objects,
         is_primary=False,
         warnings=list(generated.warnings),
         content_revision=1,
@@ -340,6 +346,11 @@ def create_test_sample_batch(
             raise TrainingUIAPIError(
                 f"{dataset.name}: датасет не готов к формированию тестовой разметки."
             )
+        if item.exclude_boundary_objects and dataset.quality_metric != "objects":
+            raise TrainingUIAPIError(
+                f"{dataset.name}: исключать объекты на границе тайла можно только "
+                "для объектовой метрики F1."
+            )
         class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
         dataset_name = dataset.dataset_name or dataset.name
         rows.append(
@@ -353,6 +364,7 @@ def create_test_sample_batch(
                 dataset_short_name=dataset_name,
                 min_object_count=item.min_object_count,
                 metric=dataset.quality_metric,
+                exclude_boundary_objects=item.exclude_boundary_objects,
                 status="queued",
             )
         )
@@ -541,6 +553,7 @@ def _create_grouped_test_sample(
             config=config,
             output_root=building_root,
             dataset=dataset,
+            exclude_boundary_objects=item.exclude_boundary_objects,
         )
         _build_test_sample_thumbnails(building_root, generated.tiles)
         building_root.replace(final_root)
@@ -632,6 +645,7 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
                 class_name=item.class_name,
                 min_object_count=item.min_object_count,
                 metric=item.metric,
+                exclude_boundary_objects=item.exclude_boundary_objects,
                 status=item.status,
                 pool_tile_count=item.pool_tile_count,
                 pool_object_count=item.pool_object_count,
@@ -3600,6 +3614,7 @@ def _summary(session: Session, row: TestSampleRow) -> TestSampleSummary:
         enabled_image_count=len(enabled),
         actual_object_count=row.actual_object_count,
         enabled_object_count=sum(tile.object_count for tile in enabled),
+        exclude_boundary_objects=row.exclude_boundary_objects,
         is_primary=row.is_primary,
         evaluation=_evaluation_info(session, row),
         pseudo_markup=test_sample_pseudo_markup_info(session, row),

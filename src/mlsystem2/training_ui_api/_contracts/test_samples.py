@@ -20,6 +20,7 @@ class TestSampleCreate(BaseModel):
     tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
     object_count: int = Field(default=150, gt=0)
+    exclude_boundary_objects: bool = False
 
 
 class TestSampleUpdate(BaseModel):
@@ -165,6 +166,7 @@ class TestSampleSummary(BaseModel):
     enabled_image_count: int = Field(ge=0)
     actual_object_count: int = Field(gt=0)
     enabled_object_count: int = Field(ge=0)
+    exclude_boundary_objects: bool = False
     is_primary: bool = False
     evaluation: TestSampleEvaluationInfo
     pseudo_markup: TestSamplePseudoMarkupInfo
@@ -237,6 +239,15 @@ class TestSampleBatchItemCreate(BaseModel):
     dataset_key: str = Field(min_length=1)
     min_object_count: int = Field(default=150, gt=0)
     metric: Literal["pixel", "objects"] = "pixel"
+    exclude_boundary_objects: bool = False
+
+    @model_validator(mode="after")
+    def validate_boundary_objects_metric(self) -> Self:
+        if self.exclude_boundary_objects and self.metric != "objects":
+            raise ValueError(
+                "Исключать объекты на границе тайла можно только для объектовой метрики F1."
+            )
+        return self
 
 
 class TestSampleBatchCreate(BaseModel):
@@ -280,6 +291,7 @@ class TestSampleBatchItemInfo(BaseModel):
     class_name: str
     min_object_count: int = Field(gt=0)
     metric: Literal["pixel", "objects"]
+    exclude_boundary_objects: bool = False
     status: Literal["queued", "running", "ok", "error"]
     pool_tile_count: int | None = Field(default=None, gt=0)
     pool_object_count: int | None = Field(default=None, gt=0)

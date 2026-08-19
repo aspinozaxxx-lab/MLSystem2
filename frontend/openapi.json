@@ -7584,6 +7584,11 @@
             "exclusiveMinimum": 0.0,
             "title": "Actual Object Count"
           },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
+          },
           "territory_count": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
@@ -7661,6 +7666,11 @@
             "exclusiveMinimum": 0.0,
             "title": "Object Count",
             "default": 150
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -9093,6 +9103,11 @@
             ],
             "title": "Metric",
             "default": "pixel"
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -9153,6 +9168,11 @@
               "objects"
             ],
             "title": "Metric"
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           },
           "status": {
             "type": "string",
@@ -9371,6 +9391,11 @@
             "exclusiveMinimum": 0.0,
             "title": "Object Count",
             "default": 150
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -9515,6 +9540,11 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Enabled Object Count"
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           },
           "is_primary": {
             "type": "boolean",
@@ -10208,6 +10238,11 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Enabled Object Count"
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
           },
           "is_primary": {
             "type": "boolean",

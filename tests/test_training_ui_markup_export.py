@@ -285,6 +285,92 @@ def test_markup_export_uses_only_positive_features_from_per_image_dataset(
     assert len(list(pool_root.glob("tile_*.geojson"))) == len(pool.tiles)
 
 
+@pytest.mark.parametrize("dataset_format", ["legacy", "per_image"])
+def test_markup_export_can_exclude_objects_crossing_tile_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    dataset_format: str,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    class_name = "Границы legacy" if dataset_format == "legacy" else "Границы per-image"
+    dataset_root = config.mlmarkup_root / class_name / "main"
+    dataset_root.mkdir(parents=True)
+    image_path = (
+        config.images_root / "kanopus" / "region_boundary" / "scene.tif"
+    )
+    _write_cog(
+        image_path,
+        left=0,
+        top=64,
+        valid_slice=(slice(0, 64), slice(0, 64)),
+    )
+    features = [
+        (1, box(10, 44, 20, 54), "positive"),
+        (2, box(-4, 44, 4, 54), "positive"),
+        (3, box(40, 44, 64, 54), "positive"),
+    ]
+    if dataset_format == "legacy":
+        (dataset_root / "scenes.txt").write_text(
+            "region_boundary\n",
+            encoding="utf-8",
+        )
+        _write_geojson(dataset_root / "markup.geojson", features)
+    else:
+        _write_per_image_geojson(
+            dataset_root / "region_boundary_scene.geojson",
+            features,
+        )
+
+    default_root = tmp_path / f"default-{dataset_format}"
+    default_root.mkdir()
+    default_result = _markup_export.generate_markup_files(
+        MarkupExportRequest(
+            dataset_key=f"{class_name}\\main",
+            tile_width=64,
+            tile_height=64,
+            image_count=1,
+            object_count=3,
+        ),
+        config,
+        default_root,
+    )
+
+    assert default_result.exclude_boundary_objects is False
+    assert default_result.actual_object_count == 3
+    default_payload = json.loads(
+        next(default_root.glob("tile_*.geojson")).read_text(encoding="utf-8")
+    )
+    assert {feature["id"] for feature in default_payload["features"]} == {1, 2, 3}
+    default_mask = np.asarray(Image.open(next(default_root.glob("*_mask.png"))))
+    assert bool(np.any(default_mask[:, :4]))
+
+    filtered_root = tmp_path / f"filtered-{dataset_format}"
+    filtered_root.mkdir()
+    filtered_result = _markup_export.generate_markup_files(
+        MarkupExportRequest(
+            dataset_key=f"{class_name}\\main",
+            tile_width=64,
+            tile_height=64,
+            image_count=1,
+            object_count=2,
+            exclude_boundary_objects=True,
+        ),
+        config,
+        filtered_root,
+    )
+
+    assert filtered_result.exclude_boundary_objects is True
+    assert filtered_result.actual_object_count == 2
+    filtered_payload = json.loads(
+        next(filtered_root.glob("tile_*.geojson")).read_text(encoding="utf-8")
+    )
+    assert [feature["id"] for feature in filtered_payload["features"]] == [1, 3]
+    filtered_mask = np.asarray(Image.open(next(filtered_root.glob("*_mask.png"))))
+    assert not bool(np.any(filtered_mask[:, :5]))
+    assert bool(np.any(filtered_mask[10:20, 10:20]))
+    assert bool(np.any(filtered_mask[:, -1]))
+
+
 def test_markup_export_preview_uses_two_pixel_yellow_contour() -> None:
     image = np.full((3, 9, 9), 100, dtype=np.uint8)
     mask = np.zeros((9, 9), dtype=np.uint8)
@@ -1547,6 +1633,9 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
     with TestClient(create_app()) as client:
         openapi = client.get("/openapi.json").json()
         assert "MarkupExportRequest" in openapi["components"]["schemas"]
+        assert "exclude_boundary_objects" in openapi["components"]["schemas"][
+            "TestSampleBatchItemCreate"
+        ]["properties"]
         preview_contract = openapi["paths"][
             "/api/v1/markup-export/{export_id}/tiles/{tile_index}/preview"
         ]["get"]["responses"]["200"]["content"]
@@ -1584,6 +1673,7 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
         )
         assert response.status_code == 200
         payload = response.json()
+        assert payload["exclude_boundary_objects"] is False
         preview = client.get(payload["tiles"][0]["preview_url"])
         assert preview.status_code == 200
         assert preview.headers["content-type"] == "image/png"
@@ -1959,6 +2049,7 @@ def test_test_sample_batch_latest_preserves_next_form_defaults(
         assert payload["image_count"] == 7
         assert payload["items"][0]["min_object_count"] == 41
         assert payload["items"][0]["metric"] == "pixel"
+        assert payload["items"][0]["exclude_boundary_objects"] is False
 
 
 def test_test_sample_batch_accepts_per_image_dataset(
@@ -2152,12 +2243,40 @@ def test_test_sample_batch_request_keeps_exact_legacy_image_count() -> None:
 
     assert request.min_image_count == 3
     assert request.items[0].metric == "pixel"
+    assert request.items[0].exclude_boundary_objects is False
 
     with pytest.raises(ValueError, match="Минимальное число снимков"):
         _TestSampleBatchCreate(
             min_image_count=4,
             image_count=3,
             items=[{"dataset_key": "Вырубки\\main"}],
+        )
+
+
+def test_test_sample_batch_boundary_exclusion_requires_object_metric() -> None:
+    request = _TestSampleBatchCreate(
+        image_count=1,
+        items=[
+            {
+                "dataset_key": "Абразия\\main",
+                "metric": "objects",
+                "exclude_boundary_objects": True,
+            }
+        ],
+    )
+
+    assert request.items[0].exclude_boundary_objects is True
+
+    with pytest.raises(ValueError, match="только для объектовой метрики"):
+        _TestSampleBatchCreate(
+            image_count=1,
+            items=[
+                {
+                    "dataset_key": "Вырубки\\main",
+                    "metric": "pixel",
+                    "exclude_boundary_objects": True,
+                }
+            ],
         )
 
 

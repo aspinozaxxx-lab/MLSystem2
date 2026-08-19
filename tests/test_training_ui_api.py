@@ -2117,6 +2117,8 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "setMinImageCount(latest.min_image_count)" in app_tsx
     assert "setMaxImageCount(latest.image_count)" in app_tsx
     assert "minObjectCount: previous.min_object_count" in app_tsx
+    assert "excludeBoundaryObjects" in app_tsx
+    assert "Не учитывать объекты, выходящие за тайл" in app_tsx
     assert "metric: previous.metric" not in app_tsx
     assert "qualityMetricLabel(row.dataset.quality_metric)" in app_tsx
     assert 'head === "classes"' in app_tsx

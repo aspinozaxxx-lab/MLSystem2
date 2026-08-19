@@ -136,6 +136,7 @@ type TestSampleBatchFormRow = {
   dataset: DatasetInfo;
   selected: boolean;
   minObjectCount: number;
+  excludeBoundaryObjects: boolean;
 };
 
 function BrandLogo() {
@@ -1082,7 +1083,12 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
   const [minImageCount, setMinImageCount] = useState(5);
   const [maxImageCount, setMaxImageCount] = useState(10);
   const [rows, setRows] = useState<TestSampleBatchFormRow[]>(() =>
-    datasets.map((dataset) => ({ dataset, selected: false, minObjectCount: 150 })),
+    datasets.map((dataset) => ({
+      dataset,
+      selected: false,
+      minObjectCount: 150,
+      excludeBoundaryObjects: false,
+    })),
   );
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
@@ -1101,7 +1107,12 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
     setRows((current) =>
       datasets.map((dataset) => {
         const existing = current.find((item) => item.dataset.key === dataset.key);
-        return existing || { dataset, selected: false, minObjectCount: 150 };
+        return existing || {
+          dataset,
+          selected: false,
+          minObjectCount: 150,
+          excludeBoundaryObjects: false,
+        };
       }),
     );
   }, [datasets]);
@@ -1119,7 +1130,15 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
           current.map((row) => {
             const previous = (latest.items || []).find((item) => item.dataset_key === row.dataset.key);
             return previous
-              ? { ...row, selected: false, minObjectCount: previous.min_object_count }
+              ? {
+                  ...row,
+                  selected: false,
+                  minObjectCount: previous.min_object_count,
+                  excludeBoundaryObjects: Boolean(
+                    row.dataset.quality_metric === "objects"
+                    && previous.exclude_boundary_objects,
+                  ),
+                }
               : row;
           }),
         );
@@ -1168,6 +1187,8 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
             dataset_key: row.dataset.key,
             min_object_count: row.minObjectCount,
             metric: row.dataset.quality_metric || "pixel",
+            exclude_boundary_objects:
+              row.dataset.quality_metric === "objects" && row.excludeBoundaryObjects,
           })),
       };
       const payload = await run(() =>
@@ -1237,6 +1258,23 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
                       <span>Основная метрика</span>
                       <input value={qualityMetricLabel(row.dataset.quality_metric)} readOnly disabled />
                     </label>
+                    {row.dataset.quality_metric === "objects" ? (
+                      <label className="test-sample-boundary-option">
+                        <input
+                          type="checkbox"
+                          checked={row.excludeBoundaryObjects}
+                          disabled={busy || batchActive}
+                          aria-label={`Не учитывать объекты, выходящие за тайл ${row.dataset.name}`}
+                          onChange={(event) => updateRow(row.dataset.key, {
+                            excludeBoundaryObjects: event.target.checked,
+                          })}
+                        />
+                        <span>
+                          <strong>Не учитывать объекты, выходящие за тайл</strong>
+                          <small>Пересекающий границу объект будет исключён целиком.</small>
+                        </span>
+                      </label>
+                    ) : null}
                   </div>
                   );
                 })}
@@ -2037,6 +2075,12 @@ function TestSampleEditorPage({
           <Metric label="Объекты, цель / факт" value={`${sample.requested_object_count} / ${sample.actual_object_count}`} />
           <Metric label="Размер тайла" value={`${sample.tile_width} × ${sample.tile_height}`} />
           <Metric label="Территории" value={sample.territory_count} />
+          {sample.quality_metric === "objects" ? (
+            <Metric
+              label="Объекты на границе тайла"
+              value={sample.exclude_boundary_objects ? "Исключены" : "Учитываются"}
+            />
+          ) : null}
         </div>
         {!hasEnabledTiles ? <div className="info-box">Включите хотя бы один тайл, чтобы рассчитать F1 и сохранить полезную разметку.</div> : null}
         {(sample.warnings || []).length ? (
