@@ -30,7 +30,7 @@ describe("format helpers", () => {
         model_name_stem: "deforestation",
         imagery_type: "kanopus",
       }],
-    )).toBe("kanopus_deforestation");
+    )).toBe("deforestation_kanopus");
     expect(defaultTrainingZipModelName(
       { dataset_key: "zu-id" },
       [{
@@ -38,7 +38,7 @@ describe("format helpers", () => {
         model_name_stem: "zu500",
         imagery_type: "ortho",
       }],
-    )).toBe("orto_zu500");
+    )).toBe("zu500_orto");
   });
 
   it("сохраняет совместимый fallback для legacy annotation_file", () => {
@@ -49,7 +49,7 @@ describe("format helpers", () => {
         annotation_file: "/data/MLMarkup/Реки/main/rivers.geojson",
         imagery_type: "kanopus",
       }],
-    )).toBe("kanopus_rivers");
+    )).toBe("rivers_kanopus");
   });
 
   it("учитывает явный признак основного датасета", () => {

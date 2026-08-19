@@ -64,8 +64,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/results/training/triton-zip` - JSON endpoint для сборки общего zip-архива нескольких успешных
   нативных и импортированных результатов; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД.
-- Одиночная и групповая формы экспорта предлагают редактируемое имя `kanopus_<model_name_stem>` либо
-  исторически совместимое `orto_<model_name_stem>`; основа сохраняется в каталоге при миграции legacy-датасетов
+- Одиночная и групповая формы экспорта предлагают редактируемое имя `<model_name_stem>_kanopus` либо
+  исторически совместимое `<model_name_stem>_orto`; основа сохраняется в каталоге при миграции legacy-датасетов
   и не зависит от текущего per-image имени файла.
 - `POST /api/v1/scene-list-export` - multipart endpoint с `imagery_type=kanopus|ortho`, optional
   `include_footprints` и GeoJSON; рекурсивно находит TIFF с полигональными объектами. Без флага возвращает

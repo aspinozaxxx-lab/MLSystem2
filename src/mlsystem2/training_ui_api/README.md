@@ -133,8 +133,8 @@ optional `hard_negative.geojson`. Папка без TXT считается per-i
 а `DatasetInfo` возвращает `format=per_image` и `annotations_dir`. Пустой управляемый per-image датасет виден
 редактору, но не готов к обучению. В legacy несколько обычных GeoJSON дают diagnostics вместо случайного выбора.
 Историческая основа имени модели из positive GeoJSON сохраняется в `datasets.model_name_stem` и возвращается в
-`DatasetInfo`, поэтому переход на per-image не меняет предлагаемое имя выгрузки: `kanopus_<имя>` для Канопуса и
-исторически совместимое `orto_<имя>` для ортофото.
+`DatasetInfo`, поэтому переход на per-image не меняет предлагаемое имя выгрузки: `<имя>_kanopus` для Канопуса и
+исторически совместимое `<имя>_orto` для ортофото.
 `updated_at` датасета заполняется по последнему git-коммиту, затронувшему его папку в
 `MLSYSTEM2_MLMARKUP_ROOT`. Атомарный runtime-релиз читает те же данные из
 `.mlsystem2-release-metadata.json`; для произвольной папки без Git и release metadata используется filesystem

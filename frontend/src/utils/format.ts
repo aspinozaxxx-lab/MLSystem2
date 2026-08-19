@@ -122,10 +122,10 @@ export function defaultTrainingZipModelName(
     || result.dataset_key
     || "model",
   );
-  const prefix = dataset?.imagery_type === "ortho" ? "orto" : "kanopus";
-  if (!modelPart || modelPart === prefix) return modelPart || prefix;
-  if (modelPart.startsWith(`${prefix}_`)) return modelPart;
-  return `${prefix}_${modelPart}`;
+  const suffix = dataset?.imagery_type === "ortho" ? "orto" : "kanopus";
+  if (!modelPart || modelPart === suffix) return modelPart || suffix;
+  if (modelPart.endsWith(`_${suffix}`)) return modelPart;
+  return `${modelPart}_${suffix}`;
 }
 
 export function isValidExportModelName(value: string): boolean {
