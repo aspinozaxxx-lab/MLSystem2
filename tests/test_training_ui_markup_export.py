@@ -2015,6 +2015,135 @@ def test_test_sample_batch_accepts_per_image_dataset(
         assert created.json()["items"][0]["status"] == "queued"
 
 
+def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        dataset = _test_samples.find_managed_dataset(
+            session,
+            config,
+            "Вырубки\\main",
+        )
+        assert dataset is not None
+        assert dataset.version is not None
+        assert dataset.scenes_file is not None
+        assert dataset.annotation_file is not None
+        class_row = dataset_class_row(session, dataset.key)
+        assert class_row is not None
+
+        primary = TrainingResultRow(
+            source="automation",
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name=dataset.name,
+            architecture="segformer_b2",
+            model_name="Основная сеть",
+            status="ok",
+        )
+        manual = TrainingResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name=dataset.name,
+            architecture="segformer_b2",
+            model_name="Ручная сеть",
+            status="ok",
+        )
+        session.add_all([primary, manual])
+        session.flush()
+        class_row.primary_training_result_id = primary.id
+
+        scenes_path = Path(dataset.scenes_file)
+        prediction_path = Path(dataset.annotation_file)
+        scenes_file = StoredFileRow(
+            kind=StoredFileKind.SCENES_TXT.value,
+            original_name=scenes_path.name,
+            content_type="text/plain",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        prediction_file = StoredFileRow(
+            kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+            original_name=prediction_path.name,
+            content_type="application/geo+json",
+            path=str(prediction_path),
+            size_bytes=prediction_path.stat().st_size,
+        )
+        session.add_all([scenes_file, prediction_file])
+        session.flush()
+        pseudo = PseudoMarkupResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            dataset_version=dataset.version,
+            training_result_id=manual.id,
+            class_key=dataset.key,
+            source_dataset_name=dataset.name,
+            image_count=dataset.image_count,
+            scenes_file_id=scenes_file.id,
+            geojson_file_id=prediction_file.id,
+            status="ok",
+        )
+        session.add(pseudo)
+        session.flush()
+
+        selected = _test_samples._latest_pseudo_markup(
+            session,
+            dataset.key,
+            class_key=class_row.key,
+            dataset_version=dataset.version,
+        )
+
+        assert selected is not None
+        assert selected.id == pseudo.id
+        assert selected.source == "manual"
+        assert selected.training_result_id == manual.id
+
+        sample_row = _TestSampleRow(
+            name="Проверка ручной псевдоразметки",
+            dataset_key=dataset.key,
+            dataset_name=dataset.name,
+            dataset_version=dataset.version,
+            class_key=class_row.key,
+            class_name=class_row.name,
+            dataset_short_name=dataset.dataset_name or dataset.name,
+            tile_width=16,
+            tile_height=16,
+            image_count=1,
+            requested_object_count=1,
+            actual_object_count=1,
+            territory_count=1,
+        )
+        session.add(sample_row)
+        session.flush()
+        pseudo_info = _test_samples.test_sample_pseudo_markup_info(
+            session,
+            sample_row,
+        )
+        assert pseudo_info.status == "ready"
+        assert pseudo_info.result_id == pseudo.id
+        assert pseudo_info.training_result_id == manual.id
+        assert pseudo_info.model_name == "Ручная сеть"
+
+        pseudo.dataset_version = "устаревшая-ревизия"
+        session.flush()
+        assert (
+            _test_samples._latest_pseudo_markup(
+                session,
+                dataset.key,
+                class_key=class_row.key,
+                dataset_version=dataset.version,
+            )
+            is None
+        )
+
+
 def test_test_sample_batch_request_keeps_exact_legacy_image_count() -> None:
     request = _TestSampleBatchCreate(
         image_count=3,

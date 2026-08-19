@@ -512,6 +512,7 @@ def _create_grouped_test_sample(
         session,
         item.dataset_key,
         class_key=item.class_key,
+        dataset_version=item.dataset_version,
     )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
@@ -942,7 +943,12 @@ def optimize_test_sample_preview(
 ) -> TestSampleDraftPreview:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
+    source = _latest_pseudo_markup(
+        session,
+        row.dataset_key,
+        class_key=row.class_key,
+        dataset_version=row.dataset_version,
+    )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
             "Нет успешной разметки для этого датасета; "
@@ -988,7 +994,12 @@ def _preview_evaluation(
             status="unavailable",
             error="В тестовой разметке нет включённых тайлов.",
         )
-    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
+    source = _latest_pseudo_markup(
+        session,
+        row.dataset_key,
+        class_key=row.class_key,
+        dataset_version=row.dataset_version,
+    )
     if source is None or source.geojson_file is None:
         return TestSampleEvaluationInfo(
             status="unavailable",
@@ -1055,7 +1066,12 @@ def optimize_test_sample(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(session, row.dataset_key, class_key=row.class_key)
+    source = _latest_pseudo_markup(
+        session,
+        row.dataset_key,
+        class_key=row.class_key,
+        dataset_version=row.dataset_version,
+    )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
             "Нет успешной разметки для этого датасета; "
@@ -1165,6 +1181,7 @@ def evaluate_test_sample(
         session,
         row.dataset_key,
         class_key=row.class_key,
+        dataset_version=row.dataset_version,
     )
     if source is None or source.geojson_file is None:
         _clear_test_sample_tile_f1(row)
@@ -1530,6 +1547,7 @@ def evaluate_test_samples_for_pseudo_markup(
             session,
             row.dataset_key,
             class_key=row.class_key,
+            dataset_version=row.dataset_version,
         )
         if latest is None or latest.id != pseudo_result.id:
             continue
@@ -2573,18 +2591,61 @@ def _latest_pseudo_markup(
     dataset_key: str,
     *,
     class_key: str | None = None,
+    dataset_version: str | None = None,
 ) -> PseudoMarkupResultRow | None:
+    """Выбрать полную псевдоразметку для формирования и оптимизации набора.
+
+    Сначала используется эффективная сеть класса. Если для неё результата нет,
+    допускается последняя псевдоразметка другой обученной сети того же класса,
+    включая ручной запуск, но только для той же ревизии исходного датасета.
+    """
+
     primary = current_primary_training_result(session, class_key or dataset_key)
     conditions = [
-            PseudoMarkupResultRow.status == "ok",
-            PseudoMarkupResultRow.dataset_key == dataset_key,
-            PseudoMarkupResultRow.geojson_file_id.is_not(None),
+        PseudoMarkupResultRow.status == "ok",
+        PseudoMarkupResultRow.dataset_key == dataset_key,
+        PseudoMarkupResultRow.geojson_file_id.is_not(None),
     ]
+    if dataset_version is not None:
+        conditions.append(
+            (PseudoMarkupResultRow.dataset_version == dataset_version)
+            | PseudoMarkupResultRow.dataset_version.is_(None)
+        )
     if primary is not None:
-        conditions.append(PseudoMarkupResultRow.training_result_id == primary.id)
+        preferred = session.scalar(
+            select(PseudoMarkupResultRow)
+            .where(
+                *conditions,
+                PseudoMarkupResultRow.training_result_id == primary.id,
+            )
+            .options(
+                selectinload(PseudoMarkupResultRow.geojson_file),
+                selectinload(PseudoMarkupResultRow.training_result),
+            )
+            .order_by(
+                PseudoMarkupResultRow.updated_at.desc(),
+                PseudoMarkupResultRow.created_at.desc(),
+                PseudoMarkupResultRow.id.desc(),
+            )
+            .limit(1)
+        )
+        if preferred is not None:
+            return preferred
+
+    class_scope = _class_scope_keys(session, class_key or dataset_key)
     return session.scalar(
         select(PseudoMarkupResultRow)
-        .where(*conditions)
+        .join(
+            TrainingResultRow,
+            TrainingResultRow.id == PseudoMarkupResultRow.training_result_id,
+        )
+        .where(
+            *conditions,
+            (
+                TrainingResultRow.dataset_key.in_(class_scope)
+                | TrainingResultRow.class_key.in_(class_scope)
+            ),
+        )
         .options(
             selectinload(PseudoMarkupResultRow.geojson_file),
             selectinload(PseudoMarkupResultRow.training_result),
@@ -3333,6 +3394,7 @@ def _test_f1_postprocess_profile_name(
             session,
             sample.dataset_key,
             class_key=sample.class_key,
+            dataset_version=sample.dataset_version,
         )
     image_count = source.image_count if source is not None else None
     if image_count is None:
@@ -3428,29 +3490,33 @@ def test_sample_pseudo_markup_info(
             status="unavailable",
             error="Для класса нет успешной сети.",
         )
-    common = {
-        "training_result_id": target.id,
-        "model_name": target.model_name,
-        "training_dataset_key": target.dataset_key or target.class_key,
-        "training_dataset_name": target.class_display_name,
-    }
+    common = _pseudo_markup_training_info(target)
     ready = _latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
+        dataset_version=row.dataset_version,
     )
     if (
         ready is not None
-        and ready.training_result_id == target.id
         and ready.geojson_file is not None
         and Path(ready.geojson_file.path).is_file()
     ):
+        ready_result = ready.training_result or (
+            session.get(TrainingResultRow, ready.training_result_id)
+            if ready.training_result_id is not None
+            else None
+        )
         return TestSamplePseudoMarkupInfo(
             status="ready",
             result_id=ready.id,
             job_id=ready.job_id,
             can_create=False,
-            **common,
+            **(
+                _pseudo_markup_training_info(ready_result)
+                if ready_result is not None
+                else common
+            ),
         )
     candidate = session.scalar(
         select(PseudoMarkupResultRow)
@@ -3490,9 +3556,21 @@ def test_sample_pseudo_markup_info(
     return TestSamplePseudoMarkupInfo(
         status="unavailable",
         can_create=True,
-        error="Для исходного датасета нет псевдоразметки текущей основной сети.",
+        error=(
+            "Для исходного датасета нет полной псевдоразметки текущей основной "
+            "или другой обученной сети класса."
+        ),
         **common,
     )
+
+
+def _pseudo_markup_training_info(result: TrainingResultRow) -> dict[str, Any]:
+    return {
+        "training_result_id": result.id,
+        "model_name": result.model_name,
+        "training_dataset_key": result.dataset_key or result.class_key,
+        "training_dataset_name": result.class_display_name,
+    }
 
 
 def _summary(session: Session, row: TestSampleRow) -> TestSampleSummary:
