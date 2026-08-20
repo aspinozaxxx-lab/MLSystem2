@@ -497,7 +497,7 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 2,
+            "pipeline_contract": 3,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),

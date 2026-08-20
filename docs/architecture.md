@@ -213,6 +213,8 @@ process и помечает известный MLflow run как `KILLED`; по�
 `torch/torchvision` из read-only mount окружения MLSystem2; это runtime-зависимость Triton, а не альтернативный
 predictor. Каждая raster-стадия штатного pipeline пишет в отдельную промежуточную маску; чтение и перезапись одного
 имени в одном `MaskMorphology` запрещены, поскольку дают зависимую от размера TIFF ошибку GDAL.
+Имя feature collection, созданной `VectorizeMasks`, без преобразования передаётся как `input` и `output`
+последующей `UnifiedVectorProcessing`; raster-имя бинарной маски `mask` не используется как имя векторного слоя.
 Контейнер Triton для Python-backend запускается с `/dev/shm` не менее `1 GiB`: стандартных Docker
 `64 MiB` недостаточно для входа ЗУ500 `1884×1884` и переменного instance-выхода. Один и тот же backend применяется
 для полной и поснимочной псевдоразметки, AOI и F1 тестовых разметок; альтернативного локального predictor для

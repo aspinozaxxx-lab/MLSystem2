@@ -933,7 +933,8 @@ def _pipeline_yaml(
     segmentation_labels_yaml = "\n".join(
         f"        - {label}" for label in segmentation_labels
     )
-    vector_postprocess_yaml = _vector_postprocess_yaml(labels, postprocess_config)
+    vector_labels = [Path(output).stem for output in outputs]
+    vector_postprocess_yaml = _vector_postprocess_yaml(vector_labels, postprocess_config)
     resolution_yaml = (
         f"      crs: utm\n      res: [{float(resolution_m)}, {float(resolution_m)}]\n"
         if resolution_m is not None and float(resolution_m) > 0

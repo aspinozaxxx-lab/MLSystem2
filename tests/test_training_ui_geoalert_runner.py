@@ -81,6 +81,9 @@ def test_native_geoalert_pipeline_contains_context_gpu_and_postprocess_bricks() 
     ]
     assert bricks[5]["_class"] == "VectorizeMasks"
     assert bricks[6]["_class"] == "UnifiedVectorProcessing"
+    assert bricks[5]["output_fcs"] == ["output"]
+    assert bricks[6]["input"] == "output"
+    assert bricks[6]["output"] == "output"
     assert _pipeline_bricks(pipeline) == [
         "SplitRaster",
         "Segmentation",

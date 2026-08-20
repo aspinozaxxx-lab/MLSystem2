@@ -1444,19 +1444,25 @@ def test_model_export_mask_postprocessing_never_overwrites_an_input_mask() -> No
                 "postprocess.mask_min_object_pixels": 32,
                 "postprocess.mask_min_hole_pixels": 32,
                 "postprocess.binary_closing_radius": 2,
+                "postprocess.min_area_m2": 20.0,
             },
         )
     )
     bricks = pipeline["config"]["bricks"]
     segmentation = bricks[1]
     morphology = [brick for brick in bricks if brick["_class"] == "MaskMorphology"]
-    vectorize = bricks[-1]
+    vectorize = next(brick for brick in bricks if brick["_class"] == "VectorizeMasks")
 
     assert segmentation["output_labels"] == ["mlsystem2_raw_1"]
     assert len(morphology) == 3
     assert morphology[0]["input_masks"] == ["mlsystem2_raw_1"]
     assert morphology[-1]["out_masks"] == ["mask"]
     assert vectorize["input_rasters"] == ["mask"]
+    assert vectorize["output_fcs"] == ["output"]
+    vector_postprocess = bricks[-1]
+    assert vector_postprocess["_class"] == "UnifiedVectorProcessing"
+    assert vector_postprocess["input"] == "output"
+    assert vector_postprocess["output"] == "output"
     for brick in morphology:
         assert set(brick["input_masks"]).isdisjoint(brick["out_masks"])
 
