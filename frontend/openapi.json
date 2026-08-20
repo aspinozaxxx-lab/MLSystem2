@@ -4705,6 +4705,10 @@
             "type": "string",
             "title": "Name"
           },
+          "technical_name": {
+            "type": "string",
+            "title": "Technical Name"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -4764,7 +4768,8 @@
         "type": "object",
         "required": [
           "key",
-          "name"
+          "name",
+          "technical_name"
         ],
         "title": "ClassInfo"
       },
@@ -4953,6 +4958,20 @@
             "minLength": 1,
             "title": "Name"
           },
+          "technical_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 1,
+                "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Name"
+          },
           "imagery_type": {
             "$ref": "#/components/schemas/ImageryType"
           }
@@ -4979,6 +4998,20 @@
               }
             ],
             "title": "Name"
+          },
+          "technical_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 1,
+                "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Name"
           },
           "quality_metric": {
             "anyOf": [
@@ -6187,6 +6220,17 @@
               }
             ],
             "title": "Class Name"
+          },
+          "class_technical_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Technical Name"
           },
           "path": {
             "anyOf": [
@@ -8783,6 +8827,11 @@
               }
             ],
             "title": "Test F1"
+          },
+          "test_f1_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Test F1 Metrics"
           },
           "test_f1_status": {
             "anyOf": [

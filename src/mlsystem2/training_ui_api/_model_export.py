@@ -45,6 +45,7 @@ def build_triton_model_export_zip(
     instance_kind: str = "KIND_CPU",
     postprocess_config: dict[str, object] | None = None,
     resolution_m: float | None = None,
+    class_schema_override: list[dict[str, object]] | None = None,
 ) -> ModelExportArchive:
     """Собрать zip модели для загрузчика models-serving-service."""
 
@@ -59,6 +60,11 @@ def build_triton_model_export_zip(
         checkpoint_path.write_bytes(checkpoint_bytes)
         loaded = _load_binary_checkpoint(checkpoint_path)
         task, class_schema = _checkpoint_task_schema(loaded)
+        class_schema = _export_class_schema_override(
+            task,
+            class_schema,
+            class_schema_override,
+        )
         metadata_threshold = _threshold_from_metadata(loaded.artifact.metadata)
         effective_threshold = (
             _validate_threshold(threshold) if threshold is not None else metadata_threshold
@@ -630,6 +636,58 @@ def _checkpoint_task_schema(loaded: Any) -> tuple[str, list[dict[str, object]]]:
     return task, schema
 
 
+def _export_class_schema_override(
+    task: str,
+    checkpoint_schema: list[dict[str, object]],
+    override: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    if override is None:
+        return checkpoint_schema
+    if task == "binary":
+        if override:
+            raise TrainingUIAPIError("Для binary checkpoint схема типов должна быть пустой.")
+        return []
+    normalized = _normalize_export_class_schema(override)
+    checkpoint_channels = [
+        (int(item["id"]), str(item["name"]).strip().casefold())
+        for item in checkpoint_schema
+    ]
+    override_channels = [
+        (int(item["id"]), str(item["name"]).strip().casefold())
+        for item in normalized
+    ]
+    if checkpoint_channels != override_channels:
+        raise TrainingUIAPIError(
+            "Новая схема типов меняет порядок или назначение каналов checkpoint."
+        )
+    return normalized
+
+
+def _normalize_export_class_schema(
+    raw_schema: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    schema: list[dict[str, object]] = []
+    for index, raw in enumerate(raw_schema, start=1):
+        item = {
+            "id": int(raw.get("id", raw.get("class_id", index))),
+            "slug": str(raw.get("slug") or "").strip(),
+            "name": str(raw.get("name") or raw.get("slug") or "").strip(),
+            "color": str(raw.get("color") or "#808080").upper(),
+            "priority": int(raw.get("priority") or 0),
+        }
+        if not item["slug"] or not item["name"]:
+            raise TrainingUIAPIError(f"Некорректный элемент новой class schema #{index}.")
+        schema.append(item)
+    schema.sort(key=lambda item: int(item["id"]))
+    if [item["id"] for item in schema] != list(range(1, len(schema) + 1)):
+        raise TrainingUIAPIError(
+            "Новая class schema должна использовать последовательные id от 1."
+        )
+    if len({str(item["slug"]) for item in schema}) != len(schema):
+        raise TrainingUIAPIError("Новая class schema содержит повторяющиеся slug.")
+    return schema
+
+
 def _threshold_from_metadata(metadata: dict[str, object]) -> float:
     raw_threshold = metadata.get(
         "confidence_threshold",
@@ -868,7 +926,13 @@ def _pipeline_yaml(
     labels_yaml = "\n".join(f"        - {label}" for label in labels)
     outputs_yaml = "\n".join(f"    - {output}" for output in outputs)
     vector_outputs_yaml = "\n".join(f"        - {Path(output).stem}" for output in outputs)
-    mask_postprocess_yaml = _mask_postprocess_yaml(labels, postprocess_config)
+    segmentation_labels, mask_postprocess_yaml = _mask_postprocess_yaml(
+        labels,
+        postprocess_config,
+    )
+    segmentation_labels_yaml = "\n".join(
+        f"        - {label}" for label in segmentation_labels
+    )
     vector_postprocess_yaml = _vector_postprocess_yaml(labels, postprocess_config)
     resolution_yaml = (
         f"      crs: utm\n      res: [{float(resolution_m)}, {float(resolution_m)}]\n"
@@ -896,7 +960,7 @@ config:
       input_rasters:
 {bands_yaml}
       output_labels:
-{labels_yaml}
+{segmentation_labels_yaml}
 {resolution_yaml}      nodata: 0
       adapter:
         _class: TritonAdapter
@@ -948,46 +1012,50 @@ def _positive_number(config: dict[str, object], key: str) -> float | None:
 def _mask_postprocess_yaml(
     labels: list[str],
     config: dict[str, object] | None,
-) -> str:
+) -> tuple[list[str], str]:
     values = dict(config or {})
-    labels_yaml = ", ".join(labels)
-    bricks: list[str] = []
+    operations: list[tuple[str, str, int]] = []
     min_objects = _positive_number(values, "postprocess.mask_min_object_pixels")
     if min_objects is not None:
-        bricks.append(
-            "    - _class: MaskMorphology\n"
-            f"      input_masks: [{labels_yaml}]\n"
-            f"      out_masks: [{labels_yaml}]\n"
-            "      mask_operation: remove_small_objects\n"
-            f"      min_size: {int(min_objects)}\n"
-            "      sample_size: [2048, 2048]\n"
-            "      bound: 1"
-        )
+        operations.append(("remove_small_objects", "min_size", int(min_objects)))
     min_holes = _positive_number(values, "postprocess.mask_min_hole_pixels")
     if min_holes is not None:
-        bricks.append(
-            "    - _class: MaskMorphology\n"
-            f"      input_masks: [{labels_yaml}]\n"
-            f"      out_masks: [{labels_yaml}]\n"
-            "      mask_operation: remove_small_holes\n"
-            f"      area_threshold: {int(min_holes)}\n"
-            "      sample_size: [2048, 2048]\n"
-            "      bound: 1"
-        )
+        operations.append(("remove_small_holes", "area_threshold", int(min_holes)))
     closing = _positive_number(values, "postprocess.binary_closing_radius")
     if closing is not None:
-        radius = int(closing)
+        operations.append(("binary_closing", "selem_size", int(closing)))
+    if not operations:
+        return labels, ""
+
+    current_labels = [f"mlsystem2_raw_{index}" for index in range(1, len(labels) + 1)]
+    segmentation_labels = list(current_labels)
+    bricks: list[str] = []
+    for operation_index, (operation, parameter, value) in enumerate(operations, start=1):
+        output_labels = (
+            labels
+            if operation_index == len(operations)
+            else [
+                f"mlsystem2_stage_{operation_index}_{index}"
+                for index in range(1, len(labels) + 1)
+            ]
+        )
+        extra = ""
+        bound = 1
+        if operation == "binary_closing":
+            extra = "      selem: disk\n"
+            bound = max(1, value)
         bricks.append(
             "    - _class: MaskMorphology\n"
-            f"      input_masks: [{labels_yaml}]\n"
-            f"      out_masks: [{labels_yaml}]\n"
-            "      mask_operation: binary_closing\n"
-            "      selem: disk\n"
-            f"      selem_size: {radius}\n"
+            f"      input_masks: [{', '.join(current_labels)}]\n"
+            f"      out_masks: [{', '.join(output_labels)}]\n"
+            f"      mask_operation: {operation}\n"
+            f"{extra}"
+            f"      {parameter}: {value}\n"
             "      sample_size: [2048, 2048]\n"
-            f"      bound: {max(1, radius)}"
+            f"      bound: {bound}"
         )
-    return "\n".join(bricks)
+        current_labels = list(output_labels)
+    return segmentation_labels, "\n".join(bricks)
 
 
 def _vector_postprocess_yaml(

@@ -67,6 +67,7 @@ def list_classes(mlmarkup_root: Path, images_root: Path | None = None) -> list[C
             ClassInfo(
                 key=path.name,
                 name=path.name,
+                technical_name=_legacy_technical_name(path.name),
                 updated_at=_latest_updated_at(datasets),
                 datasets=datasets,
                 is_custom=False,
@@ -83,11 +84,22 @@ def list_classes(mlmarkup_root: Path, images_root: Path | None = None) -> list[C
         ClassInfo(
             key=CUSTOM_KEY,
             name=CUSTOM_NAME,
+            technical_name="custom",
             datasets=[custom_dataset],
             is_custom=True,
         )
     )
     return classes
+
+
+def _legacy_technical_name(value: str) -> str:
+    normalized = "".join(
+        character
+        if character.isascii() and (character.isalnum() or character in "_-")
+        else "_"
+        for character in value.casefold()
+    ).strip("_-")
+    return normalized or "legacy"
 
 
 def list_image_folders(images_root: Path) -> list[ImageFolderInfo]:

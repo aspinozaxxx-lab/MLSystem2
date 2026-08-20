@@ -1343,7 +1343,17 @@ def _native_model_contract(
     if configured_schema:
         normalized_configured = _normalize_object_types(configured_schema)
         if normalized_configured != object_types:
-            raise RuntimeError("Схема классов задания не совпадает со схемой checkpoint.")
+            checkpoint_channels = [
+                (int(item["id"]), str(item["name"]).strip().casefold())
+                for item in object_types
+            ]
+            configured_channels = [
+                (int(item["id"]), str(item["name"]).strip().casefold())
+                for item in normalized_configured
+            ]
+            if configured_channels != checkpoint_channels:
+                raise RuntimeError("Схема классов задания не совпадает со схемой checkpoint.")
+            object_types = normalized_configured
     raw_threshold = metadata.get("confidence_threshold", metadata.get("val_best_threshold"))
     threshold = float(raw_threshold) if raw_threshold is not None else None
     return task, object_types, threshold

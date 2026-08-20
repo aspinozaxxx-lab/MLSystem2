@@ -78,6 +78,7 @@ class DatasetInfo(BaseModel):
     dataset_name: str | None = None
     class_key: str | None = None
     class_name: str | None = None
+    class_technical_name: str | None = None
     path: str | None = None
     is_custom: bool = False
     scenes_file: str | None = None
@@ -137,6 +138,7 @@ class ClassInfo(BaseModel):
 
     key: str
     name: str
+    technical_name: str
     updated_at: datetime | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
     is_custom: bool = False
@@ -183,6 +185,12 @@ class DatasetClassCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=240)
+    technical_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+    )
     imagery_type: ImageryType
 
 
@@ -190,6 +198,12 @@ class DatasetClassUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=240)
+    technical_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
+    )
     quality_metric: QualityMetric | None = None
     imagery_type: ImageryType | None = None
 

@@ -106,6 +106,7 @@ export function defaultTrainingZipModelName(
     key: string;
     name?: string | null;
     class_key?: string | null;
+    class_technical_name?: string | null;
     annotation_file?: string | null;
     imagery_type?: "kanopus" | "ortho" | null;
     model_name_stem?: string | null;
@@ -115,7 +116,8 @@ export function defaultTrainingZipModelName(
   const filename = String(dataset?.annotation_file || "").split(/[\\/]/).pop() || "";
   const annotationStem = filename.replace(/\.[^.]*$/, "");
   const modelPart = exportModelNamePart(
-    dataset?.model_name_stem
+    dataset?.class_technical_name
+    || dataset?.model_name_stem
     || annotationStem
     || dataset?.class_key
     || dataset?.name

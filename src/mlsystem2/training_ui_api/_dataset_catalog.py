@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.dataset_preparing.api import (
     is_per_image_footprint_name,
@@ -49,9 +50,11 @@ from ._models import (
     InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
+    StoredFileRow,
     TestSampleBatchItemRow,
     TestSampleRow,
     TrainingResultRow,
+    TrainingResultTestMetricRow,
     TrainingTemplateRow,
 )
 from .contracts import (
@@ -130,6 +133,7 @@ _HISTORICAL_MODEL_NAME_STEMS = {
     ("Реки", "main"): "rivers",
     ("Реки", "test"): "rivers",
 }
+_TECHNICAL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$")
 
 
 def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> None:
@@ -363,6 +367,7 @@ def list_managed_classes(
         ClassInfo(
             key=row.key,
             name=row.name,
+            technical_name=row.technical_name,
             updated_at=_latest_dataset_update(by_class.get(row.key, [])),
             datasets=by_class.get(row.key, []),
             quality_metric=row.quality_metric,
@@ -378,6 +383,7 @@ def list_managed_classes(
             ClassInfo(
                 key=CUSTOM_KEY,
                 name=CUSTOM_NAME,
+                technical_name="custom",
                 datasets=[custom_dataset],
                 is_custom=True,
                 imagery_type=DEFAULT_IMAGERY_TYPE,
@@ -435,10 +441,12 @@ def create_dataset_class(
 ) -> DatasetCatalogInfo:
     name = _clean_name(request.name, "Название класса")
     _ensure_class_name_available(session, name)
+    technical_name = _class_technical_name(session, name, request.technical_name)
     session.add(
         DatasetClassRow(
             key=str(uuid.uuid4()),
             name=name,
+            technical_name=technical_name,
             quality_metric=QUALITY_PIXEL,
             imagery_type=request.imagery_type.value,
         )
@@ -458,6 +466,20 @@ def update_dataset_class(
         name = _clean_name(request.name, "Название класса")
         _ensure_class_name_available(session, name, exclude_id=row.id)
         row.name = name
+    if request.technical_name is not None:
+        technical_name = _clean_technical_name(request.technical_name)
+        _ensure_class_technical_name_available(
+            session,
+            technical_name,
+            exclude_id=row.id,
+        )
+        if technical_name != row.technical_name:
+            _replace_source_class_technical_name(
+                session,
+                row,
+                technical_name,
+                config,
+            )
 
     metric_changed = (
         request.quality_metric is not None
@@ -664,7 +686,7 @@ def _replace_managed_composition_sources(
                 source_dataset_id=source.id,
                 priority=requested.priority,
                 object_type_id=object_type_id,
-                object_type_slug=f"type_{source_class.id.hex}",
+                object_type_slug=source_class.technical_name,
                 object_type_name=source_class.name,
                 color=color,
             )
@@ -681,7 +703,7 @@ def _managed_composition_signature(
             source.id,
             requested.priority,
             object_type_id,
-            f"type_{source_class.id.hex}",
+            source_class.technical_name,
             source_class.name,
             color,
         )
@@ -1112,6 +1134,7 @@ def _dataset_info(
         dataset_name=dataset.name,
         class_key=class_row.key,
         class_name=class_row.name,
+        class_technical_name=class_row.technical_name,
         path=str(source_path),
         scenes_file=str(scenes_file) if scenes_file is not None else None,
         annotation_file=str(annotation_file) if annotation_file is not None else None,
@@ -1219,6 +1242,7 @@ def _managed_dataset_info(
         dataset_name=dataset.name,
         class_key=class_row.key,
         class_name=class_row.name,
+        class_technical_name=class_row.technical_name,
         path=str(annotations_dir) if annotations_dir is not None else None,
         format=DatasetFormat.PER_IMAGE_MULTICLASS,
         annotations_dir=str(annotations_dir) if annotations_dir is not None else None,
@@ -1357,6 +1381,7 @@ def _custom_dataset_info(config: TrainingUIAPIConfig) -> DatasetInfo:
         dataset_name=CUSTOM_NAME,
         class_key=CUSTOM_KEY,
         class_name=CUSTOM_NAME,
+        class_technical_name="custom",
         is_custom=True,
         imagery_type=DEFAULT_IMAGERY_TYPE,
         input_channels=IMAGERY_CHANNELS[DEFAULT_IMAGERY_TYPE],
@@ -1466,6 +1491,7 @@ def _ensure_class(
     row = DatasetClassRow(
         key=key,
         name=name,
+        technical_name=_class_technical_name(session, name, None),
         quality_metric=QUALITY_PIXEL,
         imagery_type=imagery_type,
     )
@@ -1573,6 +1599,252 @@ def _ensure_class_name_available(
         statement = statement.where(DatasetClassRow.id != exclude_id)
     if session.scalar(statement) is not None:
         raise TrainingUIAPIError(f"Класс с названием «{name}» уже существует")
+
+
+def _ensure_class_technical_name_available(
+    session: Session,
+    technical_name: str,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    statement = select(DatasetClassRow).where(
+        DatasetClassRow.technical_name == technical_name
+    )
+    if exclude_id is not None:
+        statement = statement.where(DatasetClassRow.id != exclude_id)
+    if session.scalar(statement) is not None:
+        raise TrainingUIAPIError(
+            f"Техническое имя «{technical_name}» уже используется другим классом"
+        )
+
+
+def _clean_technical_name(value: str) -> str:
+    normalized = value.strip().lower()
+    if not _TECHNICAL_NAME_RE.fullmatch(normalized):
+        raise TrainingUIAPIError(
+            "Техническое имя должно содержать только латинские строчные буквы, "
+            "цифры, дефис и подчёркивание"
+        )
+    return normalized
+
+
+def _class_technical_name(
+    session: Session,
+    class_name: str,
+    requested: str | None,
+) -> str:
+    if requested is not None:
+        value = _clean_technical_name(requested)
+        _ensure_class_technical_name_available(session, value)
+        return value
+    historical = _HISTORICAL_MODEL_NAME_STEMS.get((class_name, "main"))
+    base = _clean_technical_name(historical) if historical else "class"
+    candidate = base
+    suffix = 2
+    while session.scalar(
+        select(DatasetClassRow.id).where(
+            DatasetClassRow.technical_name == candidate
+        )
+    ) is not None:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _replace_source_class_technical_name(
+    session: Session,
+    class_row: DatasetClassRow,
+    technical_name: str,
+    config: TrainingUIAPIConfig,
+) -> None:
+    old_slug = class_row.technical_name
+    relations = session.execute(
+        select(ManagedDatasetSourceRow, DatasetRow)
+        .join(DatasetRow, DatasetRow.id == ManagedDatasetSourceRow.source_dataset_id)
+        .where(DatasetRow.class_id == class_row.id)
+    ).all()
+    target_ids: set[uuid.UUID] = set()
+    for relation, _source_dataset in relations:
+        relation.object_type_slug = technical_name
+        target_ids.add(relation.managed_dataset_id)
+    class_row.technical_name = technical_name
+    for target_id in target_ids:
+        target = session.get(DatasetRow, target_id)
+        if target is None:
+            continue
+        target.config_revision += 1
+        target.legacy_version = False
+        _canonicalize_managed_dataset_history(
+            session,
+            target,
+            {old_slug: technical_name},
+            config,
+        )
+
+
+def _canonicalize_managed_dataset_history(
+    session: Session,
+    dataset: DatasetRow,
+    identifier_mapping: dict[str, str],
+    config: TrainingUIAPIConfig,
+) -> None:
+    canonical_schema = [
+        item.model_dump(mode="json") for item in managed_manifest(session, dataset).classes
+    ]
+    results = session.scalars(
+        select(TrainingResultRow).where(
+            (TrainingResultRow.dataset_key == dataset.key)
+            | (TrainingResultRow.class_key == dataset.key)
+        )
+    ).all()
+    result_ids: list[uuid.UUID] = []
+    mapping_by_result: dict[uuid.UUID, dict[str, str]] = {}
+    for result in results:
+        schema, schema_mapping = _canonical_class_schema(
+            result.class_schema,
+            canonical_schema,
+        )
+        mapping = {**schema_mapping, **identifier_mapping}
+        result.class_schema = schema
+        result.training_metrics = _remap_identifiers(
+            dict(result.training_metrics or {}),
+            mapping,
+        )
+        result_ids.append(result.id)
+        mapping_by_result[result.id] = mapping
+
+    for job in session.scalars(
+        select(JobRow).where(JobRow.dataset_key == dataset.key)
+    ).all():
+        state = dict(job.config or {})
+        old_schema = state.get("class_schema") or state.get("object_types") or []
+        schema, schema_mapping = _canonical_class_schema(old_schema, canonical_schema)
+        mapping = {**schema_mapping, **identifier_mapping}
+        state = _remap_identifiers(state, mapping)
+        if "class_schema" in state:
+            state["class_schema"] = schema
+        if "object_types" in state:
+            state["object_types"] = schema
+        job.config = state
+
+    samples = session.scalars(
+        select(TestSampleRow)
+        .where(TestSampleRow.dataset_key == dataset.key)
+        .options(selectinload(TestSampleRow.tiles))
+    ).all()
+    for sample in samples:
+        schema, schema_mapping = _canonical_class_schema(
+            sample.class_schema,
+            canonical_schema,
+        )
+        mapping = {**schema_mapping, **identifier_mapping}
+        sample.class_schema = schema
+        sample.evaluation_metrics = _remap_identifiers(
+            dict(sample.evaluation_metrics or {}),
+            mapping,
+        )
+        for tile in sample.tiles:
+            tile.class_object_counts = _remap_identifiers(
+                dict(tile.class_object_counts or {}),
+                mapping,
+            )
+            tile.evaluation_metrics = _remap_identifiers(
+                dict(tile.evaluation_metrics or {}),
+                mapping,
+            )
+        sample_root = Path(config.stored_files_root) / "test-samples" / str(sample.id)
+        if sample_root.is_dir():
+            for path in sample_root.glob("tile_*.geojson"):
+                _rewrite_identifier_geojson(path, mapping)
+
+    if result_ids:
+        for metric in session.scalars(
+            select(TrainingResultTestMetricRow).where(
+                TrainingResultTestMetricRow.training_result_id.in_(result_ids)
+            )
+        ).all():
+            metric.metrics = _remap_identifiers(
+                dict(metric.metrics or {}),
+                mapping_by_result.get(metric.training_result_id, identifier_mapping),
+            )
+        for pseudo in session.scalars(
+            select(PseudoMarkupResultRow).where(
+                PseudoMarkupResultRow.training_result_id.in_(result_ids),
+                PseudoMarkupResultRow.geojson_file_id.is_not(None),
+            )
+        ).all():
+            stored = session.get(StoredFileRow, pseudo.geojson_file_id)
+            if stored is None:
+                continue
+            _rewrite_identifier_geojson(
+                Path(stored.path),
+                mapping_by_result.get(pseudo.training_result_id, identifier_mapping),
+            )
+            path = Path(stored.path)
+            if path.is_file():
+                stored.size_bytes = path.stat().st_size
+
+
+def _canonical_class_schema(
+    values: object,
+    canonical_schema: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, str]]:
+    old_values = values if isinstance(values, list) else []
+    old_by_id = {
+        int(item.get("id", item.get("class_id", index))): item
+        for index, item in enumerate(old_values, start=1)
+        if isinstance(item, dict)
+    }
+    mapping: dict[str, str] = {}
+    result: list[dict[str, object]] = []
+    for canonical in canonical_schema:
+        class_id = int(canonical["id"])
+        old = dict(old_by_id.get(class_id) or {})
+        old_slug = str(old.get("slug") or "")
+        new_slug = str(canonical["slug"])
+        if old_slug and old_slug != new_slug:
+            mapping[old_slug] = new_slug
+        old.update(canonical)
+        result.append(old)
+    return result, mapping
+
+
+def _remap_identifiers(value, mapping: dict[str, str]):
+    if not mapping:
+        return value
+    if isinstance(value, dict):
+        return {
+            mapping.get(str(key), str(key)): _remap_identifiers(item, mapping)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_remap_identifiers(item, mapping) for item in value]
+    if isinstance(value, str):
+        return mapping.get(value, value)
+    return value
+
+
+def _rewrite_identifier_geojson(path: Path, mapping: dict[str, str]) -> None:
+    if not mapping or not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrainingUIAPIError(
+            f"Не удалось обновить технические идентификаторы в {path.name}: {exc}"
+        ) from exc
+    remapped = _remap_identifiers(payload, mapping)
+    if remapped == payload:
+        return
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(remapped, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _ensure_dataset_name_available(

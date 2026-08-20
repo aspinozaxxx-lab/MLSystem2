@@ -245,7 +245,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     with session_factory() as session:
-        class_row = DatasetClassRow(key="forest", name="Лес")
+        class_row = DatasetClassRow(key="forest", name="Лес", technical_name="forest")
         session.add(class_row)
         session.flush()
         dataset = DatasetRow(
@@ -404,7 +404,7 @@ def test_seed_inference_template_uses_active_dataset_key_after_migration(
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     with session_factory() as session:
-        class_row = DatasetClassRow(key="rivers", name="Реки")
+        class_row = DatasetClassRow(key="rivers", name="Реки", technical_name="rivers")
         session.add(class_row)
         session.flush()
         active_key = "f9776773-5273-41f8-8d10-0b06c68b19e6"
@@ -509,7 +509,11 @@ def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkey
 
     def metric_info(*_args):
         metric_calls.append(result_id)
-        return SimpleNamespace(f1=0.81, status="current")
+        return SimpleNamespace(
+            f1=0.81,
+            status="current",
+            metrics={"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
+        )
 
     monkeypatch.setattr(_service, "training_result_test_f1_info", metric_info)
 
@@ -521,6 +525,10 @@ def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkey
     assert [item.test_f1_status for item in response.classes[0].datasets] == [
         "current",
         "current",
+    ]
+    assert [item.test_f1_metrics for item in response.classes[0].datasets] == [
+        {"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
+        {"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
     ]
     assert [item.test_f1_training_result_id for item in response.classes[0].datasets] == [
         result_id,
@@ -552,7 +560,7 @@ def test_successful_training_does_not_assign_primary_star(
     )
 
     with session_factory() as session:
-        class_row = DatasetClassRow(key="forest", name="Лес")
+        class_row = DatasetClassRow(key="forest", name="Лес", technical_name="forest")
         session.add(class_row)
         session.flush()
         dataset = DatasetRow(
@@ -1423,6 +1431,67 @@ def test_model_export_pipeline_uses_rgb_for_three_channel_model() -> None:
 
     assert transforms[0]["output"] == ["RED", "GRN", "BLU"]
     assert transforms[1]["input_rasters"] == ["RED", "GRN", "BLU"]
+
+
+def test_model_export_mask_postprocessing_never_overwrites_an_input_mask() -> None:
+    pipeline = yaml.safe_load(
+        _model_export._pipeline_yaml(
+            "damaged-oks",
+            768,
+            3,
+            context=128,
+            postprocess_config={
+                "postprocess.mask_min_object_pixels": 32,
+                "postprocess.mask_min_hole_pixels": 32,
+                "postprocess.binary_closing_radius": 2,
+            },
+        )
+    )
+    bricks = pipeline["config"]["bricks"]
+    segmentation = bricks[1]
+    morphology = [brick for brick in bricks if brick["_class"] == "MaskMorphology"]
+    vectorize = bricks[-1]
+
+    assert segmentation["output_labels"] == ["mlsystem2_raw_1"]
+    assert len(morphology) == 3
+    assert morphology[0]["input_masks"] == ["mlsystem2_raw_1"]
+    assert morphology[-1]["out_masks"] == ["mask"]
+    assert vectorize["input_rasters"] == ["mask"]
+    for brick in morphology:
+        assert set(brick["input_masks"]).isdisjoint(brick["out_masks"])
+
+
+def test_multiclass_export_can_replace_only_semantic_class_identifiers() -> None:
+    checkpoint_schema = [
+        {
+            "id": 1,
+            "slug": "type_legacy",
+            "name": "Переувлажнение",
+            "color": "#112233",
+            "priority": 10,
+        }
+    ]
+    canonical_schema = [
+        {
+            "id": 1,
+            "slug": "floodings",
+            "name": "Переувлажнение",
+            "color": "#AABBCC",
+            "priority": 20,
+        }
+    ]
+
+    assert _model_export._export_class_schema_override(
+        "multiclass",
+        checkpoint_schema,
+        canonical_schema,
+    ) == canonical_schema
+    with pytest.raises(TrainingUIAPIError, match="назначение каналов"):
+        _model_export._export_class_schema_override(
+            "multiclass",
+            checkpoint_schema,
+            [{**canonical_schema[0], "name": "Другой класс"}],
+        )
 
 
 def test_model_export_pipeline_rejects_unsupported_channel_count() -> None:

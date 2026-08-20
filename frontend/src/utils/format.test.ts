@@ -22,15 +22,16 @@ describe("format helpers", () => {
     expect(isValidExportModelName("Реки")).toBe(false);
   });
 
-  it("предлагает сохранённое историческое имя модели с префиксом снимков", () => {
+  it("предлагает техническое имя класса с суффиксом типа снимков", () => {
     expect(defaultTrainingZipModelName(
       { dataset_key: "deforestation-id" },
       [{
         key: "deforestation-id",
+        class_technical_name: "forest_cuttings",
         model_name_stem: "deforestation",
         imagery_type: "kanopus",
       }],
-    )).toBe("deforestation_kanopus");
+    )).toBe("forest_cuttings_kanopus");
     expect(defaultTrainingZipModelName(
       { dataset_key: "zu-id" },
       [{

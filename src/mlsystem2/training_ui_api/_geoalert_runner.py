@@ -32,6 +32,7 @@ from ._inference_backend import GEOALERT_INFERENCE_BACKEND, configured_inference
 from ._markup_export import find_intersecting_images
 from ._model_export import (
     ModelExportArchive,
+    _export_class_schema_override,
     build_external_triton_model_export_zip,
     build_geoalert_pipeline_yaml,
     build_triton_model_export_zip,
@@ -496,10 +497,14 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
+            "pipeline_contract": 2,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
             "postprocess": postprocess_config,
+            "class_schema": list(
+                config.get("class_schema") or config.get("object_types") or []
+            ),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -521,11 +526,17 @@ def _ensure_runtime_export(
         if model_marker.get("identity_sha256") != model_digest:
             raise RuntimeError("Кеш Geoalert содержит модель с несовпадающей идентичностью.")
         if not pipeline_path.is_file() or not marker_path.is_file():
+            configured_schema = config.get("class_schema") or config.get("object_types")
+            class_schema = _export_class_schema_override(
+                str(model_marker.get("task") or "binary"),
+                list(model_marker.get("class_schema") or []),
+                list(configured_schema) if configured_schema is not None else None,
+            )
             pipeline = build_geoalert_pipeline_yaml(
                 model_name=model_name,
                 sample_size=int(model_marker.get("sample_size") or config.get("tile_size") or 768),
                 input_channels=int(model_marker["input_channels"]),
-                class_schema=list(model_marker.get("class_schema") or []),
+                class_schema=class_schema,
                 context=int(config.get("context") or 0),
                 postprocess_config=postprocess_config,
                 resolution_m=(
@@ -579,6 +590,9 @@ def _ensure_runtime_export(
                 float(config["resample_to_resolution_m"])
                 if config.get("resample_to_resolution_m") is not None
                 else None
+            ),
+            class_schema_override=list(
+                config.get("class_schema") or config.get("object_types") or []
             ),
         )
     try:

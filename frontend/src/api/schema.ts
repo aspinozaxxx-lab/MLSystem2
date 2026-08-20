@@ -1742,6 +1742,8 @@ export interface components {
             key: string;
             /** Name */
             name: string;
+            /** Technical Name */
+            technical_name: string;
             /** Updated At */
             updated_at?: string | null;
             /** Datasets */
@@ -1825,12 +1827,16 @@ export interface components {
         DatasetClassCreate: {
             /** Name */
             name: string;
+            /** Technical Name */
+            technical_name?: string | null;
             imagery_type: components["schemas"]["ImageryType"];
         };
         /** DatasetClassUpdate */
         DatasetClassUpdate: {
             /** Name */
             name?: string | null;
+            /** Technical Name */
+            technical_name?: string | null;
             quality_metric?: components["schemas"]["QualityMetric"] | null;
             imagery_type?: components["schemas"]["ImageryType"] | null;
         };
@@ -2285,6 +2291,8 @@ export interface components {
             class_key?: string | null;
             /** Class Name */
             class_name?: string | null;
+            /** Class Technical Name */
+            class_technical_name?: string | null;
             /** Path */
             path?: string | null;
             /**
@@ -3238,6 +3246,10 @@ export interface components {
             image_count?: number | null;
             /** Test F1 */
             test_f1?: number | null;
+            /** Test F1 Metrics */
+            test_f1_metrics?: {
+                [key: string]: unknown;
+            };
             /** Test F1 Status */
             test_f1_status?: ("current" | "stale") | null;
             /** Test F1 Training Result Id */

@@ -65,6 +65,59 @@ def test_multiclass_wrong_type_is_fp_and_fn_but_foreground_match() -> None:
     assert metrics["objects"]["macro"]["f1"] == 0.0
 
 
+def test_native_multiclass_checkpoint_accepts_canonical_identifiers_without_retraining() -> None:
+    loaded = SimpleNamespace(
+        model=SimpleNamespace(spec=SimpleNamespace(output_channels=3)),
+        artifact=SimpleNamespace(
+            metadata={
+                "task": "multiclass",
+                "class_schema": [
+                    {
+                        "id": 1,
+                        "slug": "type_legacy_1",
+                        "name": "Переувлажнение",
+                        "color": "#112233",
+                        "priority": 10,
+                    },
+                    {
+                        "id": 2,
+                        "slug": "type_legacy_2",
+                        "name": "Заболачивание",
+                        "color": "#445566",
+                        "priority": 20,
+                    },
+                ],
+                "val_best_threshold": 0.4,
+            }
+        ),
+    )
+    canonical = [
+        {
+            "id": 1,
+            "slug": "floodings",
+            "name": "Переувлажнение",
+            "color": "#AABBCC",
+            "priority": 30,
+        },
+        {
+            "id": 2,
+            "slug": "swampings",
+            "name": "Заболачивание",
+            "color": "#DDEEFF",
+            "priority": 40,
+        },
+    ]
+
+    task, object_types, threshold = _pseudo_runner._native_model_contract(
+        loaded,
+        {"class_schema": canonical},
+    )
+
+    assert task == "multiclass"
+    assert object_types == canonical
+    assert threshold == pytest.approx(0.4)
+
+
 def test_features_from_mask_writes_geojson_coordinates_in_wgs84() -> None:
     mask = np.zeros((2, 2), dtype=np.uint8)
     mask[0, 0] = 1

@@ -1665,6 +1665,10 @@ function TestSampleCatalog({
             <span><small>F1 obj</small><strong>{formatF1Score(sample.evaluation.objects?.f1)}</strong></span>
             <span><small>Тайлы</small><strong>{sample.enabled_image_count}/{sample.image_count}</strong></span>
           </a>
+          <CompactPerClassF1
+            metrics={sample.evaluation.metrics}
+            section={sample.quality_metric === "objects" ? "objects" : "pixel"}
+          />
           <div className="test-markup-card-footer">
             <TestSampleEvaluationBadge evaluation={sample.evaluation} />
             <span className="muted">
@@ -2496,6 +2500,7 @@ function TestSampleEvaluationPanel({
           metric={evaluation.objects}
         />
       </div>
+      <PerClassF1Table metrics={evaluation.metrics} />
       <div className="test-sample-evaluation-source">
         <span>
           <strong>{direct ? "Рассчитано сетью:" : "Псевдоразметка сети:"}</strong>{" "}
@@ -2633,12 +2638,13 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     const form = event.currentTarget;
     const data = new FormData(form);
     const name = String(data.get("name") || "").trim();
+    const technicalName = String(data.get("technical_name") || "").trim().toLowerCase();
     const imageryType = String(data.get("imagery_type") || "kanopus") as ImageryType;
-    if (!name) return;
+    if (!name || !technicalName) return;
     const payload = await run(() =>
       apiJson<DatasetCatalogInfo>("/dataset-classes", {
         method: "POST",
-        body: { name, imagery_type: imageryType },
+        body: { name, technical_name: technicalName, imagery_type: imageryType },
       }),
     );
     if (payload) form.reset();
@@ -2647,11 +2653,13 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
 
   const renameClass = async (event: FormEvent<HTMLFormElement>, classKey: string) => {
     event.preventDefault();
-    const name = String(new FormData(event.currentTarget).get("name") || "").trim();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name") || "").trim();
+    const technicalName = String(data.get("technical_name") || "").trim().toLowerCase();
     await applyCatalog(await run(() =>
       apiJson<DatasetCatalogInfo>(`/dataset-classes/${encodeURIComponent(classKey)}`, {
         method: "PATCH",
-        body: { name },
+        body: { name, technical_name: technicalName },
       }),
     ));
   };
@@ -2883,6 +2891,14 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
         <PanelHeader title="Новый класс" subtitle="Выберите тип снимков, затем добавьте датасеты" />
         <form className="inline-form" onSubmit={createClass}>
           <input name="name" placeholder="Название класса" maxLength={240} required />
+          <input
+            name="technical_name"
+            placeholder="Техническое имя, например abrasion"
+            maxLength={160}
+            pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
+            title="Латинские строчные буквы, цифры, дефис и подчёркивание"
+            required
+          />
           <select name="imagery_type" defaultValue="kanopus" aria-label="Тип снимков">
             <option value="kanopus">Канопус</option>
             <option value="ortho">Ортофото</option>
@@ -2899,7 +2915,16 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
             <div className="class-editor-header">
               <form className="inline-form" onSubmit={(event) => renameClass(event, classInfo.key)}>
                 <input name="name" defaultValue={classInfo.name} maxLength={240} required />
-                <button className="secondary" type="submit">Переименовать</button>
+                <input
+                  name="technical_name"
+                  defaultValue={classInfo.technical_name}
+                  maxLength={160}
+                  pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
+                  title="Техническое имя модели: латинские строчные буквы, цифры, дефис и подчёркивание"
+                  aria-label="Техническое имя класса"
+                  required
+                />
+                <button className="secondary" type="submit">Сохранить</button>
               </form>
               <label>
                 Тип снимков
@@ -3944,12 +3969,18 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
               >
                 <span>{dataset.dataset_name || dataset.name}</span>
                 {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
-                  <strong
-                    className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
-                    title="F1 эффективной сети класса"
-                  >
-                    {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
-                  </strong>
+                  <>
+                    <strong
+                      className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
+                      title="F1 эффективной сети класса"
+                    >
+                      {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
+                    </strong>
+                    <CompactPerClassF1
+                      metrics={dataset.test_f1_metrics}
+                      section={dataset.quality_metric === "objects" ? "objects" : "pixel"}
+                    />
+                  </>
                 ) : null}
                 <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
               </a>
@@ -4086,7 +4117,14 @@ function ResultsTable({
                     </span>
                   </td>
                   <td title={`${qualityMetricShort(result.quality_metric)} (val)`}>
-                    <span className="source-lines"><small>{qualityMetricShort(result.quality_metric)} (val)</small><strong className="technical-value">{formatF1Score(result.f1_score)}</strong></span>
+                    <span className="source-lines">
+                      <small>{qualityMetricShort(result.quality_metric)} (val)</small>
+                      <strong className="technical-value">{formatF1Score(result.f1_score)}</strong>
+                      <CompactPerClassF1
+                        metrics={validationPerClassMetrics(result.training_metrics)}
+                        section="pixel"
+                      />
+                    </span>
                   </td>
                   <td title={qualityMetricShort(result.quality_metric)}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
@@ -4095,6 +4133,10 @@ function ResultsTable({
                         <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
                           {formatTestF1Percent(result.test_f1.f1)}
                         </span>
+                        <CompactPerClassF1
+                          metrics={result.test_f1.metrics}
+                          section={result.quality_metric === "objects" ? "objects" : "pixel"}
+                        />
                       </span>
                     ) : result.test_f1?.status === "queued" || result.test_f1?.status === "running" ? (
                       <span className="badge neutral">расчёт</span>
@@ -4756,6 +4798,87 @@ function ManagedDatasetForm({
       </div>
     </form>
   );
+}
+
+type ClassF1Value = {
+  slug: string;
+  name: string;
+  color: string;
+  f1: number | null;
+};
+
+function perClassF1Values(metrics: unknown, section: "pixel" | "objects"): ClassF1Value[] {
+  if (!metrics || typeof metrics !== "object") return [];
+  const sectionValue = (metrics as Record<string, unknown>)[section];
+  if (!sectionValue || typeof sectionValue !== "object") return [];
+  const perClass = (sectionValue as Record<string, unknown>).per_class;
+  if (!perClass || typeof perClass !== "object") return [];
+  return Object.entries(perClass as Record<string, unknown>).flatMap(([slug, raw]) => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    return [{
+      slug: String(item.slug || slug),
+      name: String(item.name || item.slug || slug),
+      color: /^#[0-9A-Fa-f]{6}$/.test(String(item.color || "")) ? String(item.color) : "#808080",
+      f1: typeof item.f1 === "number" ? item.f1 : null,
+    }];
+  });
+}
+
+function PerClassF1Table({ metrics }: { metrics: unknown }) {
+  const pixel = perClassF1Values(metrics, "pixel");
+  const objects = perClassF1Values(metrics, "objects");
+  const slugs = [...new Set([...pixel.map((item) => item.slug), ...objects.map((item) => item.slug)])];
+  if (!slugs.length) return null;
+  const pixelBySlug = new Map(pixel.map((item) => [item.slug, item]));
+  const objectsBySlug = new Map(objects.map((item) => [item.slug, item]));
+  return (
+    <div className="table-wrap multiclass-f1-table-wrap">
+      <table className="multiclass-f1-table">
+        <thead><tr><th>Тип объекта</th><th>F1 пиксельный</th><th>F1 объектовый</th></tr></thead>
+        <tbody>
+          {slugs.map((slug) => {
+            const item = pixelBySlug.get(slug) || objectsBySlug.get(slug)!;
+            return (
+              <tr key={slug}>
+                <td><span className="inline-row"><span className="class-color-dot" style={{ backgroundColor: item.color }} />{item.name}<small className="technical-value muted">{slug}</small></span></td>
+                <td className="technical-value">{formatF1Score(pixelBySlug.get(slug)?.f1)}</td>
+                <td className="technical-value">{formatF1Score(objectsBySlug.get(slug)?.f1)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CompactPerClassF1({ metrics, section }: { metrics: unknown; section: "pixel" | "objects" }) {
+  const values = perClassF1Values(metrics, section);
+  if (!values.length) return null;
+  return (
+    <span className="compact-class-f1-list">
+      {values.map((item) => (
+        <small key={item.slug} title={`${item.name} · ${item.slug}`}>
+          <span className="class-color-dot" style={{ backgroundColor: item.color }} />
+          {item.name}: {formatF1Score(item.f1)}
+        </small>
+      ))}
+    </span>
+  );
+}
+
+function validationPerClassMetrics(trainingMetrics: unknown): Record<string, unknown> {
+  if (!trainingMetrics || typeof trainingMetrics !== "object") return {};
+  const raw = (trainingMetrics as Record<string, unknown>).val_per_class_metrics;
+  if (!Array.isArray(raw)) return {};
+  const perClass = Object.fromEntries(raw.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const item = value as Record<string, unknown>;
+    const slug = String(item.slug || "");
+    return slug ? [[slug, item]] : [];
+  }));
+  return { pixel: { per_class: perClass } };
 }
 
 function automationRuleKey(datasetKey: string, architecture: string): string {

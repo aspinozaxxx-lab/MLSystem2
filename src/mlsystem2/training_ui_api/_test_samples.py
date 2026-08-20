@@ -23,6 +23,8 @@ from typing import Any
 
 import numpy as np
 import rasterio
+from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 from PIL import Image
 from pyproj import CRS as PyprojCRS
 from pyproj import Transformer
@@ -45,6 +47,7 @@ from ._dataset_catalog import (
     find_managed_dataset,
     primary_training_result,
 )
+from ._datasets import resolve_scenes_file_images
 from ._markup_export import (
     _INSTANCE_BOUNDARY_PREVIEW_VERSION,
     _instance_edge_mask,
@@ -248,7 +251,7 @@ def create_test_sample(
             source=JobSource.AUTOMATION,
         )
         session.flush()
-        return _detail(session, row)
+        return _detail(session, row, config)
     except Exception:
         shutil.rmtree(building_root, ignore_errors=True)
         shutil.rmtree(final_root, ignore_errors=True)
@@ -520,11 +523,12 @@ def _create_grouped_test_sample(
     item: TestSampleBatchItemRow,
     config: TrainingUIAPIConfig,
 ) -> TestSampleDetail:
-    source = _latest_pseudo_markup(
+    source = latest_pseudo_markup(
         session,
         item.dataset_key,
         class_key=item.class_key,
         dataset_version=item.dataset_version,
+        config=config,
     )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
@@ -585,7 +589,7 @@ def _create_grouped_test_sample(
             source=JobSource.AUTOMATION,
         )
         session.flush()
-        return _detail(session, row)
+        return _detail(session, row, config)
     except Exception:
         shutil.rmtree(building_root, ignore_errors=True)
         shutil.rmtree(final_root, ignore_errors=True)
@@ -664,7 +668,10 @@ def _aware_datetime(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
+def test_sample_catalog(
+    session: Session,
+    config: TrainingUIAPIConfig | None = None,
+) -> TestSampleCatalogResponse:
     rows = session.scalars(
         select(TestSampleRow)
         .options(selectinload(TestSampleRow.tiles))
@@ -672,7 +679,7 @@ def test_sample_catalog(session: Session) -> TestSampleCatalogResponse:
     ).all()
     grouped: dict[tuple[str, str], list[TestSampleSummary]] = defaultdict(list)
     for row in rows:
-        grouped[(row.class_key, row.class_name)].append(_summary(session, row))
+        grouped[(row.class_key, row.class_name)].append(_summary(session, row, config))
     classes = [
         TestSampleClassGroup(
             key=class_key,
@@ -694,7 +701,7 @@ def test_sample_detail(
     row = _sample_row(session, sample_id)
     if config is not None:
         _backfill_test_sample_tile_f1(session, row, config)
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def _backfill_test_sample_tile_f1(
@@ -790,7 +797,7 @@ def update_test_sample(
             source=JobSource.AUTOMATION,
         )
     session.flush()
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def update_test_sample_primary(
@@ -801,7 +808,7 @@ def update_test_sample_primary(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     if not _set_test_sample_primary(session, row, request.is_primary):
-        return _detail(session, row)
+        return _detail(session, row, config)
     _refresh_training_metrics_after_primary_change(
         session,
         row.class_key,
@@ -809,7 +816,7 @@ def update_test_sample_primary(
         reason="Основная тестовая разметка изменена; требуется пересчёт.",
     )
     session.flush()
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def _set_test_sample_primary(
@@ -887,7 +894,7 @@ def update_test_sample_tile(
                 source=JobSource.AUTOMATION,
             )
         session.flush()
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def delete_test_sample(
@@ -934,7 +941,7 @@ def evaluate_test_sample_by_id(
         force=True,
     )
     session.flush()
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def evaluate_test_sample_preview(
@@ -957,11 +964,12 @@ def optimize_test_sample_preview(
 ) -> TestSampleDraftPreview:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(
+    source = latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
         dataset_version=row.dataset_version,
+        config=config,
     )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
@@ -1008,11 +1016,12 @@ def _preview_evaluation(
             status="unavailable",
             error="В тестовой разметке нет включённых тайлов.",
         )
-    source = _latest_pseudo_markup(
+    source = latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
         dataset_version=row.dataset_version,
+        config=config,
     )
     if source is None or source.geojson_file is None:
         return TestSampleEvaluationInfo(
@@ -1080,11 +1089,12 @@ def optimize_test_sample(
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
     _validate_optimization_request(row, request)
-    source = _latest_pseudo_markup(
+    source = latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
         dataset_version=row.dataset_version,
+        config=config,
     )
     if source is None or source.geojson_file is None:
         raise TrainingUIAPIError(
@@ -1119,7 +1129,7 @@ def optimize_test_sample(
             source=JobSource.AUTOMATION,
         )
     session.flush()
-    return _detail(session, row)
+    return _detail(session, row, config)
 
 
 def _optimize_test_sample_row(
@@ -1191,11 +1201,12 @@ def evaluate_test_sample(
 ) -> None:
     """Обновить поснимочный кэш оптимизатора по псевдоразметке."""
 
-    source = pseudo_result or _latest_pseudo_markup(
+    source = pseudo_result or latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
         dataset_version=row.dataset_version,
+        config=config,
     )
     if source is None or source.geojson_file is None:
         _clear_test_sample_tile_f1(row)
@@ -1557,11 +1568,12 @@ def evaluate_test_samples_for_pseudo_markup(
         .order_by(TestSampleRow.created_at)
     ).all()
     for row in rows:
-        latest = _latest_pseudo_markup(
+        latest = latest_pseudo_markup(
             session,
             row.dataset_key,
             class_key=row.class_key,
             dataset_version=row.dataset_version,
+            config=config,
         )
         if latest is None or latest.id != pseudo_result.id:
             continue
@@ -2600,67 +2612,33 @@ def _polygonal_geometry(geometry: BaseGeometry) -> Polygon | MultiPolygon | None
     return None
 
 
-def _latest_pseudo_markup(
+def latest_pseudo_markup(
     session: Session,
     dataset_key: str,
     *,
     class_key: str | None = None,
     dataset_version: str | None = None,
+    config: TrainingUIAPIConfig | None = None,
 ) -> PseudoMarkupResultRow | None:
-    """Выбрать полную псевдоразметку для формирования и оптимизации набора.
+    """Выбрать псевдоразметку эффективной сети, покрывающую снимки датасета.
 
-    Сначала используется эффективная сеть класса. Если для неё результата нет,
-    допускается последняя псевдоразметка другой обученной сети того же класса,
-    включая ручной запуск, но только для той же ревизии исходного датасета.
+    Версия обучающей разметки намеренно не участвует в выборе: изменение полигонов
+    не делает уже рассчитанный прогноз устаревшим, пока сеть и набор TIFF прежние.
     """
 
     primary = current_primary_training_result(session, class_key or dataset_key)
-    conditions = [
-        PseudoMarkupResultRow.status == "ok",
-        PseudoMarkupResultRow.dataset_key == dataset_key,
-        PseudoMarkupResultRow.geojson_file_id.is_not(None),
-    ]
-    if dataset_version is not None:
-        conditions.append(
-            (PseudoMarkupResultRow.dataset_version == dataset_version)
-            | PseudoMarkupResultRow.dataset_version.is_(None)
-        )
-    if primary is not None:
-        preferred = session.scalar(
-            select(PseudoMarkupResultRow)
-            .where(
-                *conditions,
-                PseudoMarkupResultRow.training_result_id == primary.id,
-            )
-            .options(
-                selectinload(PseudoMarkupResultRow.geojson_file),
-                selectinload(PseudoMarkupResultRow.training_result),
-            )
-            .order_by(
-                PseudoMarkupResultRow.updated_at.desc(),
-                PseudoMarkupResultRow.created_at.desc(),
-                PseudoMarkupResultRow.id.desc(),
-            )
-            .limit(1)
-        )
-        if preferred is not None:
-            return preferred
-
-    class_scope = _class_scope_keys(session, class_key or dataset_key)
-    return session.scalar(
+    if primary is None:
+        return None
+    candidates = session.scalars(
         select(PseudoMarkupResultRow)
-        .join(
-            TrainingResultRow,
-            TrainingResultRow.id == PseudoMarkupResultRow.training_result_id,
-        )
         .where(
-            *conditions,
-            (
-                TrainingResultRow.dataset_key.in_(class_scope)
-                | TrainingResultRow.class_key.in_(class_scope)
-            ),
+            PseudoMarkupResultRow.status == "ok",
+            PseudoMarkupResultRow.dataset_key == dataset_key,
+            PseudoMarkupResultRow.geojson_file_id.is_not(None),
+            PseudoMarkupResultRow.training_result_id == primary.id,
         )
         .options(
+            selectinload(PseudoMarkupResultRow.scenes_file),
             selectinload(PseudoMarkupResultRow.geojson_file),
             selectinload(PseudoMarkupResultRow.training_result),
         )
@@ -2669,8 +2647,52 @@ def _latest_pseudo_markup(
             PseudoMarkupResultRow.created_at.desc(),
             PseudoMarkupResultRow.id.desc(),
         )
-        .limit(1)
-    )
+    ).all()
+    for candidate in candidates:
+        if config is None or pseudo_markup_covers_dataset(
+            session,
+            candidate,
+            dataset_key,
+            config,
+        ):
+            return candidate
+    return None
+
+
+def pseudo_markup_covers_dataset(
+    session: Session,
+    pseudo_markup: PseudoMarkupResultRow,
+    dataset_key: str,
+    config: TrainingUIAPIConfig,
+) -> bool:
+    scenes_file = pseudo_markup.scenes_file
+    if scenes_file is None or not Path(scenes_file.path).is_file():
+        return False
+    dataset = find_managed_dataset(session, config, dataset_key)
+    if dataset is None or not dataset.images_dir:
+        return False
+    images_root = Path(dataset.images_dir).resolve()
+    try:
+        if dataset.annotations_dir:
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=str(images_root),
+                    annotations_dir=str(Path(dataset.annotations_dir).resolve()),
+                )
+            )
+            if resolution.missing_scenes or resolution.ambiguous_scenes:
+                return False
+            expected = {Path(item.image_path).resolve() for item in resolution.images}
+        elif dataset.scenes_file:
+            expected = set(
+                resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
+            )
+        else:
+            return False
+        covered = set(resolve_scenes_file_images(Path(scenes_file.path), images_root))
+    except (OSError, ValueError):
+        return False
+    return bool(expected) and expected.issubset(covered)
 
 
 def _sample_row(session: Session, sample_id: uuid.UUID) -> TestSampleRow:
@@ -2953,10 +2975,13 @@ def test_sample_model_compatibility_error(
             "Тип задачи основной сети не совпадает с типом тестовой разметки: "
             f"{result.task} вместо {sample.task}."
         )
-    if sample.task == "multiclass" and _class_schema_signature(
-        sample.class_schema
-    ) != _class_schema_signature(result.class_schema):
-        return "Схема типов основной сети не совпадает со схемой тестовой разметки."
+    if sample.task == "multiclass":
+        sample_signature = _class_schema_signature(sample.class_schema)
+        result_signature = _class_schema_signature(result.class_schema)
+        if sample_signature != result_signature and _class_schema_channel_signature(
+            sample.class_schema
+        ) != _class_schema_channel_signature(result.class_schema):
+            return "Схема типов основной сети не совпадает со схемой тестовой разметки."
     return None
 
 
@@ -2964,6 +2989,20 @@ def _class_schema_signature(values: list[dict[str, Any]] | None) -> tuple[tuple[
     try:
         return tuple(
             sorted((int(item["id"]), str(item["slug"])) for item in (values or []))
+        )
+    except (KeyError, TypeError, ValueError):
+        return ()
+
+
+def _class_schema_channel_signature(
+    values: list[dict[str, Any]] | None,
+) -> tuple[tuple[int, str], ...]:
+    try:
+        return tuple(
+            sorted(
+                (int(item["id"]), str(item["name"]).strip().casefold())
+                for item in (values or [])
+            )
         )
     except (KeyError, TypeError, ValueError):
         return ()
@@ -3404,11 +3443,12 @@ def _test_f1_postprocess_profile_name(
         else None
     )
     if source is None or source.image_count is None:
-        source = _latest_pseudo_markup(
+        source = latest_pseudo_markup(
             session,
             sample.dataset_key,
             class_key=sample.class_key,
             dataset_version=sample.dataset_version,
+            config=config,
         )
     image_count = source.image_count if source is not None else None
     if image_count is None:
@@ -3495,6 +3535,7 @@ def _test_f1_progress(job: JobRow | None) -> RuntimeProgress | None:
 def test_sample_pseudo_markup_info(
     session: Session,
     row: TestSampleRow,
+    config: TrainingUIAPIConfig | None = None,
 ) -> TestSamplePseudoMarkupInfo:
     """Описать кэш псевдоразметки исходного датасета для оптимизатора."""
 
@@ -3505,11 +3546,12 @@ def test_sample_pseudo_markup_info(
             error="Для класса нет успешной сети.",
         )
     common = _pseudo_markup_training_info(target)
-    ready = _latest_pseudo_markup(
+    ready = latest_pseudo_markup(
         session,
         row.dataset_key,
         class_key=row.class_key,
         dataset_version=row.dataset_version,
+        config=config,
     )
     if (
         ready is not None
@@ -3550,7 +3592,23 @@ def test_sample_pseudo_markup_info(
         if candidate is not None and candidate.job_id is not None
         else None
     )
-    if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+    coverage_matches = bool(
+        candidate is not None
+        and (
+            config is None
+            or pseudo_markup_covers_dataset(
+                session,
+                candidate,
+                row.dataset_key,
+                config,
+            )
+        )
+    )
+    if (
+        job is not None
+        and coverage_matches
+        and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+    ):
         return TestSamplePseudoMarkupInfo(
             status=job.status,
             result_id=candidate.id if candidate is not None else None,
@@ -3571,8 +3629,7 @@ def test_sample_pseudo_markup_info(
         status="unavailable",
         can_create=True,
         error=(
-            "Для исходного датасета нет полной псевдоразметки текущей основной "
-            "или другой обученной сети класса."
+            "Для исходного датасета нет полной псевдоразметки текущей основной сети класса."
         ),
         **common,
     )
@@ -3587,7 +3644,11 @@ def _pseudo_markup_training_info(result: TrainingResultRow) -> dict[str, Any]:
     }
 
 
-def _summary(session: Session, row: TestSampleRow) -> TestSampleSummary:
+def _summary(
+    session: Session,
+    row: TestSampleRow,
+    config: TrainingUIAPIConfig | None = None,
+) -> TestSampleSummary:
     enabled = [tile for tile in row.tiles if tile.enabled]
     return TestSampleSummary(
         id=row.id,
@@ -3617,14 +3678,18 @@ def _summary(session: Session, row: TestSampleRow) -> TestSampleSummary:
         exclude_boundary_objects=row.exclude_boundary_objects,
         is_primary=row.is_primary,
         evaluation=_evaluation_info(session, row),
-        pseudo_markup=test_sample_pseudo_markup_info(session, row),
+        pseudo_markup=test_sample_pseudo_markup_info(session, row, config),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
 
-def _detail(session: Session, row: TestSampleRow) -> TestSampleDetail:
-    summary = _summary(session, row)
+def _detail(
+    session: Session,
+    row: TestSampleRow,
+    config: TrainingUIAPIConfig | None = None,
+) -> TestSampleDetail:
+    summary = _summary(session, row, config)
     return TestSampleDetail(
         **summary.model_dump(),
         tile_width=row.tile_width,

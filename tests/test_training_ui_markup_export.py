@@ -2106,7 +2106,7 @@ def test_test_sample_batch_accepts_per_image_dataset(
         assert created.json()["items"][0]["status"] == "queued"
 
 
-def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision(
+def test_test_sample_batch_accepts_manual_pseudo_markup_of_effective_network_with_coverage(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2149,7 +2149,7 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision
         )
         session.add_all([primary, manual])
         session.flush()
-        class_row.primary_training_result_id = primary.id
+        class_row.primary_training_result_id = manual.id
 
         scenes_path = Path(dataset.scenes_file)
         prediction_path = Path(dataset.annotation_file)
@@ -2172,7 +2172,7 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision
         pseudo = PseudoMarkupResultRow(
             source="manual",
             dataset_key=dataset.key,
-            dataset_version=dataset.version,
+            dataset_version="старая-версия-полигонов",
             training_result_id=manual.id,
             class_key=dataset.key,
             source_dataset_name=dataset.name,
@@ -2184,17 +2184,33 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision
         session.add(pseudo)
         session.flush()
 
-        selected = _test_samples._latest_pseudo_markup(
+        selected = _test_samples.latest_pseudo_markup(
             session,
             dataset.key,
             class_key=class_row.key,
             dataset_version=dataset.version,
+            config=config,
         )
 
         assert selected is not None
         assert selected.id == pseudo.id
         assert selected.source == "manual"
         assert selected.training_result_id == manual.id
+
+        class_row.primary_training_result_id = primary.id
+        session.flush()
+        assert (
+            _test_samples.latest_pseudo_markup(
+                session,
+                dataset.key,
+                class_key=class_row.key,
+                dataset_version=dataset.version,
+                config=config,
+            )
+            is None
+        )
+        class_row.primary_training_result_id = manual.id
+        session.flush()
 
         sample_row = _TestSampleRow(
             name="Проверка ручной псевдоразметки",
@@ -2224,12 +2240,28 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_same_dataset_revision
 
         pseudo.dataset_version = "устаревшая-ревизия"
         session.flush()
+        selected_after_markup_change = _test_samples.latest_pseudo_markup(
+            session,
+            dataset.key,
+            class_key=class_row.key,
+            dataset_version=dataset.version,
+            config=config,
+        )
+        assert selected_after_markup_change is not None
+        assert selected_after_markup_change.id == pseudo.id
+
+        incomplete_scenes_path = tmp_path / "incomplete-scenes.txt"
+        incomplete_scenes_path.write_text("missing-scene.tif\n", encoding="utf-8")
+        scenes_file.path = str(incomplete_scenes_path)
+        scenes_file.size_bytes = incomplete_scenes_path.stat().st_size
+        session.flush()
         assert (
-            _test_samples._latest_pseudo_markup(
+            _test_samples.latest_pseudo_markup(
                 session,
                 dataset.key,
                 class_key=class_row.key,
                 dataset_version=dataset.version,
+                config=config,
             )
             is None
         )
@@ -2329,12 +2361,18 @@ def test_persistent_test_sample_metrics_and_stale_revision(
     prediction_path = tmp_path / "prediction.geojson"
     _write_prediction_from_sample(config, sample_id, prediction_path)
     with session_factory() as session:
+        dataset = _test_samples.find_managed_dataset(session, config, "Вырубки\\main")
+        assert dataset is not None and dataset.scenes_file is not None
+        class_row = dataset_class_row(session, dataset.key)
+        assert class_row is not None
+        scenes_path = Path(dataset.scenes_file)
         training = TrainingResultRow(
             dataset_key="Вырубки\\main",
             class_key="Вырубки\\main",
             class_display_name="Вырубки\\main",
             architecture="segformer_b2",
             model_name="segformer b2",
+            mlflow_run_id="run-1",
             status="ok",
         )
         stored = StoredFileRow(
@@ -2344,8 +2382,16 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             path=str(prediction_path),
             size_bytes=prediction_path.stat().st_size,
         )
-        session.add_all([training, stored])
+        scenes_stored = StoredFileRow(
+            kind=StoredFileKind.SCENES_TXT.value,
+            original_name=scenes_path.name,
+            content_type="text/plain",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        session.add_all([training, stored, scenes_stored])
         session.flush()
+        class_row.primary_training_result_id = training.id
         mismatched = PseudoMarkupResultRow(
             dataset_key="Вырубки\\other",
             training_result_id=training.id,
@@ -2366,6 +2412,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             training_result_id=training.id,
             class_key="Вырубки\\main",
             source_dataset_name="Вырубки\\main",
+            scenes_file_id=scenes_stored.id,
             geojson_file_id=stored.id,
             status="ok",
         )
@@ -2465,8 +2512,6 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         ] == saved_tile_f1
 
         # Дальше тест проверяет только устаревание псевдоразметки без прямого инференса.
-        training.status = "error"
-        session.flush()
         update_test_sample_tile(
             session,
             sample_id,
@@ -2486,8 +2531,11 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         )
         assert optimized.enabled_image_count == 2
         assert all(tile.enabled for tile in optimized.tiles)
-        assert optimized.evaluation.status == "unavailable"
+        assert optimized.evaluation.status == "queued"
         assert optimized.evaluation.objects is None
+
+        training.status = "error"
+        session.flush()
 
         detail = update_test_sample_tile(
             session,

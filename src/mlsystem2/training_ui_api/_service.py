@@ -101,7 +101,9 @@ from ._templates import (
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     current_primary_training_result,
+    latest_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
+    pseudo_markup_covers_dataset,
     primary_test_sample,
     queue_class_test_f1,
     reconcile_test_sample_evaluations,
@@ -286,6 +288,7 @@ def result_classes(
     for class_info in catalog:
         primary_model = primary_training_result(session, class_info.key)
         test_f1 = None
+        test_f1_metrics: dict[str, Any] = {}
         test_f1_status = None
         test_f1_training_result_id = None
         if (
@@ -295,6 +298,7 @@ def result_classes(
             info = training_result_test_f1_info(session, primary_model, config)
             if info is not None and info.f1 is not None:
                 test_f1 = info.f1
+                test_f1_metrics = dict(info.metrics or {})
                 test_f1_status = "current" if info.status == "current" else "stale"
                 test_f1_training_result_id = primary_model.id
         result_datasets: list[ResultDatasetInfo] = []
@@ -310,6 +314,7 @@ def result_classes(
                     is_primary=dataset.is_primary,
                     image_count=dataset.image_count,
                     test_f1=test_f1,
+                    test_f1_metrics=test_f1_metrics,
                     test_f1_status=test_f1_status,
                     test_f1_training_result_id=test_f1_training_result_id,
                 )
@@ -1582,28 +1587,40 @@ def ensure_test_sample_pseudo_markup_job(
     primary = current_primary_training_result(session, sample.class_key)
     if primary is None:
         raise TrainingUIAPIError("Для класса нет успешной сети")
-    existing = session.scalar(
+    ready = latest_pseudo_markup(
+        session,
+        sample.dataset_key,
+        class_key=sample.class_key,
+        dataset_version=sample.dataset_version,
+        config=config,
+    )
+    if ready is not None and ready.job_id is not None:
+        ready_job = session.get(JobRow, ready.job_id)
+        if ready_job is not None and ready_job.status not in {
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        }:
+            return _job_detail(session, ready_job)
+    existing_rows = session.scalars(
         select(PseudoMarkupResultRow)
         .where(
             PseudoMarkupResultRow.dataset_key == sample.dataset_key,
             PseudoMarkupResultRow.training_result_id == primary.id,
-            PseudoMarkupResultRow.status.in_(("ok", "running")),
+            PseudoMarkupResultRow.status == "running",
         )
         .order_by(
             PseudoMarkupResultRow.updated_at.desc(),
             PseudoMarkupResultRow.created_at.desc(),
             PseudoMarkupResultRow.id.desc(),
         )
-        .limit(1)
-    )
-    if existing is not None and existing.job_id is not None:
+    ).all()
+    for existing in existing_rows:
+        if existing.job_id is None:
+            continue
         job = session.get(JobRow, existing.job_id)
-        ready_file_exists = bool(
-            existing.status == "ok"
-            and existing.geojson_file is not None
-            and Path(existing.geojson_file.path).is_file()
-        )
-        if job is not None and (existing.status == "running" or ready_file_exists) and job.status not in {
+        if job is not None and pseudo_markup_covers_dataset(
+            session, existing, sample.dataset_key, config
+        ) and job.status not in {
             JobStatus.FAILED.value,
             JobStatus.CANCELLED.value,
         }:
@@ -1818,6 +1835,7 @@ def _build_training_result_export_archive(
             checkpoint_bytes=checkpoint_bytes,
             sample_size=sample_size,
             context=context,
+            class_schema_override=list(row.class_schema or []),
         )
 
 

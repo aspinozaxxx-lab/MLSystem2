@@ -29,6 +29,8 @@ from mlsystem2.training_ui_api._models import (
     DatasetClassRow,
     DatasetEditorDraftRow,
     DatasetRow,
+    PseudoMarkupResultRow,
+    StoredFileRow,
     TrainingResultRow,
 )
 from mlsystem2.training_ui_api.contracts import (
@@ -152,6 +154,7 @@ def test_manual_settings_and_ortho_type_survive_sync(
             class_row.key,
             DatasetClassUpdate(
                 name="Лесной покров",
+                technical_name="forest_cover",
                 quality_metric="objects",
                 imagery_type="ortho",
             ),
@@ -176,6 +179,7 @@ def test_manual_settings_and_ortho_type_survive_sync(
         session.refresh(main)
         session.refresh(rare)
         assert class_row.name == "Лесной покров"
+        assert class_row.technical_name == "forest_cover"
         assert class_row.quality_metric == "objects"
         assert class_row.imagery_type == "ortho"
         assert class_row.primary_dataset_id == rare.id
@@ -214,10 +218,25 @@ def test_editor_creates_dataset_directly_and_preserves_source_owner_key(
         original_key = original.key
         catalog = create_dataset_class(
             session,
-            DatasetClassCreate(name="Ручной класс", imagery_type="ortho"),
+            DatasetClassCreate(
+                name="Ручной класс",
+                technical_name="manual_class",
+                imagery_type="ortho",
+            ),
             config,
         )
         class_info = next(item for item in catalog.classes if item.name == "Ручной класс")
+        assert class_info.technical_name == "manual_class"
+        with pytest.raises(TrainingUIAPIError, match="уже используется"):
+            create_dataset_class(
+                session,
+                DatasetClassCreate(
+                    name="Ещё один класс",
+                    technical_name="manual_class",
+                    imagery_type="kanopus",
+                ),
+                config,
+            )
         with pytest.raises(TrainingUIAPIError, match="внутри MLMarkup"):
             create_managed_dataset(
                 session,
@@ -346,9 +365,84 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         )
         first_slug = managed.object_types[0].slug
         second_slug = managed.object_types[1].slug
+        assert first_slug == source_classes["Первый"].technical_name
+        assert second_slug == source_classes["Второй"].technical_name
         assert shape(by_class[first_slug]["geometry"]).intersection(
             shape(by_class[second_slug]["geometry"])
         ).area == 0
+
+        pseudo_path = tmp_path / "managed-pseudo.geojson"
+        pseudo_path.write_text(
+            json.dumps(
+                {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {
+                                "_mlsystem2_class": first_slug,
+                                "object_type": first_slug,
+                            },
+                            "geometry": mapping(box(1, 1, 2, 2)),
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stored = StoredFileRow(
+            kind="pseudo_markup_geojson",
+            original_name=pseudo_path.name,
+            content_type="application/geo+json",
+            path=str(pseudo_path),
+            size_bytes=pseudo_path.stat().st_size,
+        )
+        training = TrainingResultRow(
+            source="manual",
+            dataset_key=managed.key,
+            class_key=managed.key,
+            class_display_name=managed.name,
+            architecture="segformer_b2",
+            model_name="combined",
+            task="multiclass",
+            class_schema=[item.model_dump(mode="json") for item in managed.object_types],
+            training_metrics={"val_per_class_metrics": [{"slug": first_slug, "f1": 0.7}]},
+            status="ok",
+        )
+        session.add_all([stored, training])
+        session.flush()
+        session.add(
+            PseudoMarkupResultRow(
+                dataset_key=managed.key,
+                training_result_id=training.id,
+                class_key=managed.key,
+                source_dataset_name=managed.name,
+                geojson_file_id=stored.id,
+                status="ok",
+            )
+        )
+        session.flush()
+
+        update_dataset_class(
+            session,
+            source_classes["Первый"].key,
+            DatasetClassUpdate(technical_name="first_objects"),
+            config,
+        )
+        refreshed_managed = next(
+            item
+            for item in list_managed_datasets(session, config, include_custom=False)
+            if item.key == managed.key
+        )
+        assert refreshed_managed.object_types[0].slug == "first_objects"
+        assert training.class_schema[0]["slug"] == "first_objects"
+        assert training.training_metrics["val_per_class_metrics"][0]["slug"] == "first_objects"
+        migrated_pseudo = json.loads(pseudo_path.read_text(encoding="utf-8"))
+        assert migrated_pseudo["features"][0]["properties"] == {
+            "_mlsystem2_class": "first_objects",
+            "object_type": "first_objects",
+        }
 
         original_version = managed.version
         updated_catalog = update_managed_dataset(

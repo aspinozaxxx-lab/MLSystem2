@@ -44,6 +44,7 @@ class DatasetClassRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(240), unique=True)
+    technical_name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     imagery_type: Mapped[str] = mapped_column(String(32), default="kanopus")
     primary_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
