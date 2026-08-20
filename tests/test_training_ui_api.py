@@ -32,6 +32,7 @@ from mlsystem2.training_ui_api._models import (
     TestSampleRow as _TestSampleRow,
     TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
+    TrainingTemplateRow,
 )
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
 from mlsystem2.training_ui_api._templates import sanitize_template_config
@@ -3227,6 +3228,34 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
             dataset_template.id,
             TrainingTemplateUpdate(default_config=dataset_config),
         )
+        stored_dataset_template = session.get(TrainingTemplateRow, dataset_template.id)
+        assert stored_dataset_template is not None
+        active_dataset = session.scalar(
+            select(DatasetRow).where(DatasetRow.key == "Вырубки\\main")
+        )
+        assert active_dataset is not None
+        legacy_key = "00000000-0000-0000-0000-000000000001"
+        session.add(
+            DatasetRow(
+                key=legacy_key,
+                class_id=active_dataset.class_id,
+                name="main [legacy]",
+                source_type="mlmarkup",
+                source_path=".mlsystem2-archive/main",
+                legacy_version=True,
+                deleted_at=datetime.now(timezone.utc),
+            )
+        )
+        stored_dataset_template.dataset_key = legacy_key
+        session.flush()
+        selected_template = _service.training_template_row_for_dataset(
+            session,
+            "smp_segformer_b2",
+            "Вырубки\\main",
+        )
+        assert selected_template is stored_dataset_template
+        _service.sync_dataset_catalog(session, config)
+        assert stored_dataset_template.dataset_key == "Вырубки\\main"
         _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
         _service.update_automation(
             session,

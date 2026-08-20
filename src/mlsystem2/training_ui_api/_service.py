@@ -98,6 +98,12 @@ from ._templates import (
     sanitize_inference_template_config,
     sanitize_template_config,
 )
+from ._template_selection import (
+    dataset_inference_template_row,
+    dataset_training_template_row,
+    effective_inference_template_row,
+    effective_training_template_row,
+)
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     current_primary_training_result,
@@ -572,7 +578,7 @@ def create_training_template(
     dataset = find_managed_dataset(session, config, request.dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
-    existing = _dataset_template_row(session, request.architecture, dataset.key)
+    existing = dataset_training_template_row(session, request.architecture, dataset.key)
     if existing is not None:
         raise TrainingUIAPIError(f"Шаблон для датасета уже существует: {dataset.name}")
     now = _now()
@@ -712,7 +718,7 @@ def create_inference_template(
     dataset = find_managed_dataset(session, config, request.dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
-    existing = _dataset_inference_template_row(session, request.architecture, dataset.key)
+    existing = dataset_inference_template_row(session, request.architecture, dataset.key)
     if existing is not None:
         raise TrainingUIAPIError(f"Шаблон инференса для датасета уже существует: {dataset.name}")
     now = _now()
@@ -1983,11 +1989,11 @@ def training_template_row_for_dataset(
     architecture: str,
     dataset_key: str | None,
 ) -> TrainingTemplateRow | None:
-    if dataset_key and dataset_key != CUSTOM_KEY:
-        row = _dataset_template_row(session, architecture, dataset_key)
-        if row is not None and row.is_active:
-            return row
-    return _base_template_row(session, architecture)
+    return effective_training_template_row(
+        session,
+        architecture,
+        None if dataset_key == CUSTOM_KEY else dataset_key,
+    )
 
 
 def inference_template_row_for_dataset(
@@ -1995,11 +2001,7 @@ def inference_template_row_for_dataset(
     architecture: str,
     dataset_key: str | None,
 ) -> InferenceTemplateRow | None:
-    if dataset_key:
-        row = _dataset_inference_template_row(session, architecture, dataset_key)
-        if row is not None and row.is_active:
-            return row
-    return _base_inference_template_row(session, architecture)
+    return effective_inference_template_row(session, architecture, dataset_key)
 
 
 def _base_template_row(session: Session, architecture: str) -> TrainingTemplateRow | None:
@@ -2016,19 +2018,6 @@ def _base_inference_template_row(session: Session, architecture: str) -> Inferen
         select(InferenceTemplateRow).where(
             InferenceTemplateRow.architecture == architecture,
             InferenceTemplateRow.dataset_key.is_(None),
-        )
-    )
-
-
-def _dataset_template_row(
-    session: Session,
-    architecture: str,
-    dataset_key: str,
-) -> TrainingTemplateRow | None:
-    return session.scalar(
-        select(TrainingTemplateRow).where(
-            TrainingTemplateRow.architecture == architecture,
-            TrainingTemplateRow.dataset_key == dataset_key,
         )
     )
 
@@ -2286,19 +2275,6 @@ def _template_info(row: TrainingTemplateRow) -> TrainingTemplate:
         version=row.version,
         created_at=row.created_at,
         updated_at=row.updated_at,
-    )
-
-
-def _dataset_inference_template_row(
-    session: Session,
-    architecture: str,
-    dataset_key: str,
-) -> InferenceTemplateRow | None:
-    return session.scalar(
-        select(InferenceTemplateRow).where(
-            InferenceTemplateRow.architecture == architecture,
-            InferenceTemplateRow.dataset_key == dataset_key,
-        )
     )
 
 

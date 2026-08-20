@@ -81,6 +81,7 @@ from ._managed_datasets import (
     managed_source_infos,
     materialize_managed_dataset,
 )
+from ._template_selection import reconcile_dataset_template_keys
 
 
 SOURCE_MLMARKUP = "mlmarkup"
@@ -141,9 +142,11 @@ def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -
 
     with _SYNC_LOCK:
         initial_import = session.scalar(select(DatasetRow.id).limit(1)) is None
+        reconcile_dataset_template_keys(session)
         _import_historical_dataset_keys(session, config)
         _import_mlmarkup_folders(session, config, preserve_legacy_keys=initial_import)
         _ensure_model_name_stems(session, config)
+        reconcile_dataset_template_keys(session)
         session.flush()
         root = Path(config.mlmarkup_root).resolve()
         _LAST_SYNC_BY_ROOT[root] = (time.monotonic(), _catalog_tree_stamp(root))

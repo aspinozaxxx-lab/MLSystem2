@@ -45,16 +45,18 @@ from ._external_models import (
 from ._models import (
     AutomationControlRow,
     AutomationRuleRow,
-    InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
-    TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
 from ._queueing import next_queue_position
 from ._templates import sanitize_inference_template_config, sanitize_template_config
+from ._template_selection import (
+    effective_inference_template_row,
+    effective_training_template_row,
+)
 from .contracts import (
     AutomationEnabledUpdate,
     AutomationRuleInfo,
@@ -281,7 +283,7 @@ def _ensure_training_for_rule(
         return
     if _has_active_automation_job(session, JobType.TRAINING, rule, dataset.version):
         return
-    template = _training_template_row_for_dataset(session, rule.architecture, dataset.key)
+    template = effective_training_template_row(session, rule.architecture, dataset.key)
     if template is None or not template.is_active:
         return
     experiment = create_experiment(
@@ -368,7 +370,7 @@ def _ensure_pseudo_markup_for_rule(
         return
     if _has_active_automation_job(session, JobType.INFERENCE, rule, dataset.version):
         return
-    inference_template = _inference_template_row_for_dataset(
+    inference_template = effective_inference_template_row(
         session,
         training_result.architecture,
         dataset.key,
@@ -474,48 +476,6 @@ def _current_training_result(
             TrainingResultRow.status.in_(CURRENT_AUTOMATION_RESULT_STATUSES),
         )
         .order_by(TrainingResultRow.created_at.desc())
-    )
-
-
-def _training_template_row_for_dataset(
-    session: Session,
-    architecture: str,
-    dataset_key: str,
-) -> TrainingTemplateRow | None:
-    dataset_template = session.scalar(
-        select(TrainingTemplateRow).where(
-            TrainingTemplateRow.architecture == architecture,
-            TrainingTemplateRow.dataset_key == dataset_key,
-        )
-    )
-    if dataset_template is not None and dataset_template.is_active:
-        return dataset_template
-    return session.scalar(
-        select(TrainingTemplateRow).where(
-            TrainingTemplateRow.architecture == architecture,
-            TrainingTemplateRow.dataset_key.is_(None),
-        )
-    )
-
-
-def _inference_template_row_for_dataset(
-    session: Session,
-    architecture: str,
-    dataset_key: str,
-) -> InferenceTemplateRow | None:
-    dataset_template = session.scalar(
-        select(InferenceTemplateRow).where(
-            InferenceTemplateRow.architecture == architecture,
-            InferenceTemplateRow.dataset_key == dataset_key,
-        )
-    )
-    if dataset_template is not None and dataset_template.is_active:
-        return dataset_template
-    return session.scalar(
-        select(InferenceTemplateRow).where(
-            InferenceTemplateRow.architecture == architecture,
-            InferenceTemplateRow.dataset_key.is_(None),
-        )
     )
 
 
