@@ -460,6 +460,9 @@ def _effective_postprocess_config(
         "postprocess.binary_closing_radius": params.get("binary_closing_radius"),
         "postprocess.min_area_m2": params.get("min_area_m2"),
         "postprocess.min_hole_area_m2": params.get("min_hole_area_m2"),
+        "postprocess.smooth.enabled": params.get("smooth_iterations") is not None,
+        "postprocess.smooth.iterations": params.get("smooth_iterations"),
+        "postprocess.smooth.offset": params.get("smooth_offset"),
         "postprocess.simplify_m": params.get("simplify_m"),
         "postprocess.filter_compact_objects.enabled": (
             params.get("filter_compact_min_isoperimetric_quotient") is not None

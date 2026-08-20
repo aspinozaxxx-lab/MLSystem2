@@ -1,6 +1,6 @@
 import os
 import datetime as dt
-from math import hypot, pi
+from math import hypot, isfinite, pi
 from loguru import logger
 from gpdadapter import FeatureCollection
 from ..functional.rasterize import rasterize
@@ -42,7 +42,9 @@ class UnifiedVectorProcessing(PolygonProcessingBrick):
     def process(self, fc: FeatureCollection) -> FeatureCollection:
         for brick in self._bricks:
             logger.info(f"Processing with {brick.__class__.__name__}")
-            fc = brick.process(fc)
+            # Usually we make_valid it on saving,
+            # but as here we are not saving in between processing steps, it's a safety precaution
+            fc = brick.process(fc).make_valid()
         return fc
 
     def get_config(self) -> dict:
@@ -80,7 +82,7 @@ class Smooth(PolygonProcessingBrick):
         output: name of output GeoJSON feature collection, if `None` overwrite `input_vector`
     """
     iterations: int = Field(3, gt=0, lt=6, description='Number of iterations for the algorithm, between 1 and 5')  # exponential complexity and file size, so 3 is optimal choice
-    offset: float = Field(0.25, gt=0,
+    offset: float = Field(0.25, gt=0, le=0.5,
                           description='A fraction of the edge, which is cut. Bigger offset means bigger radius of smoothing.')  # from 0 to 0.5
 
     def process(self, fc: FeatureCollection) -> FeatureCollection:
@@ -138,10 +140,27 @@ class FilterSmallObjects(PolygonProcessingBrick):
     """
     min_area: float
     area_tag: Optional[str] = Field(None, description='Property name for feature area')
+    preserve_boundary_objects: bool = Field(
+        False,
+        description='Keep objects marked as touching the source raster boundary',
+    )
+    boundary_tag: str = Field(
+        '_touches_raster_boundary',
+        min_length=1,
+        description='Property containing the source raster boundary marker',
+    )
 
     def process(self, fc: FeatureCollection) -> FeatureCollection:
+        _require_boundary_tag(fc, self.preserve_boundary_objects, self.boundary_tag)
         length = len(fc)
-        fc = fc[fc.geometry.area > self.min_area]
+        if self.preserve_boundary_objects:
+            fc.filter(
+                lambda feature: _is_boundary_object(feature, self.boundary_tag)
+                or feature.geometry.area > self.min_area,
+                inplace=True,
+            )
+        else:
+            fc = fc[fc.geometry.area > self.min_area]
         logger.trace(f'{length - len(fc)} polygons deleted')
         # add area_tag as property and add area as value
         if self.area_tag:
@@ -178,45 +197,69 @@ class FilterNarrowObjects(PolygonProcessingBrick):
 
 
 class FilterCompactObjects(PolygonProcessingBrick):
-    """
-    Удаляет компактные полигоны, которые больше похожи на пруды или озера, чем на вытянутые реки.
+    """Remove compact polygons while preserving clipped raster-boundary fragments.
 
-    Аргументы:
-        input: имя входной feature collection
-        output: имя выходной feature collection; если не задано, перезаписывается input
-        min_isoperimetric_quotient: нижний порог компактности. Для круга значение равно 1,
-            для вытянутых объектов ближе к 0.
-        max_bbox_ratio: верхний порог отношения сторон minimum rotated rectangle.
+    A polygon is compact only when both its isoperimetric quotient and the
+    aspect ratio of its minimum rotated rectangle pass their thresholds.
+    Polygon area does not affect filtering.
     """
+
     min_isoperimetric_quotient: float = Field(
         0.25,
         ge=0,
         le=1,
-        description='Минимальный isoperimetric quotient, при котором объект считается компактным',
+        description='Minimum isoperimetric quotient for a compact object',
     )
     max_bbox_ratio: float = Field(
         3.5,
         ge=1,
-        description='Максимальное отношение сторон minimum rotated rectangle, при котором объект считается компактным',
+        description='Maximum minimum-rotated-rectangle ratio for a compact object',
+    )
+    preserve_boundary_objects: bool = Field(
+        False,
+        description='Keep objects marked as touching the source raster boundary',
+    )
+    boundary_tag: str = Field(
+        '_touches_raster_boundary',
+        min_length=1,
+        description='Property containing the source raster boundary marker',
     )
 
     def process(self, fc: FeatureCollection) -> FeatureCollection:
+        _require_boundary_tag(fc, self.preserve_boundary_objects, self.boundary_tag)
         length = len(fc)
-        fc.filter(lambda x: not self._is_compact(x.geometry), inplace=True)
+        fc.filter(
+            lambda feature: (
+                self.preserve_boundary_objects
+                and _is_boundary_object(feature, self.boundary_tag)
+            )
+            or not self._is_compact(feature.geometry),
+            inplace=True,
+        )
         logger.trace(f'{length - len(fc)} polygons deleted')
         return fc
 
     def _is_compact(self, geometry) -> bool:
+        if geometry is None or geometry.is_empty or not geometry.is_valid:
+            return False
+        try:
+            quotient = self._isoperimetric_quotient(geometry)
+            ratio = self._minimum_rectangle_ratio(geometry)
+        except Exception as error:
+            logger.warning(f'Compactness calculation failed; keeping geometry: {error}')
+            return False
         return (
-            self._isoperimetric_quotient(geometry) >= self.min_isoperimetric_quotient
-            and self._minimum_rectangle_ratio(geometry) < self.max_bbox_ratio
+            quotient >= self.min_isoperimetric_quotient
+            and ratio < self.max_bbox_ratio
         )
 
     @staticmethod
     def _isoperimetric_quotient(geometry) -> float:
-        if geometry.length <= 0:
+        perimeter = geometry.length
+        if perimeter <= 0:
             return 0.0
-        return float(4.0 * pi * geometry.area / (geometry.length ** 2))
+        quotient = float(4.0 * pi * geometry.area / (perimeter ** 2))
+        return quotient if isfinite(quotient) else 0.0
 
     @classmethod
     def _minimum_rectangle_ratio(cls, geometry) -> float:
@@ -248,6 +291,25 @@ class FilterCompactObjects(PolygonProcessingBrick):
         if shortest <= 0:
             return float('inf') if max(width, height) > 0 else 0.0
         return max(width, height) / shortest
+
+
+def _require_boundary_tag(
+    fc: FeatureCollection,
+    preserve_boundary_objects: bool,
+    boundary_tag: str,
+) -> None:
+    if preserve_boundary_objects and len(fc) > 0 and boundary_tag not in fc.columns:
+        raise ValueError(
+            f'Boundary protection requires feature property {boundary_tag!r}'
+        )
+
+
+def _is_boundary_object(feature, boundary_tag: str) -> bool:
+    try:
+        value = feature[boundary_tag]
+        return bool(value)
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 class RemoveOverlappingObjects(PolygonProcessingBrick):

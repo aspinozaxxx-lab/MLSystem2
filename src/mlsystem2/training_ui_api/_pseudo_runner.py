@@ -71,6 +71,8 @@ class _PostprocessProfile:
     binary_closing_radius: int | None = None
     min_area_m2: float | None = None
     min_hole_area_m2: float | None = None
+    smooth_iterations: int | None = None
+    smooth_offset: float | None = None
     simplify_m: float | None = None
     filter_compact_min_isoperimetric_quotient: float | None = None
     filter_compact_max_bbox_ratio: float | None = None
@@ -1183,7 +1185,6 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             merged_features,
             list(config.get("object_types") or []),
         )
-        merged_features = _filter_compact_features(merged_features, postprocess_profile)
         if is_aoi:
             assert aoi_wgs84 is not None
             merged_features = _finalize_aoi_features(
@@ -2222,7 +2223,6 @@ def _infer_test_tile_mask(
                 "Для профильной постобработки тестового тайла нужен CRS снимка."
             )
         geometries: list[tuple[BaseGeometry, int]] = []
-        raster_boundary = box(*dataset.bounds).boundary
         for geometry, value in rasterio_features.shapes(
             mask,
             mask=mask > 0,
@@ -2236,7 +2236,12 @@ def _infer_test_tile_mask(
                 source_geometry,
                 dataset.crs,
                 postprocess_profile,
-                preserve_boundary_fragment=source_geometry.intersects(raster_boundary),
+                preserve_boundary_fragment=_touches_raster_boundary(
+                    source_geometry,
+                    dataset.transform,
+                    dataset.width,
+                    dataset.height,
+                ),
             )
             if not processed.is_empty:
                 geometries.append((processed, class_id))
@@ -2408,6 +2413,7 @@ def _features_from_mask(
             component_id = int(value)
             if component_id <= 0:
                 continue
+            source_geometry = shape(geometry)
             if _has_vector_postprocess(postprocess_profile):
                 if crs is None:
                     raise RuntimeError(
@@ -2415,7 +2421,15 @@ def _features_from_mask(
                         "иначе нельзя применить пороги площади в м²."
                     )
                 processed_geometry = _postprocess_geometry(
-                    shape(geometry), crs, postprocess_profile
+                    source_geometry,
+                    crs,
+                    postprocess_profile,
+                    preserve_boundary_fragment=_touches_raster_boundary(
+                        source_geometry,
+                        transform,
+                        mask.shape[1],
+                        mask.shape[0],
+                    ),
                 )
                 if processed_geometry.is_empty:
                     continue
@@ -3029,6 +3043,21 @@ def _postprocess_profile_from_config(
     else:
         updates["filter_compact_min_isoperimetric_quotient"] = None
         updates["filter_compact_max_bbox_ratio"] = None
+    if bool(config.get("postprocess.smooth.enabled")):
+        try:
+            smooth_iterations = int(config.get("postprocess.smooth.iterations") or 1)
+            smooth_offset = float(config.get("postprocess.smooth.offset") or 0.125)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Параметры Smooth должны быть числами.") from exc
+        if not 1 <= smooth_iterations <= 5:
+            raise RuntimeError("Число итераций Smooth должно быть от 1 до 5.")
+        if not 0 < smooth_offset <= 0.5:
+            raise RuntimeError("Параметр Smooth offset должен быть больше 0 и не больше 0.5.")
+        updates["smooth_iterations"] = smooth_iterations
+        updates["smooth_offset"] = smooth_offset
+    else:
+        updates["smooth_iterations"] = None
+        updates["smooth_offset"] = None
     if not updates:
         return base
     return replace(base, **updates)
@@ -3042,6 +3071,8 @@ def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float
         "binary_closing_radius",
         "min_area_m2",
         "min_hole_area_m2",
+        "smooth_iterations",
+        "smooth_offset",
         "simplify_m",
         "filter_compact_min_isoperimetric_quotient",
         "filter_compact_max_bbox_ratio",
@@ -3175,6 +3206,8 @@ def _has_vector_postprocess(profile: _PostprocessProfile) -> bool:
         for value in (
             profile.min_area_m2,
             profile.min_hole_area_m2,
+            profile.smooth_iterations,
+            profile.smooth_offset,
             profile.simplify_m,
             profile.filter_compact_min_isoperimetric_quotient,
             profile.filter_compact_max_bbox_ratio,
@@ -3210,43 +3243,23 @@ def _postprocess_geometry(
     if profile.min_hole_area_m2 is not None:
         metric_geometry = _remove_small_geometry_holes(metric_geometry, profile.min_hole_area_m2)
         metric_geometry = _make_valid(metric_geometry)
+    if not preserve_boundary_fragment:
+        metric_geometry = _filter_compact_geometry(metric_geometry, profile)
+    if metric_geometry.is_empty:
+        return metric_geometry
+    if profile.smooth_iterations is not None and profile.smooth_offset is not None:
+        metric_geometry = _smooth_geometry(
+            metric_geometry,
+            iterations=profile.smooth_iterations,
+            offset=profile.smooth_offset,
+        )
+        metric_geometry = _make_valid(metric_geometry)
     if profile.simplify_m is not None and profile.simplify_m > 0:
         metric_geometry = metric_geometry.simplify(profile.simplify_m, preserve_topology=True)
         metric_geometry = _make_valid(metric_geometry)
-    if not preserve_boundary_fragment:
-        metric_geometry = _filter_compact_geometry(metric_geometry, profile)
     if metric_to_source is not None and not metric_geometry.is_empty:
         return shapely_transform(metric_to_source, metric_geometry)
     return metric_geometry
-
-
-def _filter_compact_features(
-    features: list[dict[str, Any]],
-    profile: _PostprocessProfile,
-) -> list[dict[str, Any]]:
-    if (
-        profile.filter_compact_min_isoperimetric_quotient is None
-        or profile.filter_compact_max_bbox_ratio is None
-    ):
-        return features
-    output: list[dict[str, Any]] = []
-    for feature in features:
-        geometry_data = feature.get("geometry")
-        if geometry_data is None:
-            continue
-        try:
-            metric_geometry, metric_to_source = _geometry_to_metric(shape(geometry_data), "EPSG:4326")
-            metric_geometry = _filter_compact_geometry(_make_valid(metric_geometry), profile)
-        except Exception:  # noqa: BLE001
-            output.append(feature)
-            continue
-        if metric_geometry.is_empty:
-            continue
-        geometry = shapely_transform(metric_to_source, metric_geometry) if metric_to_source is not None else metric_geometry
-        updated = dict(feature)
-        updated["geometry"] = mapping(geometry)
-        output.append(updated)
-    return output
 
 
 def _filter_compact_geometry(
@@ -3321,19 +3334,97 @@ def _bounds_ratio(geometry: BaseGeometry) -> float:
     return max(width, height) / shortest
 
 
+def _smooth_geometry(
+    geometry: BaseGeometry,
+    *,
+    iterations: int,
+    offset: float,
+) -> BaseGeometry:
+    polygons = list(_iter_polygons(geometry))
+    for _ in range(iterations):
+        polygons = [_smooth_polygon(polygon, offset) for polygon in polygons]
+    return _polygons_to_geometry(polygons)
+
+
+def _smooth_polygon(polygon: Polygon, offset: float) -> Polygon:
+    shell = _smooth_ring(list(polygon.exterior.coords), offset)
+    holes = [_smooth_ring(list(ring.coords), offset) for ring in polygon.interiors]
+    return Polygon(shell=shell, holes=holes)
+
+
+def _smooth_ring(coords: list[tuple[float, ...]], offset: float) -> list[list[float]]:
+    if not coords:
+        return []
+    if coords[0] != coords[-1]:
+        raise RuntimeError("Кольцо полигона должно быть замкнуто.")
+    contour = coords[1:]
+    if len(contour) < 3:
+        return [list(point[:2]) for point in coords]
+    smoothed: list[list[float]] = []
+    for index, point in enumerate(contour):
+        previous = contour[index - 1]
+        following = contour[0] if index == len(contour) - 1 else contour[index + 1]
+        smoothed.extend(
+            [
+                [
+                    point[0] * (1 - offset) + previous[0] * offset,
+                    point[1] * (1 - offset) + previous[1] * offset,
+                ],
+                [
+                    point[0] * (1 - offset) + following[0] * offset,
+                    point[1] * (1 - offset) + following[1] * offset,
+                ],
+            ]
+        )
+    smoothed.append(smoothed[0])
+    return smoothed
+
+
+def _touches_raster_boundary(
+    geometry: BaseGeometry,
+    transform,
+    width: int,
+    height: int,
+    tolerance_pixels: float = 1.0,
+) -> bool:
+    outer = Polygon(
+        [
+            transform * (0, 0),
+            transform * (width, 0),
+            transform * (width, height),
+            transform * (0, height),
+        ]
+    )
+    if width <= 2 * tolerance_pixels or height <= 2 * tolerance_pixels:
+        boundary_strip = outer
+    else:
+        inner = Polygon(
+            [
+                transform * (tolerance_pixels, tolerance_pixels),
+                transform * (width - tolerance_pixels, tolerance_pixels),
+                transform * (width - tolerance_pixels, height - tolerance_pixels),
+                transform * (tolerance_pixels, height - tolerance_pixels),
+            ]
+        )
+        boundary_strip = outer.difference(inner)
+    return bool(geometry.intersects(boundary_strip))
+
+
 def _geometry_to_metric(
     geometry: BaseGeometry,
     crs,
 ) -> tuple[BaseGeometry, Callable[..., Any] | None]:
     source_crs = PyprojCRS.from_user_input(str(crs))
-    if source_crs.is_projected:
-        return geometry, None
-    if not source_crs.is_geographic:
+    if not source_crs.is_projected and not source_crs.is_geographic:
         raise RuntimeError(f"CRS снимка не является ни метрической, ни географической: {source_crs}.")
+    if source_crs.is_projected and source_crs.utm_zone is not None:
+        return geometry, None
     representative = geometry.representative_point()
     to_lonlat = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
     lon, lat = to_lonlat.transform(representative.x, representative.y)
     metric_crs = _utm_crs_for_lonlat(float(lon), float(lat))
+    if source_crs == metric_crs:
+        return geometry, None
     to_metric = Transformer.from_crs(source_crs, metric_crs, always_xy=True)
     to_source = Transformer.from_crs(metric_crs, source_crs, always_xy=True)
     return shapely_transform(to_metric.transform, geometry), to_source.transform
@@ -3355,7 +3446,7 @@ def _make_valid(geometry: BaseGeometry) -> BaseGeometry:
 
 def _filter_small_polygons(geometry: BaseGeometry, min_area_m2: float) -> BaseGeometry:
     return _polygons_to_geometry(
-        [polygon for polygon in _iter_polygons(geometry) if polygon.area >= min_area_m2]
+        [polygon for polygon in _iter_polygons(geometry) if polygon.area > min_area_m2]
     )
 
 

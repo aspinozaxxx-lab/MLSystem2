@@ -329,12 +329,17 @@ dataset_key)`. Если ключ сменился при миграции, ка�
 `inference_templates` устроены аналогично, но содержат только параметры Geoalert-совместимой
 постобработки: `postprocess.mask_min_object_pixels`, `postprocess.mask_min_hole_pixels`,
 `postprocess.binary_closing_radius`, `postprocess.min_area_m2`, `postprocess.min_hole_area_m2`,
+`postprocess.smooth.enabled`, `postprocess.smooth.iterations`, `postprocess.smooth.offset`,
 `postprocess.simplify_m` и параметры `postprocess.filter_compact_objects.*`. При ручном и автоматическом
 создании псевдоразметки сервис ищет активный шаблон инференса по датасету обученной модели
 `(architecture, training_dataset_key)`, а если его нет, использует базовый `(architecture, null)`; выбранный
-датасет, папка или загруженный TXT со снимками на шаблон не влияют. Для `Реки\main` и `smp_segformer_b2` начальный шаблон включает
-профиль 18: `min_area=10000 м²`, `min_hole_area=5000 м²`, `Simplify=15 м` и фильтр компактных объектов
-`min_isoperimetric_quotient=0.25`, `max_bbox_ratio=3.5`.
+датасет, папка или загруженный TXT со снимками на шаблон не влияют. Seed-обновление добавляет новые defaults и
+заменяет прежние системные значения, но сохраняет явные пользовательские переопределения. Для `Реки\main` и
+`smp_segformer_b2` начальный шаблон включает профиль 18: `min_area=10000 м²`, `min_hole_area=5000 м²`,
+`FilterCompactObjects(0.25, 3.5)`, `Smooth(iterations=1, offset=0.125)` и `Simplify=1 м`.
+Compact-фильтр не использует площадь объекта; граничные фрагменты в полосе одного пикселя сохраняются обоими
+фильтрами и теряют служебный тег после завершения цепочки. В базовом, в том числе озёрном, шаблоне compact-фильтр
+и Smooth выключены.
 
 `jobs`, `training_results` и `pseudo_markup_results` имеют `source=manual|automation`, `dataset_key` и
 `dataset_version`. Для auto rows дополнительно заполнен `automation_rule_id`. Auto jobs нельзя удалить или двигать
@@ -403,7 +408,10 @@ F1 и эпоху в `training_results.f1_score`/`training_results.epoch`. Pseudo
 `inference_template_id`, `inference_template_config` и, когда MLflow доступен, полный `checkpoint_uri`.
 Для успешного результата обучения `POST /api/v1/results/training/{result_id}/triton-zip` скачивает тот же
 `checkpoints/best.pt` из MLflow, собирает временный архив Triton CPU тем же кодом, что endpoint checkpoint-экспорта,
-и возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса. `POST /api/v1/results/training/triton-zip`
+и применяет актуальный effective inference-шаблон по `architecture + class_key`, включая модели, обученные до
+появления новых параметров. Нормализованный postprocess-конфиг и его SHA-256 записываются в
+`export_metadata.json`. Низкоуровневый checkpoint-экспорт не подбирает классовый шаблон автоматически и
+возвращает файл без записи в Postgres, MLflow, S3 или рабочий каталог инференса. `POST /api/v1/results/training/triton-zip`
 принимает список успешных результатов и имен моделей, собирает каждую модель тем же кодом и возвращает общий zip с
 `models-serving-service/`, `pipelines/`, `metadata/` и корневым `export_metadata.json`.
 
@@ -447,8 +455,10 @@ endpoint возвращает фрагмент `journalctl` по unit из `MLSY
 с чисткой маски `48 px`, `min_area=3000 м²`, `min_hole_area=5000 м²` и `Simplify=15 м`.
 После выбора автоматического профиля раннер применяет непустые поля из `inference_template_config`, поэтому
 шаблон может ужесточить или ослабить только нужные параметры. Включенный `filter_compact_objects` удаляет
-компактные полигоны по isoperimetric quotient и отношению сторон minimum rotated rectangle; для рек это
-используется для отсечения озер и прудов.
+компактные полигоны независимо от площади по isoperimetric quotient и отношению сторон minimum rotated rectangle;
+для рек это используется для отсечения озер и прудов. Полигоны в пределах одного пикселя от границы растра и
+вырожденные геометрии сохраняются; невалидные не приводят к ошибке фильтрации. Затем речной профиль выполняет
+Smooth перед Simplify.
 Перед записью итогового скачиваемого GeoJSON `pytorch_one_off` сливает
 пересекающиеся и касающиеся полигоны через `unary_union`; per-scene GeoJSON остаются диагностическими файлами
 без глобального слияния. Для ортофото слияние и постобработка остаются внутри per-scene Geoalert pipeline, чтобы

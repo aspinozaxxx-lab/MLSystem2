@@ -457,14 +457,7 @@ def _ensure_seed_inference_templates(session: Session) -> None:
         row.parent_template_id = None
         row.display_name = payload["display_name"]
         row.config_schema = payload["config_schema"]
-        row.default_config = sanitize_inference_template_config(
-            row.default_config,
-            fallback=payload["default_config"],
-        )
-        row.baseline_default_config = sanitize_inference_template_config(
-            row.baseline_default_config,
-            fallback=payload["baseline_default_config"],
-        )
+        _reconcile_seed_inference_config(row, payload)
     session.flush()
 
     base_rows = {
@@ -487,14 +480,30 @@ def _ensure_seed_inference_templates(session: Session) -> None:
         row.display_name = payload["display_name"]
         row.dataset_name = payload["dataset_name"]
         row.config_schema = parent.config_schema
-        row.default_config = sanitize_inference_template_config(
-            row.default_config,
-            fallback=payload["default_config"],
-        )
-        row.baseline_default_config = sanitize_inference_template_config(
-            row.baseline_default_config,
-            fallback=payload["baseline_default_config"],
-        )
+        _reconcile_seed_inference_config(row, payload)
+
+
+def _reconcile_seed_inference_config(
+    row: InferenceTemplateRow,
+    payload: dict[str, Any],
+) -> None:
+    current = dict(row.default_config or {})
+    previous_baseline = dict(row.baseline_default_config or {})
+    next_baseline = sanitize_inference_template_config(
+        payload["baseline_default_config"]
+    )
+    reconciled = sanitize_inference_template_config(
+        current,
+        fallback=next_baseline,
+    )
+    for key, next_value in next_baseline.items():
+        if key not in current or (
+            key in previous_baseline
+            and current[key] == previous_baseline[key]
+        ):
+            reconciled[key] = next_value
+    row.default_config = reconciled
+    row.baseline_default_config = next_baseline
 
 
 def _resolve_inference_seed_dataset(
@@ -1682,6 +1691,7 @@ def export_training_result_triton_zip(
     config: TrainingUIAPIConfig,
     context: int | None = None,
 ) -> ModelExportArchive:
+    ensure_seed_templates(session)
     row = _training_result_row_for_export(session, result_id)
     return _build_training_result_export_archive(
         session,
@@ -1701,6 +1711,7 @@ def export_training_results_triton_zip(
 ) -> ModelExportArchive:
     if not request.items:
         raise TrainingUIAPIError("Выберите хотя бы одну модель для экспорта.")
+    ensure_seed_templates(session)
     _validate_batch_export_uniqueness(request)
 
     temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-results-export-"))
@@ -1835,12 +1846,22 @@ def _build_training_result_export_archive(
         except OSError as exc:
             raise TrainingUIAPIError("Не удалось прочитать скачанный best.pt.") from exc
 
+        inference_template = effective_inference_template_row(
+            session,
+            row.architecture,
+            row.class_key,
+        )
+        postprocess_config = sanitize_inference_template_config(
+            inference_template.default_config if inference_template is not None else None
+        )
+
         return build_triton_model_export_zip(
             model_name=model_name,
             checkpoint_filename=checkpoint_path.name or "best.pt",
             checkpoint_bytes=checkpoint_bytes,
             sample_size=sample_size,
             context=context,
+            postprocess_config=postprocess_config,
             class_schema_override=list(row.class_schema or []),
         )
 

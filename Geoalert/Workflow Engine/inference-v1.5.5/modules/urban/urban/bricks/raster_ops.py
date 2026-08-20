@@ -415,12 +415,19 @@ class VectorizeMasks(Brick):
         value_property_name: property name to write threshold group value into
         normalize_value_property_to: normalize values written into threshold_property from (0, 255) to this range
                                      (e.g. if you want it to look like confidence from 0 to 100)
+        mark_boundary_objects: add a boolean property to polygons within the configured number of pixels
+            from the source raster boundary
+        boundary_tolerance_pixels: boundary strip width in source raster pixels
+        boundary_tag: property name used for the boundary marker
     """
 
     input_rasters: Sequence[str]
     output_fcs: Optional[Sequence[str]] = Field(None)
     value_property_name: Optional[str] = Field(None)
     normalize_value_property_to: Optional[Tuple[float, float]] = Field(None)
+    mark_boundary_objects: bool = Field(False)
+    boundary_tolerance_pixels: float = Field(1.0, gt=0)
+    boundary_tag: str = Field('_touches_raster_boundary', min_length=1)
 
     def model_post_init(self, __context):
         super().model_post_init(__context)
@@ -439,6 +446,7 @@ class VectorizeMasks(Brick):
                         fc[:, '_x_res'] = abs(d.res[0])
                         fc[:, '_y_res'] = abs(d.res[1])
                         fc[:, '_crs'] = str(d.crs)
+                        self._mark_boundary_objects(fc, d.transform, d.width, d.height)
                         fc._data.reset_index(drop=True, inplace=True)
                         if self.normalize_value_property_to:
                             fc.map(partial(normalize, from_range=(0, 255), to_range=self.normalize_value_property_to),
@@ -449,13 +457,52 @@ class VectorizeMasks(Brick):
         else:
             # read bands
             bc = io.read_bc(path, self.input_rasters)
-            for band, name in zip(bc, self.output_fcs):
+            for band, raster, name in zip(bc, self.input_rasters, self.output_fcs):
                 fc: FeatureCollection = polygonize(band)
                 fc[:, '_x_res'] = abs(bc.transform[0])
                 fc[:, '_y_res'] = abs(bc.transform[4])
                 fc[:, '_crs'] = str(bc.crs)
+                with rasterio.open(os.path.join(path, raster) + '.tif') as dataset:
+                    self._mark_boundary_objects(
+                        fc,
+                        dataset.transform,
+                        dataset.width,
+                        dataset.height,
+                        pixel_center_contours=True,
+                    )
                 io.save_fc(fc, path, name, make_valid=True, drop_empty=True, dropna=True, explode=True,
                            remove_repeated_points=True, keep_only_geometry_types=shapely.Polygon)  # save
+
+    def _mark_boundary_objects(
+        self,
+        fc,
+        transform,
+        width,
+        height,
+        pixel_center_contours=False,
+    ):
+        if not self.mark_boundary_objects or fc.empty:
+            return
+        tolerance = self.boundary_tolerance_pixels + (0.5 if pixel_center_contours else 0.0)
+        outer = shapely.Polygon([
+            transform * (0, 0),
+            transform * (width, 0),
+            transform * (width, height),
+            transform * (0, height),
+        ])
+        if width <= 2 * tolerance or height <= 2 * tolerance:
+            boundary_strip = outer
+        else:
+            inner = shapely.Polygon([
+                transform * (tolerance, tolerance),
+                transform * (width - tolerance, tolerance),
+                transform * (width - tolerance, height - tolerance),
+                transform * (tolerance, height - tolerance),
+            ])
+            boundary_strip = outer.difference(inner)
+        fc[:, self.boundary_tag] = fc.geometry.map(
+            lambda geometry: bool(geometry.intersects(boundary_strip))
+        )
 
 
 class ZonalStats(Brick):

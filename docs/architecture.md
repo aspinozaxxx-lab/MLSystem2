@@ -217,6 +217,13 @@ predictor. Каждая raster-стадия штатного pipeline пишет
 имени в одном `MaskMorphology` запрещены, поскольку дают зависимую от размера TIFF ошибку GDAL.
 Имя feature collection, созданной `VectorizeMasks`, без преобразования передаётся как `input` и `output`
 последующей `UnifiedVectorProcessing`; raster-имя бинарной маски `mask` не используется как имя векторного слоя.
+Речной inference-шаблон помечает полигоны в полосе одного пикселя от четырёх сторон растра и выполняет в UTM
+`FilterSmallObjects → RemoveSmallHoles → FilterCompactObjects → Smooth → Simplify → RemoveTags`.
+`FilterCompactObjects` принимает решение только по isoperimetric quotient и minimum rotated rectangle, без
+ограничения площади; граничные и вырожденные геометрии сохраняются, а невалидные не приводят к ошибке
+compact-фильтра. Для озёр compact-фильтр и сглаживание не включаются, поэтому их прежний vector pipeline не
+меняется. Совместимый `pytorch_one_off`
+повторяет тот же порядок геометрических операций.
 Контейнер Triton для Python-backend запускается с `/dev/shm` не менее `1 GiB`: стандартных Docker
 `64 MiB` недостаточно для входа ЗУ500 `1884×1884` и переменного instance-выхода. Один и тот же backend применяется
 для полной и поснимочной псевдоразметки, AOI и F1 тестовых разметок; альтернативного локального predictor для
@@ -280,7 +287,15 @@ MLMarkup и по умолчанию выбирает основные датас
 совместимое `<имя>_orto` для ортофото. Пользователь может изменить предложенное имя перед выгрузкой. Экспорт
 скачивает `checkpoints/best.pt` либо внешний ZIP из MLflow по сохраненным run id,
 собирает временный общий zip-архив для `models-serving-service` и Triton через тот же сборщик, что одиночный
-экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса. ONNX получает полный вход, а Geoalert YAML получает `bounds=context` и `sample_size=полезный центр`. Для старого checkpoint без metadata context экспорт использует `bounds=0`; оператор может явно задать context. Binary ABI остаётся прежним. Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold, размеры окна и checkpoint metadata.
+экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
+Одиночный и пакетный экспорт результата разрешают актуальный effective inference-шаблон по
+`architecture + class_key`, а `export_metadata.json` фиксирует нормализованный postprocess-конфиг и его SHA-256;
+низкоуровневый экспорт загруженного `.pt` не подбирает классовые настройки. ONNX получает полный вход, а
+Geoalert YAML получает `bounds=context` и `sample_size=полезный центр`. Для старого checkpoint без metadata
+context экспорт использует `bounds=0`; оператор может явно задать context. Binary ABI остаётся прежним.
+Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит
+semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold,
+размеры окна и checkpoint metadata.
 Страница создания списка сцен в `training_ui_api` принимает GeoJSON и тип снимков, рекурсивно сопоставляет
 полигональные объекты с фактическими валидными пикселями TIFF только внутри соответствующего корня
 `prepared_images/kanopus` или `prepared_images/orto` и возвращает ZIP с UTF-8 TXT полных относительных путей

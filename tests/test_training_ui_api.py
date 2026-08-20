@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -454,6 +455,56 @@ def test_seed_inference_template_uses_active_dataset_key_after_migration(
         assert [(row.id, row.dataset_key) for row in river_templates] == [
             (template_id, active_key)
         ]
+
+
+def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        river = session.scalar(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.architecture == "smp_segformer_b2",
+                InferenceTemplateRow.dataset_key == "Реки\\main",
+            )
+        )
+        assert river is not None
+        old_baseline = dict(river.baseline_default_config)
+        old_baseline.pop("postprocess.smooth.enabled")
+        old_baseline.pop("postprocess.smooth.iterations")
+        old_baseline.pop("postprocess.smooth.offset")
+        old_baseline["postprocess.simplify_m"] = 15.0
+        current = {
+            **old_baseline,
+            "postprocess.filter_compact_objects.max_bbox_ratio": 4.25,
+        }
+        river.baseline_default_config = old_baseline
+        river.default_config = current
+        session.flush()
+
+        ensure_seed_templates(session)
+        session.flush()
+
+        assert river.default_config["postprocess.smooth.enabled"] is True
+        assert river.default_config["postprocess.smooth.iterations"] == 1
+        assert river.default_config["postprocess.smooth.offset"] == 0.125
+        assert river.default_config["postprocess.simplify_m"] == 1.0
+        assert river.default_config["postprocess.filter_compact_objects.max_bbox_ratio"] == 4.25
+        first_reconciled = dict(river.default_config)
+
+        ensure_seed_templates(session)
+        session.flush()
+
+        assert river.default_config == first_reconciled
+        assert river.baseline_default_config["postprocess.simplify_m"] == 1.0
 
 
 def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkeypatch) -> None:
@@ -1422,6 +1473,10 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
         assert metadata["onnx_opset"] == 17
         assert metadata["onnx_ir_version"] == 8
+        assert metadata["postprocess_config"] == {}
+        assert metadata["postprocess_config_sha256"] == hashlib.sha256(b"{}").hexdigest()
+        assert "FilterCompactObjects" not in pipeline
+        assert "Smooth" not in pipeline
     finally:
         archive.cleanup()
 
@@ -1548,6 +1603,11 @@ def _minimal_onnx_path(tmp_path: Path, *, opset: int, ir_version: int) -> Path:
 
 def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch) -> None:
     captured: list[tuple[float, int]] = []
+    postprocess_config = {
+        "postprocess.smooth.offset": 0.125,
+        "postprocess.smooth.enabled": True,
+        "postprocess.smooth.iterations": 1,
+    }
 
     def fake_load_binary_checkpoint(path: Path) -> SimpleNamespace:
         return SimpleNamespace(
@@ -1573,6 +1633,7 @@ def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch)
         checkpoint_bytes=b"checkpoint",
         sample_size=768,
         context=128,
+        postprocess_config=postprocess_config,
     )
     try:
         assert captured == [(0.73, 768)]
@@ -1586,7 +1647,20 @@ def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch)
         assert metadata["inference_context"] == 128
         assert metadata["inference_context_source"] == "request"
         assert metadata["inference_core_size"] == 512
+        normalized_postprocess = {
+            key: postprocess_config[key]
+            for key in sorted(postprocess_config)
+        }
+        normalized_json = json.dumps(
+            normalized_postprocess,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        assert metadata["postprocess_config"] == normalized_postprocess
+        assert metadata["postprocess_config_sha256"] == hashlib.sha256(normalized_json).hexdigest()
         assert "bounds: 128" in pipeline
+        assert "_class: Smooth" in pipeline
         assert "sample_size: [" not in pipeline
         assert "sample_size:\n        - 512\n        - 512" in pipeline
     finally:
@@ -1739,6 +1813,17 @@ def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Pa
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     with session_factory() as session:
+        ensure_seed_templates(session)
+        river_template = session.scalar(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.architecture == "smp_segformer_b2",
+                InferenceTemplateRow.dataset_key == "Реки\\main",
+            )
+        )
+        assert river_template is not None
+        river_config = dict(river_template.default_config)
+        river_config["postprocess.smooth.offset"] = 0.2
+        river_template.default_config = river_config
         result = TrainingResultRow(
             source=JobSource.MANUAL.value,
             dataset_key="Реки\\main",
@@ -1766,6 +1851,16 @@ def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Pa
         assert kwargs["checkpoint_filename"] == "best.pt"
         assert kwargs["checkpoint_bytes"] == b"checkpoint"
         assert kwargs["sample_size"] is None
+        postprocess_config = kwargs["postprocess_config"]
+        assert isinstance(postprocess_config, dict)
+        assert postprocess_config["postprocess.filter_compact_objects.enabled"] is True
+        assert postprocess_config["postprocess.filter_compact_objects.min_isoperimetric_quotient"] == 0.25
+        assert postprocess_config["postprocess.filter_compact_objects.max_bbox_ratio"] == 3.5
+        assert postprocess_config["postprocess.smooth.enabled"] is True
+        assert postprocess_config["postprocess.smooth.iterations"] == 1
+        assert postprocess_config["postprocess.smooth.offset"] == 0.2
+        assert postprocess_config["postprocess.simplify_m"] == 1.0
+        assert "postprocess.filter_compact_objects.max_area_m2" not in postprocess_config
         zip_path = tmp_path / "rivers_kanopus.zip"
         with zipfile.ZipFile(zip_path, "w") as zip_file:
             zip_file.writestr("export_metadata.json", "{}")
@@ -1877,6 +1972,16 @@ def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path
     assert [item["model_name"] for item in build_calls] == ["rivers_kanopus", "deforest_kanopus"]
     assert build_calls[0]["sample_size"] == 512
     assert build_calls[1]["sample_size"] is None
+    river_postprocess = build_calls[0]["postprocess_config"]
+    default_postprocess = build_calls[1]["postprocess_config"]
+    assert isinstance(river_postprocess, dict)
+    assert isinstance(default_postprocess, dict)
+    assert river_postprocess["postprocess.filter_compact_objects.enabled"] is True
+    assert river_postprocess["postprocess.smooth.enabled"] is True
+    assert river_postprocess["postprocess.smooth.offset"] == 0.125
+    assert river_postprocess["postprocess.simplify_m"] == 1.0
+    assert default_postprocess["postprocess.filter_compact_objects.enabled"] is False
+    assert default_postprocess["postprocess.smooth.enabled"] is False
 
     batch_zip_path = tmp_path / "models_export.zip"
     batch_zip_path.write_bytes(response.content)
@@ -2459,6 +2564,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
         inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
         assert "postprocess.min_area_m2" in inference_keys
+        assert "postprocess.smooth.enabled" in inference_keys
+        assert "postprocess.smooth.iterations" in inference_keys
+        assert "postprocess.smooth.offset" in inference_keys
         assert "postprocess.filter_compact_objects.enabled" in inference_keys
         assert "train.batch_size" not in inference_keys
         river_inference_template = next(
@@ -2466,7 +2574,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         )
         assert river_inference_template["default_config"]["postprocess.min_area_m2"] == 10000.0
         assert river_inference_template["default_config"]["postprocess.min_hole_area_m2"] == 5000.0
-        assert river_inference_template["default_config"]["postprocess.simplify_m"] == 15.0
+        assert river_inference_template["default_config"]["postprocess.smooth.enabled"] is True
+        assert river_inference_template["default_config"]["postprocess.smooth.iterations"] == 1
+        assert river_inference_template["default_config"]["postprocess.smooth.offset"] == 0.125
+        assert river_inference_template["default_config"]["postprocess.simplify_m"] == 1.0
         assert river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"] is True
         inference_dataset_template = client.post(
             "/api/v1/inference-templates",

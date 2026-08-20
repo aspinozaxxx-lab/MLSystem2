@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -20,6 +21,7 @@ from .contracts import TrainingUIAPIError
 MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$")
 ONNX_OPSET = 17
 ONNX_IR_VERSION = 8
+_BOUNDARY_TAG = "_touches_raster_boundary"
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,15 @@ def build_triton_model_export_zip(
     _validate_checkpoint_filename(checkpoint_filename)
     request_sample_size = _validate_optional_sample_size(sample_size)
     request_context = _validate_optional_context(context)
+    normalized_postprocess_config = _normalized_postprocess_config(postprocess_config)
+    postprocess_config_sha256 = hashlib.sha256(
+        json.dumps(
+            normalized_postprocess_config,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
     temp_root = Path(tempfile.mkdtemp(prefix="mlsystem2-model-export-"))
     try:
@@ -129,7 +140,7 @@ def build_triton_model_export_zip(
                 input_channels,
                 class_schema=class_schema,
                 context=parsed_context,
-                postprocess_config=postprocess_config,
+                postprocess_config=normalized_postprocess_config,
                 resolution_m=resolution_m,
             ),
         )
@@ -160,6 +171,8 @@ def build_triton_model_export_zip(
                 "onnx_ir_version": ONNX_IR_VERSION,
                 "checkpoint_filename": checkpoint_filename,
                 "resolution_m": resolution_m,
+                "postprocess_config": normalized_postprocess_config,
+                "postprocess_config_sha256": postprocess_config_sha256,
                 "checkpoint_metadata": loaded.artifact.metadata,
             },
         )
@@ -934,6 +947,7 @@ def _pipeline_yaml(
         f"        - {label}" for label in segmentation_labels
     )
     vector_labels = [Path(output).stem for output in outputs]
+    vectorize_options_yaml = _vectorize_options_yaml(postprocess_config)
     vector_postprocess_yaml = _vector_postprocess_yaml(vector_labels, postprocess_config)
     resolution_yaml = (
         f"      crs: utm\n      res: [{float(resolution_m)}, {float(resolution_m)}]\n"
@@ -979,7 +993,7 @@ config:
 {labels_yaml}
       output_fcs:
 {vector_outputs_yaml}
-{vector_postprocess_yaml}
+{vectorize_options_yaml}{vector_postprocess_yaml}
 """
 
 
@@ -1008,6 +1022,30 @@ def _positive_number(config: dict[str, object], key: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _normalized_postprocess_config(
+    config: dict[str, object] | None,
+) -> dict[str, object]:
+    return {
+        str(key): value
+        for key, value in sorted(dict(config or {}).items(), key=lambda item: str(item[0]))
+    }
+
+
+def _uses_boundary_protection(config: dict[str, object] | None) -> bool:
+    values = dict(config or {})
+    return bool(values.get("postprocess.filter_compact_objects.enabled"))
+
+
+def _vectorize_options_yaml(config: dict[str, object] | None) -> str:
+    if not _uses_boundary_protection(config):
+        return ""
+    return (
+        "      mark_boundary_objects: true\n"
+        "      boundary_tolerance_pixels: 1.0\n"
+        f"      boundary_tag: {_BOUNDARY_TAG}\n"
+    )
 
 
 def _mask_postprocess_yaml(
@@ -1065,14 +1103,25 @@ def _vector_postprocess_yaml(
 ) -> str:
     values = dict(config or {})
     nested: list[str] = []
+    protect_boundary = _uses_boundary_protection(values)
+    smooth_enabled = bool(values.get("postprocess.smooth.enabled"))
+    preserve_legacy_order = not protect_boundary and not smooth_enabled
     simplify = _positive_number(values, "postprocess.simplify_m")
-    if simplify is not None:
+    if preserve_legacy_order and simplify is not None:
         nested.append(f"        - _class: Simplify\n          rate: {simplify}")
     min_area = _positive_number(values, "postprocess.min_area_m2")
     if min_area is not None:
-        nested.append(
-            f"        - _class: FilterSmallObjects\n          min_area: {min_area}\n          area_tag: area"
+        small_object_yaml = (
+            "        - _class: FilterSmallObjects\n"
+            f"          min_area: {min_area}\n"
+            "          area_tag: area"
         )
+        if protect_boundary:
+            small_object_yaml += (
+                "\n          preserve_boundary_objects: true\n"
+                f"          boundary_tag: {_BOUNDARY_TAG}"
+            )
+        nested.append(small_object_yaml)
     min_hole_area = _positive_number(values, "postprocess.min_hole_area_m2")
     if min_hole_area is not None:
         nested.append(
@@ -1087,7 +1136,28 @@ def _vector_postprocess_yaml(
         nested.append(
             "        - _class: FilterCompactObjects\n"
             f"          min_isoperimetric_quotient: {quotient}\n"
-            f"          max_bbox_ratio: {ratio}"
+            f"          max_bbox_ratio: {ratio}\n"
+            "          preserve_boundary_objects: true\n"
+            f"          boundary_tag: {_BOUNDARY_TAG}"
+        )
+    if smooth_enabled:
+        iterations = int(values.get("postprocess.smooth.iterations") or 1)
+        offset = float(values.get("postprocess.smooth.offset") or 0.125)
+        if not 1 <= iterations <= 5:
+            raise TrainingUIAPIError("Число итераций Smooth должно быть от 1 до 5.")
+        if not 0 < offset <= 0.5:
+            raise TrainingUIAPIError("Параметр Smooth offset должен быть больше 0 и не больше 0.5.")
+        nested.append(
+            "        - _class: Smooth\n"
+            f"          iterations: {iterations}\n"
+            f"          offset: {offset}"
+        )
+    if not preserve_legacy_order and simplify is not None:
+        nested.append(f"        - _class: Simplify\n          rate: {simplify}")
+    if protect_boundary:
+        nested.append(
+            "        - _class: RemoveTags\n"
+            f"          tags: [{_BOUNDARY_TAG}]"
         )
     if not nested:
         return ""

@@ -257,6 +257,28 @@ INFERENCE_CONFIG_SCHEMA: dict[str, Any] = {
             "min_value": 0,
         },
         {
+            "key": "postprocess.smooth.enabled",
+            "label": "Сглаживать контур",
+            "value_type": "boolean",
+            "tooltip": "Включает мягкое сглаживание полигонов после фильтрации.",
+        },
+        {
+            "key": "postprocess.smooth.iterations",
+            "label": "Итерации сглаживания",
+            "value_type": "integer",
+            "tooltip": "Число проходов углового сглаживания Smooth.",
+            "min_value": 1,
+            "max_value": 5,
+        },
+        {
+            "key": "postprocess.smooth.offset",
+            "label": "Сила сглаживания",
+            "value_type": "number",
+            "tooltip": "Доля ребра, срезаемая Smooth на каждом проходе.",
+            "min_value": 0,
+            "max_value": 0.5,
+        },
+        {
             "key": "postprocess.simplify_m",
             "label": "Упрощение контура, м",
             "value_type": "number-null",
@@ -293,6 +315,9 @@ INFERENCE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "postprocess.binary_closing_radius": None,
     "postprocess.min_area_m2": None,
     "postprocess.min_hole_area_m2": None,
+    "postprocess.smooth.enabled": False,
+    "postprocess.smooth.iterations": 1,
+    "postprocess.smooth.offset": 0.125,
     "postprocess.simplify_m": None,
     "postprocess.filter_compact_objects.enabled": False,
     "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
@@ -302,7 +327,10 @@ INFERENCE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
 RIVERS_INFERENCE_CONFIG: dict[str, Any] = {
     "postprocess.min_area_m2": 10000.0,
     "postprocess.min_hole_area_m2": 5000.0,
-    "postprocess.simplify_m": 15.0,
+    "postprocess.smooth.enabled": True,
+    "postprocess.smooth.iterations": 1,
+    "postprocess.smooth.offset": 0.125,
+    "postprocess.simplify_m": 1.0,
     "postprocess.filter_compact_objects.enabled": True,
     "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
     "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
@@ -423,6 +451,18 @@ _INFERENCE_FIELD_HELP: dict[str, tuple[str, str]] = {
     "postprocess.min_hole_area_m2": (
         "Минимальная площадь дырки, которую оставляем в полигоне. Меньшие дырки удаляются из геометрии.",
         "Пусто для авто-профиля; 100..10000 м². Повышать для цельных объектов, снижать если внутренние пустоты важны.",
+    ),
+    "postprocess.smooth.enabled": (
+        "Включает мягкое угловое сглаживание полигонов после фильтров формы и площади.",
+        "Обычно выключено; включать для классов с заметно ступенчатыми контурами, например рек.",
+    ),
+    "postprocess.smooth.iterations": (
+        "Число проходов Smooth. Каждый проход увеличивает число вершин до последующего Simplify.",
+        "1 для мягкого сглаживания; увеличивать только после проверки геометрии и размера GeoJSON.",
+    ),
+    "postprocess.smooth.offset": (
+        "Доля соседнего ребра, используемая для срезания каждого угла.",
+        "0.125 для мягкого сглаживания; допустимый диапазон больше 0 и не более 0.5.",
     ),
     "postprocess.simplify_m": (
         "Упрощение контура в метрах. Снижает число вершин и делает GeoJSON легче, но может съесть тонкие детали.",

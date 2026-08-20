@@ -11,6 +11,7 @@ import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
+from shapely.ops import transform as shapely_transform
 
 from mlsystem2.training_ui_api import _pseudo_runner
 from mlsystem2.training_ui_api._external_models import ExternalTestPrediction
@@ -19,12 +20,13 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     _completed_image_count,
     _final_status,
     _features_from_mask,
-    _filter_compact_features,
     _geometry_postprocessor,
+    _geometry_to_metric,
     _infer_test_tile_mask,
     _merge_overlapping_features,
     _multiclass_pixel_counts,
     _postprocess_mask,
+    _postprocess_geometry,
     _postprocess_profile_from_config,
     _resolve_feature_type_conflicts,
     _resolve_scene_inputs,
@@ -481,7 +483,10 @@ def test_postprocess_profile_accepts_template_overrides() -> None:
         {
             "postprocess.min_area_m2": 10000.0,
             "postprocess.min_hole_area_m2": 5000.0,
-            "postprocess.simplify_m": 15.0,
+            "postprocess.smooth.enabled": True,
+            "postprocess.smooth.iterations": 1,
+            "postprocess.smooth.offset": 0.125,
+            "postprocess.simplify_m": 1.0,
             "postprocess.filter_compact_objects.enabled": True,
             "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
             "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
@@ -491,7 +496,9 @@ def test_postprocess_profile_accepts_template_overrides() -> None:
     assert profile.name == "strong"
     assert profile.min_area_m2 == 10000.0
     assert profile.min_hole_area_m2 == 5000.0
-    assert profile.simplify_m == 15.0
+    assert profile.smooth_iterations == 1
+    assert profile.smooth_offset == 0.125
+    assert profile.simplify_m == 1.0
     assert profile.filter_compact_min_isoperimetric_quotient == 0.25
     assert profile.filter_compact_max_bbox_ratio == 3.5
 
@@ -666,7 +673,7 @@ def test_detail_v2_filters_small_polygons_and_holes_in_metric_crs() -> None:
     mask = np.zeros((120, 120), dtype=np.uint8)
     mask[10:100, 10:100] = 1
     mask[40:60, 40:60] = 0
-    mask[0:10, 0:10] = 1
+    mask[2:10, 2:10] = 1
 
     processed_mask = _postprocess_mask(mask, profile)
     features = _features_from_mask(
@@ -801,23 +808,69 @@ def test_multiclass_conflict_resolution_does_not_union_disjoint_history(
     assert calls == 0
 
 
-def test_filter_compact_features_removes_lake_like_objects() -> None:
-    profile = _postprocess_profile_from_config(
-        _select_postprocess_profile(51),
-        {
-            "postprocess.filter_compact_objects.enabled": True,
-            "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
-            "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
-        },
+def test_geometry_postprocess_removes_compact_objects_regardless_of_area() -> None:
+    profile = replace(
+        _postprocess_profile_from_config(
+            _select_postprocess_profile(51),
+            {
+                "postprocess.filter_compact_objects.enabled": True,
+                "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+                "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+            },
+        ),
+        mask_min_object_pixels=None,
+        mask_min_hole_pixels=None,
+        min_area_m2=None,
+        min_hole_area_m2=None,
+        simplify_m=None,
     )
-    features = [
-        _geojson_feature(box(30.00, 50.00, 30.01, 50.01), "lake"),
-        _geojson_feature(box(30.00, 50.02, 30.12, 50.025), "river"),
-    ]
+    small_square = _postprocess_geometry(box(0, 0, 10, 10), "EPSG:32637", profile)
+    large_square = _postprocess_geometry(box(0, 0, 1000, 1000), "EPSG:32637", profile)
+    elongated = _postprocess_geometry(box(0, 0, 100, 10), "EPSG:32637", profile)
 
-    filtered = _filter_compact_features(features, profile)
+    assert small_square.is_empty
+    assert large_square.is_empty
+    assert not elongated.is_empty
 
-    assert [item["properties"]["scene_id"] for item in filtered] == ["river"]
+
+def test_geometry_postprocess_smooths_before_simplifying() -> None:
+    profile = replace(
+        _select_postprocess_profile(1),
+        smooth_iterations=1,
+        smooth_offset=0.125,
+        simplify_m=1.0,
+    )
+    polygon = shape(
+        {
+            "type": "Polygon",
+            "coordinates": [[
+                [0, 0],
+                [0, 10],
+                [5, 10],
+                [5, 20],
+                [15, 20],
+                [15, 0],
+                [0, 0],
+            ]],
+        }
+    )
+
+    result = _postprocess_geometry(polygon, "EPSG:32637", profile)
+
+    assert result.is_valid
+    assert result != polygon
+    assert len(result.exterior.coords) <= len(polygon.exterior.coords) * 2
+
+
+def test_geometry_postprocess_reprojects_web_mercator_to_local_utm() -> None:
+    geometry = box(11546954, 6801527, 11552171, 6806744)
+
+    metric_geometry, to_source = _geometry_to_metric(geometry, "EPSG:3857")
+
+    assert to_source is not None
+    assert metric_geometry.bounds != geometry.bounds
+    restored = shapely_transform(to_source, metric_geometry)
+    assert restored.equals_exact(geometry, tolerance=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -880,6 +933,23 @@ def test_test_tile_keeps_small_prediction_touching_raster_boundary(
     assert np.array_equal(result, prediction)
 
 
+def test_test_tile_keeps_compact_prediction_within_one_pixel_of_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prediction = np.zeros((32, 32), dtype=np.uint8)
+    prediction[1:5, 10:14] = 1
+
+    result = _infer_fixed_test_prediction(
+        tmp_path,
+        monkeypatch,
+        prediction,
+        _compact_filter_profile(),
+    )
+
+    assert np.array_equal(result, prediction)
+
+
 def _compact_filter_profile():
     return replace(
         _postprocess_profile_from_config(
@@ -890,6 +960,8 @@ def _compact_filter_profile():
                 "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
             },
         ),
+        mask_min_object_pixels=None,
+        mask_min_hole_pixels=None,
         min_area_m2=1.0,
         min_hole_area_m2=None,
         simplify_m=None,
