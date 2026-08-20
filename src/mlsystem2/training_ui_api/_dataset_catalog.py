@@ -1807,6 +1807,10 @@ def _canonical_class_schema(
 _CLASS_SCHEMA_FIELDS = frozenset({"class_schema", "object_types"})
 
 
+def _is_class_schema_field(key: object) -> bool:
+    return str(key).rsplit(".", maxsplit=1)[-1] in _CLASS_SCHEMA_FIELDS
+
+
 def _nested_class_schema_mapping(
     value: object,
     canonical_schema: list[dict[str, object]],
@@ -1814,7 +1818,7 @@ def _nested_class_schema_mapping(
     mapping: dict[str, str] = {}
     if isinstance(value, dict):
         for key, item in value.items():
-            if key in _CLASS_SCHEMA_FIELDS and isinstance(item, list):
+            if _is_class_schema_field(key) and isinstance(item, list):
                 _schema, item_mapping = _canonical_class_schema(item, canonical_schema)
                 mapping.update(item_mapping)
             else:
@@ -1832,7 +1836,7 @@ def _canonicalize_nested_class_schemas(
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if key in _CLASS_SCHEMA_FIELDS and isinstance(item, list):
+            if _is_class_schema_field(key) and isinstance(item, list):
                 result[key], _mapping = _canonical_class_schema(item, canonical_schema)
             else:
                 result[key] = _canonicalize_nested_class_schemas(item, canonical_schema)

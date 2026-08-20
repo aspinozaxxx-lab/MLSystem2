@@ -423,6 +423,9 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
             model_name="combined",
             architecture="segformer_b2",
             config={
+                "dataset.object_types": [
+                    item.model_dump(mode="json") for item in managed.object_types
+                ],
                 "dataset": {
                     "object_types": [
                         item.model_dump(mode="json") for item in managed.object_types
@@ -463,6 +466,7 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         assert training.class_schema[0]["slug"] == "first_objects"
         assert training.training_metrics["val_per_class_metrics"][0]["slug"] == "first_objects"
         assert historical_job.config["dataset"]["object_types"][0]["slug"] == "first_objects"
+        assert historical_job.config["dataset.object_types"][0]["slug"] == "first_objects"
         assert (
             historical_job.config["editor_pseudo"]["object_types"][0]["slug"]
             == "first_objects"
