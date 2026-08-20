@@ -48,7 +48,7 @@ from ._dataset_catalog import (
     list_managed_classes,
     list_managed_datasets,
     managed_dataset_catalog,
-    primary_training_result,
+    primary_training_result as primary_training_result,
     set_primary_dataset as _set_primary_dataset,
     synchronize_dataset_catalog,
     update_dataset_class as _update_dataset_class,
@@ -292,23 +292,25 @@ def result_classes(
     catalog = list_managed_classes(session, config)
     output: list[ResultClassInfo] = []
     for class_info in catalog:
-        primary_model = primary_training_result(session, class_info.key)
-        test_f1 = None
-        test_f1_metrics: dict[str, Any] = {}
-        test_f1_status = None
-        test_f1_training_result_id = None
-        if (
-            primary_model is not None
-            and primary_test_sample(session, class_info.key) is not None
-        ):
-            info = training_result_test_f1_info(session, primary_model, config)
-            if info is not None and info.f1 is not None:
-                test_f1 = info.f1
-                test_f1_metrics = dict(info.metrics or {})
-                test_f1_status = "current" if info.status == "current" else "stale"
-                test_f1_training_result_id = primary_model.id
+        selected_results = _result_card_training_results(
+            session,
+            class_info.key,
+            [dataset.key for dataset in class_info.datasets],
+        )
         result_datasets: list[ResultDatasetInfo] = []
         for dataset in class_info.datasets:
+            test_f1 = None
+            test_f1_metrics: dict[str, Any] = {}
+            test_f1_status = None
+            test_f1_training_result_id = None
+            selected_result = selected_results.get(dataset.key)
+            if selected_result is not None:
+                info = training_result_test_f1_info(session, selected_result, config)
+                if info is not None and info.f1 is not None:
+                    test_f1 = info.f1
+                    test_f1_metrics = dict(info.metrics or {})
+                    test_f1_status = "current" if info.status == "current" else "stale"
+                    test_f1_training_result_id = selected_result.id
             result_datasets.append(
                 ResultDatasetInfo(
                     key=dataset.key,
@@ -336,6 +338,61 @@ def result_classes(
             )
         )
     return ResultClassListResponse(classes=output)
+
+
+def _result_card_training_results(
+    session: Session,
+    class_key: str,
+    dataset_keys: list[str],
+) -> dict[str, TrainingResultRow]:
+    """Выбрать основную либо последнюю успешную сеть отдельно для каждого датасета."""
+
+    ordered_dataset_keys = list(dict.fromkeys(dataset_keys))
+    if not ordered_dataset_keys:
+        return {}
+    active_dataset_keys = set(ordered_dataset_keys)
+    rows = session.scalars(
+        select(TrainingResultRow)
+        .where(
+            (
+                TrainingResultRow.dataset_key.in_(ordered_dataset_keys)
+                | TrainingResultRow.class_key.in_(ordered_dataset_keys)
+            ),
+            TrainingResultRow.status == ResultStatus.OK.value,
+        )
+        .order_by(
+            TrainingResultRow.trained_at.desc().nullslast(),
+            TrainingResultRow.created_at.desc(),
+            TrainingResultRow.id.desc(),
+        )
+    ).all()
+    selected: dict[str, TrainingResultRow] = {}
+    for row in rows:
+        dataset_key = _training_result_dataset_key(row, active_dataset_keys)
+        if dataset_key is not None:
+            selected.setdefault(dataset_key, row)
+
+    class_row = dataset_class_row(session, class_key)
+    if class_row is None or class_row.primary_training_result_id is None:
+        return selected
+    primary = session.get(TrainingResultRow, class_row.primary_training_result_id)
+    if primary is None or primary.status != ResultStatus.OK.value:
+        return selected
+    primary_dataset_key = _training_result_dataset_key(primary, active_dataset_keys)
+    if primary_dataset_key is not None:
+        selected[primary_dataset_key] = primary
+    return selected
+
+
+def _training_result_dataset_key(
+    row: TrainingResultRow,
+    active_dataset_keys: set[str],
+) -> str | None:
+    if row.dataset_key in active_dataset_keys:
+        return row.dataset_key
+    if row.class_key in active_dataset_keys:
+        return row.class_key
+    return None
 
 
 def image_folders(config: TrainingUIAPIConfig) -> ImageFolderListResponse:

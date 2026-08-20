@@ -507,18 +507,18 @@ def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
         assert river.baseline_default_config["postprocess.simplify_m"] == 1.0
 
 
-def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkeypatch) -> None:
-    result_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    effective_result = TrainingResultRow(
-        id=result_id,
-        source="manual",
-        dataset_key="forest-main-new",
-        class_key="forest-main-new",
-        class_display_name="Лес\\main_new",
-        architecture="smp_segformer_b2",
-        model_name="последняя сеть",
-        status="ok",
-    )
+def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    primary_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    latest_main_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    latest_test_id = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    failed_id = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
     datasets = [
         SimpleNamespace(
             key="forest-main",
@@ -531,14 +531,24 @@ def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkey
             image_count=12,
         ),
         SimpleNamespace(
-            key="forest-main-new",
-            name="main_new",
-            dataset_name="Лес\\main_new",
+            key="forest-test",
+            name="test",
+            dataset_name="Лес\\test",
             class_key="forest",
             class_name="Лес",
             quality_metric="pixel",
             is_primary=False,
             image_count=8,
+        ),
+        SimpleNamespace(
+            key="forest-empty",
+            name="empty",
+            dataset_name="Лес\\empty",
+            class_key="forest",
+            class_name="Лес",
+            quality_metric="pixel",
+            is_primary=False,
+            image_count=3,
         ),
     ]
     class_info = SimpleNamespace(
@@ -549,43 +559,135 @@ def test_result_classes_show_effective_network_f1_for_every_class_dataset(monkey
         is_custom=False,
         quality_metric="pixel",
     )
+    metrics = {
+        primary_id: (
+            0.61,
+            "current",
+            {"pixel": {"per_class": {"forest": {"f1": 0.61}, "scrub": {"f1": 0.42}}}},
+        ),
+        latest_main_id: (
+            0.72,
+            "current",
+            {"pixel": {"per_class": {"forest": {"f1": 0.72}, "scrub": {"f1": 0.55}}}},
+        ),
+        latest_test_id: (
+            0.83,
+            "stale",
+            {"pixel": {"per_class": {"forest": {"f1": 0.83}, "scrub": {"f1": 0.74}}}},
+        ),
+    }
     metric_calls: list[UUID] = []
 
     monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: [class_info])
-    monkeypatch.setattr(
-        _service,
-        "primary_training_result",
-        lambda *_args: effective_result,
-    )
-    monkeypatch.setattr(_service, "primary_test_sample", lambda *_args: object())
 
-    def metric_info(*_args):
-        metric_calls.append(result_id)
-        return SimpleNamespace(
-            f1=0.81,
-            status="current",
-            metrics={"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
-        )
+    def metric_info(_session, result, _config):
+        metric_calls.append(result.id)
+        f1, status, per_class = metrics[result.id]
+        return SimpleNamespace(f1=f1, status=status, metrics=per_class)
 
     monkeypatch.setattr(_service, "training_result_test_f1_info", metric_info)
 
-    response = _service.result_classes(SimpleNamespace(), SimpleNamespace())
+    with session_factory() as session:
+        class_row = DatasetClassRow(key="forest", name="Лес", technical_name="forest")
+        session.add(class_row)
+        session.flush()
+        session.add_all(
+            [
+                DatasetRow(
+                    key=dataset.key,
+                    class_id=class_row.id,
+                    name=dataset.name,
+                    source_path=f"Лес/{dataset.name}",
+                )
+                for dataset in datasets
+            ]
+        )
+        results = [
+            TrainingResultRow(
+                id=primary_id,
+                source="manual",
+                dataset_key="forest-main",
+                class_key="forest-main",
+                class_display_name="Лес\\main",
+                architecture="smp_segformer_b2",
+                model_name="основная сеть main",
+                trained_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                status="ok",
+            ),
+            TrainingResultRow(
+                id=latest_main_id,
+                source="manual",
+                dataset_key="forest-main",
+                class_key="forest-main",
+                class_display_name="Лес\\main",
+                architecture="smp_segformer_b2",
+                model_name="последняя сеть main",
+                trained_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+                created_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+                status="ok",
+            ),
+            TrainingResultRow(
+                id=latest_test_id,
+                source="manual",
+                dataset_key="forest-test-legacy",
+                class_key="forest-test",
+                class_display_name="Лес\\test",
+                architecture="smp_segformer_b2",
+                model_name="последняя сеть test",
+                trained_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+                created_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+                status="ok",
+            ),
+            TrainingResultRow(
+                id=failed_id,
+                source="manual",
+                dataset_key="forest-main",
+                class_key="forest-main",
+                class_display_name="Лес\\main",
+                architecture="smp_segformer_b2",
+                model_name="неуспешная сеть main",
+                trained_at=datetime(2026, 8, 4, tzinfo=timezone.utc),
+                created_at=datetime(2026, 8, 4, tzinfo=timezone.utc),
+                status="error",
+            ),
+        ]
+        session.add_all(results)
+        session.flush()
+        class_row.primary_training_result_id = primary_id
+        session.flush()
 
-    assert metric_calls == [result_id]
-    assert [item.is_primary for item in response.classes[0].datasets] == [True, False]
-    assert [item.test_f1 for item in response.classes[0].datasets] == [0.81, 0.81]
-    assert [item.test_f1_status for item in response.classes[0].datasets] == [
-        "current",
-        "current",
-    ]
-    assert [item.test_f1_metrics for item in response.classes[0].datasets] == [
-        {"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
-        {"pixel": {"per_class": {"forest": {"f1": 0.81}}}},
-    ]
-    assert [item.test_f1_training_result_id for item in response.classes[0].datasets] == [
-        result_id,
-        result_id,
-    ]
+        response = _service.result_classes(session, config)
+        cards = response.classes[0].datasets
+
+        assert metric_calls == [primary_id, latest_test_id]
+        assert [item.is_primary for item in cards] == [True, False, False]
+        assert [item.test_f1 for item in cards] == [0.61, 0.83, None]
+        assert [item.test_f1_status for item in cards] == ["current", "stale", None]
+        assert [item.test_f1_metrics for item in cards] == [
+            {"pixel": {"per_class": {"forest": {"f1": 0.61}, "scrub": {"f1": 0.42}}}},
+            {"pixel": {"per_class": {"forest": {"f1": 0.83}, "scrub": {"f1": 0.74}}}},
+            {},
+        ]
+        assert [item.test_f1_training_result_id for item in cards] == [
+            primary_id,
+            latest_test_id,
+            None,
+        ]
+
+        class_row.primary_training_result_id = None
+        session.flush()
+        metric_calls.clear()
+
+        fallback = _service.result_classes(session, config).classes[0].datasets
+
+        assert metric_calls == [latest_main_id, latest_test_id]
+        assert [item.test_f1 for item in fallback] == [0.72, 0.83, None]
+        assert [item.test_f1_training_result_id for item in fallback] == [
+            latest_main_id,
+            latest_test_id,
+            None,
+        ]
 
 
 def test_successful_training_does_not_assign_primary_star(

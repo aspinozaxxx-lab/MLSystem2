@@ -3972,7 +3972,7 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
                   <>
                     <strong
                       className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
-                      title="F1 эффективной сети класса"
+                      title="F1 основной или последней успешной сети этого датасета"
                     >
                       {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
                     </strong>
