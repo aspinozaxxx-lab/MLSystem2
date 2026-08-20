@@ -1717,15 +1717,10 @@ def _canonicalize_managed_dataset_history(
         select(JobRow).where(JobRow.dataset_key == dataset.key)
     ).all():
         state = dict(job.config or {})
-        old_schema = state.get("class_schema") or state.get("object_types") or []
-        schema, schema_mapping = _canonical_class_schema(old_schema, canonical_schema)
+        schema_mapping = _nested_class_schema_mapping(state, canonical_schema)
         mapping = {**schema_mapping, **identifier_mapping}
         state = _remap_identifiers(state, mapping)
-        if "class_schema" in state:
-            state["class_schema"] = schema
-        if "object_types" in state:
-            state["object_types"] = schema
-        job.config = state
+        job.config = _canonicalize_nested_class_schemas(state, canonical_schema)
 
     samples = session.scalars(
         select(TestSampleRow)
@@ -1807,6 +1802,44 @@ def _canonical_class_schema(
         old.update(canonical)
         result.append(old)
     return result, mapping
+
+
+_CLASS_SCHEMA_FIELDS = frozenset({"class_schema", "object_types"})
+
+
+def _nested_class_schema_mapping(
+    value: object,
+    canonical_schema: list[dict[str, object]],
+) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _CLASS_SCHEMA_FIELDS and isinstance(item, list):
+                _schema, item_mapping = _canonical_class_schema(item, canonical_schema)
+                mapping.update(item_mapping)
+            else:
+                mapping.update(_nested_class_schema_mapping(item, canonical_schema))
+    elif isinstance(value, list):
+        for item in value:
+            mapping.update(_nested_class_schema_mapping(item, canonical_schema))
+    return mapping
+
+
+def _canonicalize_nested_class_schemas(
+    value,
+    canonical_schema: list[dict[str, object]],
+):
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if key in _CLASS_SCHEMA_FIELDS and isinstance(item, list):
+                result[key], _mapping = _canonical_class_schema(item, canonical_schema)
+            else:
+                result[key] = _canonicalize_nested_class_schemas(item, canonical_schema)
+        return result
+    if isinstance(value, list):
+        return [_canonicalize_nested_class_schemas(item, canonical_schema) for item in value]
+    return value
 
 
 def _remap_identifiers(value, mapping: dict[str, str]):

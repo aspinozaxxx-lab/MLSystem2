@@ -29,6 +29,7 @@ from mlsystem2.training_ui_api._models import (
     DatasetClassRow,
     DatasetEditorDraftRow,
     DatasetRow,
+    JobRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
@@ -412,6 +413,29 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         )
         session.add_all([stored, training])
         session.flush()
+        historical_job = JobRow(
+            type="training",
+            source="manual",
+            status="completed",
+            queue_position=1,
+            dataset_key=managed.key,
+            dataset_name=managed.name,
+            model_name="combined",
+            architecture="segformer_b2",
+            config={
+                "dataset": {
+                    "object_types": [
+                        item.model_dump(mode="json") for item in managed.object_types
+                    ]
+                },
+                "editor_pseudo": {
+                    "object_types": [
+                        item.model_dump(mode="json") for item in managed.object_types
+                    ]
+                },
+            },
+        )
+        session.add(historical_job)
         session.add(
             PseudoMarkupResultRow(
                 dataset_key=managed.key,
@@ -438,6 +462,11 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         assert refreshed_managed.object_types[0].slug == "first_objects"
         assert training.class_schema[0]["slug"] == "first_objects"
         assert training.training_metrics["val_per_class_metrics"][0]["slug"] == "first_objects"
+        assert historical_job.config["dataset"]["object_types"][0]["slug"] == "first_objects"
+        assert (
+            historical_job.config["editor_pseudo"]["object_types"][0]["slug"]
+            == "first_objects"
+        )
         migrated_pseudo = json.loads(pseudo_path.read_text(encoding="utf-8"))
         assert migrated_pseudo["features"][0]["properties"] == {
             "_mlsystem2_class": "first_objects",
