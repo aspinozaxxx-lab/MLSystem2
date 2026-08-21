@@ -16,6 +16,7 @@ import {
   featureCounts,
   geometryInsideFootprint,
   isCurrentDatasetScene,
+  isDeleteShortcut,
   isUndoShortcut,
   preventMapMiddleButtonDefault,
   publishScenes,
@@ -144,6 +145,10 @@ describe("черновики редактора датасетов", () => {
   });
 
   it("удаляет клавишей Del сначала вершины, а без них — выделенный полигон", () => {
+    expect(isDeleteShortcut({ code: "Delete", key: "Delete" })).toBe(true);
+    expect(isDeleteShortcut({ code: "", key: "Del" })).toBe(true);
+    expect(isDeleteShortcut({ code: "Backspace", key: "Backspace" })).toBe(true);
+    expect(isDeleteShortcut({ code: "KeyD", key: "d" })).toBe(false);
     expect(selectedDeleteAction(2, 1)).toBe("vertices");
     expect(selectedDeleteAction(0, 1)).toBe("features");
     expect(selectedDeleteAction(0, 0)).toBeNull();

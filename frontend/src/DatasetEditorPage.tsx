@@ -55,6 +55,7 @@ import {
   featureCounts,
   geometryInsideFootprint,
   isCurrentDatasetScene,
+  isDeleteShortcut,
   isUndoShortcut,
   preventMapMiddleButtonDefault,
   RASTER_CONTRAST,
@@ -1525,7 +1526,7 @@ export function DatasetEditorPage({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInput(event.target)) return;
-      if (event.key === "Delete" || event.key === "Backspace") {
+      if (isDeleteShortcut(event)) {
         if (editMode === "pseudo" && (pseudoSelectRef.current?.getFeatures().getLength() || 0) > 0) {
           event.preventDefault();
           clearPseudoSelection();
@@ -1546,8 +1547,8 @@ export function DatasetEditorPage({
         undoCurrent();
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [clearPseudoSelection, deleteSelected, deleteSelectedVertices, editMode, undoCurrent]);
 
   useEffect(() => {
@@ -2073,7 +2074,14 @@ export function DatasetEditorPage({
                   </div>
                 ) : null}
                 <div className="dataset-editor-map-shell">
-                  <div className="dataset-editor-map" ref={mapTargetRef} />
+                  <div
+                    className="dataset-editor-map"
+                    ref={mapTargetRef}
+                    role="application"
+                    aria-label="Карта редактора датасета"
+                    tabIndex={0}
+                    onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
+                  />
                   <div className="dataset-editor-map-controls">
                     <button
                       className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}

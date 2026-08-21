@@ -1771,6 +1771,11 @@
   background: #111827;
 }
 
+.dataset-editor-map:focus-visible {
+  outline: 2px solid var(--grovika-cyan-text);
+  outline-offset: 2px;
+}
+
 .dataset-editor-map canvas.dataset-editor-raster-layer {
   image-rendering: pixelated;
 }

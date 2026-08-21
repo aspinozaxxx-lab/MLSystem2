@@ -39,6 +39,15 @@ export function isUndoShortcut(
   return event.code === "KeyZ" || key === "z" || key === "я";
 }
 
+export function isDeleteShortcut(
+  event: Pick<KeyboardEvent, "code" | "key">,
+): boolean {
+  return event.code === "Delete"
+    || event.key === "Delete"
+    || event.key === "Del"
+    || event.key === "Backspace";
+}
+
 export function selectedDeleteAction(
   selectedVertexCount: number,
   selectedFeatureCount: number,
