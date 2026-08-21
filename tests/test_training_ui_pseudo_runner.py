@@ -1215,6 +1215,108 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert fake_torch.cuda.empty_cache_calls == 1
 
 
+def test_managed_test_sample_f1_uses_each_class_sample_and_macro_average(
+    tmp_path: Path,
+) -> None:
+    masks = [
+        np.asarray(
+            [
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+            ],
+            dtype=np.uint8,
+        ),
+        np.asarray(
+            [
+                [1, 0, 0, 0],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+            ],
+            dtype=np.uint8,
+        ),
+    ]
+    predictions = [
+        np.asarray(
+            [
+                [1, 1, 1, 1],
+                [0, 0, 0, 0],
+                [2, 2, 2, 2],
+                [0, 0, 0, 0],
+            ],
+            dtype=np.uint8,
+        ),
+        np.asarray(
+            [
+                [2, 2, 2, 2],
+                [1, 1, 1, 1],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+            ],
+            dtype=np.uint8,
+        ),
+    ]
+    tiles = []
+    for index, (mask, prediction) in enumerate(zip(masks, predictions, strict=True), start=1):
+        mask_path = tmp_path / f"managed_{index}_mask.png"
+        prediction_path = tmp_path / f"managed_{index}_prediction.npy"
+        with rasterio.open(
+            mask_path,
+            "w",
+            driver="PNG",
+            width=4,
+            height=4,
+            count=1,
+            dtype="uint8",
+        ) as dataset:
+            dataset.write(mask * 255, 1)
+        np.save(prediction_path, prediction)
+        tiles.append(
+            {
+                "index": index,
+                "image_path": str(tmp_path / f"managed_{index}.tif"),
+                "mask_path": str(mask_path),
+                "precomputed_prediction_path": str(prediction_path),
+                "target_class_id": index,
+                "target_class_slug": f"class_{index}",
+                "test_sample_id": f"sample-{index}",
+                "source_tile_index": 1,
+            }
+        )
+
+    report = run_test_sample_f1(
+        {
+            "operation": "test_sample_f1",
+            "run_root": str(tmp_path / "managed-run"),
+            "task": "multiclass",
+            "object_types": [
+                {"id": 1, "slug": "class_1", "name": "Первый", "color": "#112233"},
+                {"id": 2, "slug": "class_2", "name": "Второй", "color": "#445566"},
+            ],
+            "managed_test_samples": True,
+            "test_samples": [{"sample_id": "sample-1"}, {"sample_id": "sample-2"}],
+            "tiles": tiles,
+        }
+    )
+
+    assert report["status"] == "ok"
+    assert report["true_positive"] == 5
+    assert report["false_positive"] == 3
+    assert report["false_negative"] == 4
+    pixel = report["metrics"]["pixel"]
+    assert pixel["per_class"]["class_1"]["f1"] == pytest.approx(2 / 3)
+    assert pixel["per_class"]["class_2"]["f1"] == pytest.approx(0.4)
+    assert pixel["macro"]["f1"] == pytest.approx((2 / 3 + 0.4) / 2)
+    assert report["metrics"]["objects"]["macro"]["f1"] == pytest.approx(0.5)
+    assert report["metrics"]["aggregation"] == "macro"
+    assert report["metrics"]["test_samples"] == [
+        {"sample_id": "sample-1"},
+        {"sample_id": "sample-2"},
+    ]
+
+
 def test_test_sample_f1_passes_external_instance_ids(tmp_path, monkeypatch) -> None:
     checkpoint_path = tmp_path / "model.zip"
     checkpoint_path.write_bytes(b"archive")

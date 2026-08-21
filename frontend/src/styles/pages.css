@@ -141,6 +141,10 @@
   table-layout: fixed;
 }
 
+.training-summary-table {
+  min-width: 1060px;
+}
+
 .model-export-table {
   min-width: 1040px;
   table-layout: fixed;
@@ -180,27 +184,27 @@
 }
 
 .training-summary-table .result-col-model {
-  width: 18%;
+  width: 17%;
 }
 
 .training-summary-table .result-col-status {
-  width: 13%;
+  width: 12%;
 }
 
 .training-summary-table .result-col-score {
-  width: 8%;
-}
-
-.training-summary-table .result-col-epoch {
-  width: 7%;
-}
-
-.training-summary-table .result-col-created {
   width: 18%;
 }
 
+.training-summary-table .result-col-epoch {
+  width: 6%;
+}
+
+.training-summary-table .result-col-created {
+  width: 14%;
+}
+
 .training-summary-table .result-col-actions {
-  width: 28%;
+  width: 15%;
 }
 
 .pseudo-table .result-col-source {
@@ -294,9 +298,10 @@
 }
 
 .dataset-result-link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
   min-width: 0;
   min-height: 32px;
   padding: 4px 8px;
@@ -305,14 +310,32 @@
   flex: 1 1 auto;
 }
 
-.dataset-result-link span {
+.dataset-result-name {
   color: var(--text);
   font-weight: 600;
 }
 
-.dataset-result-link small {
+.dataset-result-identity {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dataset-result-identity small {
   color: var(--muted);
   white-space: nowrap;
+}
+
+.dataset-result-score {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 10px;
+  min-width: 0;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .dataset-editor-link {
@@ -336,7 +359,9 @@
 }
 
 .result-card-f1 {
-  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   font: 600 13px/20px var(--grovika-font-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -365,6 +390,29 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.result-test-sample-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.result-test-sample {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: var(--grovika-radius-control);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  font-size: 12px;
+}
+
+.result-test-sample small {
+  opacity: 0.78;
+  white-space: nowrap;
 }
 
 .status-banner.ok {
@@ -414,6 +462,25 @@
 .source-lines small {
   font-family: var(--grovika-font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+.result-score-summary {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.result-score-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.result-score-value > small {
+  color: var(--muted);
+  font-family: var(--grovika-font-mono);
+  white-space: nowrap;
 }
 
 .test-sample-catalog {
@@ -946,6 +1013,11 @@
   white-space: nowrap;
 }
 
+.result-card-f1 small {
+  color: inherit;
+  font: 600 11px/16px var(--grovika-font-sans);
+}
+
 .test-sample-tile-viewer-scale {
   min-width: 52px;
   color: var(--text);
@@ -1098,16 +1170,44 @@
 }
 
 .compact-class-f1-list {
-  display: grid;
-  gap: 2px;
-  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
 }
 
-.compact-class-f1-list small {
+.dataset-result-score .compact-class-f1-list {
+  justify-content: flex-end;
+}
+
+.compact-class-f1-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.compact-class-f1-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.compact-class-f1-chip strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-family: var(--grovika-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .class-editor-user-drafts {

@@ -1181,12 +1181,34 @@ def dataset_results(
         )
         for row in rows
     ]
+    primary_test_samples = next(
+        (
+            list(info.test_f1.samples)
+            for info in result_infos
+            if info.test_f1 is not None and info.test_f1.samples
+        ),
+        [],
+    )
+    if not primary_test_samples and primary is not None:
+        primary_test_samples = [
+            PrimaryTestSampleInfo(
+                id=primary.id,
+                name=primary.name,
+                content_revision=primary.content_revision,
+                enabled_image_count=sum(tile.enabled for tile in primary.tiles),
+                enabled_object_count=sum(
+                    tile.object_count for tile in primary.tiles if tile.enabled
+                ),
+                class_key=primary.class_key,
+                class_name=primary.class_name,
+            )
+        ]
     successful_test_statuses = [
         info.test_f1.status
         for row, info in zip(rows, result_infos, strict=True)
         if row.status == ResultStatus.OK.value and info.test_f1 is not None
     ]
-    if primary is None:
+    if not primary_test_samples:
         test_f1_status = "unavailable"
     elif successful_test_statuses and all(
         item == "current" for item in successful_test_statuses
@@ -1214,10 +1236,13 @@ def dataset_results(
                 enabled_object_count=sum(
                     tile.object_count for tile in primary.tiles if tile.enabled
                 ),
+                class_key=primary.class_key,
+                class_name=primary.class_name,
             )
             if primary is not None
             else None
         ),
+        primary_test_samples=primary_test_samples,
         test_f1_status=test_f1_status,
         results=result_infos,
     )

@@ -62,10 +62,12 @@ from ._markup_export import (
     generate_markup_files,
     generate_markup_pool_files,
 )
+from ._managed_datasets import SOURCE_MANAGED, managed_sources
 from ._models import (
     DatasetRow,
     InferenceTemplateRow,
     JobRow,
+    ManagedDatasetSourceRow,
     PseudoMarkupResultRow,
     TestSampleBatchItemRow,
     TestSampleBatchRow,
@@ -83,6 +85,7 @@ from .contracts import (
     JobStatus,
     JobType,
     MarkupExportRequest,
+    PrimaryTestSampleInfo,
     RuntimeProgress,
     TestSampleBatchCreate,
     TestSampleBatchInfo,
@@ -2730,14 +2733,51 @@ def _refresh_training_metrics_after_primary_change(
     session.flush()
     primary = _primary_sample(session, dataset_key)
     usable = primary is not None and any(tile.enabled for tile in primary.tiles)
+    dependent_managed_keys = _dependent_managed_dataset_keys(session, dataset_key)
     _mark_training_test_metrics_stale(
         session,
         dataset_key,
         reason,
         unavailable=not usable,
     )
+    for managed_key in dependent_managed_keys:
+        _mark_training_test_metrics_stale(
+            session,
+            managed_key,
+            reason,
+            unavailable=not usable,
+        )
     if config is not None and usable:
         queue_class_test_f1(session, dataset_key, config)
+        if dependent_managed_keys:
+            reconcile_training_result_test_f1(
+                session,
+                config,
+                dataset_keys=dependent_managed_keys,
+            )
+
+
+def _dependent_managed_dataset_keys(
+    session: Session,
+    class_or_dataset_key: str,
+) -> set[str]:
+    class_row = dataset_class_row(session, class_or_dataset_key)
+    if class_row is None:
+        return set()
+    source_dataset_ids = select(DatasetRow.id).where(
+        DatasetRow.class_id == class_row.id
+    )
+    managed_dataset_ids = select(ManagedDatasetSourceRow.managed_dataset_id).where(
+        ManagedDatasetSourceRow.source_dataset_id.in_(source_dataset_ids)
+    )
+    return set(
+        session.scalars(
+            select(DatasetRow.key).where(
+                DatasetRow.id.in_(managed_dataset_ids),
+                DatasetRow.deleted_at.is_(None),
+            )
+        ).all()
+    )
 
 
 def _mark_training_test_metrics_stale(
@@ -3008,6 +3048,166 @@ def _class_schema_channel_signature(
         return ()
 
 
+@dataclass(frozen=True, slots=True)
+class _TrainingResultTestTarget:
+    sample: TestSampleRow
+    class_id: int | None = None
+    class_slug: str | None = None
+    class_name: str | None = None
+    class_key: str | None = None
+    color: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingResultTestPlan:
+    managed: bool
+    targets: tuple[_TrainingResultTestTarget, ...]
+    error: str | None = None
+
+
+def _training_result_test_plan(
+    session: Session,
+    result: TrainingResultRow,
+) -> _TrainingResultTestPlan:
+    """Выбирает эталоны сети: один для binary либо по одному на класс managed."""
+
+    dataset = _training_result_dataset_row(session, result)
+    if dataset is None or dataset.source_type != SOURCE_MANAGED:
+        sample = _primary_sample(session, result.class_key)
+        if sample is None:
+            return _TrainingResultTestPlan(
+                managed=False,
+                targets=(),
+                error="Для датасета не назначена основная тестовая разметка.",
+            )
+        if not any(tile.enabled for tile in sample.tiles):
+            return _TrainingResultTestPlan(
+                managed=False,
+                targets=(_TrainingResultTestTarget(sample=sample),),
+                error="В основной тестовой разметке нет включённых тайлов.",
+            )
+        compatibility_error = test_sample_model_compatibility_error(
+            session,
+            sample,
+            result,
+        )
+        return _TrainingResultTestPlan(
+            managed=False,
+            targets=(_TrainingResultTestTarget(sample=sample),),
+            error=compatibility_error,
+        )
+
+    if result.task != "multiclass":
+        return _TrainingResultTestPlan(
+            managed=True,
+            targets=(),
+            error="Сеть управляемого датасета должна быть multiclass.",
+        )
+    sources = managed_sources(session, dataset.id)
+    schema_by_slug = {
+        str(item.get("slug")): item
+        for item in (result.class_schema or [])
+        if isinstance(item, dict) and item.get("slug") is not None
+    }
+    targets: list[_TrainingResultTestTarget] = []
+    errors: list[str] = []
+    source_slugs = {source.relation.object_type_slug for source in sources}
+    for source in sources:
+        slug = source.relation.object_type_slug
+        schema_item = schema_by_slug.get(slug)
+        if schema_item is None:
+            errors.append(
+                f"В схеме сети отсутствует тип {source.relation.object_type_name}."
+            )
+            continue
+        try:
+            class_id = int(schema_item["id"])
+        except (KeyError, TypeError, ValueError):
+            errors.append(
+                f"В схеме сети повреждён ID типа {source.relation.object_type_name}."
+            )
+            continue
+        if class_id != source.relation.object_type_id:
+            errors.append(
+                f"ID типа {source.relation.object_type_name} не совпадает с управляемым датасетом."
+            )
+            continue
+        sample = _primary_sample(session, source.dataset_class.key)
+        if sample is None:
+            errors.append(
+                f"Для класса «{source.dataset_class.name}» не назначена основная тестовая разметка."
+            )
+            continue
+        if sample.task != "binary":
+            errors.append(
+                f"Основная тестовая разметка класса «{source.dataset_class.name}» должна быть binary."
+            )
+            continue
+        if not any(tile.enabled for tile in sample.tiles):
+            errors.append(
+                f"В основной тестовой разметке класса «{source.dataset_class.name}» нет включённых тайлов."
+            )
+            continue
+        targets.append(
+            _TrainingResultTestTarget(
+                sample=sample,
+                class_id=class_id,
+                class_slug=slug,
+                class_name=source.relation.object_type_name,
+                class_key=source.dataset_class.key,
+                color=source.relation.color,
+            )
+        )
+    extra_slugs = sorted(set(schema_by_slug) - source_slugs)
+    if extra_slugs:
+        errors.append(
+            "В схеме сети есть типы, отсутствующие в управляемом датасете: "
+            + ", ".join(extra_slugs)
+            + "."
+        )
+    if len(sources) < 2:
+        errors.append("Управляемому датасету требуется минимум два исходных класса.")
+    return _TrainingResultTestPlan(
+        managed=True,
+        targets=tuple(sorted(targets, key=lambda item: int(item.class_id or 0))),
+        error=" ".join(errors) or None,
+    )
+
+
+def _training_result_dataset_row(
+    session: Session,
+    result: TrainingResultRow,
+) -> DatasetRow | None:
+    keys = [
+        key
+        for key in (result.dataset_key, result.class_key)
+        if isinstance(key, str) and key
+    ]
+    if not keys:
+        return None
+    rows = session.scalars(select(DatasetRow).where(DatasetRow.key.in_(keys))).all()
+    by_key = {row.key: row for row in rows}
+    return by_key.get(result.dataset_key or "") or by_key.get(result.class_key)
+
+
+def _training_result_test_scope(
+    plan: _TrainingResultTestPlan,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "sample_id": str(target.sample.id),
+            "sample_revision": target.sample.content_revision,
+            "tile_indices": sorted(
+                tile.tile_index for tile in target.sample.tiles if tile.enabled
+            ),
+            "class_id": target.class_id,
+            "class_slug": target.class_slug,
+            "class_key": target.class_key,
+        }
+        for target in plan.targets
+    ]
+
+
 def _saved_test_sample_evaluation_matches(
     sample: TestSampleRow,
     result: TrainingResultRow,
@@ -3104,11 +3304,6 @@ def queue_class_test_f1(
 ) -> int:
     """Ставит в общую inference-очередь недостающие оценки успешных сетей."""
 
-    sample = _primary_sample(session, dataset_key)
-    if sample is None:
-        raise TrainingUIAPIError("Для датасета не назначена основная тестовая разметка.")
-    if not any(tile.enabled for tile in sample.tiles):
-        raise TrainingUIAPIError("В основной тестовой разметке нет включённых тайлов.")
     class_keys = _class_scope_keys(session, dataset_key)
     results = session.scalars(
         select(TrainingResultRow)
@@ -3122,7 +3317,14 @@ def queue_class_test_f1(
         .order_by(TrainingResultRow.created_at.desc(), TrainingResultRow.id.desc())
     ).all()
     created = 0
+    first_error: str | None = None
+    usable_plan_found = False
     for result in results:
+        plan = _training_result_test_plan(session, result)
+        if plan.error is not None:
+            first_error = first_error or plan.error
+        else:
+            usable_plan_found = True
         if queue_training_result_test_f1(
             session,
             result,
@@ -3131,6 +3333,22 @@ def queue_class_test_f1(
         ):
             created += 1
     session.flush()
+    if results and not usable_plan_found:
+        raise TrainingUIAPIError(
+            first_error or "Для расчёта F1 нет основных тестовых разметок."
+        )
+    if not results:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset_key))
+        if dataset is None or dataset.source_type != SOURCE_MANAGED:
+            sample = _primary_sample(session, dataset_key)
+            if sample is None:
+                raise TrainingUIAPIError(
+                    "Для датасета не назначена основная тестовая разметка."
+                )
+            if not any(tile.enabled for tile in sample.tiles):
+                raise TrainingUIAPIError(
+                    "В основной тестовой разметке нет включённых тайлов."
+                )
     return created
 
 
@@ -3157,14 +3375,19 @@ def reconcile_training_result_test_f1(
     ).all()
     created = 0
     for result in results:
-        sample = _primary_sample(session, result.class_key)
-        if sample is None or not any(tile.enabled for tile in sample.tiles):
-            continue
+        plan = _training_result_test_plan(session, result)
         metric = session.get(TrainingResultTestMetricRow, result.id)
+        if plan.error is not None:
+            if metric is not None:
+                _cancel_test_metric_job(session, metric)
+                metric.status = "stale" if metric.f1 is not None else "unavailable"
+                metric.error = plan.error
+                metric.updated_at = _utc_now()
+            continue
         if not _test_metric_needs_reconciliation(
             session,
             result,
-            sample,
+            plan,
             metric,
             config,
         ):
@@ -3183,20 +3406,28 @@ def reconcile_training_result_test_f1(
 def _test_metric_needs_reconciliation(
     session: Session,
     result: TrainingResultRow,
-    sample: TestSampleRow,
+    plan: _TrainingResultTestPlan,
     metric: TrainingResultTestMetricRow | None,
     config: TrainingUIAPIConfig,
 ) -> bool:
     if metric is None:
         return True
-    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
+    postprocess_profile = _training_result_test_postprocess_profile_name(
+        session,
+        result,
+        plan,
+        config,
+    )
     template, _, config_hash = _effective_inference_template(
         session,
         result.architecture,
         result.class_key,
         postprocess_profile,
+        evaluation_scope=(
+            _training_result_test_scope(plan) if plan.managed else None
+        ),
     )
-    if not _metric_matches(metric, sample, template, config_hash):
+    if not _training_metric_matches(metric, plan, template, config_hash):
         return True
     if metric.status == "current" or _metric_job_is_active(session, metric):
         return False
@@ -3216,20 +3447,32 @@ def queue_training_result_test_f1(
 
     if result.status != "ok":
         return False
-    sample = _primary_sample(session, result.class_key)
-    if sample is None or not any(tile.enabled for tile in sample.tiles):
+    plan = _training_result_test_plan(session, result)
+    metric = session.get(TrainingResultTestMetricRow, result.id)
+    if plan.error is not None:
+        if metric is not None:
+            _cancel_test_metric_job(session, metric)
+            metric.status = "stale" if metric.f1 is not None else "unavailable"
+            metric.error = plan.error
+            metric.updated_at = _utc_now()
         return False
-    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
+    postprocess_profile = _training_result_test_postprocess_profile_name(
+        session,
+        result,
+        plan,
+        config,
+    )
+    evaluation_scope = _training_result_test_scope(plan)
     template, template_config, config_hash = _effective_inference_template(
         session,
         result.architecture,
         result.class_key,
         postprocess_profile,
+        evaluation_scope=evaluation_scope if plan.managed else None,
     )
-    metric = session.get(TrainingResultTestMetricRow, result.id)
-    if metric is not None and _metric_matches(
+    if metric is not None and _training_metric_matches(
         metric,
-        sample,
+        plan,
         template,
         config_hash,
     ):
@@ -3243,8 +3486,9 @@ def queue_training_result_test_f1(
             metric = TrainingResultTestMetricRow(training_result_id=result.id)
             session.add(metric)
         _cancel_test_metric_job(session, metric)
-        metric.sample_id = sample.id
-        metric.sample_revision = sample.content_revision
+        sample = plan.targets[0].sample if not plan.managed else None
+        metric.sample_id = sample.id if sample is not None else None
+        metric.sample_revision = sample.content_revision if sample is not None else None
         metric.status = "error"
         metric.job_id = None
         metric.inference_template_id = template.id if template is not None else None
@@ -3261,6 +3505,7 @@ def queue_training_result_test_f1(
     else:
         _cancel_test_metric_job(session, metric)
 
+    sample = plan.targets[0].sample
     job_source = source or JobSource(result.source)
     job = JobRow(
         type=JobType.INFERENCE.value,
@@ -3269,9 +3514,15 @@ def queue_training_result_test_f1(
         queue_position=next_queue_position(session, JobType.INFERENCE, job_source),
         dataset_key=result.class_key,
         dataset_version=result.dataset_version,
-        dataset_name=sample.dataset_name,
+        dataset_name=(
+            result.class_display_name if plan.managed else sample.dataset_name
+        ),
         training_dataset_name=result.class_display_name,
-        inference_dataset_name=sample.name,
+        inference_dataset_name=(
+            f"Основные тестовые выборки: {len(plan.targets)}"
+            if plan.managed
+            else sample.name
+        ),
         model_name=result.model_name,
         architecture=result.architecture,
         tile_size=sample.tile_width,
@@ -3280,11 +3531,16 @@ def queue_training_result_test_f1(
             "metric_target": TRAINING_RESULT_TEST_METRIC_TARGET,
             "class_key": result.class_key,
             "training_result_id": str(result.id),
-            "test_sample_id": str(sample.id),
-            "test_sample_revision": sample.content_revision,
-            "test_sample_tile_indices": [
-                tile.tile_index for tile in sample.tiles if tile.enabled
-            ],
+            "test_sample_id": None if plan.managed else str(sample.id),
+            "test_sample_revision": None if plan.managed else sample.content_revision,
+            "test_sample_tile_indices": (
+                []
+                if plan.managed
+                else [tile.tile_index for tile in sample.tiles if tile.enabled]
+            ),
+            "managed_test_samples": plan.managed,
+            "test_samples": evaluation_scope if plan.managed else [],
+            "f1_aggregation": "macro" if plan.managed else "foreground",
             "inference_template_id": str(template.id) if template is not None else None,
             "inference_template_version": template.version if template is not None else None,
             "inference_template_config": template_config,
@@ -3296,8 +3552,8 @@ def queue_training_result_test_f1(
     )
     session.add(job)
     session.flush()
-    metric.sample_id = sample.id
-    metric.sample_revision = sample.content_revision
+    metric.sample_id = None if plan.managed else sample.id
+    metric.sample_revision = None if plan.managed else sample.content_revision
     metric.status = "queued"
     metric.job_id = job.id
     metric.inference_template_id = template.id if template is not None else None
@@ -3314,33 +3570,83 @@ def training_result_test_f1_info(
     result: TrainingResultRow,
     config: TrainingUIAPIConfig,
 ) -> TrainingResultTestF1Info | None:
-    sample = _primary_sample(session, result.class_key)
-    if sample is None:
+    plan = _training_result_test_plan(session, result)
+    if not plan.managed and not plan.targets:
         return None
+    samples = [_training_result_test_target_info(target) for target in plan.targets]
+    sample = plan.targets[0].sample if not plan.managed and plan.targets else None
     metric = session.get(TrainingResultTestMetricRow, result.id)
     if metric is None:
         return TrainingResultTestF1Info(
             status="unavailable",
             quality_metric=result.quality_metric,
-            sample_id=sample.id,
-            sample_name=sample.name,
-            sample_revision=sample.content_revision,
-            error="Для сети ещё не рассчитан F1 на основной тестовой разметке.",
+            sample_id=sample.id if sample is not None else None,
+            sample_name=sample.name if sample is not None else None,
+            sample_revision=(sample.content_revision if sample is not None else None),
+            samples=samples,
+            aggregation="macro" if plan.managed else "foreground",
+            error=(
+                plan.error
+                or "Для сети ещё не рассчитан F1 на основных тестовых разметках."
+            ),
         )
-    postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
+    if plan.error is not None:
+        status = "stale" if metric.f1 is not None else "unavailable"
+        return _training_result_test_metric_info(
+            session,
+            result,
+            metric,
+            status=status,
+            samples=samples,
+            sample=sample,
+            managed=plan.managed,
+            error=plan.error,
+        )
+    postprocess_profile = _training_result_test_postprocess_profile_name(
+        session,
+        result,
+        plan,
+        config,
+    )
     template, _, config_hash = _effective_inference_template(
         session,
         result.architecture,
         result.class_key,
         postprocess_profile,
+        evaluation_scope=(
+            _training_result_test_scope(plan) if plan.managed else None
+        ),
     )
     status = metric.status
-    if not _metric_matches(metric, sample, template, config_hash):
+    if not _training_metric_matches(metric, plan, template, config_hash):
         status = "stale" if metric.f1 is not None else "unavailable"
     elif status in {"queued", "running"} and not _metric_job_is_active(session, metric):
         status = "stale" if metric.f1 is not None else "error"
     if status not in {"current", "stale", "queued", "running", "error", "unavailable"}:
         status = "stale" if metric.f1 is not None else "unavailable"
+    return _training_result_test_metric_info(
+        session,
+        result,
+        metric,
+        status=status,
+        samples=samples,
+        sample=sample,
+        managed=plan.managed,
+        error=metric.error,
+    )
+
+
+def _training_result_test_metric_info(
+    session: Session,
+    result: TrainingResultRow,
+    metric: TrainingResultTestMetricRow,
+    *,
+    status: str,
+    samples: list[PrimaryTestSampleInfo],
+    sample: TestSampleRow | None,
+    managed: bool,
+    error: str | None,
+) -> TrainingResultTestF1Info:
     job = session.get(JobRow, metric.job_id) if metric.job_id is not None else None
     use_objects = result.quality_metric == "objects"
     return TrainingResultTestF1Info(
@@ -3365,13 +3671,38 @@ def training_result_test_f1_info(
         object_false_positive=metric.object_false_positive,
         object_false_negative=metric.object_false_negative,
         metrics=dict(metric.metrics or {}),
-        sample_id=metric.sample_id or sample.id,
-        sample_name=metric.sample.name if metric.sample is not None else sample.name,
+        sample_id=(metric.sample_id or sample.id) if sample is not None else None,
+        sample_name=(
+            metric.sample.name
+            if metric.sample is not None
+            else (sample.name if sample is not None else None)
+        ),
         sample_revision=metric.sample_revision,
+        samples=samples,
+        aggregation="macro" if managed else "foreground",
         job_id=metric.job_id,
         evaluated_at=metric.evaluated_at,
-        error=metric.error,
+        error=error,
         progress=_test_f1_progress(job),
+    )
+
+
+def _training_result_test_target_info(
+    target: _TrainingResultTestTarget,
+) -> PrimaryTestSampleInfo:
+    return PrimaryTestSampleInfo(
+        id=target.sample.id,
+        name=target.sample.name,
+        content_revision=target.sample.content_revision,
+        enabled_image_count=sum(tile.enabled for tile in target.sample.tiles),
+        enabled_object_count=sum(
+            tile.object_count for tile in target.sample.tiles if tile.enabled
+        ),
+        class_key=target.class_key or target.sample.class_key,
+        class_name=target.class_name or target.sample.class_name,
+        class_slug=target.class_slug,
+        class_id=target.class_id,
+        color=target.color,
     )
 
 
@@ -3400,6 +3731,8 @@ def _effective_inference_template(
     architecture: str,
     dataset_key: str,
     postprocess_profile: str,
+    *,
+    evaluation_scope: list[dict[str, Any]] | None = None,
 ) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
     template = session.scalar(
         select(InferenceTemplateRow).where(
@@ -3419,17 +3752,47 @@ def _effective_inference_template(
         if template is not None
         else {}
     )
+    hash_payload: dict[str, Any] = {
+        "evaluator_version": TEST_SAMPLE_F1_EVALUATOR_VERSION,
+        "postprocess_profile": postprocess_profile,
+        "template_config": template_config,
+    }
+    if evaluation_scope is not None:
+        hash_payload["evaluation_scope"] = evaluation_scope
+        hash_payload["f1_aggregation"] = "macro"
     serialized = json.dumps(
-        {
-            "evaluator_version": TEST_SAMPLE_F1_EVALUATOR_VERSION,
-            "postprocess_profile": postprocess_profile,
-            "template_config": template_config,
-        },
+        hash_payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
     return template, template_config, hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _training_result_test_postprocess_profile_name(
+    session: Session,
+    result: TrainingResultRow,
+    plan: _TrainingResultTestPlan,
+    config: TrainingUIAPIConfig,
+) -> str:
+    if not plan.managed:
+        return _test_f1_postprocess_profile_name(session, plan.targets[0].sample, config)
+    dataset = find_managed_dataset(
+        session,
+        config,
+        result.dataset_key or result.class_key,
+    )
+    image_count = dataset.image_count if dataset is not None else None
+    if image_count is None:
+        image_count = len(
+            {
+                tile.source_name
+                for target in plan.targets
+                for tile in target.sample.tiles
+                if tile.enabled
+            }
+        )
+    return postprocess_profile_name(max(0, int(image_count)))
 
 
 def _test_f1_postprocess_profile_name(
@@ -3472,6 +3835,30 @@ def _metric_matches(
         and metric.inference_template_version
         == (template.version if template is not None else None)
         and metric.inference_config_hash == config_hash
+    )
+
+
+def _training_metric_matches(
+    metric: TrainingResultTestMetricRow,
+    plan: _TrainingResultTestPlan,
+    template: InferenceTemplateRow | None,
+    config_hash: str,
+) -> bool:
+    if plan.managed:
+        return (
+            metric.sample_id is None
+            and metric.sample_revision is None
+            and metric.inference_template_id
+            == (template.id if template is not None else None)
+            and metric.inference_template_version
+            == (template.version if template is not None else None)
+            and metric.inference_config_hash == config_hash
+        )
+    return _metric_matches(
+        metric,
+        plan.targets[0].sample,
+        template,
+        config_hash,
     )
 
 

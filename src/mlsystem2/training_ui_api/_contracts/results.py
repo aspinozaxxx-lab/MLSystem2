@@ -70,6 +70,8 @@ class TrainingResultTestF1Info(BaseModel):
     sample_id: UUID | None = None
     sample_name: str | None = None
     sample_revision: int | None = Field(default=None, ge=1)
+    samples: list[PrimaryTestSampleInfo] = Field(default_factory=list)
+    aggregation: Literal["foreground", "macro"] = "foreground"
     job_id: UUID | None = None
     evaluated_at: datetime | None = None
     error: str | None = None
@@ -84,6 +86,11 @@ class PrimaryTestSampleInfo(BaseModel):
     content_revision: int = Field(ge=1)
     enabled_image_count: int = Field(ge=0)
     enabled_object_count: int = Field(ge=0)
+    class_key: str | None = None
+    class_name: str | None = None
+    class_slug: str | None = None
+    class_id: int | None = Field(default=None, ge=1)
+    color: str | None = None
 
 
 class TrainingResultInfo(BaseModel):
@@ -141,6 +148,7 @@ class DatasetResultsResponse(BaseModel):
     quality_metric: Literal["pixel", "objects"] = "pixel"
     dataset_updated_at: datetime | None = None
     primary_test_sample: PrimaryTestSampleInfo | None = None
+    primary_test_samples: list[PrimaryTestSampleInfo] = Field(default_factory=list)
     test_f1_status: Literal["current", "stale", "running", "unavailable"] = "unavailable"
     results: list[TrainingResultInfo]
 

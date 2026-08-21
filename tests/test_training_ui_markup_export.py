@@ -36,8 +36,10 @@ from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import dataset_class_row
 from mlsystem2.training_ui_api._models import (
+    DatasetClassRow,
     DatasetRow,
     JobRow,
+    ManagedDatasetSourceRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TestSampleRow as _TestSampleRow,
@@ -3130,6 +3132,292 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
         assert metric.status == "current"
         assert metric.f1 == pytest.approx(8 / 9)
         assert metric.object_f1 == pytest.approx(1.0)
+
+
+def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        first_class = DatasetClassRow(
+            key="first-class",
+            name="Первый класс",
+            technical_name="first_objects",
+            imagery_type="kanopus",
+        )
+        second_class = DatasetClassRow(
+            key="second-class",
+            name="Второй класс",
+            technical_name="second_objects",
+            imagery_type="kanopus",
+        )
+        managed_class = DatasetClassRow(
+            key="managed-class",
+            name="Составной класс",
+            technical_name="managed_objects",
+            imagery_type="kanopus",
+        )
+        session.add_all([first_class, second_class, managed_class])
+        session.flush()
+        first_dataset = DatasetRow(
+            key="first-dataset",
+            class_id=first_class.id,
+            name="main",
+            source_type="mlmarkup",
+            source_path="Первый класс/main",
+            legacy_version=False,
+        )
+        second_dataset = DatasetRow(
+            key="second-dataset",
+            class_id=second_class.id,
+            name="main",
+            source_type="mlmarkup",
+            source_path="Второй класс/main",
+            legacy_version=False,
+        )
+        managed_dataset = DatasetRow(
+            key="managed-dataset",
+            class_id=managed_class.id,
+            name="main",
+            source_type="managed",
+            source_path="managed/managed-dataset",
+            legacy_version=False,
+        )
+        session.add_all([first_dataset, second_dataset, managed_dataset])
+        session.flush()
+        session.add_all(
+            [
+                ManagedDatasetSourceRow(
+                    managed_dataset_id=managed_dataset.id,
+                    source_dataset_id=first_dataset.id,
+                    priority=100,
+                    object_type_id=1,
+                    object_type_slug="first_objects",
+                    object_type_name="Первый класс",
+                    color="#112233",
+                ),
+                ManagedDatasetSourceRow(
+                    managed_dataset_id=managed_dataset.id,
+                    source_dataset_id=second_dataset.id,
+                    priority=50,
+                    object_type_id=2,
+                    object_type_slug="second_objects",
+                    object_type_name="Второй класс",
+                    color="#445566",
+                ),
+            ]
+        )
+
+        def add_primary_sample(
+            *,
+            sample_name: str,
+            dataset: DatasetRow,
+            dataset_class: DatasetClassRow,
+        ) -> _TestSampleRow:
+            sample = _TestSampleRow(
+                name=sample_name,
+                dataset_key=dataset.key,
+                dataset_name=f"{dataset_class.name}\\main",
+                class_key=dataset_class.key,
+                class_name=dataset_class.name,
+                dataset_short_name="main",
+                quality_metric="pixel",
+                task="binary",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                requested_object_count=1,
+                actual_object_count=1,
+                territory_count=1,
+                is_primary=True,
+            )
+            sample.tiles = [
+                _TestSampleTileRow(
+                    tile_index=1,
+                    source_name=f"{dataset_class.technical_name}/scene.tif",
+                    territory=dataset_class.technical_name,
+                    object_count=1,
+                    enabled=True,
+                )
+            ]
+            session.add(sample)
+            session.flush()
+            sample_root = config.stored_files_root / "test-samples" / str(sample.id)
+            sample_root.mkdir(parents=True)
+            with rasterio.open(
+                sample_root / "tile_001.tif",
+                "w",
+                driver="GTiff",
+                width=16,
+                height=16,
+                count=4,
+                dtype="uint8",
+                crs="EPSG:3857",
+                transform=from_origin(0, 16, 1, 1),
+            ) as target:
+                target.write(np.ones((4, 16, 16), dtype=np.uint8))
+            Image.fromarray(np.zeros((16, 16), dtype=np.uint8)).save(
+                sample_root / "tile_001_mask.png"
+            )
+            (sample_root / "tile_001.geojson").write_text(
+                json.dumps({"type": "FeatureCollection", "features": []}),
+                encoding="utf-8",
+            )
+            return sample
+
+        first_sample = add_primary_sample(
+            sample_name="Основная первого",
+            dataset=first_dataset,
+            dataset_class=first_class,
+        )
+        second_sample = add_primary_sample(
+            sample_name="Основная второго",
+            dataset=second_dataset,
+            dataset_class=second_class,
+        )
+        training = TrainingResultRow(
+            source="manual",
+            dataset_key=managed_dataset.key,
+            class_key=managed_dataset.key,
+            class_display_name="Составной класс\\main",
+            architecture="segformer_b2",
+            model_name="combined",
+            mlflow_run_id="managed-run",
+            task="multiclass",
+            class_schema=[
+                {"id": 1, "slug": "first_objects", "name": "Первый класс", "color": "#112233"},
+                {"id": 2, "slug": "second_objects", "name": "Второй класс", "color": "#445566"},
+            ],
+            status="ok",
+        )
+        session.add(training)
+        session.flush()
+        monkeypatch.setattr(
+            _test_samples,
+            "find_managed_dataset",
+            lambda *_args, **_kwargs: SimpleNamespace(image_count=2),
+        )
+
+        assert queue_training_result_test_f1(session, training, config) is True
+        metric = session.get(TrainingResultTestMetricRow, training.id)
+        assert metric is not None
+        assert metric.sample_id is None
+        assert metric.sample_revision is None
+        job = session.get(JobRow, metric.job_id)
+        assert job is not None
+        assert job.config["managed_test_samples"] is True
+        assert [item["sample_id"] for item in job.config["test_samples"]] == [
+            str(first_sample.id),
+            str(second_sample.id),
+        ]
+
+        monkeypatch.setattr(
+            _worker,
+            "_best_training_checkpoint",
+            lambda _config, _run_id: SimpleNamespace(
+                artifact_uri="file:///checkpoint.pt",
+                artifact_path="checkpoints/best.pt",
+                f1_score=0.8,
+                epoch=20,
+                threshold=0.5,
+            ),
+        )
+        run_root = tmp_path / "managed-network-test-f1"
+        payload = _worker._build_test_sample_f1_config(
+            session,
+            job,
+            config,
+            run_root,
+        )
+        assert [tile["target_class_id"] for tile in payload["tiles"]] == [1, 2]
+        assert [tile["index"] for tile in payload["tiles"]] == [1, 2]
+
+        report_metrics = {
+            "pixel": {
+                "per_class": {
+                    "first_objects": {"f1": 0.6},
+                    "second_objects": {"f1": 0.8},
+                },
+                "macro": {"precision": 0.65, "recall": 0.75, "f1": 0.7},
+            },
+            "objects": {
+                "per_class": {
+                    "first_objects": {"f1": 0.4},
+                    "second_objects": {"f1": 0.8},
+                },
+                "macro": {"precision": 0.55, "recall": 0.65, "f1": 0.6},
+            },
+            "aggregation": "macro",
+        }
+        (run_root / "scratch").mkdir(parents=True)
+        (run_root / "scratch" / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "processed": 2,
+                    "threshold": 0.5,
+                    "true_positive": 50,
+                    "false_positive": 10,
+                    "false_negative": 20,
+                    "object_true_positive": 5,
+                    "object_false_positive": 2,
+                    "object_false_negative": 3,
+                    "metrics": report_metrics,
+                }
+            ),
+            encoding="utf-8",
+        )
+        job.tmp_path = str(run_root)
+        job.status = "running"
+        _finish_test_sample_f1_job(session, job, config, succeeded=True)
+
+        assert metric.status == "current"
+        assert metric.precision == pytest.approx(0.65)
+        assert metric.recall == pytest.approx(0.75)
+        assert metric.f1 == pytest.approx((0.6 + 0.8) / 2)
+        assert metric.object_f1 == pytest.approx((0.4 + 0.8) / 2)
+        assert metric.true_positive == 50
+        info = training_result_test_f1_info(session, training, config)
+        assert info is not None
+        assert info.aggregation == "macro"
+        assert [item.class_name for item in info.samples] == [
+            "Первый класс",
+            "Второй класс",
+        ]
+
+        update_test_sample_tile(
+            session,
+            second_sample.id,
+            1,
+            _TestSampleTileUpdate(enabled=False),
+        )
+        assert metric.status == "unavailable"
+        stale_info = training_result_test_f1_info(session, training, config)
+        assert stale_info is not None
+        assert stale_info.status == "stale"
+        assert "Второй класс" in (stale_info.error or "")
+
+        update_test_sample_tile(
+            session,
+            second_sample.id,
+            1,
+            _TestSampleTileUpdate(enabled=True),
+            config,
+        )
+        assert metric.status == "queued"
+        refreshed_job = session.get(JobRow, metric.job_id)
+        assert refreshed_job is not None
+        second_scope = next(
+            item
+            for item in refreshed_job.config["test_samples"]
+            if item["class_slug"] == "second_objects"
+        )
+        assert second_scope["sample_revision"] == second_sample.content_revision
 
 
 def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(

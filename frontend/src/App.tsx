@@ -3550,6 +3550,13 @@ function DatasetResultsPage({
     );
     if (updated) setPayload(updated);
   };
+  const primaryTestSamples = payload.primary_test_samples?.length
+    ? payload.primary_test_samples
+    : payload.primary_test_sample
+      ? [payload.primary_test_sample]
+      : [];
+  const managedTestEvaluation = primaryTestSamples.some((sample) => sample.class_id !== null && sample.class_id !== undefined);
+  const resultMetricLabel = managedTestEvaluation ? "F1 сред." : qualityMetricShort(payload.quality_metric);
 
   return (
     <>
@@ -3569,11 +3576,20 @@ function DatasetResultsPage({
           </>
         }
       />
-      {payload.primary_test_sample ? (
+      {primaryTestSamples.length ? (
         <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
           <div>
-            <strong>{payload.test_f1_status === "current" ? `${qualityMetricShort(payload.quality_metric)} актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${qualityMetricShort(payload.quality_metric)}` : `${qualityMetricShort(payload.quality_metric)} не актуален`}</strong>
-            <span>Основная разметка: {payload.primary_test_sample.name} · {payload.primary_test_sample.enabled_image_count} тайлов</span>
+            <strong>{payload.test_f1_status === "current" ? `${resultMetricLabel} актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${resultMetricLabel}` : `${resultMetricLabel} не актуален`}</strong>
+            <span className="result-test-sample-list">
+              {primaryTestSamples.map((sample) => (
+                <span className="result-test-sample" key={sample.id} title={`Основная тестовая разметка: ${sample.name}`}>
+                  {sample.color ? <span className="class-color-dot" style={{ backgroundColor: sample.color }} /> : null}
+                  <strong>{sample.class_name || "Основная разметка"}</strong>
+                  <span>{sample.name}</span>
+                  <small>{sample.enabled_image_count} тайлов</small>
+                </span>
+              ))}
+            </span>
           </div>
           {payload.test_f1_status !== "current" ? (
             <button className="primary" type="button" disabled={payload.test_f1_status === "running"} onClick={() => void recalculateTestF1()}>
@@ -3967,22 +3983,25 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
                 className="dataset-result-link"
                 href={`#/results/${encodeURIComponent(dataset.key)}`}
               >
-                <span>{dataset.dataset_name || dataset.name}</span>
+                <span className="dataset-result-identity">
+                  <span className="dataset-result-name">{dataset.dataset_name || dataset.name}</span>
+                  <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
+                </span>
                 {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
-                  <>
+                  <span className="dataset-result-score">
                     <strong
                       className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
                       title="F1 основной или последней успешной сети этого датасета"
                     >
-                      {qualityMetricShort(dataset.quality_metric)} {formatTestF1Percent(dataset.test_f1)}
+                      <small>{metricAggregationLabel(dataset.test_f1_metrics, dataset.quality_metric)}</small>
+                      {formatTestF1Percent(dataset.test_f1)}
                     </strong>
                     <CompactPerClassF1
                       metrics={dataset.test_f1_metrics}
                       section={dataset.quality_metric === "objects" ? "objects" : "pixel"}
                     />
-                  </>
+                  </span>
                 ) : null}
-                <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
               </a>
               <a
                 className="dataset-editor-link"
@@ -4117,9 +4136,11 @@ function ResultsTable({
                     </span>
                   </td>
                   <td title={`${qualityMetricShort(result.quality_metric)} (val)`}>
-                    <span className="source-lines">
-                      <small>{qualityMetricShort(result.quality_metric)} (val)</small>
-                      <strong className="technical-value">{formatF1Score(result.f1_score)}</strong>
+                    <span className="result-score-summary">
+                      <span className="result-score-value">
+                        <small>{perClassF1Values(validationPerClassMetrics(result.training_metrics), "pixel").length > 1 ? "F1 сред. (val)" : `${qualityMetricShort(result.quality_metric)} (val)`}</small>
+                        <strong className="technical-value">{formatF1Score(result.f1_score)}</strong>
+                      </span>
                       <CompactPerClassF1
                         metrics={validationPerClassMetrics(result.training_metrics)}
                         section="pixel"
@@ -4128,10 +4149,12 @@ function ResultsTable({
                   </td>
                   <td title={qualityMetricShort(result.quality_metric)}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
-                      <span className="source-lines">
-                        <small>{qualityMetricShort(result.quality_metric)}</small>
-                        <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
-                          {formatTestF1Percent(result.test_f1.f1)}
+                      <span className="result-score-summary">
+                        <span className="result-score-value">
+                          <small>{result.test_f1.aggregation === "macro" ? "F1 сред." : qualityMetricShort(result.quality_metric)}</small>
+                          <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
+                            {formatTestF1Percent(result.test_f1.f1)}
+                          </span>
                         </span>
                         <CompactPerClassF1
                           metrics={result.test_f1.metrics}
@@ -4825,6 +4848,16 @@ function perClassF1Values(metrics: unknown, section: "pixel" | "objects"): Class
   });
 }
 
+function metricAggregationLabel(
+  metrics: unknown,
+  qualityMetric: "pixel" | "objects",
+): string {
+  const aggregation = metrics && typeof metrics === "object"
+    ? (metrics as Record<string, unknown>).aggregation
+    : null;
+  return aggregation === "macro" ? "F1 сред." : qualityMetricShort(qualityMetric);
+}
+
 function PerClassF1Table({ metrics }: { metrics: unknown }) {
   const pixel = perClassF1Values(metrics, "pixel");
   const objects = perClassF1Values(metrics, "objects");
@@ -4859,9 +4892,10 @@ function CompactPerClassF1({ metrics, section }: { metrics: unknown; section: "p
   return (
     <span className="compact-class-f1-list">
       {values.map((item) => (
-        <small key={item.slug} title={`${item.name} · ${item.slug}`}>
+        <small className="compact-class-f1-chip" key={item.slug} title={`${item.name} · ${item.slug}`}>
           <span className="class-color-dot" style={{ backgroundColor: item.color }} />
-          {item.name}: {formatF1Score(item.f1)}
+          <span className="compact-class-f1-name">{item.name}</span>
+          <strong>{item.f1 === null ? "—" : formatTestF1Percent(item.f1)}</strong>
         </small>
       ))}
     </span>

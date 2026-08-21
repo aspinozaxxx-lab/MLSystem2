@@ -6643,6 +6643,13 @@
               }
             ]
           },
+          "primary_test_samples": {
+            "items": {
+              "$ref": "#/components/schemas/PrimaryTestSampleInfo"
+            },
+            "type": "array",
+            "title": "Primary Test Samples"
+          },
           "test_f1_status": {
             "type": "string",
             "enum": [
@@ -7847,6 +7854,62 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Enabled Object Count"
+          },
+          "class_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Key"
+          },
+          "class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Name"
+          },
+          "class_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Slug"
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
           }
         },
         "additionalProperties": false,
@@ -11115,6 +11178,22 @@
               }
             ],
             "title": "Sample Revision"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/PrimaryTestSampleInfo"
+            },
+            "type": "array",
+            "title": "Samples"
+          },
+          "aggregation": {
+            "type": "string",
+            "enum": [
+              "foreground",
+              "macro"
+            ],
+            "title": "Aggregation",
+            "default": "foreground"
           },
           "job_id": {
             "anyOf": [

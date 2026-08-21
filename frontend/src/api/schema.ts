@@ -2429,6 +2429,8 @@ export interface components {
             /** Dataset Updated At */
             dataset_updated_at?: string | null;
             primary_test_sample?: components["schemas"]["PrimaryTestSampleInfo"] | null;
+            /** Primary Test Samples */
+            primary_test_samples?: components["schemas"]["PrimaryTestSampleInfo"][];
             /**
              * Test F1 Status
              * @default unavailable
@@ -2869,6 +2871,16 @@ export interface components {
             enabled_image_count: number;
             /** Enabled Object Count */
             enabled_object_count: number;
+            /** Class Key */
+            class_key?: string | null;
+            /** Class Name */
+            class_name?: string | null;
+            /** Class Slug */
+            class_slug?: string | null;
+            /** Class Id */
+            class_id?: number | null;
+            /** Color */
+            color?: string | null;
         };
         /** PseudoMarkupResultInfo */
         PseudoMarkupResultInfo: {
@@ -4021,6 +4033,14 @@ export interface components {
             sample_name?: string | null;
             /** Sample Revision */
             sample_revision?: number | null;
+            /** Samples */
+            samples?: components["schemas"]["PrimaryTestSampleInfo"][];
+            /**
+             * Aggregation
+             * @default foreground
+             * @enum {string}
+             */
+            aggregation: "foreground" | "macro";
             /** Job Id */
             job_id?: string | null;
             /** Evaluated At */

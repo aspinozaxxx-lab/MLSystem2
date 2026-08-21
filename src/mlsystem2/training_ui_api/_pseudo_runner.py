@@ -363,62 +363,120 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 )
             tile_metrics: dict[str, Any] | None = None
             if task == "multiclass":
-                unknown_values = set(np.unique(ground_truth_labels).tolist()) - {0, *class_ids}
-                if unknown_values:
-                    raise RuntimeError(
-                        "Эталонная маска содержит неизвестные class ID: "
-                        + ", ".join(str(value) for value in sorted(unknown_values))
-                    )
-                tile_pixel = _multiclass_pixel_counts(
-                    ground_truth_labels,
-                    prediction.astype(np.uint8, copy=False),
-                    class_ids,
-                )
-                for class_id, values in tile_pixel.items():
-                    _add_metric_counts(class_pixel_counts[class_id], values)
                 geojson_path = tile.get("geojson_path")
-                ground_truth_by_class = (
-                    _test_tile_class_instance_masks(
-                        Path(str(geojson_path)),
-                        Path(str(tile["image_path"])),
-                        prediction.shape,
-                        object_types,
+                target_class_value = tile.get("target_class_id")
+                if target_class_value is not None:
+                    target_class_id = int(target_class_value)
+                    if target_class_id not in class_ids:
+                        raise RuntimeError(
+                            f"Тестовый тайл ссылается на неизвестный class ID {target_class_id}."
+                        )
+                    ground_truth = ground_truth_labels > 0
+                    predicted = prediction == target_class_id
+                    true_positive = int(np.count_nonzero(ground_truth & predicted))
+                    false_positive = int(np.count_nonzero(~ground_truth & predicted))
+                    false_negative = int(np.count_nonzero(ground_truth & ~predicted))
+                    tile_pixel = {
+                        target_class_id: {
+                            "true_positive": true_positive,
+                            "false_positive": false_positive,
+                            "false_negative": false_negative,
+                        }
+                    }
+                    _add_metric_counts(
+                        class_pixel_counts[target_class_id],
+                        tile_pixel[target_class_id],
                     )
-                    if geojson_path
-                    else {
-                        class_id: label_components(
-                            ground_truth_labels == class_id,
+                    ground_truth_instances = (
+                        _test_tile_instance_mask(
+                            Path(str(geojson_path)),
+                            Path(str(tile["image_path"])),
+                            prediction.shape,
+                        )
+                        if geojson_path
+                        else label_components(
+                            ground_truth,
                             structure=np.ones((3, 3), dtype=np.uint8),
                         )[0]
-                        for class_id in class_ids
-                    }
-                )
-                tile_objects: dict[int, dict[str, int]] = {}
-                for class_id in class_ids:
-                    class_objects = compute_object_f1(
+                    )
+                    objects = compute_object_f1(
                         ObjectF1Request(
-                            y_true_instances=ground_truth_by_class[class_id],
-                            y_pred_mask=prediction == class_id,
+                            y_true_instances=ground_truth_instances,
+                            y_pred_mask=predicted,
                         )
                     )
-                    values = {
-                        "true_positive": int(class_objects.true_positive),
-                        "false_positive": int(class_objects.false_positive),
-                        "false_negative": int(class_objects.false_negative),
+                    tile_objects = {
+                        target_class_id: {
+                            "true_positive": int(objects.true_positive),
+                            "false_positive": int(objects.false_positive),
+                            "false_negative": int(objects.false_negative),
+                        }
                     }
-                    tile_objects[class_id] = values
-                    _add_metric_counts(class_object_counts[class_id], values)
-                ground_truth = ground_truth_labels > 0
-                predicted = prediction > 0
-                objects = compute_object_f1(
-                    ObjectF1Request(
-                        y_true_instances=_combine_class_instance_masks(ground_truth_by_class),
-                        y_pred_mask=predicted,
+                    _add_metric_counts(
+                        class_object_counts[target_class_id],
+                        tile_objects[target_class_id],
                     )
-                )
-                true_positive = int(np.count_nonzero(ground_truth & predicted))
-                false_positive = int(np.count_nonzero(~ground_truth & predicted))
-                false_negative = int(np.count_nonzero(ground_truth & ~predicted))
+                else:
+                    unknown_values = set(np.unique(ground_truth_labels).tolist()) - {
+                        0,
+                        *class_ids,
+                    }
+                    if unknown_values:
+                        raise RuntimeError(
+                            "Эталонная маска содержит неизвестные class ID: "
+                            + ", ".join(str(value) for value in sorted(unknown_values))
+                        )
+                    tile_pixel = _multiclass_pixel_counts(
+                        ground_truth_labels,
+                        prediction.astype(np.uint8, copy=False),
+                        class_ids,
+                    )
+                    for class_id, values in tile_pixel.items():
+                        _add_metric_counts(class_pixel_counts[class_id], values)
+                    ground_truth_by_class = (
+                        _test_tile_class_instance_masks(
+                            Path(str(geojson_path)),
+                            Path(str(tile["image_path"])),
+                            prediction.shape,
+                            object_types,
+                        )
+                        if geojson_path
+                        else {
+                            class_id: label_components(
+                                ground_truth_labels == class_id,
+                                structure=np.ones((3, 3), dtype=np.uint8),
+                            )[0]
+                            for class_id in class_ids
+                        }
+                    )
+                    tile_objects = {}
+                    for class_id in class_ids:
+                        class_objects = compute_object_f1(
+                            ObjectF1Request(
+                                y_true_instances=ground_truth_by_class[class_id],
+                                y_pred_mask=prediction == class_id,
+                            )
+                        )
+                        values = {
+                            "true_positive": int(class_objects.true_positive),
+                            "false_positive": int(class_objects.false_positive),
+                            "false_negative": int(class_objects.false_negative),
+                        }
+                        tile_objects[class_id] = values
+                        _add_metric_counts(class_object_counts[class_id], values)
+                    ground_truth = ground_truth_labels > 0
+                    predicted = prediction > 0
+                    objects = compute_object_f1(
+                        ObjectF1Request(
+                            y_true_instances=_combine_class_instance_masks(
+                                ground_truth_by_class
+                            ),
+                            y_pred_mask=predicted,
+                        )
+                    )
+                    true_positive = int(np.count_nonzero(ground_truth & predicted))
+                    false_positive = int(np.count_nonzero(~ground_truth & predicted))
+                    false_negative = int(np.count_nonzero(ground_truth & ~predicted))
                 tile_metrics = _structured_multiclass_metrics(
                     tile_pixel,
                     tile_objects,
@@ -472,6 +530,16 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             reports.append(
                 {
                     "index": int(tile["index"]),
+                    **(
+                        {
+                            "test_sample_id": tile.get("test_sample_id"),
+                            "source_tile_index": tile.get("source_tile_index"),
+                            "target_class_id": tile.get("target_class_id"),
+                            "target_class_slug": tile.get("target_class_slug"),
+                        }
+                        if tile.get("target_class_id") is not None
+                        else {}
+                    ),
                     "true_positive": true_positive,
                     "false_positive": false_positive,
                     "false_negative": false_negative,
@@ -531,6 +599,13 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         if str(config.get("task") or "binary") == "multiclass"
         else None
     )
+    if structured_metrics is not None and config.get("managed_test_samples"):
+        structured_metrics = {
+            **structured_metrics,
+            "aggregation": "macro",
+            "aggregation_label": "Среднее F1 по основным выборкам классов",
+            "test_samples": list(config.get("test_samples") or []),
+        }
     return {
         "status": "ok" if reports else "error",
         "operation": "test_sample_f1",

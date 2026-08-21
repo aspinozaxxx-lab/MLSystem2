@@ -79,6 +79,8 @@ from ._templates import normalize_tile_factors
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     TEST_SAMPLE_EVALUATION_TARGET,
+    _training_result_test_plan,
+    _training_result_test_scope,
     current_primary_training_result,
     evaluate_test_samples_for_pseudo_markup,
     primary_test_sample,
@@ -905,17 +907,21 @@ def _build_test_sample_f1_config(
 ) -> dict[str, Any]:
     try:
         training_result_id = uuid.UUID(str(row.config.get("training_result_id")))
-        sample_id = uuid.UUID(str(row.config.get("test_sample_id")))
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("В задании F1 повреждены идентификаторы сети или разметки.") from exc
+        raise RuntimeError("В задании F1 повреждён идентификатор сети.") from exc
     training_result = session.get(TrainingResultRow, training_result_id)
-    sample = session.get(TestSampleRow, sample_id)
     if training_result is None or training_result.status != ResultStatus.OK.value:
         raise RuntimeError("Успешный результат обучения для расчёта F1 не найден.")
     saved_evaluation = _is_saved_test_sample_evaluation_job(row)
-    if sample is None:
-        raise RuntimeError("Тестовая разметка была удалена.")
+    plan = None
     if saved_evaluation:
+        try:
+            sample_id = uuid.UUID(str(row.config.get("test_sample_id")))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("В задании F1 повреждён идентификатор разметки.") from exc
+        sample = session.get(TestSampleRow, sample_id)
+        if sample is None:
+            raise RuntimeError("Тестовая разметка была удалена.")
         primary = current_primary_training_result(session, sample.class_key)
         if primary is None or primary.id != training_result.id:
             raise RuntimeError("Основная сеть класса была заменена.")
@@ -927,30 +933,38 @@ def _build_test_sample_f1_config(
         if compatibility_error is not None:
             raise RuntimeError(compatibility_error)
     else:
-        primary_sample = primary_test_sample(session, training_result.class_key)
-        compatibility_error = test_sample_model_compatibility_error(
-            session,
-            sample,
-            training_result,
-        )
-        if (
-            primary_sample is None
-            or primary_sample.id != sample.id
-            or compatibility_error is not None
-        ):
+        plan = _training_result_test_plan(session, training_result)
+        if plan.error is not None or not plan.targets:
             raise RuntimeError(
-                compatibility_error
-                or "Основная тестовая разметка была заменена или удалена."
+                plan.error or "Основные тестовые разметки были удалены."
             )
-    expected_revision = int(row.config.get("test_sample_revision") or 0)
-    if sample.content_revision != expected_revision:
-        raise RuntimeError("Состав основной тестовой разметки изменён.")
-    expected_indices = {
-        int(value) for value in (row.config.get("test_sample_tile_indices") or [])
-    }
-    enabled_tiles = [tile for tile in sample.tiles if tile.enabled]
-    if not enabled_tiles or {tile.tile_index for tile in enabled_tiles} != expected_indices:
-        raise RuntimeError("Состав включённых тайлов не совпадает с ревизией задания.")
+        if plan.managed:
+            if list(row.config.get("test_samples") or []) != _training_result_test_scope(plan):
+                raise RuntimeError(
+                    "Состав основных тестовых разметок управляемого датасета изменён."
+                )
+            sample = plan.targets[0].sample
+        else:
+            sample = plan.targets[0].sample
+            compatibility_error = test_sample_model_compatibility_error(
+                session,
+                sample,
+                training_result,
+            )
+            if compatibility_error is not None:
+                raise RuntimeError(compatibility_error)
+    if saved_evaluation or not (plan and plan.managed):
+        expected_revision = int(row.config.get("test_sample_revision") or 0)
+        if sample.content_revision != expected_revision:
+            raise RuntimeError("Состав основной тестовой разметки изменён.")
+        expected_indices = {
+            int(value) for value in (row.config.get("test_sample_tile_indices") or [])
+        }
+        enabled_tiles = [tile for tile in sample.tiles if tile.enabled]
+        if not enabled_tiles or {
+            tile.tile_index for tile in enabled_tiles
+        } != expected_indices:
+            raise RuntimeError("Состав включённых тайлов не совпадает с ревизией задания.")
     if not training_result.mlflow_run_id:
         raise RuntimeError("У результата обучения отсутствует MLflow run id.")
     source_training_job = (
@@ -1013,25 +1027,53 @@ def _build_test_sample_f1_config(
         )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
-    sample_root = Path(config.stored_files_root) / "test-samples" / str(sample.id)
     tiles: list[dict[str, Any]] = []
-    for tile in sorted(enabled_tiles, key=lambda item: item.tile_index):
-        base_name = f"tile_{tile.tile_index:03d}"
-        tif_path = sample_root / f"{base_name}.tif"
-        mask_path = sample_root / f"{base_name}_mask.png"
-        geojson_path = sample_root / f"{base_name}.geojson"
-        if not tif_path.is_file() or not mask_path.is_file() or not geojson_path.is_file():
-            raise RuntimeError(
-                f"Не найдены TIFF, GeoJSON или маска тестового тайла {base_name}."
-            )
-        tiles.append(
-            {
-                "index": tile.tile_index,
-                "image_path": str(tif_path),
-                "mask_path": str(mask_path),
-                "geojson_path": str(geojson_path),
-            }
+    targets = (
+        list(plan.targets)
+        if plan is not None and plan.managed
+        else [None]
+    )
+    for target in targets:
+        target_sample = target.sample if target is not None else sample
+        sample_root = (
+            Path(config.stored_files_root) / "test-samples" / str(target_sample.id)
         )
+        target_tiles = sorted(
+            (tile for tile in target_sample.tiles if tile.enabled),
+            key=lambda item: item.tile_index,
+        )
+        for tile in target_tiles:
+            base_name = f"tile_{tile.tile_index:03d}"
+            tif_path = sample_root / f"{base_name}.tif"
+            mask_path = sample_root / f"{base_name}_mask.png"
+            geojson_path = sample_root / f"{base_name}.geojson"
+            if (
+                not tif_path.is_file()
+                or not mask_path.is_file()
+                or not geojson_path.is_file()
+            ):
+                raise RuntimeError(
+                    "Не найдены TIFF, GeoJSON или маска тестового тайла "
+                    f"{target_sample.name}/{base_name}."
+                )
+            tiles.append(
+                {
+                    "index": len(tiles) + 1 if target is not None else tile.tile_index,
+                    "source_tile_index": tile.tile_index,
+                    "test_sample_id": str(target_sample.id),
+                    "image_path": str(tif_path),
+                    "mask_path": str(mask_path),
+                    "geojson_path": str(geojson_path),
+                    **(
+                        {
+                            "target_class_id": target.class_id,
+                            "target_class_slug": target.class_slug,
+                        }
+                        if target is not None
+                        else {}
+                    ),
+                }
+            )
     return {
         "operation": TEST_SAMPLE_F1_OPERATION,
         "inference_backend": inference_backend,
@@ -1045,8 +1087,21 @@ def _build_test_sample_f1_config(
         "object_types": list(training_result.class_schema or []),
         "source_model": training_result.model_name,
         "training_result_id": str(training_result.id),
-        "test_sample_id": str(sample.id),
-        "test_sample_revision": sample.content_revision,
+        "test_sample_id": (
+            None if plan is not None and plan.managed else str(sample.id)
+        ),
+        "test_sample_revision": (
+            None if plan is not None and plan.managed else sample.content_revision
+        ),
+        "managed_test_samples": bool(plan is not None and plan.managed),
+        "test_samples": (
+            _training_result_test_scope(plan)
+            if plan is not None and plan.managed
+            else []
+        ),
+        "f1_aggregation": (
+            "macro" if plan is not None and plan.managed else "foreground"
+        ),
         "tiles": tiles,
         "mlflow_tracking_uri": config.mlflow_tracking_uri,
         "mlflow_run_id": training_result.mlflow_run_id,
@@ -1645,29 +1700,46 @@ def _finish_test_sample_f1_job(
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     metric = _test_sample_f1_metric(session, row)
     if metric is not None:
-        sample = session.get(TestSampleRow, metric.sample_id) if metric.sample_id is not None else None
         training_result = _test_sample_f1_training_result(session, row)
-        primary_sample = (
-            primary_test_sample(session, training_result.class_key)
-            if training_result is not None
-            else None
-        )
-        compatibility_error = (
-            test_sample_model_compatibility_error(session, sample, training_result)
-            if sample is not None and training_result is not None
-            else "Сеть или тестовая разметка больше не существуют."
-        )
-        expected_revision = int(row.config.get("test_sample_revision") or 0)
-        still_current = bool(
-            sample
-            and training_result
-            and primary_sample is not None
-            and primary_sample.id == sample.id
-            and compatibility_error is None
-            and sample.content_revision == expected_revision
-            and metric.sample_revision == expected_revision
-            and metric.job_id == row.id
-        )
+        managed_evaluation = bool((row.config or {}).get("managed_test_samples"))
+        if managed_evaluation and training_result is not None:
+            plan = _training_result_test_plan(session, training_result)
+            still_current = bool(
+                plan.managed
+                and plan.error is None
+                and list((row.config or {}).get("test_samples") or [])
+                == _training_result_test_scope(plan)
+                and metric.sample_id is None
+                and metric.sample_revision is None
+                and metric.job_id == row.id
+            )
+        else:
+            sample = (
+                session.get(TestSampleRow, metric.sample_id)
+                if metric.sample_id is not None
+                else None
+            )
+            primary_sample = (
+                primary_test_sample(session, training_result.class_key)
+                if training_result is not None
+                else None
+            )
+            compatibility_error = (
+                test_sample_model_compatibility_error(session, sample, training_result)
+                if sample is not None and training_result is not None
+                else "Сеть или тестовая разметка больше не существуют."
+            )
+            expected_revision = int(row.config.get("test_sample_revision") or 0)
+            still_current = bool(
+                sample
+                and training_result
+                and primary_sample is not None
+                and primary_sample.id == sample.id
+                and compatibility_error is None
+                and sample.content_revision == expected_revision
+                and metric.sample_revision == expected_revision
+                and metric.job_id == row.id
+            )
         if succeeded and still_current and report is not None:
             (
                 metric.precision,
@@ -1676,7 +1748,10 @@ def _finish_test_sample_f1_job(
                 metric.true_positive,
                 metric.false_positive,
                 metric.false_negative,
-            ) = _report_metric_values(report)
+            ) = _report_metric_values(
+                report,
+                section="pixel" if managed_evaluation else None,
+            )
             (
                 metric.object_precision,
                 metric.object_recall,
@@ -1684,7 +1759,11 @@ def _finish_test_sample_f1_job(
                 metric.object_true_positive,
                 metric.object_false_positive,
                 metric.object_false_negative,
-            ) = _report_metric_values(report, prefix="object_")
+            ) = _report_metric_values(
+                report,
+                prefix="object_",
+                section="objects" if managed_evaluation else None,
+            )
             report_threshold = report.get("threshold")
             metric.threshold = (
                 float(report_threshold) if report_threshold is not None else None
@@ -1827,6 +1906,7 @@ def _report_metric_values(
     report: dict[str, Any],
     *,
     prefix: str = "",
+    section: str | None = None,
 ) -> tuple[float, float, float, int, int, int]:
     true_positive = int(report.get(f"{prefix}true_positive") or 0)
     false_positive = int(report.get(f"{prefix}false_positive") or 0)
@@ -1837,6 +1917,17 @@ def _report_metric_values(
     recall = true_positive / recall_denominator if recall_denominator else 0.0
     denominator = precision + recall
     f1 = 2.0 * precision * recall / denominator if denominator else 0.0
+    if section is not None:
+        metrics = report.get("metrics")
+        section_metrics = metrics.get(section) if isinstance(metrics, dict) else None
+        macro = section_metrics.get("macro") if isinstance(section_metrics, dict) else None
+        if isinstance(macro, dict):
+            try:
+                precision = float(macro["precision"])
+                recall = float(macro["recall"])
+                f1 = float(macro["f1"])
+            except (KeyError, TypeError, ValueError):
+                pass
     return (
         precision,
         recall,
