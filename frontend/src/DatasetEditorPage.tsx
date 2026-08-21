@@ -73,7 +73,7 @@ import {
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
-type EditMode = "select" | "draw";
+type EditMode = "select" | "draw" | "pseudo";
 type BandMode = "RGB" | "NRG" | "NGB";
 type VertexSelection = {
   feature: Feature<Geometry>;
@@ -217,6 +217,7 @@ const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
 };
 const styleCache = new Map<string, Style>();
 const pseudoStyleCache = new Map<string, Style>();
+const selectedPseudoStyleCache = new Map<string, Style>();
 const EDITABLE_VERTICES_STYLE = new Style({
   geometry: (feature) => new MultiPoint(
     editableVertexCoordinates((feature as Feature<Geometry>).getGeometry()),
@@ -257,6 +258,8 @@ export function DatasetEditorPage({
   const [pseudoVisible, setPseudoVisible] = useState(false);
   const [pseudoMarkup, setPseudoMarkup] = useState<PseudoMarkupInfo | null>(null);
   const [pseudoRequestPending, setPseudoRequestPending] = useState(false);
+  const [pseudoTarget, setPseudoTarget] = useState<ObjectSelection>("positive");
+  const [selectedPseudoCount, setSelectedPseudoCount] = useState(0);
   const [draftSaveStatuses, setDraftSaveStatuses] = useState<Record<string, DraftSaveStatus>>({});
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
@@ -274,6 +277,7 @@ export function DatasetEditorPage({
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const pseudoSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const pseudoLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
+  const pseudoSelectRef = useRef<Select | null>(null);
   const rasterLayerRef = useRef<WebGLTileLayer | null>(null);
   const selectRef = useRef<Select | null>(null);
   const vertexBoxRef = useRef<DragBox | null>(null);
@@ -514,6 +518,8 @@ export function DatasetEditorPage({
       : "positive";
     roleRef.current = defaultRole;
     setRole(defaultRole);
+    setPseudoTarget(defaultRole);
+    setSelectedPseudoCount(0);
     setRebuildPreview(null);
     void loadScenes(datasetKey);
   }, [datasetKey, loadScenes, resetDrafts, selectedDataset]);
@@ -805,6 +811,8 @@ export function DatasetEditorPage({
     pseudoLoadRequestRef.current += 1;
     setPseudoVisible(false);
     setPseudoRequestPending(false);
+    setSelectedPseudoCount(0);
+    setEditMode("select");
     setPseudoMarkup(pseudoCacheRef.current.get(activePseudoCacheKey) || null);
   }, [activePseudoCacheKey]);
 
@@ -882,6 +890,9 @@ export function DatasetEditorPage({
 
   const togglePseudoMarkup = () => {
     if (pseudoVisible) {
+      pseudoSelectRef.current?.getFeatures().clear();
+      setSelectedPseudoCount(0);
+      setEditMode("select");
       setPseudoVisible(false);
       return;
     }
@@ -1013,6 +1024,16 @@ export function DatasetEditorPage({
           selectedVerticesRef.current,
         ),
     });
+    const pseudoSelect = new Select({
+      layers: [pseudoLayer],
+      multi: true,
+      hitTolerance: 4,
+      style: (feature) => selectedPseudoMarkupStyle(
+        feature as Feature<Geometry>,
+        objectTypeChoices,
+      ),
+    });
+    pseudoSelect.setActive(false);
     const modify = new Modify({
       features: select.getFeatures(),
       deleteCondition: () => false,
@@ -1106,6 +1127,17 @@ export function DatasetEditorPage({
       setSelectedVertices([]);
       syncRoleFromFeature(event.selected[0] as Feature<Geometry> | undefined);
     });
+    pseudoSelect.on("select", (event) => {
+      const selected = pseudoSelect.getFeatures();
+      setSelectedPseudoCount(selected.getLength());
+      const suggestedTarget = pseudoFeatureTarget(
+        event.selected.at(-1) as Feature<Geometry> | undefined,
+        selectedDataset,
+      );
+      if (selected.getLength() === 1 && suggestedTarget) {
+        setPseudoTarget(suggestedTarget);
+      }
+    });
     vertexBox.on("boxstart", () => {
       setSelectedVertices([]);
     });
@@ -1190,6 +1222,7 @@ export function DatasetEditorPage({
     target.addEventListener("auxclick", preventMiddleButtonBrowserAction, true);
     map.addInteraction(middleDragPan);
     map.addInteraction(select);
+    map.addInteraction(pseudoSelect);
     map.addInteraction(vertexBox);
     map.addInteraction(modify);
     map.addInteraction(draw);
@@ -1198,6 +1231,7 @@ export function DatasetEditorPage({
     mapRef.current = map;
     pseudoSourceRef.current = pseudoSource;
     pseudoLayerRef.current = pseudoLayer;
+    pseudoSelectRef.current = pseudoSelect;
     vectorLayerRef.current = vectorLayer;
     rasterLayerRef.current = rasterLayer;
     selectRef.current = select;
@@ -1215,6 +1249,7 @@ export function DatasetEditorPage({
       mapRef.current = null;
       pseudoSourceRef.current = null;
       pseudoLayerRef.current = null;
+      pseudoSelectRef.current = null;
       vectorSourceRef.current = null;
       vectorLayerRef.current = null;
       rasterLayerRef.current = null;
@@ -1243,6 +1278,8 @@ export function DatasetEditorPage({
     const source = pseudoSourceRef.current;
     const layer = pseudoLayerRef.current;
     if (!source || !layer || !detail) return;
+    pseudoSelectRef.current?.getFeatures().clear();
+    setSelectedPseudoCount(0);
     source.clear();
     if (pseudoMarkup?.status === "ready" && pseudoMarkup.geojson) {
       const rasterCrs = geojsonCrs(detail.geojson);
@@ -1259,16 +1296,33 @@ export function DatasetEditorPage({
   useEffect(() => {
     const sceneDeleted = Boolean(activeDraft?.current.deleted);
     const drawing = annotationsVisible && !sceneDeleted && editMode === "draw";
+    const selectingPseudo = pseudoVisible
+      && pseudoMarkup?.status === "ready"
+      && !sceneDeleted
+      && editMode === "pseudo";
     drawRef.current?.setActive(drawing);
-    selectRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
-    vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
-    modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && !drawing);
+    selectRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
+    vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
+    modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
+    pseudoSelectRef.current?.setActive(selectingPseudo);
     vectorLayerRef.current?.setVisible(annotationsVisible && !sceneDeleted);
-    if (drawing || !annotationsVisible || sceneDeleted) {
+    if (editMode !== "select" || !annotationsVisible || sceneDeleted) {
       setSelectedVertices([]);
       selectRef.current?.getFeatures().clear();
     }
-  }, [activeDraft?.current.deleted, annotationsVisible, detail, editMode, setSelectedVertices]);
+    if (!selectingPseudo) {
+      pseudoSelectRef.current?.getFeatures().clear();
+      setSelectedPseudoCount(0);
+    }
+  }, [
+    activeDraft?.current.deleted,
+    annotationsVisible,
+    detail,
+    editMode,
+    pseudoMarkup?.status,
+    pseudoVisible,
+    setSelectedVertices,
+  ]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -1323,6 +1377,35 @@ export function DatasetEditorPage({
     roleRef.current = nextRole;
     setRole(nextRole);
   };
+
+  const clearPseudoSelection = useCallback(() => {
+    pseudoSelectRef.current?.getFeatures().clear();
+    setSelectedPseudoCount(0);
+    mapRef.current?.render();
+  }, []);
+
+  const addSelectedPseudoToDraft = useCallback(() => {
+    const selected = pseudoSelectRef.current?.getFeatures();
+    const source = vectorSourceRef.current;
+    if (!selected || !source || selected.getLength() === 0 || !selectedDataset) return;
+    const before = captureActiveSnapshot();
+    if (!before) return;
+    const features = selected.getArray().flatMap((feature) => {
+      const draftFeature = clonePseudoFeatureForDraft(
+        feature as Feature<Geometry>,
+        pseudoTarget,
+        selectedDataset,
+      );
+      return draftFeature ? [draftFeature] : [];
+    });
+    if (!features.length) return;
+    features.forEach((feature) => newFeaturesRef.current.add(feature));
+    source.addFeatures(features);
+    clearPseudoSelection();
+    vectorLayerRef.current?.changed();
+    mapRef.current?.render();
+    recordCurrentChange(before);
+  }, [captureActiveSnapshot, clearPseudoSelection, pseudoTarget, recordCurrentChange, selectedDataset]);
 
   const previewDatasetRebuild = async () => {
     if (!datasetKey || hasDirtyDrafts) return;
@@ -1443,6 +1526,11 @@ export function DatasetEditorPage({
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInput(event.target)) return;
       if (event.key === "Delete" || event.key === "Backspace") {
+        if (editMode === "pseudo" && (pseudoSelectRef.current?.getFeatures().getLength() || 0) > 0) {
+          event.preventDefault();
+          clearPseudoSelection();
+          return;
+        }
         const action = selectedDeleteAction(
           selectedVerticesRef.current.length,
           selectRef.current?.getFeatures().getLength() || 0,
@@ -1460,7 +1548,7 @@ export function DatasetEditorPage({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelected, deleteSelectedVertices, undoCurrent]);
+  }, [clearPseudoSelection, deleteSelected, deleteSelectedVertices, editMode, undoCurrent]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1878,6 +1966,19 @@ export function DatasetEditorPage({
                       >
                         <PencilLine size={17} />
                       </button>
+                      {pseudoVisible && pseudoMarkup?.status === "ready" ? (
+                        <button
+                          className={`${editMode === "pseudo" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
+                          type="button"
+                          disabled={Boolean(activeDraft.current.deleted)}
+                          aria-label="Выбрать объекты псевдоразметки"
+                          aria-pressed={editMode === "pseudo"}
+                          title="Выбор объектов сети: клик — выбрать один, Shift+клик — добавить или убрать объект из выбора"
+                          onClick={() => setEditMode("pseudo")}
+                        >
+                          <Plus size={17} />
+                        </button>
+                      ) : null}
                     </div>
                     {selectedDataset?.task === "multiclass" ? (
                       <div className="dataset-editor-object-switch" role="group" aria-label="Тип объекта">
@@ -1953,7 +2054,9 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена.
+                  <MousePointer2 size={14} /> {editMode === "pseudo"
+                    ? "Клик — выбрать объект сети, Shift+клик — выбрать несколько; укажите назначение и добавьте их в черновик. Del снимает выбор."
+                    : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
@@ -2064,6 +2167,44 @@ export function DatasetEditorPage({
                               ? `Псевдоразметка: инференс${pseudoMarkup.progress_total ? ` ${pseudoMarkup.progress_current || 0}/${pseudoMarkup.progress_total}` : ""}`
                               : pseudoMarkup.message || "Псевдоразметка недоступна"}
                       </span>
+                      {pseudoMarkup.status === "ready" && editMode === "pseudo" ? (
+                        <div className="dataset-editor-pseudo-accept">
+                          <strong>Выбрано: {selectedPseudoCount}</strong>
+                          <label>
+                            Добавить как
+                            <select
+                              value={pseudoTarget}
+                              aria-label="Назначение выбранных объектов псевдоразметки"
+                              onChange={(event) => setPseudoTarget(event.target.value)}
+                            >
+                              {selectedDataset?.task === "multiclass" ? (
+                                objectTypeChoices.map((item) => (
+                                  <option key={item.slug} value={item.slug}>{item.name}</option>
+                                ))
+                              ) : (
+                                <option value="positive">{selectedDataset?.class_name || "Целевой класс"}</option>
+                              )}
+                              <option value="hard_negative">Hard negative</option>
+                            </select>
+                          </label>
+                          <button
+                            className="primary"
+                            type="button"
+                            disabled={selectedPseudoCount === 0}
+                            onClick={addSelectedPseudoToDraft}
+                          >
+                            <Plus size={14} /> В черновик
+                          </button>
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={selectedPseudoCount === 0}
+                            onClick={clearPseudoSelection}
+                          >
+                            Сбросить
+                          </button>
+                        </div>
+                      ) : null}
                       {pseudoMarkup.can_retry ? (
                         <button
                           className="secondary"
@@ -2338,7 +2479,7 @@ function matchesObjectSelection(
 function applyObjectSelection(
   feature: Feature<Geometry>,
   selection: ObjectSelection,
-  dataset: EditorDataset | null,
+  dataset: Pick<EditorDataset, "task" | "object_types"> | null,
 ): void {
   if (selection === "hard_negative") {
     feature.set(ROLE_PROPERTY, "hard_negative", true);
@@ -2354,6 +2495,36 @@ function applyObjectSelection(
   } else {
     feature.unset(CLASS_PROPERTY, true);
   }
+}
+
+export function clonePseudoFeatureForDraft(
+  pseudoFeature: Feature<Geometry>,
+  selection: ObjectSelection,
+  dataset: Pick<EditorDataset, "task" | "object_types">,
+): Feature<Geometry> | null {
+  const geometry = pseudoFeature.getGeometry();
+  if (!geometry) return null;
+  const feature = new Feature<Geometry>({ geometry: geometry.clone() });
+  feature.setId(crypto.randomUUID());
+  applyObjectSelection(feature, selection, dataset);
+  return feature;
+}
+
+function pseudoFeatureTarget(
+  feature: Feature<Geometry> | undefined,
+  dataset: EditorDataset | null,
+): ObjectSelection | null {
+  if (!feature || !dataset) return null;
+  if (dataset.task !== "multiclass") return "positive";
+  const slug = feature.get("object_type_slug");
+  if (typeof slug === "string" && dataset.object_types.some((item) => item.slug === slug)) {
+    return slug;
+  }
+  const rawId = feature.get("object_type_id");
+  const objectType = dataset.object_types.find((item) =>
+    rawId !== undefined && rawId !== null && item.id === Number(rawId)
+  );
+  return objectType?.slug || dataset.object_types[0]?.slug || null;
 }
 
 function formatRebuildChange(change: RebuildChange): string {
@@ -2375,16 +2546,7 @@ export function pseudoMarkupStyle(
   feature: Feature<Geometry>,
   objectTypes: EditorObjectType[],
 ): Style {
-  const sourceColor = feature.get("object_type_color");
-  const slug = feature.get("object_type_slug");
-  const rawId = feature.get("object_type_id");
-  const objectType = objectTypes.find((item) =>
-    (typeof slug === "string" && item.slug === slug)
-    || (rawId !== undefined && rawId !== null && item.id === Number(rawId))
-  );
-  const color = typeof sourceColor === "string" && /^#[0-9a-f]{6}$/i.test(sourceColor)
-    ? sourceColor.toUpperCase()
-    : objectType?.color || "#22D3EE";
+  const color = pseudoFeatureColor(feature, objectTypes);
   const key = color.toUpperCase();
   const cached = pseudoStyleCache.get(key);
   if (cached) return cached;
@@ -2394,6 +2556,40 @@ export function pseudoMarkupStyle(
   });
   pseudoStyleCache.set(key, style);
   return style;
+}
+
+function selectedPseudoMarkupStyle(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+): Style[] {
+  const base = pseudoMarkupStyle(feature, objectTypes);
+  const color = pseudoFeatureColor(feature, objectTypes);
+  const key = color.toUpperCase();
+  let selected = selectedPseudoStyleCache.get(key);
+  if (!selected) {
+    selected = new Style({
+      fill: new Fill({ color: hexToRgba(color, 0.34) }),
+      stroke: new Stroke({ color: "#FFFFFF", width: 4, lineDash: [3, 3] }),
+    });
+    selectedPseudoStyleCache.set(key, selected);
+  }
+  return [base, selected];
+}
+
+function pseudoFeatureColor(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+): string {
+  const sourceColor = feature.get("object_type_color");
+  const slug = feature.get("object_type_slug");
+  const rawId = feature.get("object_type_id");
+  const objectType = objectTypes.find((item) =>
+    (typeof slug === "string" && item.slug === slug)
+    || (rawId !== undefined && rawId !== null && item.id === Number(rawId))
+  );
+  return typeof sourceColor === "string" && /^#[0-9a-f]{6}$/i.test(sourceColor)
+    ? sourceColor.toUpperCase()
+    : objectType?.color || "#22D3EE";
 }
 
 function featureStyle(
