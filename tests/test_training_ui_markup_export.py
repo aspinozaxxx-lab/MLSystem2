@@ -3315,6 +3315,19 @@ def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
             str(first_sample.id),
             str(second_sample.id),
         ]
+        metric.f1 = 0.44
+        metric.metrics = {
+            "pixel": {
+                "per_class": {
+                    "first_objects": {"f1": 0.2},
+                    "second_objects": {"f1": 0.4},
+                }
+            }
+        }
+        queued_info = training_result_test_f1_info(session, training, config)
+        assert queued_info is not None
+        assert queued_info.status == "queued"
+        assert queued_info.aggregation == "foreground"
 
         monkeypatch.setattr(
             _worker,

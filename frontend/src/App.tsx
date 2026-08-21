@@ -3577,7 +3577,7 @@ function DatasetResultsPage({
         }
       />
       {primaryTestSamples.length ? (
-        <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : "error"}`}>
+        <section className={`status-banner ${payload.test_f1_status === "current" ? "ok" : payload.test_f1_status === "running" ? "neutral" : "error"}`}>
           <div>
             <strong>{payload.test_f1_status === "current" ? `${resultMetricLabel} актуален` : payload.test_f1_status === "running" ? `Идёт пересчёт ${resultMetricLabel}` : `${resultMetricLabel} не актуален`}</strong>
             <span className="result-test-sample-list">

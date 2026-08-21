@@ -3679,7 +3679,11 @@ def _training_result_test_metric_info(
         ),
         sample_revision=metric.sample_revision,
         samples=samples,
-        aggregation="macro" if managed else "foreground",
+        aggregation=(
+            "macro"
+            if managed and (metric.metrics or {}).get("aggregation") == "macro"
+            else "foreground"
+        ),
         job_id=metric.job_id,
         evaluated_at=metric.evaluated_at,
         error=error,
