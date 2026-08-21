@@ -330,7 +330,7 @@
 
 .dataset-result-score {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 6px 10px;
   min-width: 0;
@@ -1178,7 +1178,7 @@
 }
 
 .dataset-result-score .compact-class-f1-list {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .compact-class-f1-chip {
