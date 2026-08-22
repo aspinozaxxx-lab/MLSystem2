@@ -116,6 +116,25 @@
   padding: 32px 28px 48px;
 }
 
+.nav-queue-count {
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--grovika-slate);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.nav .active .nav-queue-count {
+  background: color-mix(in srgb, var(--grovika-white) 18%, transparent);
+  color: var(--grovika-white);
+}
+
 .page.page-wide {
   width: 100%;
   max-width: none;

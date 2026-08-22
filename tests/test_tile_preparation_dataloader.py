@@ -38,6 +38,7 @@ from mlsystem2.tile_preparation._mask import build_supervision_mask
 from mlsystem2.tile_preparation.contracts import (
     HARD_NEGATIVE_LABEL,
     TileClassAnnotation,
+    TileClassDefinition,
     TileDataloaderRequest,
     TilePreparationError,
     TileSceneSource,
@@ -598,6 +599,77 @@ def test_create_tile_dataloader_returns_multiclass_supervision_mask_with_hard_ne
     assert set(torch.unique(masks).tolist()) == {HARD_NEGATIVE_LABEL, 0, 1}
     assert batch_meta["tile_category"] == [TILE_CATEGORY_POSITIVE]
     loader.dataset.close()
+
+
+def test_per_image_multiclass_keeps_hard_negative_for_its_class_only(
+    tmp_path: Path,
+) -> None:
+    raster_path = tmp_path / "managed.tif"
+    _write_raster_data(
+        raster_path,
+        np.full((1, 4, 4), 1000, dtype=np.uint16),
+        nodata=0,
+    )
+    annotation_path = tmp_path / "managed.geojson"
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "_mlsystem2_role": "hard_negative",
+                            "_mlsystem2_class": "class_a",
+                        },
+                        "geometry": _polygon_geometry(
+                            [[0, 3], [1, 3], [1, 4], [0, 4], [0, 3]]
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    dataset = TileDataset(
+        scenes=[
+            TileSceneSource(
+                scene_id="managed",
+                image_path=raster_path,
+                annotation_file=annotation_path,
+            )
+        ],
+        classes=[
+            TileClassDefinition(
+                class_id=1,
+                slug="class_a",
+                name="Класс А",
+                color="#3366CC",
+            ),
+            TileClassDefinition(
+                class_id=2,
+                slug="class_b",
+                name="Класс Б",
+                color="#22AA55",
+            ),
+        ],
+        tile_size=4,
+        stride=4,
+        mode="val",
+        seed=42,
+        augmentation_level=0,
+    )
+
+    _image, supervision, meta = dataset[0]
+
+    assert dataset.tile_categories == [TILE_CATEGORY_HARD_NEGATIVE]
+    assert np.all(supervision == 0)
+    class_negatives = meta["class_hard_negative_masks"]
+    assert class_negatives.shape == (2, 4, 4)
+    assert class_negatives[0, 0, 0]
+    assert not np.any(class_negatives[1])
+    dataset.close()
 
 
 def test_create_tile_dataloader_resolves_multiclass_overlap_by_priority(tmp_path: Path) -> None:

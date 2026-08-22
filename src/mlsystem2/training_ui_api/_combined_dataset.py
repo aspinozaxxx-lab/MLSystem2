@@ -347,6 +347,11 @@ def _build_per_image_combined_dataset(
                 if clipped.is_empty or clipped.area <= 0:
                     continue
                 transformed_features.append((item, clipped))
+            if manifest.managed:
+                transformed_features = _collapse_managed_hard_negatives(
+                    transformed_features,
+                    {item.slug for item in manifest.classes},
+                )
             target_features: list[dict[str, Any]] = []
             target_hashes: dict[str, str] = {}
             seen_hard_negatives: set[tuple[str, str]] = set()
@@ -356,7 +361,7 @@ def _build_per_image_combined_dataset(
             ):
                 if item.role == "hard_negative":
                     hard_negative_key = (
-                        item.source_origin_key or item.origin_key,
+                        f"{item.class_slug or ''}:{item.source_origin_key or item.origin_key}",
                         hashlib.sha256(clipped.wkb).hexdigest(),
                     )
                     if hard_negative_key in seen_hard_negatives:
@@ -380,11 +385,14 @@ def _build_per_image_combined_dataset(
                     "_mlsystem2_source_identity": item.source_identity,
                 }
                 properties = {key: value for key, value in properties.items() if value is not None}
-                if item.class_slug is not None:
+                if item.role == "positive" and item.class_slug is not None:
                     properties["_mlsystem2_class"] = item.class_slug
                     class_counts[item.class_slug] += 1
                 else:
-                    properties.pop("_mlsystem2_class", None)
+                    if item.class_slug is not None:
+                        properties["_mlsystem2_class"] = item.class_slug
+                    else:
+                        properties.pop("_mlsystem2_class", None)
                     hard_negative_count += 1
                 target = {
                     "type": "Feature",
@@ -505,7 +513,7 @@ def _load_per_image_source_features(
                 origin_hash=origin_hash,
                 source_path=relative,
                 role=role,
-                class_slug=source.class_slug if role == "positive" else None,
+                class_slug=source.class_slug,
                 source_dataset_key=source.dataset_key,
                 source_annotation=path.name,
                 source_origin_key=source_origin,
@@ -719,6 +727,57 @@ def _apply_target_priorities(
             continue
         output.append((feature, resolved))
     return output
+
+
+def _collapse_managed_hard_negatives(
+    features: list[tuple[_SourceFeature, BaseGeometry]],
+    class_slugs: set[str],
+) -> list[tuple[_SourceFeature, BaseGeometry]]:
+    positives = [item for item in features if item[0].role != "hard_negative"]
+    groups: dict[str, list[tuple[_SourceFeature, BaseGeometry]]] = {}
+    for feature, geometry in features:
+        if feature.role != "hard_negative":
+            continue
+        key = hashlib.sha256(
+            (
+                f"{feature.source_origin_key or feature.origin_key}:"
+                f"{hashlib.sha256(geometry.wkb).hexdigest()}"
+            ).encode("utf-8")
+        ).hexdigest()
+        groups.setdefault(key, []).append((feature, geometry))
+
+    collapsed: list[tuple[_SourceFeature, BaseGeometry]] = []
+    for key in sorted(groups):
+        group = groups[key]
+        group_classes = {
+            str(feature.class_slug)
+            for feature, _geometry in group
+            if feature.class_slug is not None
+        }
+        if any(feature.class_slug is None for feature, _geometry in group) or (
+            class_slugs and group_classes >= class_slugs
+        ):
+            feature, geometry = group[0]
+            collapsed.append(
+                (
+                    replace(
+                        feature,
+                        class_slug=None,
+                        source_dataset_key=None,
+                        source_identity=None,
+                    ),
+                    geometry,
+                )
+            )
+            continue
+        seen_classes: set[str] = set()
+        for feature, geometry in group:
+            class_slug = str(feature.class_slug or "")
+            if class_slug in seen_classes:
+                continue
+            seen_classes.add(class_slug)
+            collapsed.append((feature, geometry))
+    return [*positives, *collapsed]
 
 
 def _difference_with_clearance(

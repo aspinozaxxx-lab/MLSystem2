@@ -21,6 +21,7 @@ class TrainingJobCreate(BaseModel):
     custom_dataset_id: UUID | None = None
     architecture: str
     config: dict[str, Any]
+    run_inference_after_training: bool = False
 
 
 class QueueEnabledUpdate(BaseModel):
@@ -35,6 +36,12 @@ class QueueControlInfo(BaseModel):
     queue_name: JobType
     enabled: bool
     updated_at: datetime
+
+
+class QueueCountInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_jobs: int = Field(ge=0)
 
 
 class JobSummary(BaseModel):
@@ -90,6 +97,7 @@ class JobDetail(BaseModel):
     mlflow_experiment_name: str | None = None
     mlflow_run_name: str | None = None
     config: dict[str, Any]
+    run_inference_after_training: bool = False
     readonly: bool = True
     created_at: datetime
     started_at: datetime | None = None
@@ -112,6 +120,7 @@ __all__ = [
     "JobLogInfo",
     "JobSummary",
     "QueueControlInfo",
+    "QueueCountInfo",
     "QueueEnabledUpdate",
     "QueueSnapshot",
     "TrainingJobCreate",

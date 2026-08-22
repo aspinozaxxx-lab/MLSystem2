@@ -701,6 +701,7 @@ def test_successful_training_does_not_assign_primary_star(
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     reconciled_class_keys: list[set[str]] = []
+    post_training_inference_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         _worker,
@@ -711,6 +712,14 @@ def test_successful_training_does_not_assign_primary_star(
         _worker,
         "reconcile_test_sample_evaluations",
         lambda _session, _config, *, class_keys: reconciled_class_keys.append(class_keys) or 0,
+    )
+    monkeypatch.setattr(
+        _service,
+        "create_pseudo_markup_job",
+        lambda _session, **kwargs: (
+            post_training_inference_calls.append(kwargs)
+            or SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000123"))
+        ),
     )
 
     with session_factory() as session:
@@ -733,7 +742,7 @@ def test_successful_training_does_not_assign_primary_star(
             dataset_name="Лес\\main",
             model_name="segformer b2",
             architecture="smp_segformer_b2",
-            config={},
+            config={"ui.run_inference_after_training": True},
         )
         session.add_all([dataset, job])
         session.flush()
@@ -756,6 +765,12 @@ def test_successful_training_does_not_assign_primary_star(
         assert class_row.primary_training_result_id is None
         assert _service.primary_training_result(session, class_row.key).id == result.id
         assert reconciled_class_keys == [{class_row.key}]
+        assert len(post_training_inference_calls) == 1
+        assert post_training_inference_calls[0]["dataset_key"] == dataset.key
+        assert post_training_inference_calls[0]["training_result_id"] == result.id
+        assert job.config["ui.post_training_inference_job_ids"] == [
+            "00000000-0000-0000-0000-000000000123"
+        ]
 
 
 def test_training_ui_queue_snapshot_returns_unified_priority_order(
@@ -2724,6 +2739,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
                 "custom_dataset_id": custom["id"],
                 "architecture": "smp_segformer_b2",
                 "config": reset["default_config"],
+                "run_inference_after_training": True,
             },
         ).json()
         assert job["status"] == "queued"
@@ -2731,13 +2747,17 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert job["mlflow_run_name"] is None
         assert "train.device" not in job["config"]
         assert "dataset.split_granularity" not in job["config"]
+        assert job["run_inference_after_training"] is True
+        assert "ui.run_inference_after_training" not in job["config"]
 
         queues = client.get("/api/v1/queues").json()
         assert queues["training_enabled"] is True
         assert len(queues["training_jobs"]) == 1
+        assert client.get("/api/v1/queues/count").json() == {"active_jobs": 1}
 
         detail = client.get(f"/api/v1/jobs/{job['id']}").json()
         assert detail["readonly"] is True
+        assert detail["run_inference_after_training"] is True
 
         custom_results = client.get("/api/v1/results/datasets/custom").json()
         training_result_id = custom_results["results"][0]["id"]

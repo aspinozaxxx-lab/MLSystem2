@@ -271,10 +271,16 @@ def _train_epoch(
     has_optimizer_step = False
     nonfinite_gradient_skips = 0
     for batch_index, batch in enumerate(loader, start=1):
-        images, masks, _meta = _split_batch(batch, epoch, batch_index, "train")
+        images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
         masks, hard_negative_pixels = _prepare_supervision_masks(
             torch, masks, config, device
+        )
+        class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
+            torch,
+            meta,
+            config,
+            device,
         )
         _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "train")
         _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "train")
@@ -289,9 +295,21 @@ def _train_epoch(
             hard_negative_pixels,
             config.inference_context,
         )
+        if class_hard_negative_pixels is not None:
+            class_hard_negative_pixels = _crop_spatial(
+                class_hard_negative_pixels,
+                config.inference_context,
+            )
         if config.task == "multiclass":
             _validate_multiclass_targets(torch, masks, logits.shape[1], epoch, batch_index, "train")
-        loss = _loss(torch, logits, masks, config, hard_negative_pixels)
+        loss = _loss(
+            torch,
+            logits,
+            masks,
+            config,
+            hard_negative_pixels,
+            class_hard_negative_pixels,
+        )
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
@@ -314,7 +332,7 @@ def _train_epoch(
                 config.max_train_batches_per_epoch is not None
                 and batch_index >= config.max_train_batches_per_epoch
             )
-            del images, masks, hard_negative_pixels, logits, loss
+            del images, masks, hard_negative_pixels, class_hard_negative_pixels, logits, loss
             if pause_controller is not None:
                 pause_controller.pause_if_requested()
             if reached_limit:
@@ -330,7 +348,7 @@ def _train_epoch(
             config.max_train_batches_per_epoch is not None
             and batch_index >= config.max_train_batches_per_epoch
         )
-        del images, masks, hard_negative_pixels, logits, loss, grad_norm
+        del images, masks, hard_negative_pixels, class_hard_negative_pixels, logits, loss, grad_norm
         if pause_controller is not None:
             pause_controller.pause_if_requested()
         if reached_limit:
@@ -546,10 +564,16 @@ def _validate_multiclass_epoch(
 
     with torch.no_grad():
         for batch_index, batch in enumerate(loader, start=1):
-            images, masks, _meta = _split_batch(batch, epoch, batch_index, "val")
+            images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
             masks, hard_negative_pixels = _prepare_supervision_masks(
                 torch, masks, config, device
+            )
+            class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
+                torch,
+                meta,
+                config,
+                device,
             )
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
@@ -561,6 +585,11 @@ def _validate_multiclass_epoch(
                 hard_negative_pixels,
                 config.inference_context,
             )
+            if class_hard_negative_pixels is not None:
+                class_hard_negative_pixels = _crop_spatial(
+                    class_hard_negative_pixels,
+                    config.inference_context,
+                )
             num_classes = int(logits.shape[1])
             _validate_multiclass_targets(torch, masks, num_classes, epoch, batch_index, "val")
             if num_classes != expected_num_classes:
@@ -568,7 +597,14 @@ def _validate_multiclass_epoch(
                     "Число каналов multiclass-модели не соответствует class_schema: "
                     f"ожидается {expected_num_classes}, получено {num_classes}."
                 )
-            loss = _loss(torch, logits, masks, config, hard_negative_pixels)
+            loss = _loss(
+                torch,
+                logits,
+                masks,
+                config,
+                hard_negative_pixels,
+                class_hard_negative_pixels,
+            )
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
@@ -585,35 +621,49 @@ def _validate_multiclass_epoch(
                 for class_id in range(1, num_classes):
                     predicted = labels == class_id
                     expected = masks == class_id
+                    valid = (
+                        torch.ones_like(expected, dtype=torch.bool)
+                        if class_hard_negative_pixels is None
+                        else (
+                            ~class_hard_negative_pixels.any(dim=1)
+                            | class_hard_negative_pixels[:, class_id - 1, :, :]
+                        )
+                    )
                     stats = stats_by_class.setdefault(
                         class_id,
                         {"tp": 0, "fp": 0, "fn": 0, "support": 0, "predicted": 0},
                     )
-                    stats["tp"] += int((predicted & expected).sum().item())
-                    stats["fp"] += int((predicted & ~expected).sum().item())
-                    stats["fn"] += int((~predicted & expected).sum().item())
-                    stats["support"] += int(expected.sum().item())
-                    stats["predicted"] += int(predicted.sum().item())
+                    stats["tp"] += int((predicted & expected & valid).sum().item())
+                    stats["fp"] += int((predicted & ~expected & valid).sum().item())
+                    stats["fn"] += int((~predicted & expected & valid).sum().item())
+                    stats["support"] += int((expected & valid).sum().item())
+                    stats["predicted"] += int((predicted & valid).sum().item())
                 predicted_foreground = labels > 0
                 expected_foreground = masks > 0
+                foreground_valid = (
+                    torch.ones_like(expected_foreground, dtype=torch.bool)
+                    if class_hard_negative_pixels is None
+                    else ~class_hard_negative_pixels.any(dim=1)
+                )
                 foreground = foreground_stats[threshold]
                 foreground["tp"] += int(
-                    (predicted_foreground & expected_foreground).sum().item()
+                    (predicted_foreground & expected_foreground & foreground_valid).sum().item()
                 )
                 foreground["fp"] += int(
-                    (predicted_foreground & ~expected_foreground).sum().item()
+                    (predicted_foreground & ~expected_foreground & foreground_valid).sum().item()
                 )
                 foreground["fn"] += int(
-                    (~predicted_foreground & expected_foreground).sum().item()
+                    (~predicted_foreground & expected_foreground & foreground_valid).sum().item()
                 )
 
             reached_limit = (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
             )
-            del images, masks, hard_negative_pixels, logits, loss, probabilities
+            del images, masks, hard_negative_pixels, class_hard_negative_pixels
+            del logits, loss, probabilities
             del confidence, raw_labels, labels, predicted, expected
-            del predicted_foreground, expected_foreground
+            del predicted_foreground, expected_foreground, foreground_valid, valid
             if pause_controller is not None:
                 pause_controller.pause_if_requested()
             if reached_limit:
@@ -839,32 +889,62 @@ def _prepare_supervision_masks(torch, masks, config, device):
     return target, hard_negative_pixels
 
 
+def _prepare_class_hard_negative_pixels(torch, meta, config, device):
+    if config.task != "multiclass" or not isinstance(meta, dict):
+        return None
+    raw = meta.get("class_hard_negative_masks")
+    if raw is None:
+        return None
+    value = raw.to(device=device, dtype=torch.bool)
+    expected_channels = len(config.class_schema)
+    if value.ndim != 4 or int(value.shape[1]) != expected_channels:
+        raise TrainError(
+            "Классовая hard negative маска должна иметь форму "
+            f"B×{expected_channels}×H×W."
+        )
+    return value
+
+
 def _loss(
     torch,
     logits,
     masks,
     config,
     hard_negative_pixels=None,
+    class_hard_negative_pixels=None,
 ):
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(
                 "multiclass train поддерживает только loss=cross_entropy или cross_entropy_dice"
             )
-        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+        weights = _multiclass_base_loss_weights(
+            torch,
+            logits,
+            hard_negative_pixels,
+            class_hard_negative_pixels,
+            config,
+        )
         cross_entropy = _weighted_mean(
             torch.nn.functional.cross_entropy(logits, masks, reduction="none"),
             weights,
         )
+        class_hard_negative_loss = _class_hard_negative_loss(
+            torch,
+            logits,
+            class_hard_negative_pixels,
+            config,
+        )
         if config.loss == "cross_entropy_dice":
-            return cross_entropy + _multiclass_dice_loss(
+            return cross_entropy + class_hard_negative_loss + _multiclass_dice_loss(
                 torch,
                 logits,
                 masks,
                 hard_negative_pixels,
                 config,
+                class_hard_negative_pixels,
             )
-        return cross_entropy
+        return cross_entropy + class_hard_negative_loss
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
         weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
@@ -960,6 +1040,46 @@ def _weighted_mean(values, weights):
     return (values * weights).mean()
 
 
+def _multiclass_base_loss_weights(
+    torch,
+    logits,
+    hard_negative_pixels,
+    class_hard_negative_pixels,
+    config,
+):
+    weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    if class_hard_negative_pixels is None:
+        return weights
+    valid = (~class_hard_negative_pixels.any(dim=1)).to(
+        device=logits.device,
+        dtype=logits.dtype,
+    )
+    return valid if weights is None else weights * valid
+
+
+def _class_hard_negative_loss(
+    torch,
+    logits,
+    class_hard_negative_pixels,
+    config,
+):
+    if class_hard_negative_pixels is None:
+        return logits.sum() * 0.0
+    probabilities = torch.softmax(logits, dim=1)[:, 1:, :, :]
+    masks = class_hard_negative_pixels.to(
+        device=logits.device,
+        dtype=logits.dtype,
+    )
+    epsilon = torch.finfo(logits.dtype).eps
+    complement_loss = -torch.log((1.0 - probabilities).clamp_min(epsilon))
+    pixel_count = max(1, int(logits.shape[0] * logits.shape[2] * logits.shape[3]))
+    return (
+        complement_loss.mul(masks).sum()
+        / pixel_count
+        * float(getattr(config, "hard_negative_weight", 1.0))
+    )
+
+
 def _focal_loss_with_bce(
     torch,
     logits,
@@ -1017,6 +1137,7 @@ def _multiclass_dice_loss(
     masks,
     hard_negative_pixels=None,
     config=None,
+    class_hard_negative_pixels=None,
 ):
     probs = torch.softmax(logits, dim=1)
     num_classes = int(logits.shape[1])
@@ -1029,6 +1150,13 @@ def _multiclass_dice_loss(
     target = target.permute(0, 3, 1, 2).to(device=logits.device, dtype=probs.dtype)
     probs = probs[:, 1:, :, :]
     target = target[:, 1:, :, :]
+    if class_hard_negative_pixels is not None:
+        valid = (~class_hard_negative_pixels.any(dim=1)).unsqueeze(1).to(
+            device=logits.device,
+            dtype=probs.dtype,
+        )
+        probs = probs * valid
+        target = target * valid
     probability_weights = _pixel_loss_weights(
         torch, logits, hard_negative_pixels, config
     )

@@ -13,6 +13,7 @@ from mlsystem2.training_ui_api._service import (
     job_detail,
     job_log,
     move_job,
+    queue_count,
     queues,
     set_queue_enabled,
 )
@@ -21,6 +22,7 @@ from mlsystem2.training_ui_api.contracts import (
     JobLogInfo,
     JobType,
     QueueEnabledUpdate,
+    QueueCountInfo,
     QueueSnapshot,
     TrainingJobCreate,
 )
@@ -43,6 +45,13 @@ def register_job_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> QueueSnapshot:
         return queues(db)
+
+    @app.get("/api/v1/queues/count", response_model=QueueCountInfo)
+    def get_queue_count(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> QueueCountInfo:
+        return queue_count(db)
 
     @app.put("/api/v1/queues/training/enabled", response_model=QueueSnapshot)
     def put_training_enabled(

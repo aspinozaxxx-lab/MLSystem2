@@ -1245,6 +1245,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queues/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Queue Count */
+        get: operations["get_queue_count_api_v1_queues_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queues/training/enabled": {
         parameters: {
             query?: never;
@@ -2582,6 +2599,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Run Inference After Training
+             * @default false
+             */
+            run_inference_after_training: boolean;
+            /**
              * Readonly
              * @default true
              */
@@ -3138,6 +3160,11 @@ export interface components {
          * @enum {string}
          */
         QualityMetric: "pixel" | "objects";
+        /** QueueCountInfo */
+        QueueCountInfo: {
+            /** Active Jobs */
+            active_jobs: number;
+        };
         /** QueueEnabledUpdate */
         QueueEnabledUpdate: {
             /** Enabled */
@@ -3876,6 +3903,11 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /**
+             * Run Inference After Training
+             * @default false
+             */
+            run_inference_after_training: boolean;
         };
         /** TrainingResultBatchExportRequest */
         TrainingResultBatchExportRequest: {
@@ -6817,6 +6849,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueSnapshot"];
+                };
+            };
+        };
+    };
+    get_queue_count_api_v1_queues_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueCountInfo"];
                 };
             };
         };

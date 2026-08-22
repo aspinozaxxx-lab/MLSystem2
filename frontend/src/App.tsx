@@ -61,6 +61,7 @@ import type {
   MLflowExperimentInfo,
   ModelInfo,
   PseudoMarkupResultInfo,
+  QueueCountInfo,
   QueueSnapshot,
   ResultChangeInfo,
   ResultChangesResponse,
@@ -272,7 +273,7 @@ export function App() {
   );
 
   return (
-    <Shell user={user} route={route} onLogout={logout}>
+    <Shell user={user} route={route} onLogout={logout} run={run}>
       {page}
       <Modal modal={modal} onClose={closeModal} />
     </Shell>
@@ -325,14 +326,27 @@ function Shell({
   user,
   route,
   onLogout,
+  run,
   children,
 }: {
   user: string;
   route: string[];
   onLogout: () => void;
+  run: Runner;
   children: ReactNode;
 }) {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [queueCount, setQueueCount] = useState(0);
+  const loadQueueCount = useCallback(async () => {
+    const payload = await run(() => apiJson<QueueCountInfo>("/queues/count"));
+    if (payload) setQueueCount(payload.active_jobs);
+  }, [run]);
+
+  useEffect(() => {
+    void loadQueueCount();
+    const timer = window.setInterval(() => void loadQueueCount(), PROGRESS_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [loadQueueCount, route]);
   const exportRouteActive =
     route[0] === "model-export" || route[0] === "scene-list-export" || route[0] === "test-markups";
   const navItems = [
@@ -356,6 +370,11 @@ function Shell({
               <a className={route[0] === item.key ? "active" : ""} href={item.href} key={item.key}>
                 <Icon size={16} />
                 {item.label}
+                {item.key === "queue" ? (
+                  <span className="nav-queue-count" aria-label={`Активных заданий: ${queueCount}`}>
+                    {queueCount}
+                  </span>
+                ) : null}
               </a>
             );
           })}
@@ -566,6 +585,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   const [experimentName, setExperimentName] = useState("MLSystem2");
   const [config, setConfig] = useState<JsonRecord>({});
   const [busy, setBusy] = useState(false);
+  const [runInferenceAfterTraining, setRunInferenceAfterTraining] = useState(false);
 
   const template = useMemo(
     () => templateFor(bootstrap.training_templates, architecture, datasetKey),
@@ -652,6 +672,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           custom_dataset_id: customDatasetId,
           architecture,
           config,
+          run_inference_after_training: runInferenceAfterTraining,
         },
       }),
     );
@@ -745,6 +766,19 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           ) : (
             <div className="error-box">Нет шаблона для выбранной модели.</div>
           )}
+        </section>
+        <section className="panel compact-panel">
+          <label className="field checkbox-field">
+            <input
+              type="checkbox"
+              checked={runInferenceAfterTraining}
+              onChange={(event) => setRunInferenceAfterTraining(event.target.checked)}
+            />
+            <span>После обучения запустить инференс по снимкам этого датасета</span>
+          </label>
+          <p className="muted">
+            После успешного обучения штатная псевдоразметка будет поставлена в очередь для всех снимков выбранного датасета.
+          </p>
         </section>
         <div className="button-row">
           <button className="primary" type="submit" disabled={busy || !template}>
@@ -3943,6 +3977,9 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
               <td className="technical-value">{formatDateTime(job.created_at)}</td>
               <td>
                 <div className="inline-row" onClick={(event) => event.stopPropagation()}>
+                  <a className="secondary compact-action" href={`#/jobs/${job.id}`}>
+                    Job
+                  </a>
                   <button className="secondary icon-button" type="button" title="Выше" onClick={() => onAction(job, "move-up")}>
                     <ChevronUp size={15} />
                   </button>

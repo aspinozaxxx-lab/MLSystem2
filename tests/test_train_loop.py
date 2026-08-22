@@ -769,6 +769,55 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
     assert weights[0, 0, 1].item() == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
+def test_multiclass_class_hard_negative_penalizes_only_its_object_type(
+    loss_name: str,
+) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        hard_negative_weight=2.0,
+        early_stopping_patience=1,
+        class_slugs=["class_a", "class_b"],
+    )
+    masks = torch.zeros((1, 1, 1), dtype=torch.long)
+    global_hard_negative = torch.zeros_like(masks, dtype=torch.bool)
+    class_hard_negative = torch.tensor([[[[True]], [[False]]]])
+    predicts_a = torch.tensor([[[[-4.0]], [[4.0]], [[-4.0]]]], requires_grad=True)
+    predicts_b = torch.tensor([[[[-4.0]], [[-4.0]], [[4.0]]]], requires_grad=True)
+
+    loss_a = _trainer._loss(
+        torch,
+        predicts_a,
+        masks,
+        config,
+        global_hard_negative,
+        class_hard_negative,
+    )
+    loss_b = _trainer._loss(
+        torch,
+        predicts_b,
+        masks,
+        config,
+        global_hard_negative,
+        class_hard_negative,
+    )
+    loss_a.backward()
+
+    assert loss_a > loss_b
+    assert predicts_a.grad is not None
+    assert predicts_a.grad[0, 1, 0, 0].abs().item() > 0
+
+
 def test_hard_negative_weight_ignores_tile_meta_without_supervision_pixels() -> None:
     torch = pytest.importorskip("torch")
 

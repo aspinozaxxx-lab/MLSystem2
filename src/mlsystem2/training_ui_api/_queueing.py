@@ -13,6 +13,8 @@ from .contracts import JobSource, JobStatus, JobType
 
 
 DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
+POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
+POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
 
 
 class _QueueRow(Protocol):

@@ -92,11 +92,28 @@ type EditorDataset = {
   task: "binary" | "multiclass";
   object_types: EditorObjectType[];
   combined: boolean;
+  managed: boolean;
+  managed_sources: EditorManagedSource[];
   source_status: "current" | "stale" | "unknown" | "unavailable";
   source_changes: string[];
   class_counts: Record<string, number>;
   hard_negative_count: number;
   primary_training_result_id: string | null;
+};
+
+type EditorManagedSource = {
+  dataset_key: string;
+  dataset_name: string;
+  class_key: string;
+  class_name: string;
+  priority: number;
+  object_type_id: number;
+  object_type_slug: string;
+  color: string;
+};
+
+type ObjectSelectionDataset = Pick<EditorDataset, "task" | "object_types"> & {
+  managed?: boolean;
 };
 
 type EditorObjectType = {
@@ -209,6 +226,7 @@ type DraftSaveStatus = "saved" | "saving" | "unsaved" | "error";
 
 const ROLE_PROPERTY = "_mlsystem2_role";
 const CLASS_PROPERTY = "_mlsystem2_class";
+const SOURCE_ORIGIN_KEY_PROPERTY = "_mlsystem2_source_origin_key";
 const POSITIVE_COLOR = "#F3C623";
 const HARD_NEGATIVE_COLOR = "#EF4444";
 const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
@@ -260,6 +278,9 @@ export function DatasetEditorPage({
   const [pseudoMarkup, setPseudoMarkup] = useState<PseudoMarkupInfo | null>(null);
   const [pseudoRequestPending, setPseudoRequestPending] = useState(false);
   const [pseudoTarget, setPseudoTarget] = useState<ObjectSelection>("positive");
+  const [pseudoNegativeDatasetKeys, setPseudoNegativeDatasetKeys] = useState<Set<string>>(
+    new Set(),
+  );
   const [selectedPseudoCount, setSelectedPseudoCount] = useState(0);
   const [draftSaveStatuses, setDraftSaveStatuses] = useState<Record<string, DraftSaveStatus>>({});
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
@@ -520,6 +541,9 @@ export function DatasetEditorPage({
     roleRef.current = defaultRole;
     setRole(defaultRole);
     setPseudoTarget(defaultRole);
+    setPseudoNegativeDatasetKeys(
+      new Set((selectedDataset?.managed_sources || []).map((source) => source.dataset_key)),
+    );
     setSelectedPseudoCount(0);
     setRebuildPreview(null);
     void loadScenes(datasetKey);
@@ -1115,8 +1139,13 @@ export function DatasetEditorPage({
 
     const syncRoleFromFeature = (selected: Feature<Geometry> | undefined) => {
       if (!selected) return;
+      const selectedClass = typeof selected.get(CLASS_PROPERTY) === "string"
+        ? String(selected.get(CLASS_PROPERTY))
+        : null;
       const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative"
-        ? "hard_negative"
+        ? selectedDataset?.managed && selectedClass
+          ? hardNegativeSelection(selectedClass)
+          : "hard_negative"
         : typeof selected.get(CLASS_PROPERTY) === "string"
           ? String(selected.get(CLASS_PROPERTY))
           : "positive";
@@ -1392,6 +1421,20 @@ export function DatasetEditorPage({
     const before = captureActiveSnapshot();
     if (!before) return;
     const features = selected.getArray().flatMap((feature) => {
+      if (pseudoTarget === "hard_negative" && selectedDataset.managed) {
+        const sharedSourceOrigin = `pseudo:${crypto.randomUUID()}`;
+        return selectedDataset.managed_sources.flatMap((managedSource) => {
+          if (!pseudoNegativeDatasetKeys.has(managedSource.dataset_key)) return [];
+          const draftFeature = clonePseudoFeatureForDraft(
+            feature as Feature<Geometry>,
+            hardNegativeSelection(managedSource.object_type_slug),
+            selectedDataset,
+          );
+          if (!draftFeature) return [];
+          draftFeature.set(SOURCE_ORIGIN_KEY_PROPERTY, sharedSourceOrigin, true);
+          return [draftFeature];
+        });
+      }
       const draftFeature = clonePseudoFeatureForDraft(
         feature as Feature<Geometry>,
         pseudoTarget,
@@ -1406,7 +1449,14 @@ export function DatasetEditorPage({
     vectorLayerRef.current?.changed();
     mapRef.current?.render();
     recordCurrentChange(before);
-  }, [captureActiveSnapshot, clearPseudoSelection, pseudoTarget, recordCurrentChange, selectedDataset]);
+  }, [
+    captureActiveSnapshot,
+    clearPseudoSelection,
+    pseudoNegativeDatasetKeys,
+    pseudoTarget,
+    recordCurrentChange,
+    selectedDataset,
+  ]);
 
   const previewDatasetRebuild = async () => {
     if (!datasetKey || hasDirtyDrafts) return;
@@ -1996,16 +2046,38 @@ export function DatasetEditorPage({
                             <span className="dataset-editor-color-dot" />{item.name}
                           </button>
                         ))}
-                        <button
-                          type="button"
-                          className={role === "hard_negative" ? "active" : ""}
-                          aria-pressed={role === "hard_negative"}
-                          title="Общий hard negative / фон"
-                          style={{ "--object-color": HARD_NEGATIVE_COLOR } as CSSProperties}
-                          onClick={() => changeRole("hard_negative")}
-                        >
-                          <span className="dataset-editor-color-dot" />Hard negative
-                        </button>
+                        {selectedDataset.managed ? (
+                          objectTypeChoices.map((item) => {
+                            const selection = hardNegativeSelection(item.slug);
+                            const source = selectedDataset.managed_sources.find(
+                              (candidate) => candidate.object_type_slug === item.slug,
+                            );
+                            return (
+                              <button
+                                type="button"
+                                key={selection}
+                                className={role === selection ? "active" : ""}
+                                aria-pressed={role === selection}
+                                title={`Hard negative для датасета ${source?.dataset_name || item.name}`}
+                                style={{ "--object-color": HARD_NEGATIVE_COLOR } as CSSProperties}
+                                onClick={() => changeRole(selection)}
+                              >
+                                <span className="dataset-editor-color-dot" />− {item.name}
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <button
+                            type="button"
+                            className={role === "hard_negative" ? "active" : ""}
+                            aria-pressed={role === "hard_negative"}
+                            title="Общий hard negative / фон"
+                            style={{ "--object-color": HARD_NEGATIVE_COLOR } as CSSProperties}
+                            onClick={() => changeRole("hard_negative")}
+                          >
+                            <span className="dataset-editor-color-dot" />Hard negative
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <label
@@ -2195,10 +2267,49 @@ export function DatasetEditorPage({
                               <option value="hard_negative">Hard negative</option>
                             </select>
                           </label>
+                          {pseudoTarget === "hard_negative" && selectedDataset?.managed ? (
+                            <div className="dataset-editor-pseudo-negative-targets">
+                              <span>Исходные датасеты:</span>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={pseudoNegativeDatasetKeys.size === selectedDataset.managed_sources.length}
+                                  onChange={(event) => setPseudoNegativeDatasetKeys(
+                                    event.target.checked
+                                      ? new Set(selectedDataset.managed_sources.map((source) => source.dataset_key))
+                                      : new Set(),
+                                  )}
+                                />
+                                Все
+                              </label>
+                              {selectedDataset.managed_sources.map((source) => (
+                                <label key={source.dataset_key}>
+                                  <input
+                                    type="checkbox"
+                                    checked={pseudoNegativeDatasetKeys.has(source.dataset_key)}
+                                    onChange={(event) => setPseudoNegativeDatasetKeys((current) => {
+                                      const next = new Set(current);
+                                      if (event.target.checked) next.add(source.dataset_key);
+                                      else next.delete(source.dataset_key);
+                                      return next;
+                                    })}
+                                  />
+                                  {source.dataset_name}
+                                </label>
+                              ))}
+                            </div>
+                          ) : null}
                           <button
                             className="primary"
                             type="button"
-                            disabled={selectedPseudoCount === 0}
+                            disabled={
+                              selectedPseudoCount === 0
+                              || (
+                                pseudoTarget === "hard_negative"
+                                && Boolean(selectedDataset?.managed)
+                                && pseudoNegativeDatasetKeys.size === 0
+                              )
+                            }
                             onClick={addSelectedPseudoToDraft}
                           >
                             <Plus size={14} /> В черновик
@@ -2479,7 +2590,15 @@ function matchesObjectSelection(
   feature: Feature<Geometry>,
   selection: ObjectSelection,
 ): boolean {
-  if (selection === "hard_negative") return feature.get(ROLE_PROPERTY) === "hard_negative";
+  const negativeClass = hardNegativeClass(selection);
+  if (selection === "hard_negative") {
+    return feature.get(ROLE_PROPERTY) === "hard_negative"
+      && typeof feature.get(CLASS_PROPERTY) !== "string";
+  }
+  if (negativeClass) {
+    return feature.get(ROLE_PROPERTY) === "hard_negative"
+      && feature.get(CLASS_PROPERTY) === negativeClass;
+  }
   if (feature.get(ROLE_PROPERTY) === "hard_negative") return false;
   return selection === "positive" || feature.get(CLASS_PROPERTY) === selection;
 }
@@ -2487,11 +2606,20 @@ function matchesObjectSelection(
 function applyObjectSelection(
   feature: Feature<Geometry>,
   selection: ObjectSelection,
-  dataset: Pick<EditorDataset, "task" | "object_types"> | null,
+  dataset: ObjectSelectionDataset | null,
 ): void {
-  if (selection === "hard_negative") {
+  const negativeClass = hardNegativeClass(selection);
+  if (selection === "hard_negative" || negativeClass) {
     feature.set(ROLE_PROPERTY, "hard_negative", true);
-    feature.unset(CLASS_PROPERTY, true);
+    if (
+      dataset?.managed
+      && negativeClass
+      && dataset.object_types.some((item) => item.slug === negativeClass)
+    ) {
+      feature.set(CLASS_PROPERTY, negativeClass, true);
+    } else {
+      feature.unset(CLASS_PROPERTY, true);
+    }
     return;
   }
   feature.set(ROLE_PROPERTY, "positive", true);
@@ -2508,7 +2636,7 @@ function applyObjectSelection(
 export function clonePseudoFeatureForDraft(
   pseudoFeature: Feature<Geometry>,
   selection: ObjectSelection,
-  dataset: Pick<EditorDataset, "task" | "object_types">,
+  dataset: ObjectSelectionDataset,
 ): Feature<Geometry> | null {
   const geometry = pseudoFeature.getGeometry();
   if (!geometry) return null;
@@ -2516,6 +2644,15 @@ export function clonePseudoFeatureForDraft(
   feature.setId(crypto.randomUUID());
   applyObjectSelection(feature, selection, dataset);
   return feature;
+}
+
+function hardNegativeSelection(classSlug: string): ObjectSelection {
+  return `hard_negative:${classSlug}`;
+}
+
+function hardNegativeClass(selection: ObjectSelection): string | null {
+  const prefix = "hard_negative:";
+  return selection.startsWith(prefix) ? selection.slice(prefix.length) || null : null;
 }
 
 function pseudoFeatureTarget(

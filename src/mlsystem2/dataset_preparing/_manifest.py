@@ -124,9 +124,17 @@ def validate_multiclass_annotation(
                 )
             by_class[str(class_slug)] += 1
         elif role == "hard_negative":
-            if CLASS_PROPERTY in properties:
+            if (
+                CLASS_PROPERTY in properties
+                and not manifest.managed
+            ) or (
+                class_slug is not None
+                and manifest.managed
+                and class_slug not in known_slugs
+            ):
                 raise DatasetPreparationError(
-                    f"Hard negative Feature #{index} не должен содержать класс: {path}"
+                    f"Hard negative Feature #{index} содержит недопустимый класс "
+                    f"{class_slug!r}: {path}"
                 )
             hard_negative += 1
         else:

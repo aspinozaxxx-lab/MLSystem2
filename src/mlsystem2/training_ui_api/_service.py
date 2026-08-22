@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from mlsystem2.mlflow_adapter.api import (
@@ -91,7 +91,13 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
-from ._queueing import ensure_queue_positions, next_queue_position, queue_sort_key
+from ._queueing import (
+    POST_TRAINING_INFERENCE_CONFIG_KEY,
+    POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+    ensure_queue_positions,
+    next_queue_position,
+    queue_sort_key,
+)
 from ._templates import (
     initial_inference_templates,
     initial_templates,
@@ -155,6 +161,7 @@ from .contracts import (
     PseudoMarkupResultInfo,
     PrimaryTestSampleInfo,
     QueueEnabledUpdate,
+    QueueCountInfo,
     QueueSnapshot,
     ResultClassInfo,
     ResultClassListResponse,
@@ -959,6 +966,7 @@ def create_training_job(
     )
     if dataset.images_dir is not None:
         job_config["dataset.images_dir"] = dataset.images_dir
+    job_config[POST_TRAINING_INFERENCE_CONFIG_KEY] = request.run_inference_after_training
     _validate_tile_factor_config(job_config)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
@@ -1014,6 +1022,13 @@ def queues(session: Session) -> QueueSnapshot:
         training_jobs=_queue_jobs(session, JobType.TRAINING),
         inference_jobs=_queue_jobs(session, JobType.INFERENCE),
     )
+
+
+def queue_count(session: Session) -> QueueCountInfo:
+    active_jobs = session.scalar(
+        select(func.count(JobRow.id)).where(JobRow.status.in_(ACTIVE_JOB_STATUSES))
+    )
+    return QueueCountInfo(active_jobs=int(active_jobs or 0))
 
 
 def set_queue_enabled(
@@ -2484,7 +2499,18 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         tile_size=row.tile_size,
         mlflow_experiment_name=row.mlflow_experiment_name,
         mlflow_run_name=row.mlflow_run_name,
-        config=row.config,
+        config={
+            key: value
+            for key, value in (row.config or {}).items()
+            if key
+            not in {
+                POST_TRAINING_INFERENCE_CONFIG_KEY,
+                POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+            }
+        },
+        run_inference_after_training=bool(
+            (row.config or {}).get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)
+        ),
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,

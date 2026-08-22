@@ -70,6 +70,23 @@ describe("стиль псевдоразметки редактора датас�
     expect(accepted?.get("_mlsystem2_class")).toBeUndefined();
   });
 
+  it("привязывает hard negative управляемого датасета к выбранному типу", () => {
+    const pseudo = new Feature({
+      geometry: new Polygon([[[0, 0], [1, 0], [1, 1], [0, 0]]]),
+    });
+    const accepted = clonePseudoFeatureForDraft(pseudo, "hard_negative:water", {
+      task: "multiclass",
+      managed: true,
+      object_types: [
+        { id: 1, slug: "water", name: "Вода", color: "#3366CC", priority: 0 },
+        { id: 2, slug: "swamp", name: "Заболачивание", color: "#22AA55", priority: 1 },
+      ],
+    });
+
+    expect(accepted?.get("_mlsystem2_role")).toBe("hard_negative");
+    expect(accepted?.get("_mlsystem2_class")).toBe("water");
+  });
+
   it("добавляет объект binary-сети как обычную положительную разметку", () => {
     const pseudo = new Feature({
       geometry: new Polygon([[[0, 0], [1, 0], [1, 1], [0, 0]]]),

@@ -16,7 +16,12 @@ from rasterio.windows import Window
 
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations
-from ._mask import HARD_NEGATIVE_LABEL, build_supervision_mask, rasterize_instance_mask
+from ._mask import (
+    HARD_NEGATIVE_LABEL,
+    build_supervision_mask,
+    rasterize_instance_mask,
+    rasterize_window_mask,
+)
 from ._valid_footprint import filter_valid_windows
 from ._windows import TileWindow, build_tile_windows, core_tile_window
 from .contracts import (
@@ -104,12 +109,13 @@ class TileDataset:
         self._split_window_count = 0
         self._datasets: OrderedDict[int, DatasetReader] = OrderedDict()
         self._annotation_indexes: dict[
-            tuple[Path, str | None, str | None, str | None], AnnotationIndex
+            tuple[Path, str | None, str | None, str | None, bool], AnnotationIndex
         ] = {}
         self._positive_hint_by_index: list[bool] | None = None
         self._hard_negative_hint_by_index: list[bool] | None = None
         self._category_hint_by_index: list[str] | None = None
         self._class_hints_by_index: list[frozenset[int]] | None = None
+        self._has_class_specific_hard_negatives = False
         self._scene_nodata: list[object] = []
         self._scene_crs: list[str | None] = []
         self._scene_tile_diagnostics: list[dict[str, object]] = []
@@ -228,22 +234,50 @@ class TileDataset:
             window,
             nodata_pixels,
         )
-        category = _tile_category_from_supervision_mask(self._core_array(mask))
+        class_hard_negative_masks = (
+            self._read_class_hard_negative_masks(
+                scene_window.scene_index,
+                dataset,
+                window,
+                nodata_pixels,
+                mask,
+            )
+            if self._has_class_specific_hard_negatives
+            else None
+        )
+        category = _tile_category_from_supervision_mask(
+            self._core_array(mask),
+            class_hard_negative=(
+                class_hard_negative_masks is not None
+                and bool(np.any(self._core_array(class_hard_negative_masks)))
+            ),
+        )
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
         if should_augment and category in {
             TILE_CATEGORY_POSITIVE,
             TILE_CATEGORY_HARD_NEGATIVE,
         }:
-            image, mask, augmented = apply_augmentations(
+            augmentation_mask = mask
+            if class_hard_negative_masks is not None:
+                augmentation_mask = np.concatenate(
+                    [mask[None, :, :], class_hard_negative_masks.astype(mask.dtype, copy=False)],
+                    axis=0,
+                )
+            image, augmentation_mask, augmented = apply_augmentations(
                 image,
-                mask,
+                augmentation_mask,
                 nodata_pixels=nodata_pixels,
                 nodata=nodata,
                 level=self._augmentation_level,
                 seed=self._seed,
                 sample_index=index,
             )
+            if class_hard_negative_masks is not None:
+                mask = augmentation_mask[0]
+                class_hard_negative_masks = augmentation_mask[1:] > 0
+            else:
+                mask = augmentation_mask
 
         object_instances = (
             self._read_object_instances(
@@ -255,7 +289,12 @@ class TileDataset:
             if self._include_object_instances
             else None
         )
-        meta = self._sample_meta(category, augmented, object_instances)
+        meta = self._sample_meta(
+            category,
+            augmented,
+            object_instances,
+            class_hard_negative_masks,
+        )
         return np.ascontiguousarray(image), np.ascontiguousarray(mask), meta
 
     @property
@@ -306,6 +345,10 @@ class TileDataset:
     @property
     def includes_object_instances(self) -> bool:
         return self._include_object_instances
+
+    @property
+    def class_hard_negative_channel_count(self) -> int:
+        return len(self._classes) if self._has_class_specific_hard_negatives else 0
 
     @property
     def candidate_window_count(self) -> int:
@@ -494,10 +537,11 @@ class TileDataset:
         *,
         role: str | None = None,
         class_slug: str | None = None,
+        without_class: bool = False,
     ) -> AnnotationIndex:
         path = Path(annotation_file)
         crs = self._scene_crs[scene_index]
-        key = (path, crs, role, class_slug)
+        key = (path, crs, role, class_slug, without_class)
         index = self._annotation_indexes.get(key)
         if index is None:
             if role == "positive":
@@ -508,7 +552,13 @@ class TileDataset:
                     class_slug=class_slug,
                 )
             elif role == "hard_negative":
-                index = load_annotation_index(path, crs, role="hard_negative")
+                index = load_annotation_index(
+                    path,
+                    crs,
+                    role="hard_negative",
+                    class_slug=class_slug,
+                    without_class=without_class,
+                )
             else:
                 index = load_annotation_index(path, crs)
             self._annotation_indexes[key] = index
@@ -561,6 +611,34 @@ class TileDataset:
         if self.uses_multiclass_masks:
             return mask.astype(np.int64, copy=False)
         return mask.astype(np.float32, copy=False)[None, :, :]
+
+    def _read_class_hard_negative_masks(
+        self,
+        scene_index: int,
+        dataset: DatasetReader,
+        window: Window,
+        nodata_pixels: np.ndarray,
+        supervision_mask: np.ndarray,
+    ) -> np.ndarray:
+        bounds = dataset.window_bounds(window)
+        transform = dataset.window_transform(window)
+        masks = np.stack(
+            [
+                rasterize_window_mask(
+                    geometries,
+                    out_shape=(self._tile_size, self._tile_size),
+                    transform=transform,
+                ).astype(bool, copy=False)
+                for _class_id, geometries in self._class_hard_negative_layers(
+                    scene_index,
+                    bounds,
+                )
+            ],
+            axis=0,
+        )
+        masks[:, nodata_pixels] = False
+        masks[:, supervision_mask != 0] = False
+        return masks
 
     def _read_object_instances(
         self,
@@ -637,6 +715,7 @@ class TileDataset:
                 scene.annotation_file,
                 scene_index,
                 role="hard_negative",
+                without_class=bool(self._classes),
             ).query_bounds(bounds)
         geometries: list[object] = []
         if self._hard_negative_annotation_file is not None:
@@ -656,6 +735,29 @@ class TileDataset:
                 ).query_bounds(bounds)
             )
         return geometries
+
+    def _class_hard_negative_layers(
+        self,
+        scene_index: int,
+        bounds: tuple[float, float, float, float],
+    ) -> list[tuple[int, list[object]]]:
+        if not self._classes:
+            return []
+        scene = self._scenes[scene_index]
+        if scene.annotation_file is None:
+            return []
+        return [
+            (
+                definition.class_id,
+                self._annotation_index(
+                    scene.annotation_file,
+                    scene_index,
+                    role="hard_negative",
+                    class_slug=definition.slug,
+                ).query_bounds(bounds),
+            )
+            for definition in self._classes
+        ]
 
     def _build_hints(self) -> None:
         positive_hints: list[bool] = []
@@ -681,9 +783,18 @@ class TileDataset:
                 positive_hints.append(
                     bool(self._positive_index(scene_index).query_bounds(bounds))
                 )
+            class_hard_negative = any(
+                bool(geometries)
+                for _class_id, geometries in self._class_hard_negative_layers(
+                    scene_index,
+                    bounds,
+                )
+            )
             hard_negative_hints.append(
                 bool(self._hard_negative_geometries(scene_index, bounds))
+                or class_hard_negative
             )
+            self._has_class_specific_hard_negatives |= class_hard_negative
         self._positive_hint_by_index = positive_hints
         self._hard_negative_hint_by_index = hard_negative_hints
         self._category_hint_by_index = _tile_categories(
@@ -825,6 +936,7 @@ class TileDataset:
         category: str,
         augmented: bool,
         object_instances: np.ndarray | None = None,
+        class_hard_negative_masks: np.ndarray | None = None,
     ) -> dict[str, object]:
         meta: dict[str, object] = {
             "augmented": augmented,
@@ -835,6 +947,10 @@ class TileDataset:
         }
         if object_instances is not None:
             meta["object_instances"] = np.ascontiguousarray(object_instances)
+        if class_hard_negative_masks is not None:
+            meta["class_hard_negative_masks"] = np.ascontiguousarray(
+                class_hard_negative_masks,
+            )
         return meta
 
 
@@ -932,10 +1048,14 @@ def _wait_while_training_paused() -> None:
         time.sleep(0.1)
 
 
-def _tile_category_from_supervision_mask(mask: np.ndarray) -> str:
+def _tile_category_from_supervision_mask(
+    mask: np.ndarray,
+    *,
+    class_hard_negative: bool = False,
+) -> str:
     if bool(np.any(mask > 0)):
         return TILE_CATEGORY_POSITIVE
-    if bool(np.any(mask == HARD_NEGATIVE_LABEL)):
+    if bool(np.any(mask == HARD_NEGATIVE_LABEL)) or class_hard_negative:
         return TILE_CATEGORY_HARD_NEGATIVE
     return TILE_CATEGORY_BACKGROUND
 

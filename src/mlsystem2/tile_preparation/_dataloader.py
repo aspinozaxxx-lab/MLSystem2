@@ -365,7 +365,16 @@ def _estimate_val_cache_bytes(dataset: TileDataset, *, tile_count: int) -> int:
         if getattr(dataset, "includes_object_instances", False)
         else 0
     )
-    return int((image_bytes + mask_bytes + instance_bytes) * VAL_CACHE_ESTIMATE_OVERHEAD)
+    class_hard_negative_bytes = (
+        tile_count
+        * tile_pixels
+        * int(getattr(dataset, "class_hard_negative_channel_count", 0))
+        * np.dtype(np.bool_).itemsize
+    )
+    return int(
+        (image_bytes + mask_bytes + instance_bytes + class_hard_negative_bytes)
+        * VAL_CACHE_ESTIMATE_OVERHEAD
+    )
 
 
 def _available_memory_bytes() -> int | None:
@@ -504,6 +513,16 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
             raise TilePreparationError("В batch присутствуют неполные маски объектов.")
         batch_meta["object_instances"] = torch.stack(
             [torch.as_tensor(meta["object_instances"], dtype=torch.long) for meta in metas],
+            dim=0,
+        )
+    if any("class_hard_negative_masks" in meta for meta in metas):
+        if not all("class_hard_negative_masks" in meta for meta in metas):
+            raise TilePreparationError("В batch присутствуют неполные классовые hard negative маски.")
+        batch_meta["class_hard_negative_masks"] = torch.stack(
+            [
+                torch.as_tensor(meta["class_hard_negative_masks"], dtype=torch.bool)
+                for meta in metas
+            ],
             dim=0,
         )
     return images, masks, batch_meta

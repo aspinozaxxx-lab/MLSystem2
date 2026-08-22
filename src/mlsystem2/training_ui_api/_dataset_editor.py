@@ -2326,12 +2326,12 @@ def _publish_managed_editor_scenes(
             old_source_key = old_properties.get("_mlsystem2_source_dataset_key")
             old_source = source_by_key.get(str(old_source_key))
             old_role = str(old_properties.get(_ROLE_PROPERTY) or "positive")
-            if old_source is None and old_role == "positive":
+            if old_source is None:
                 old_source = source_by_slug.get(str(old_properties.get(_CLASS_PROPERTY)))
             old_sources = (
-                source_specs
-                if old_feature is not None and old_role == "hard_negative"
-                else ([old_source] if old_source is not None else [])
+                [old_source]
+                if old_source is not None
+                else (source_specs if old_feature is not None and old_role == "hard_negative" else [])
             )
             new_sources = []
             if new_feature is not None:
@@ -2341,7 +2341,11 @@ def _publish_managed_editor_scenes(
                     if new_source is not None:
                         new_sources = [new_source]
                 else:
-                    new_sources = list(source_specs)
+                    new_source = source_by_slug.get(str(new_properties.get(_CLASS_PROPERTY)))
+                    if new_source is not None:
+                        new_sources = [new_source]
+                    elif new_properties.get(_CLASS_PROPERTY) is None:
+                        new_sources = list(source_specs)
                 if not new_sources:
                     raise TrainingUIAPIError(
                         f"Не найден исходный датасет для объекта {origin_key}."
@@ -2945,6 +2949,11 @@ def _validate_editor_geojson(
                 raise TrainingUIAPIError(
                     f"У positive-объекта {index} должен быть один из классов датасета"
                 )
+        elif dataset.task == "multiclass" and role == "hard_negative" and dataset.managed:
+            if class_slug is not None and class_slug not in known_slugs:
+                raise TrainingUIAPIError(
+                    f"У hard negative объекта {index} указан неизвестный исходный класс"
+                )
         elif _CLASS_PROPERTY in properties:
             raise TrainingUIAPIError(
                 f"У hard negative или binary-объекта {index} не должно быть класса"
@@ -3241,7 +3250,7 @@ def _normalize_editor_geojson(
         else:
             properties.setdefault("_mlsystem2_origin_key", f"manual:{feature_id}")
             properties.setdefault("_mlsystem2_source_path", "manual")
-        if properties.get(_ROLE_PROPERTY) == "hard_negative":
+        if properties.get(_ROLE_PROPERTY) == "hard_negative" and not dataset.managed:
             properties.pop(_CLASS_PROPERTY, None)
         feature["properties"] = properties
         features.append(feature)

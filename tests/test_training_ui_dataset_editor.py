@@ -1194,6 +1194,18 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
                 "coordinates": [[[4, 4], [5, 4], [5, 5], [4, 5], [4, 4]]],
             },
         },
+        {
+            "type": "Feature",
+            "id": "managed-lake-hard-negative",
+            "properties": {
+                "_mlsystem2_role": "hard_negative",
+                "_mlsystem2_class": lake_type["slug"],
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[6, 6], [7, 6], [7, 7], [6, 7], [6, 6]]],
+            },
+        },
     ]
     published_added = env.client.put(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
@@ -1217,9 +1229,23 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         "positive",
         "hard_negative",
     }
+    assert sum(
+        item["properties"]["_mlsystem2_role"] == "hard_negative"
+        for item in lake_features
+    ) == 2
+    assert not any(item.get("id") == "managed-lake-hard-negative" for item in river_features)
+    assert any(item.get("id") == "managed-lake-hard-negative" for item in lake_features)
     refreshed_added = env.client.get(added_detail_url).json()
     assert refreshed_added["scene"]["positive_count"] == 1
-    assert refreshed_added["scene"]["hard_negative_count"] == 1
+    assert refreshed_added["scene"]["hard_negative_count"] == 2
+    materialized_negatives = [
+        item
+        for item in refreshed_added["geojson"]["features"]
+        if item["properties"]["_mlsystem2_role"] == "hard_negative"
+    ]
+    assert {
+        item["properties"].get("_mlsystem2_class") for item in materialized_negatives
+    } == {None, lake_type["slug"]}
 
     marked_deleted = env.client.request(
         "DELETE",

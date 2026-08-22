@@ -3408,6 +3408,24 @@
         }
       }
     },
+    "/api/v1/queues/count": {
+      "get": {
+        "summary": "Get Queue Count",
+        "operationId": "get_queue_count_api_v1_queues_count_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueCountInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/queues/training/enabled": {
       "put": {
         "summary": "Put Training Enabled",
@@ -7078,6 +7096,11 @@
             "type": "object",
             "title": "Config"
           },
+          "run_inference_after_training": {
+            "type": "boolean",
+            "title": "Run Inference After Training",
+            "default": false
+          },
           "readonly": {
             "type": "boolean",
             "title": "Readonly",
@@ -8554,6 +8577,21 @@
           "objects"
         ],
         "title": "QualityMetric"
+      },
+      "QueueCountInfo": {
+        "properties": {
+          "active_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Active Jobs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "active_jobs"
+        ],
+        "title": "QueueCountInfo"
       },
       "QueueEnabledUpdate": {
         "properties": {
@@ -10593,6 +10631,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Config"
+          },
+          "run_inference_after_training": {
+            "type": "boolean",
+            "title": "Run Inference After Training",
+            "default": false
           }
         },
         "additionalProperties": false,

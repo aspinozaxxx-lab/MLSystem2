@@ -1664,6 +1664,7 @@
   border: 1px solid var(--border);
   border-radius: var(--grovika-radius-control);
   background: var(--surface-soft);
+  flex-wrap: wrap;
 }
 
 .dataset-editor-object-switch button {
@@ -1865,6 +1866,27 @@
   min-height: 30px;
   padding: 3px 28px 3px 8px;
   font-size: 12px;
+}
+
+.dataset-editor-pseudo-negative-targets {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.dataset-editor-pseudo-negative-targets > label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.dataset-editor-pseudo-negative-targets input[type="checkbox"] {
+  width: 16px;
+  min-height: 16px;
 }
 
 .dataset-editor-pseudo-status.failed,

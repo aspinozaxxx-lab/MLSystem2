@@ -50,7 +50,10 @@ def load_annotation_index(
     *,
     role: Literal["positive", "hard_negative"] | None = None,
     class_slug: str | None = None,
+    without_class: bool = False,
 ) -> AnnotationIndex:
+    if class_slug is not None and without_class:
+        raise ValueError("class_slug и without_class нельзя задавать одновременно")
     path = Path(annotation_file)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -75,6 +78,10 @@ def load_annotation_index(
         if class_slug is not None:
             properties = feature.get("properties") if isinstance(feature, dict) else None
             if not isinstance(properties, dict) or properties.get("_mlsystem2_class") != class_slug:
+                continue
+        elif without_class:
+            properties = feature.get("properties") if isinstance(feature, dict) else None
+            if isinstance(properties, dict) and properties.get("_mlsystem2_class") is not None:
                 continue
         geometry_payload = feature.get("geometry") if isinstance(feature, dict) else None
         if geometry_payload is None:

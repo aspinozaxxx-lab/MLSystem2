@@ -36,6 +36,8 @@ from .contracts import ManagedDatasetSourceInfo, TrainingUIAPIError
 
 SOURCE_MANAGED = "managed"
 _MANAGED_CACHE_FOLDER = "managed-datasets"
+_MANAGED_DATASET_VERSION_ALGORITHM = 2
+_MANAGED_MATERIALIZATION_ALGORITHM = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +158,7 @@ def managed_dataset_version(
         )
     explicit_scenes = managed_scenes(session, dataset.id)
     payload = {
-        "algorithm": 2,
+        "algorithm": _MANAGED_DATASET_VERSION_ALGORITHM,
         "dataset_key": dataset.key,
         "config_revision": dataset.config_revision,
         "sources": values,
@@ -188,14 +190,19 @@ def materialize_managed_dataset(
     if class_row is None:
         raise TrainingUIAPIError(f"Класс управляемого датасета не найден: {dataset.key}")
     version, updated_at = managed_dataset_version(session, dataset, source_root)
-    digest = version.removeprefix("managed:")
+    cache_digest = hashlib.sha256(
+        (
+            f"{version}:materialization-algorithm:"
+            f"{_MANAGED_MATERIALIZATION_ALGORITHM}"
+        ).encode("utf-8")
+    ).hexdigest()
     cache_parent = (
         Path(config.stored_files_root).parent
         / _MANAGED_CACHE_FOLDER
         / scope
         / dataset.key
     )
-    target = cache_parent / digest
+    target = cache_parent / cache_digest
     manifest_path = target / ".mlsystem2-dataset.json"
     if manifest_path.is_file():
         return _materialization_from_cache(target, version, updated_at)
@@ -270,7 +277,7 @@ def materialize_managed_dataset(
         }
     )
     cache_parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache_parent / f".{digest}.{uuid.uuid4().hex}.tmp"
+    temporary = cache_parent / f".{cache_digest}.{uuid.uuid4().hex}.tmp"
     temporary.mkdir()
     try:
         for annotation_name, payload in files.items():

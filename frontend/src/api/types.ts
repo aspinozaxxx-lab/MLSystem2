@@ -40,6 +40,7 @@ export type MarkupExportRequest = components["schemas"]["MarkupExportRequest"];
 export type MarkupExportTileInfo = components["schemas"]["MarkupExportTileInfo"];
 export type ModelInfo = components["schemas"]["ModelInfo"];
 export type PseudoMarkupResultInfo = components["schemas"]["PseudoMarkupResultInfo"];
+export type QueueCountInfo = components["schemas"]["QueueCountInfo"];
 export type QueueSnapshot = components["schemas"]["QueueSnapshot"];
 export type ResultChangeInfo = components["schemas"]["ResultChangeInfo"];
 export type ResultClassInfo = components["schemas"]["ResultClassInfo"];

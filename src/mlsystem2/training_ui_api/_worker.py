@@ -72,6 +72,8 @@ from ._processes import terminate_job_process
 from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
 from ._queueing import (
     DATASET_EDITOR_PSEUDO_OPERATION,
+    POST_TRAINING_INFERENCE_CONFIG_KEY,
+    POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     dispatch_sort_key,
     ensure_queue_positions,
 )
@@ -1424,8 +1426,66 @@ def _finish_training_job(
                 LOGGER.exception(
                     "Не удалось сверить прямые оценки тестовых разметок после обучения сети"
                 )
+        _queue_post_training_inference(session, row, training_results, config)
         session.flush()
     LOGGER.info("Finished training job %s with status %s", row.id, row.status)
+
+
+def _queue_post_training_inference(
+    session: Session,
+    row: JobRow,
+    training_results: list[TrainingResultRow],
+    config: TrainingUIAPIConfig,
+) -> None:
+    job_config = dict(row.config or {})
+    if not bool(job_config.get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)):
+        return
+    if job_config.get(POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY):
+        return
+
+    from ._service import create_pseudo_markup_job
+
+    custom = (
+        row.custom_dataset or session.get(CustomDatasetRow, row.custom_dataset_id)
+        if row.custom_dataset_id is not None
+        else None
+    )
+    queued_job_ids: list[str] = []
+    for result in training_results:
+        try:
+            scenes_name: str | None = None
+            scenes_content_type: str | None = None
+            scenes_bytes: bytes | None = None
+            inference_dataset_key: str | None = result.dataset_key or row.dataset_key
+            if custom is not None:
+                scenes_name = custom.scenes_file.original_name
+                scenes_content_type = custom.scenes_file.content_type
+                scenes_bytes = Path(custom.scenes_file.path).read_bytes()
+                inference_dataset_key = None
+            with session.begin_nested():
+                detail = create_pseudo_markup_job(
+                    session,
+                    class_key=result.class_key,
+                    dataset_key=inference_dataset_key,
+                    image_folder_key=None,
+                    training_result_id=result.id,
+                    scenes_name=scenes_name,
+                    scenes_content_type=scenes_content_type,
+                    scenes_bytes=scenes_bytes,
+                    config=config,
+                )
+            queued_job_ids.append(str(detail.id))
+        except Exception:  # noqa: BLE001
+            LOGGER.exception(
+                "Не удалось поставить инференс после обучения сети %s по датасету %s",
+                result.id,
+                result.dataset_key,
+            )
+    if queued_job_ids:
+        row.config = {
+            **job_config,
+            POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY: queued_job_ids,
+        }
 
 
 def _local_training_checkpoint_metadata(row: JobRow) -> dict[str, Any]:
