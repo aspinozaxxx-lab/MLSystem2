@@ -67,6 +67,8 @@ class JobSummary(BaseModel):
     progress: RuntimeProgress | None = None
     actions: list[str] = Field(default_factory=list)
     secondary_priority: bool = False
+    best_checkpoint_available: bool = False
+    stop_and_save_best_requested: bool = False
 
 
 class QueueSnapshot(BaseModel):
@@ -101,6 +103,8 @@ class JobDetail(BaseModel):
     config: dict[str, Any]
     run_inference_after_training: bool = False
     secondary_priority: bool = False
+    best_checkpoint_available: bool = False
+    stop_and_save_best_requested: bool = False
     readonly: bool = True
     created_at: datetime
     started_at: datetime | None = None

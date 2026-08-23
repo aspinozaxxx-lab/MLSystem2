@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Save,
   Settings,
+  Square,
   Star,
   Trash2,
   X,
@@ -3360,7 +3361,67 @@ function AutomationPage({ run, showModal, closeModal }: RoutedPageProps) {
   );
 }
 
-function QueuePage({ run }: RoutedPageProps) {
+function openTrainingStopModal(
+  job: JobSummary | JobDetail,
+  run: Runner,
+  showModal: (modal: ModalState) => void,
+  closeModal: () => void,
+  onChanged: () => Promise<void>,
+) {
+  const checkpointAvailable = Boolean(job.best_checkpoint_available);
+  showModal({
+    title: "Остановить обучение?",
+    wide: true,
+    body: (
+      <div className="form-stack">
+        <p>
+          Можно завершить обучение штатно и сохранить как успешный результат <strong>best.pt</strong> —
+          чекпойнт эпохи с максимальной валидационной F1 по метрике этого обучения.
+        </p>
+        <p>Текущая незавершённая эпоха будет отброшена. Файл final.pt вместо лучшего не используется.</p>
+        {!checkpointAvailable ? (
+          <div className="notice warning">
+            Лучший чекпойнт появится после первой полностью завершённой эпохи. Сейчас доступна только
+            остановка без результата.
+          </div>
+        ) : null}
+      </div>
+    ),
+    footer: (
+      <>
+        <button className="secondary" type="button" onClick={closeModal}>Продолжить обучение</button>
+        <button
+          className="primary"
+          type="button"
+          disabled={!checkpointAvailable}
+          title={checkpointAvailable ? "Сохранить чекпойнт с лучшей F1" : "Первая эпоха ещё не завершена"}
+          onClick={async () => {
+            const updated = await run(() => apiJson<JobDetail>(`/jobs/${job.id}/stop-and-save-best`, { method: "POST" }));
+            if (!updated) return;
+            closeModal();
+            await onChanged();
+          }}
+        >
+          <Save size={16} /> Сохранить лучший и остановить
+        </button>
+        <button
+          className="danger"
+          type="button"
+          onClick={async () => {
+            const deleted = await run(() => apiJson<JobDetail>(`/jobs/${job.id}`, { method: "DELETE" }));
+            if (!deleted) return;
+            closeModal();
+            await onChanged();
+          }}
+        >
+          <Trash2 size={16} /> Остановить без результата
+        </button>
+      </>
+    ),
+  });
+}
+
+function QueuePage({ run, showModal, closeModal }: RoutedPageProps) {
   const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
   const load = useCallback(async () => {
     const payload = await run(() => apiJson<QueueSnapshot>("/queues"));
@@ -3388,6 +3449,15 @@ function QueuePage({ run }: RoutedPageProps) {
   };
 
   const jobAction = async (job: JobSummary, action: "move-up" | "move-down" | "delete") => {
+    if (
+      action === "delete"
+      && job.type === "training"
+      && job.source === "manual"
+      && isActiveStatus(job.status)
+    ) {
+      openTrainingStopModal(job, run, showModal, closeModal, load);
+      return;
+    }
     const path = action === "delete" ? `/jobs/${job.id}` : `/jobs/${job.id}/${action}`;
     const method = action === "delete" ? "DELETE" : "POST";
     const updated = await run(() => apiJson<JobDetail>(path, { method }));
@@ -3422,7 +3492,7 @@ function QueuePage({ run }: RoutedPageProps) {
   );
 }
 
-function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string }) {
+function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPageProps & { jobId: string }) {
   const [job, setJob] = useState<JobDetail | null>(null);
   const load = useCallback(async () => {
     const payload = await run(() => apiJson<JobDetail>(`/jobs/${encodeURIComponent(jobId)}`));
@@ -3446,11 +3516,31 @@ function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string })
       <PageHeader
         title={`Job ${job.id}`}
         subtitle={`${job.dataset_name} · ${job.model_name}`}
-        actions={<a className="secondary" href="#/queue">К очереди</a>}
+        actions={
+          <div className="inline-row">
+            {job.type === "training" && job.source === "manual" && isActiveStatus(job.status) ? (
+              <button
+                className="danger"
+                type="button"
+                disabled={job.stop_and_save_best_requested}
+                onClick={() => openTrainingStopModal(job, run, showModal, closeModal, load)}
+              >
+                <Square size={15} />
+                {job.stop_and_save_best_requested ? "Останавливается" : "Остановить"}
+              </button>
+            ) : null}
+            <a className="secondary" href="#/queue">К очереди</a>
+          </div>
+        }
       />
       <section className="panel">
         <div className="metric-grid">
-          <Metric label="Статус" value={statusBadge(job.status, job.type, job.progress)} />
+          <Metric
+            label="Статус"
+            value={job.stop_and_save_best_requested && isActiveStatus(job.status)
+              ? <span className="badge warning">сохраняется лучший чекпойнт по F1</span>
+              : statusBadge(job.status, job.type, job.progress)}
+          />
           <Metric label="Тип" value={job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение"} />
           <Metric label="Источник" value={sourceBadge(job.source)} />
           <Metric label="Приоритет" value={job.secondary_priority ? "второстепенный" : "обычный"} />
@@ -3984,7 +4074,11 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
           {jobs.map((job) => (
             <tr className="clickable-row" key={job.id} onClick={() => navigate(`jobs/${job.id}`)}>
               <td className="technical-value">{job.queue_position}</td>
-              <td>{statusBadge(job.status, job.type, job.progress)}</td>
+              <td>
+                {job.stop_and_save_best_requested && isActiveStatus(job.status)
+                  ? <span className="badge warning">сохраняется лучший F1</span>
+                  : statusBadge(job.status, job.type, job.progress)}
+              </td>
               <td>
                 <span className="inline-row">
                   {jobTypeBadge(job)}
@@ -3999,14 +4093,20 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
                   <a className="secondary compact-action" href={`#/jobs/${job.id}`}>
                     Job
                   </a>
-                  <button className="secondary icon-button" type="button" title="Выше" onClick={() => onAction(job, "move-up")}>
+                  <button className="secondary icon-button" type="button" title="Выше" disabled={!(job.actions || []).includes("move_up")} onClick={() => onAction(job, "move-up")}>
                     <ChevronUp size={15} />
                   </button>
-                  <button className="secondary icon-button" type="button" title="Ниже" onClick={() => onAction(job, "move-down")}>
+                  <button className="secondary icon-button" type="button" title="Ниже" disabled={!(job.actions || []).includes("move_down")} onClick={() => onAction(job, "move-down")}>
                     <ChevronDown size={15} />
                   </button>
-                  <button className="danger icon-button" type="button" title="Удалить" onClick={() => onAction(job, "delete")}>
-                    <Trash2 size={15} />
+                  <button
+                    className="danger icon-button"
+                    type="button"
+                    disabled={job.stop_and_save_best_requested}
+                    title={job.type === "training" && isActiveStatus(job.status) ? "Остановить обучение" : "Удалить"}
+                    onClick={() => onAction(job, "delete")}
+                  >
+                    {job.type === "training" && isActiveStatus(job.status) ? <Square size={15} /> : <Trash2 size={15} />}
                   </button>
                 </div>
               </td>

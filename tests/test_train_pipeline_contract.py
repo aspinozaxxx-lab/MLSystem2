@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import builtins
 import inspect
@@ -31,7 +31,13 @@ from mlsystem2.settings.contracts import (
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
 from mlsystem2.train_pipeline.api import run_train_pipeline
 from mlsystem2.train_pipeline import _runner
-from mlsystem2.train_pipeline.contracts import TrainPipelineError, TrainPipelineRequest, TrainPipelineResult
+from mlsystem2.train_pipeline.contracts import (
+    PipelineReport,
+    PipelineStatus,
+    TrainPipelineError,
+    TrainPipelineRequest,
+    TrainPipelineResult,
+)
 
 
 def test_seed_training_without_torch_still_seeds_python_and_numpy(monkeypatch) -> None:
@@ -135,10 +141,12 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
         prepare_dataset=lambda request: _dataset_result(),
         create_tile_dataloader=lambda request: object(),
         create_model=lambda spec: calls.append("create_model") or model,
-        load_checkpoint=lambda request: calls.append("load_checkpoint")
-        or LoadedCheckpoint(
-            model=model,
-            artifact=CheckpointArtifact(uri=request.checkpoint_uri, format="torch_pt"),
+        load_checkpoint=lambda request: (
+            calls.append("load_checkpoint")
+            or LoadedCheckpoint(
+                model=model,
+                artifact=CheckpointArtifact(uri=request.checkpoint_uri, format="torch_pt"),
+            )
         ),
         train_model=lambda request, progress_sink=None: _train_result(),
         log_dataset_preparation=lambda run, report: None,
@@ -157,7 +165,9 @@ def test_train_pipeline_uses_load_checkpoint_branch() -> None:
 
     assert result.status.value == "succeeded"
     assert calls == ["load_checkpoint"]
-    assert dataset_artifacts == [{"scenes.txt": "./scenes.txt", "annotations.geojson": "./annotations.geojson"}]
+    assert dataset_artifacts == [
+        {"scenes.txt": "./scenes.txt", "annotations.geojson": "./annotations.geojson"}
+    ]
 
 
 def test_dataset_artifact_files_prefix_multiclass_sources() -> None:
@@ -281,6 +291,55 @@ def test_train_pipeline_logs_epoch_metrics_from_progress_sink() -> None:
     assert logged_epochs == [1]
 
 
+def test_train_pipeline_finishes_mlflow_run_when_best_checkpoint_is_saved_early() -> None:
+    reports: list[PipelineReport] = []
+    ended_statuses: list[str] = []
+    logged_results: list[TrainResult] = []
+    model = ModelHandle(
+        spec=ModelSpec(name="segformer_b0", input_channels=4, output_channels=1),
+        model=object(),
+    )
+    stopped_result = _train_result().model_copy(
+        update={
+            "final_checkpoint_path": None,
+            "stopped_early": True,
+        }
+    )
+    deps = _runner._PipelineDependencies(
+        get_settings=lambda: _settings(initial_checkpoint_uri=None),
+        get_settings_path=lambda: Path("config.yaml"),
+        start_run=lambda request: MLflowRunRef(
+            run_id="run",
+            experiment_name=request.experiment_name,
+            tracking_uri=request.tracking_uri,
+            active=True,
+        ),
+        prepare_dataset=lambda request: _dataset_result(),
+        create_tile_dataloader=lambda request: object(),
+        create_model=lambda spec: model,
+        load_checkpoint=lambda request: None,
+        train_model=lambda request, progress_sink=None: stopped_result,
+        log_dataset_preparation=lambda run, report: None,
+        log_tile_preparation=lambda run, report: None,
+        log_run_config=lambda run, config_path: None,
+        log_training_epoch=lambda run, item: None,
+        log_training_metrics=lambda run, result: logged_results.append(result),
+        log_training_artifacts=lambda run, result: None,
+        log_timing_report=lambda run, report: None,
+        log_pipeline_report=lambda run, report: reports.append(report),
+        end_run=lambda run, status: ended_statuses.append(status.value),
+    )
+
+    result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
+
+    assert result.status == PipelineStatus.SUCCEEDED
+    assert logged_results == [stopped_result]
+    assert ended_statuses == ["FINISHED"]
+    assert reports[-1].status == PipelineStatus.SUCCEEDED
+    assert "лучшей F1" in reports[-1].message
+    assert reports[-1].artifacts["final_checkpoint_path"] is None
+
+
 def test_train_pipeline_marks_mlflow_run_killed_on_interrupt() -> None:
     ended_statuses: list[str] = []
     model = ModelHandle(
@@ -301,7 +360,9 @@ def test_train_pipeline_marks_mlflow_run_killed_on_interrupt() -> None:
         create_tile_dataloader=lambda request: object(),
         create_model=lambda spec: model,
         load_checkpoint=lambda request: None,
-        train_model=lambda request, progress_sink=None: (_ for _ in ()).throw(InterruptedError("stop")),
+        train_model=lambda request, progress_sink=None: (_ for _ in ()).throw(
+            InterruptedError("stop")
+        ),
         log_dataset_preparation=lambda run, report: None,
         log_tile_preparation=lambda run, report: None,
         log_run_config=lambda run, config_path: None,

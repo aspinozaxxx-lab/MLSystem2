@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -38,7 +38,9 @@ def test_next_run_name_starts_from_one() -> None:
 
 
 def test_config_and_tile_artifacts_are_noop_when_run_disabled(tmp_path: Path) -> None:
-    run = MLflowRunRef(run_id="disabled", experiment_name="test", tracking_uri="file://mlruns", active=False)
+    run = MLflowRunRef(
+        run_id="disabled", experiment_name="test", tracking_uri="file://mlruns", active=False
+    )
 
     log_run_config(run, tmp_path / "missing.yaml")
     log_tile_preparation(run, {"splits": {}})
@@ -409,7 +411,9 @@ def test_log_run_config_uses_fixed_artifact_path(
             logged.append((content, artifact_file))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     log_run_config(run, config)
 
@@ -425,7 +429,9 @@ def test_log_tile_preparation_uses_report_artifact_path(monkeypatch) -> None:
             logged.append((payload, artifact_file))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     log_tile_preparation(run, {"tile_size": 1024})
 
@@ -447,7 +453,9 @@ def test_log_dataset_artifacts_writes_files_under_dataset(tmp_path: Path, monkey
             logged.append((Path(path).name, Path(path).read_text(encoding="utf-8"), artifact_path))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     log_dataset_artifacts(
         run,
@@ -499,7 +507,9 @@ def test_log_training_epoch_reactivates_run_by_id(monkeypatch) -> None:
             calls.append(("metric", name, value, step, active_id))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run-42", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run-42", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     _client.log_training_epoch(
         run,
@@ -525,7 +535,9 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
             logged.append((name, value, step))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     _client.log_training_epoch(
         run,
@@ -621,7 +633,9 @@ def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
             logged.append((name, value, step))
 
     monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
-    run = MLflowRunRef(run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True
+    )
 
     _client.log_training_metrics(
         run,
@@ -650,6 +664,7 @@ def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
     assert logged == [
         ("train/epochs_total", 2, None),
         ("train/training_time_sec", 2.2, None),
+        ("train/stopped_early", 0, None),
         ("train/best_quality_f1", 0.6, None),
         ("train/best_threshold_pixel_f1", 0.6, None),
     ]

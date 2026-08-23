@@ -18,7 +18,7 @@
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
 - `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`, `sample_size`.
-- `TrainResult` - поля `history`, `epochs_total`, `training_time_sec`, `best_checkpoint_path`, `final_checkpoint_path`, `artifacts`, `task`, `class_schema`, `best_threshold`.
+- `TrainResult` - поля `history`, `epochs_total`, `training_time_sec`, `best_checkpoint_path`, `final_checkpoint_path`, `artifacts`, `task`, `class_schema`, `best_threshold`, `stopped_early`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -46,5 +46,12 @@ Best checkpoint и early stopping используют `val_quality_f1`; для 
 маркер `paused` с тем же token. После удаления запроса состояние возвращается на исходное device; процесс,
 DataLoader, scheduler, история эпох и MLflow-run не пересоздаются. DataLoader workers кооперативно прекращают
 подготовку новых тайлов на время запроса, поэтому пауза освобождает не только GPU, но и основную CPU/IO-нагрузку.
+
+В том же control-каталоге `stop-and-save-best.request` означает штатно завершить обучение с уже созданным
+`best.pt`. Запрос проверяется на границе каждого train/validation batch и во время паузы. Незавершённая эпоха
+не добавляется в history; модель из её текущего состояния не сохраняется. Результат получает
+`stopped_early=true`, `final_checkpoint_path=None` и единственный checkpoint-артефакт `best`, выбранный по
+максимальной F1 завершённых эпох. Если до запроса не завершилась ни одна эпоха и `best.pt` отсутствует,
+обучение не может быть выдано как успешный результат.
 
 Train loop проверяет `images`, `masks`, `logits`, `loss`, `train_loss` и `val_loss` на finite values, чтобы ошибка обучения была диагностируемой до создания `EpochMetrics`. После backward применяется фиксированный gradient clipping `max_norm=1.0`. Non-finite gradient skip - аварийная защита, а не нормальный путь обучения: один batch может быть пропущен, но этот счетчик не входит в публичные метрики; если пропусков больше внутреннего аварийного лимита, обучение завершается `TrainError`. Если за эпоху не выполнен ни один optimizer step, обучение также завершается `TrainError`.

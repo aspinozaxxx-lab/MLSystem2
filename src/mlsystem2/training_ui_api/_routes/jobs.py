@@ -16,6 +16,7 @@ from mlsystem2.training_ui_api._service import (
     queue_count,
     queues,
     set_queue_enabled,
+    stop_training_job_and_save_best,
 )
 from mlsystem2.training_ui_api.contracts import (
     JobDetail,
@@ -92,6 +93,14 @@ def register_job_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> JobDetail:
         return delete_job(db, job_id)
+
+    @app.post("/api/v1/jobs/{job_id}/stop-and-save-best", response_model=JobDetail)
+    def stop_training_job_and_save_best_route(
+        job_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> JobDetail:
+        return stop_training_job_and_save_best(db, job_id)
 
     @app.post("/api/v1/jobs/{job_id}/move-up", response_model=JobDetail)
     def move_job_up(

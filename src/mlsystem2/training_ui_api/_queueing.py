@@ -16,6 +16,7 @@ DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
 POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
 SECONDARY_PRIORITY_CONFIG_KEY = "ui.secondary_priority"
+STOP_AND_SAVE_BEST_CONFIG_KEY = "ui.stop_and_save_best_requested"
 
 
 class _QueueRow(Protocol):
@@ -83,15 +84,17 @@ def next_queue_position(session: Session, job_type: JobType, source: JobSource) 
 
 
 def ensure_queue_positions(session: Session) -> None:
-    rows = session.scalars(
-        select(JobRow).where(JobRow.status.in_(_ACTIVE_JOB_STATUSES))
-    ).all()
+    rows = session.scalars(select(JobRow).where(JobRow.status.in_(_ACTIVE_JOB_STATUSES))).all()
     legacy_rows = [row for row in rows if row.queue_position < _MIN_MANAGED_QUEUE_POSITION]
     if not legacy_rows:
         return
     next_positions = {
         base: max(
-            [row.queue_position for row in rows if base <= row.queue_position < base + _QUEUE_POSITION_BLOCK],
+            [
+                row.queue_position
+                for row in rows
+                if base <= row.queue_position < base + _QUEUE_POSITION_BLOCK
+            ],
             default=base,
         )
         for base in _QUEUE_POSITION_BASES.values()

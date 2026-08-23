@@ -1,4 +1,4 @@
-﻿"""Публичные контракты обучения."""
+"""Публичные контракты обучения."""
 
 from __future__ import annotations
 
@@ -204,6 +204,7 @@ class TrainResult(BaseModel):
     task: Literal["binary", "multiclass"] = "binary"
     class_schema: list[TrainClassDefinition] = Field(default_factory=list)
     best_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    stopped_early: bool = False
 
 
 __all__ = [

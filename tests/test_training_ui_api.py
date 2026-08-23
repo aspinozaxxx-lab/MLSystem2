@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -16,7 +16,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import BigInteger, Integer
 from sqlalchemy import select
 
-from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowExperiment, MLflowTrainingProgress
+from mlsystem2.mlflow_adapter.contracts import (
+    MLflowBestCheckpoint,
+    MLflowExperiment,
+    MLflowTrainingProgress,
+)
 from mlsystem2.models.contracts import ModelsError
 from mlsystem2.training_ui_api import _auth, _automation, _model_export, _service, _worker
 from mlsystem2.training_ui_api._routes import export as _export_routes
@@ -210,7 +214,9 @@ def test_pseudo_geojson_download_name_normalizes_legacy_slashes() -> None:
         size_bytes=1,
     )
 
-    assert _service.stored_file_download_name(row) == "Засоления_main_segformer b2_07_38_06_06.geojson"
+    assert (
+        _service.stored_file_download_name(row) == "Засоления_main_segformer b2_07_38_06_06.geojson"
+    )
 
 
 def test_pseudo_geojson_download_name_uses_display_name_for_uuid_key() -> None:
@@ -452,9 +458,7 @@ def test_seed_inference_template_uses_active_dataset_key_after_migration(
                 InferenceTemplateRow.dataset_key.is_not(None),
             )
         ).all()
-        assert [(row.id, row.dataset_key) for row in river_templates] == [
-            (template_id, active_key)
-        ]
+        assert [(row.id, row.dataset_key) for row in river_templates] == [(template_id, active_key)]
 
 
 def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
@@ -949,7 +953,9 @@ def test_training_ui_running_training_progress_falls_back_without_mlflow_history
     monkeypatch.setattr(_service, "get_training_epoch_progress", failing_epoch_progress)
 
     with session_factory() as session:
-        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job = _queue_test_job(
+            JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc)
+        )
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime(2026, 6, 10, tzinfo=timezone.utc)
         job.config = {"train.epochs": 8}
@@ -1196,7 +1202,9 @@ def test_training_ui_job_log_api_reads_failed_start_worker_error(
     Base.metadata.create_all(session_factory.kw["bind"])
 
     with session_factory() as session:
-        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job = _queue_test_job(
+            JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc)
+        )
         job.status = JobStatus.FAILED.value
         session.add(job)
         session.flush()
@@ -1238,7 +1246,9 @@ def test_training_ui_job_log_falls_back_to_journalctl(
     Base.metadata.create_all(session_factory.kw["bind"])
 
     with session_factory() as session:
-        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job = _queue_test_job(
+            JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc)
+        )
         job.status = JobStatus.FAILED.value
         job.finished_at = job.created_at + timedelta(minutes=1)
         session.add(job)
@@ -1290,7 +1300,9 @@ def test_training_ui_job_log_reports_missing_when_journal_has_no_job(
     Base.metadata.create_all(session_factory.kw["bind"])
 
     with session_factory() as session:
-        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job = _queue_test_job(
+            JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc)
+        )
         job.status = JobStatus.FAILED.value
         session.add(job)
         session.flush()
@@ -1321,7 +1333,9 @@ def test_training_ui_job_log_uses_persisted_error_when_runtime_is_gone(
     Base.metadata.create_all(session_factory.kw["bind"])
 
     with session_factory() as session:
-        job = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc))
+        job = _queue_test_job(
+            JobType.TRAINING, JobSource.MANUAL, 1, datetime(2026, 6, 10, tzinfo=timezone.utc)
+        )
         job.status = JobStatus.FAILED.value
         job.error = "TrainPipelineError: процесс обучения был прерван"
         session.add(job)
@@ -1349,9 +1363,7 @@ def test_training_worker_reads_failed_training_log_for_persistence(tmp_path: Pat
     )
     job.tmp_path = str(run_dir)
 
-    assert _worker._training_job_error(job).endswith(
-        "RuntimeError: недостаточно памяти GPU"
-    )
+    assert _worker._training_job_error(job).endswith("RuntimeError: недостаточно памяти GPU")
 
 
 def test_training_ui_worker_dispatches_inference_before_training(
@@ -1669,7 +1681,9 @@ def test_stored_file_object_count_is_nullable_integer() -> None:
     assert column.nullable is True
 
 
-def test_pseudo_geojson_object_count_prefers_report_and_falls_back_to_geojson(tmp_path: Path) -> None:
+def test_pseudo_geojson_object_count_prefers_report_and_falls_back_to_geojson(
+    tmp_path: Path,
+) -> None:
     geojson_path = tmp_path / "pseudo.geojson"
     geojson_path.write_text(
         json.dumps(
@@ -1745,14 +1759,18 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
             "deforestation-b2/1/model.onnx.data",
         }
         assert (service_extract_dir / "deforestation-b2").exists()
-        config = (service_extract_dir / "deforestation-b2" / "config.pbtxt").read_text(encoding="utf-8")
+        config = (service_extract_dir / "deforestation-b2" / "config.pbtxt").read_text(
+            encoding="utf-8"
+        )
         assert 'name: "deforestation-b2"' in config
         assert "dims: [ 1, 4, -1, -1 ]" in config
         assert "dims: [ -1, 1, -1, -1 ]" in config
         assert "dims: [ 1, 1, -1, -1 ]" not in config
         assert "KIND_CPU" in config
         assert "KIND_GPU" not in config
-        pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(encoding="utf-8")
+        pipeline = (extract_dir / "pipelines" / "deforestation-b2_triton.yaml").read_text(
+            encoding="utf-8"
+        )
         assert 'name: "deforestation-b2"' in pipeline
         assert "bounds: 128" in pipeline
         assert "sample_size:\n        - 512\n        - 512" in pipeline
@@ -1821,6 +1839,92 @@ def test_model_export_mask_postprocessing_never_overwrites_an_input_mask() -> No
         assert set(brick["input_masks"]).isdisjoint(brick["out_masks"])
 
 
+def test_running_training_can_stop_and_publish_existing_best_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
+        f"sqlite:///{tmp_path / 'ui.db'}",
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(
+            JobType.TRAINING,
+            JobSource.MANUAL,
+            1,
+            datetime(2026, 8, 24, tzinfo=timezone.utc),
+        )
+        job.status = JobStatus.RUNNING.value
+        job.process_pid = 4321
+        job.tmp_path = str(tmp_path / "job")
+        best_path = Path(job.tmp_path) / "scratch" / "checkpoints" / "best.pt"
+        best_path.parent.mkdir(parents=True)
+        best_path.write_bytes(b"best-f1-checkpoint")
+        session.add(job)
+        session.flush()
+
+        before = _service._job_summary(session, job)
+        assert before.best_checkpoint_available is True
+        assert "stop_and_save_best" in before.actions
+
+        detail = _service.stop_training_job_and_save_best(session, job.id)
+        request_path = (
+            Path(job.tmp_path) / _service.JOB_CONTROL_DIR / _service.STOP_AND_SAVE_BEST_REQUEST_FILE
+        )
+
+        assert request_path.is_file()
+        assert detail.status == JobStatus.RUNNING
+        assert detail.stop_and_save_best_requested is True
+        assert detail.best_checkpoint_available is True
+        assert job.process_pid == 4321
+        assert "stop_and_save_best" not in _service._job_summary(session, job).actions
+
+        repeated = _service.stop_training_job_and_save_best(session, job.id)
+        assert repeated.stop_and_save_best_requested is True
+
+
+def test_training_cannot_stop_with_result_before_first_best_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "MLSYSTEM2_TRAINING_UI_DATABASE_URL",
+        f"sqlite:///{tmp_path / 'ui.db'}",
+    )
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        job = _queue_test_job(
+            JobType.TRAINING,
+            JobSource.MANUAL,
+            1,
+            datetime(2026, 8, 24, tzinfo=timezone.utc),
+        )
+        job.status = JobStatus.RUNNING.value
+        job.tmp_path = str(tmp_path / "job")
+        session.add(job)
+        session.flush()
+
+        with pytest.raises(TrainingUIAPIError, match="ещё не создан"):
+            _service.stop_training_job_and_save_best(session, job.id)
+
+        assert not (
+            Path(job.tmp_path) / _service.JOB_CONTROL_DIR / _service.STOP_AND_SAVE_BEST_REQUEST_FILE
+        ).exists()
+
+
 def test_multiclass_export_can_replace_only_semantic_class_identifiers() -> None:
     checkpoint_schema = [
         {
@@ -1841,11 +1945,14 @@ def test_multiclass_export_can_replace_only_semantic_class_identifiers() -> None
         }
     ]
 
-    assert _model_export._export_class_schema_override(
-        "multiclass",
-        checkpoint_schema,
-        canonical_schema,
-    ) == canonical_schema
+    assert (
+        _model_export._export_class_schema_override(
+            "multiclass",
+            checkpoint_schema,
+            canonical_schema,
+        )
+        == canonical_schema
+    )
     with pytest.raises(TrainingUIAPIError, match="назначение каналов"):
         _model_export._export_class_schema_override(
             "multiclass",
@@ -1946,8 +2053,7 @@ def test_model_export_manual_sample_size_is_used_for_old_checkpoint(monkeypatch)
         assert metadata["inference_context_source"] == "request"
         assert metadata["inference_core_size"] == 512
         normalized_postprocess = {
-            key: postprocess_config[key]
-            for key in sorted(postprocess_config)
+            key: postprocess_config[key] for key in sorted(postprocess_config)
         }
         normalized_json = json.dumps(
             normalized_postprocess,
@@ -2093,11 +2199,15 @@ def test_model_export_api_returns_zip(tmp_path: Path, monkeypatch) -> None:
             files={"checkpoint": ("best.pt", b"checkpoint", "application/octet-stream")},
         )
     assert response.status_code == 200
-    assert response.headers["content-disposition"].endswith('filename="deforestation-b2_export.zip"')
+    assert response.headers["content-disposition"].endswith(
+        'filename="deforestation-b2_export.zip"'
+    )
     assert response.content.startswith(b"PK")
 
 
-def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Path, monkeypatch) -> None:
+def test_training_result_model_export_api_downloads_best_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLFLOW_TRACKING_URI", "http://mlflow.local")
@@ -2152,7 +2262,10 @@ def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Pa
         postprocess_config = kwargs["postprocess_config"]
         assert isinstance(postprocess_config, dict)
         assert postprocess_config["postprocess.filter_compact_objects.enabled"] is True
-        assert postprocess_config["postprocess.filter_compact_objects.min_isoperimetric_quotient"] == 0.25
+        assert (
+            postprocess_config["postprocess.filter_compact_objects.min_isoperimetric_quotient"]
+            == 0.25
+        )
         assert postprocess_config["postprocess.filter_compact_objects.max_bbox_ratio"] == 3.5
         assert postprocess_config["postprocess.smooth.enabled"] is True
         assert postprocess_config["postprocess.smooth.iterations"] == 1
@@ -2184,7 +2297,9 @@ def test_training_result_model_export_api_downloads_best_checkpoint(tmp_path: Pa
     assert response.content.startswith(b"PK")
 
 
-def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path, monkeypatch) -> None:
+def test_training_results_batch_model_export_api_returns_flat_zip(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_MLFLOW_TRACKING_URI", "http://mlflow.local")
@@ -2252,15 +2367,26 @@ def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path
     monkeypatch.setattr(_service, "build_triton_model_export_zip", fake_build_zip)
 
     with TestClient(create_app()) as client:
-        assert client.post("/api/v1/results/training/triton-zip", json={"items": []}).status_code == 401
+        assert (
+            client.post("/api/v1/results/training/triton-zip", json={"items": []}).status_code
+            == 401
+        )
         login = client.post("/api/v1/auth/login", json={"username": "mluser", "password": "secret"})
         assert login.status_code == 200
         response = client.post(
             "/api/v1/results/training/triton-zip",
             json={
                 "items": [
-                    {"result_id": str(first_id), "model_name": "rivers_kanopus", "sample_size": 512},
-                    {"result_id": str(second_id), "model_name": "deforest_kanopus", "sample_size": None},
+                    {
+                        "result_id": str(first_id),
+                        "model_name": "rivers_kanopus",
+                        "sample_size": 512,
+                    },
+                    {
+                        "result_id": str(second_id),
+                        "model_name": "deforest_kanopus",
+                        "sample_size": None,
+                    },
                 ]
             },
         )
@@ -2290,7 +2416,10 @@ def test_training_results_batch_model_export_api_returns_flat_zip(tmp_path: Path
         assert "pipelines/rivers_kanopus_triton.yaml" in names
         assert "metadata/rivers_kanopus_export_metadata.json" in names
         metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
-    assert [item["model_name"] for item in metadata["models"]] == ["rivers_kanopus", "deforest_kanopus"]
+    assert [item["model_name"] for item in metadata["models"]] == [
+        "rivers_kanopus",
+        "deforest_kanopus",
+    ]
 
 
 def test_training_results_batch_export_supports_native_and_external_models(
@@ -2504,7 +2633,9 @@ def test_training_result_model_export_requires_ok_status_and_mlflow_run(
             _service.export_training_results_triton_zip(
                 session,
                 request=TrainingResultBatchExportRequest(
-                    items=[TrainingResultExportItem(result_id=running.id, model_name="rivers_kanopus")]
+                    items=[
+                        TrainingResultExportItem(result_id=running.id, model_name="rivers_kanopus")
+                    ]
                 ),
                 config=config,
             )
@@ -2512,13 +2643,19 @@ def test_training_result_model_export_requires_ok_status_and_mlflow_run(
             _service.export_training_results_triton_zip(
                 session,
                 request=TrainingResultBatchExportRequest(
-                    items=[TrainingResultExportItem(result_id=without_run.id, model_name="rivers_kanopus")]
+                    items=[
+                        TrainingResultExportItem(
+                            result_id=without_run.id, model_name="rivers_kanopus"
+                        )
+                    ]
                 ),
                 config=config,
             )
 
 
-def test_class_results_includes_sample_size_hint_from_training_job(tmp_path: Path, monkeypatch) -> None:
+def test_class_results_includes_sample_size_hint_from_training_job(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
@@ -2623,10 +2760,10 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "recommended_range" in app_tsx
     assert "downloadBlob(response.blob" in app_tsx
     assert 'pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"' in app_tsx
-    assert "components[\"schemas\"][\"BootstrapInfo\"]" in api_types
-    assert "components[\"schemas\"][\"TestSampleDetail\"]" in api_types
-    assert "components[\"schemas\"][\"TestSampleOptimizeRequest\"]" in api_types
-    assert "credentials: \"same-origin\"" in api_client
+    assert 'components["schemas"]["BootstrapInfo"]' in api_types
+    assert 'components["schemas"]["TestSampleDetail"]' in api_types
+    assert 'components["schemas"]["TestSampleOptimizeRequest"]' in api_types
+    assert 'credentials: "same-origin"' in api_client
 
 
 def test_frontend_build_runs_vite_wrapper(tmp_path: Path, monkeypatch) -> None:
@@ -2660,7 +2797,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
     (class_dir / "deforestation.txt").write_text("scene-1\n", encoding="utf-8")
-    (class_dir / "deforestation.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    (class_dir / "deforestation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
+    )
     images_root = tmp_path / "prepared_images"
     image_folder = images_root / "kanopus" / "irkutsk"
     image_folder.mkdir(parents=True)
@@ -2672,7 +2811,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         '<!doctype html><title>MLSystem2</title><script type="module" src="/assets/index-test.js"></script>',
         encoding="utf-8",
     )
-    (frontend_dist / "assets" / "index-test.js").write_text("console.log('MLSystem2')", encoding="utf-8")
+    (frontend_dist / "assets" / "index-test.js").write_text(
+        "console.log('MLSystem2')", encoding="utf-8"
+    )
     (frontend_dist / "assets" / "index-test.css").write_text("body{margin:0}", encoding="utf-8")
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
@@ -2691,7 +2832,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert client.get("/").text.startswith("<!doctype html>")
         app_js = client.get("/assets/index-test.js")
         assert app_js.text == "console.log('MLSystem2')"
-        assert app_js.headers["content-type"].split(";")[0] in {"text/javascript", "application/javascript"}
+        assert app_js.headers["content-type"].split(";")[0] in {
+            "text/javascript",
+            "application/javascript",
+        }
         assert client.get("/assets/index-test.css").text == "body{margin:0}"
         assert client.get("/not-a-real-frontend-route").text.startswith("<!doctype html>")
         unauthorized = client.get("/api/v1/datasets")
@@ -2746,7 +2890,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         new_dir = mlmarkup_root / "Пожары" / "main"
         new_dir.mkdir(parents=True)
         (new_dir / "fires.txt").write_text("scene-2\n", encoding="utf-8")
-        (new_dir / "fires.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+        (new_dir / "fires.geojson").write_text(
+            '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
+        )
         refreshed = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in refreshed] == [
             "Вырубки\\main",
@@ -2809,7 +2955,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert segformer_template["default_config"]["train.max_val_batches_per_epoch"] == 1000
         assert segformer_template["default_config"]["train.max_training_time_sec"] == 1800
         loss_field = next(
-            item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.loss"
+            item
+            for item in segformer_template["config_schema"]["fields"]
+            if item["key"] == "train.loss"
         )
         assert loss_field["options"] == [
             "bce_dice",
@@ -2819,7 +2967,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "cross_entropy_dice",
         ]
         hard_weight_field = next(
-            item for item in segformer_template["config_schema"]["fields"] if item["key"] == "train.hard_negative_weight"
+            item
+            for item in segformer_template["config_schema"]["fields"]
+            if item["key"] == "train.hard_negative_weight"
         )
         assert "размеченных hard-negative зон" in hard_weight_field["tooltip"]
         assert "Остальной background" in hard_weight_field["tooltip"]
@@ -2876,7 +3026,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert river_inference_template["default_config"]["postprocess.smooth.iterations"] == 1
         assert river_inference_template["default_config"]["postprocess.smooth.offset"] == 0.125
         assert river_inference_template["default_config"]["postprocess.simplify_m"] == 1.0
-        assert river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"] is True
+        assert (
+            river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"]
+            is True
+        )
         inference_dataset_template = client.post(
             "/api/v1/inference-templates",
             json={"architecture": "smp_segformer_b2", "dataset_key": "Вырубки\\main"},
@@ -2892,7 +3045,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             },
         ).json()
         assert updated_inference_dataset_template["source"] == "manual"
-        assert updated_inference_dataset_template["default_config"]["postprocess.min_area_m2"] == 2222.0
+        assert (
+            updated_inference_dataset_template["default_config"]["postprocess.min_area_m2"]
+            == 2222.0
+        )
 
         custom = client.post(
             "/api/v1/custom-datasets",
@@ -2978,7 +3134,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert folder_pseudo["config"]["inference_template_id"] == inference_template["id"]
         second_folder_pseudo = client.post(
             "/api/v1/results/datasets/custom/pseudo-markup",
-            data={"image_folder_key": "kanopus/toguchinsk", "training_result_id": training_result_id},
+            data={
+                "image_folder_key": "kanopus/toguchinsk",
+                "training_result_id": training_result_id,
+            },
         ).json()
         assert second_folder_pseudo["type"] == "inference"
         assert second_folder_pseudo["config"]["image_folder_key"] == "kanopus/toguchinsk"
@@ -3018,7 +3177,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "irkutsk/scene-1.tif",
             "irkutsk/scene-2.tif",
         ]
-        folder_result = next(item for item in pseudo_results if item["source_dataset_name"] == "kanopus/irkutsk")
+        folder_result = next(
+            item for item in pseudo_results if item["source_dataset_name"] == "kanopus/irkutsk"
+        )
         assert folder_result["image_count"] == 2
         second_folder_scenes = next(
             item["scenes_file"]
@@ -3031,7 +3192,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         uploaded_txt_result = next(
             item
             for item in pseudo_results
-            if item["source_dataset_name"] == "Custom" and item["scenes_file"]["original_name"] == "manual.txt"
+            if item["source_dataset_name"] == "Custom"
+            and item["scenes_file"]["original_name"] == "manual.txt"
         )
         assert uploaded_txt_result["image_count"] == 2
         session_factory = create_session_factory(get_config())
@@ -3046,7 +3208,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert deleted_folder_pseudo.status_code == 200
         queue_after_delete = client.get("/api/v1/queues").json()["inference_jobs"]
         assert second_folder_pseudo["id"] not in {item["id"] for item in queue_after_delete}
-        deleted_uploaded_pseudo = client.delete(f"/api/v1/results/pseudo-markup/{uploaded_txt_result['id']}")
+        deleted_uploaded_pseudo = client.delete(
+            f"/api/v1/results/pseudo-markup/{uploaded_txt_result['id']}"
+        )
         assert deleted_uploaded_pseudo.status_code == 200
         assert deleted_uploaded_pseudo.json()["id"] == uploaded_txt_result["id"]
         queue_after_pseudo_delete = client.get("/api/v1/queues").json()["inference_jobs"]
@@ -3071,7 +3235,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert client.get(f"/api/v1/jobs/{job['id']}").status_code == 400
         assert client.get("/api/v1/queues").json()["training_jobs"] == []
         assert client.get("/api/v1/results/datasets/custom").json()["results"] == []
-        deleted_template = client.delete(f"/api/v1/training-templates/by-id/{dataset_template['id']}").json()
+        deleted_template = client.delete(
+            f"/api/v1/training-templates/by-id/{dataset_template['id']}"
+        ).json()
         assert deleted_template["dataset_key"] == "Вырубки\\main"
         deleted_inference_template = client.delete(
             f"/api/v1/inference-templates/by-id/{inference_dataset_template['id']}"
@@ -3084,7 +3250,9 @@ def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, m
     class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
     (class_dir / "scenes.txt").write_text("scene-1\n", encoding="utf-8")
-    (class_dir / "annotation.geojson").write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    (class_dir / "annotation.geojson").write_text(
+        '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
+    )
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -3330,16 +3498,12 @@ def test_training_ui_worker_snapshots_per_image_annotations(
         )
         pseudo_row = session.get(JobRow, pseudo.id)
         pseudo_result = session.scalar(
-            select(PseudoMarkupResultRow).where(
-                PseudoMarkupResultRow.job_id == pseudo.id
-            )
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo.id)
         )
         assert pseudo_row is not None
         assert pseudo_result is not None
         assert pseudo_result.scenes_file is not None
-        generated_scenes = Path(pseudo_result.scenes_file.path).read_text(
-            encoding="utf-8"
-        )
+        generated_scenes = Path(pseudo_result.scenes_file.path).read_text(encoding="utf-8")
         annotation_files = list(pseudo_row.config["annotation_files"])
 
     snapshot_dir = Path(payload["dataset"]["annotations_dir"])
@@ -3596,7 +3760,9 @@ def test_training_ui_rejects_invalid_job_factor_sum(
             )
 
 
-def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Path, monkeypatch) -> None:
+def test_training_ui_automation_has_lower_priority_than_manual_jobs(
+    tmp_path: Path, monkeypatch
+) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
@@ -3649,9 +3815,7 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
         )
         stored_dataset_template = session.get(TrainingTemplateRow, dataset_template.id)
         assert stored_dataset_template is not None
-        active_dataset = session.scalar(
-            select(DatasetRow).where(DatasetRow.key == "Вырубки\\main")
-        )
+        active_dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == "Вырубки\\main"))
         assert active_dataset is not None
         legacy_key = "00000000-0000-0000-0000-000000000001"
         session.add(
@@ -3696,9 +3860,13 @@ def test_training_ui_automation_has_lower_priority_than_manual_jobs(tmp_path: Pa
         old_auto_job_id = auto_job.id
         old_version = auto_job.dataset_version
         annotation_path = class_dir / "annotation.geojson"
-        annotation_path.write_text('{"type":"FeatureCollection","features":[{"type":"Feature"}]}', encoding="utf-8")
+        annotation_path.write_text(
+            '{"type":"FeatureCollection","features":[{"type":"Feature"}]}', encoding="utf-8"
+        )
         stat = annotation_path.stat()
-        os.utime(annotation_path, ns=(stat.st_atime_ns + 2_000_000_000, stat.st_mtime_ns + 2_000_000_000))
+        os.utime(
+            annotation_path, ns=(stat.st_atime_ns + 2_000_000_000, stat.st_mtime_ns + 2_000_000_000)
+        )
         _automation.sync_automation_once(session, config)
         assert session.get(JobRow, old_auto_job_id).status == JobStatus.CANCELLED.value
         auto_job = session.scalar(
@@ -3815,7 +3983,9 @@ def test_training_ui_disabling_automation_cancels_running_jobs_and_kills_mlflow(
         auto_job.status = JobStatus.RUNNING.value
         auto_job.process_pid = 9876
         auto_job.tmp_path = str(run_dir)
-        result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == auto_job.id))
+        result = session.scalar(
+            select(TrainingResultRow).where(TrainingResultRow.job_id == auto_job.id)
+        )
         assert result is not None
         result.mlflow_run_id = "run-auto-kill"
 
@@ -3979,7 +4149,9 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
             )
         )
         assert training_job is not None
-        training_result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == training_job.id))
+        training_result = session.scalar(
+            select(TrainingResultRow).where(TrainingResultRow.job_id == training_job.id)
+        )
         assert training_result is not None
         training_job.status = JobStatus.COMPLETED.value
         training_result.status = ResultStatus.OK.value
@@ -3998,8 +4170,13 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
         assert pseudo_job.dataset_key == "Вырубки\\main"
         assert pseudo_job.dataset_version == training_job.dataset_version
         assert pseudo_job.config["training_result_id"] == str(training_result.id)
-        assert pseudo_job.config["checkpoint_uri"] == "s3://mlflow-artifacts/auto/run/artifacts/checkpoints/best.pt"
-        pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
+        assert (
+            pseudo_job.config["checkpoint_uri"]
+            == "s3://mlflow-artifacts/auto/run/artifacts/checkpoints/best.pt"
+        )
+        pseudo_result = session.scalar(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id)
+        )
         assert pseudo_result is not None
         assert pseudo_result.scenes_file is not None
         assert pseudo_result.image_count == 1
@@ -4099,9 +4276,7 @@ def test_training_ui_automation_supports_per_image_dataset(
         )
         assert training_job is not None
         training_result = session.scalar(
-            select(TrainingResultRow).where(
-                TrainingResultRow.job_id == training_job.id
-            )
+            select(TrainingResultRow).where(TrainingResultRow.job_id == training_job.id)
         )
         assert training_result is not None
         training_job.status = JobStatus.COMPLETED.value
@@ -4118,9 +4293,7 @@ def test_training_ui_automation_supports_per_image_dataset(
         )
         assert pseudo_job is not None
         pseudo_result = session.scalar(
-            select(PseudoMarkupResultRow).where(
-                PseudoMarkupResultRow.job_id == pseudo_job.id
-            )
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id)
         )
         assert pseudo_result is not None
         assert pseudo_result.image_count == 1
@@ -4224,7 +4397,9 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         run_dir = Path(row.tmp_path)
         (run_dir / "mlflow_run_id").write_text("run-123\n", encoding="utf-8")
         _worker._sync_training_run_id(session, row, config)
-        running_result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == job.id))
+        running_result = session.scalar(
+            select(TrainingResultRow).where(TrainingResultRow.job_id == job.id)
+        )
         assert running_result is not None
         assert running_result.mlflow_run_id == "run-123"
         assert row.mlflow_experiment_id == "1"
@@ -4233,7 +4408,9 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
             == f"{config.mlflow_ui_url.rstrip('/')}/#/experiments/1/runs/run-123"
         )
 
-        (run_dir / "train.log").write_text("status=succeeded\nmlflow_run=run-123\n", encoding="utf-8")
+        (run_dir / "train.log").write_text(
+            "status=succeeded\nmlflow_run=run-123\n", encoding="utf-8"
+        )
         (run_dir / "exit_code").write_text("0\n", encoding="utf-8")
 
         dispatch_training_queue_once(session, config, popen_factory=fake_popen)
@@ -4270,10 +4447,10 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert pseudo_job.config["checkpoint_f1_score"] == 0.8123
         assert pseudo_job.config["checkpoint_epoch"] == 7
         assert pseudo_job.config["checkpoint_threshold"] == 0.7
-        assert pseudo_job.config["annotation_files"] == [
-            str(class_dir / "annotation.geojson")
-        ]
-        legacy_pseudo_result = session.scalar(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id))
+        assert pseudo_job.config["annotation_files"] == [str(class_dir / "annotation.geojson")]
+        legacy_pseudo_result = session.scalar(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == pseudo_job.id)
+        )
         assert legacy_pseudo_result is not None
         assert legacy_pseudo_result.image_count == 1
         legacy_pseudo_result.image_count = None
@@ -4293,9 +4470,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert "checkpoint_artifact_path: checkpoints/best.pt" in pseudo_config
         assert pseudo_config_payload["inference_backend"] == "pytorch_one_off"
         assert pseudo_config_payload["input_channels"] == 4
-        assert pseudo_config_payload["annotation_files"] == [
-            str(class_dir / "annotation.geojson")
-        ]
+        assert pseudo_config_payload["annotation_files"] == [str(class_dir / "annotation.geojson")]
         for forbidden_key in ("triton_model", "pipeline", "model_repository", "model_archive"):
             assert forbidden_key not in pseudo_config_payload
 

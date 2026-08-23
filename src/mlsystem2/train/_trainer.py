@@ -1,4 +1,4 @@
-﻿"""PyTorch цикл обучения сегментационной модели."""
+"""PyTorch цикл обучения сегментационной модели."""
 
 from __future__ import annotations
 
@@ -28,6 +28,11 @@ MULTICLASS_THRESHOLD_CANDIDATES = (0.0, *THRESHOLD_CANDIDATES)
 TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
 PAUSE_REQUEST_FILE = "pause.request"
 PAUSED_MARKER_FILE = "paused"
+STOP_AND_SAVE_BEST_REQUEST_FILE = "stop-and-save-best.request"
+
+
+class _TrainingStopAndSaveBestRequested(Exception):
+    """Внутренний сигнал штатно завершить run с уже сохранённым best.pt."""
 
 
 class _TrainingPauseController:
@@ -44,6 +49,7 @@ class _TrainingPauseController:
     def pause_if_requested(self) -> None:
         if self._control_dir is None:
             return
+        self._stop_if_requested()
         request_path = self._control_dir / PAUSE_REQUEST_FILE
         if not request_path.is_file():
             return
@@ -62,12 +68,21 @@ class _TrainingPauseController:
             os.replace(temporary, marker_path)
             self._paused = True
             while request_path.is_file():
+                self._stop_if_requested()
                 time.sleep(0.2)
             self._model.to(self._device)
             _move_optimizer_state(self._optimizer, self._device)
+            self._stop_if_requested()
         finally:
             marker_path.unlink(missing_ok=True)
             self._paused = False
+
+    def _stop_if_requested(self) -> None:
+        if (
+            self._control_dir is not None
+            and (self._control_dir / STOP_AND_SAVE_BEST_REQUEST_FILE).is_file()
+        ):
+            raise _TrainingStopAndSaveBestRequested
 
     def close(self) -> None:
         if self._control_dir is not None:
@@ -143,109 +158,119 @@ def train_model(
         device,
         os.getenv(TRAINING_CONTROL_DIR_ENV),
     )
+    stopped_early = False
 
     try:
-        for epoch in range(1, config.epochs + 1):
-            pause_controller.pause_if_requested()
-            _emit(progress_sink, epoch, "epoch_started", None)
-            epoch_started = perf_counter()
+        try:
+            for epoch in range(1, config.epochs + 1):
+                pause_controller.pause_if_requested()
+                _emit(progress_sink, epoch, "epoch_started", None)
+                epoch_started = perf_counter()
 
-            train_epoch = _train_epoch(
-                torch,
-                model,
-                request.train_loader,
-                optimizer,
-                device,
-                config,
-                epoch,
-                pause_controller=pause_controller,
-            )
-            val = _validate_epoch(
-                torch,
-                model,
-                request.val_loader,
-                device,
-                config,
-                epoch,
-                pause_controller=pause_controller,
-            )
-            scheduler.step()
+                train_epoch = _train_epoch(
+                    torch,
+                    model,
+                    request.train_loader,
+                    optimizer,
+                    device,
+                    config,
+                    epoch,
+                    pause_controller=pause_controller,
+                )
+                val = _validate_epoch(
+                    torch,
+                    model,
+                    request.val_loader,
+                    device,
+                    config,
+                    epoch,
+                    pause_controller=pause_controller,
+                )
+                scheduler.step()
 
-            _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
-            _ensure_finite_scalar(val["loss"], "val_loss", epoch)
-            metrics = EpochMetrics(
-                epoch=epoch,
-                train_loss=train_epoch["loss"],
-                val_loss=val["loss"],
-                quality_metric=config.quality_metric,
-                val_quality_f1=val["quality_f1"],
-                val_quality_precision=val["quality_precision"],
-                val_quality_recall=val["quality_recall"],
-                val_best_threshold=val["best_threshold"],
-                val_best_pixel_threshold=val["best_pixel_threshold"],
-                val_best_threshold_pixel_f1=val["best_threshold_pixel_f1"],
-                val_best_threshold_pixel_precision=val["best_threshold_pixel_precision"],
-                val_best_threshold_pixel_recall=val["best_threshold_pixel_recall"],
-                val_best_threshold_precision=val["best_threshold_precision"],
-                val_best_threshold_recall=val["best_threshold_recall"],
-                val_best_threshold_object_f1=val.get("best_threshold_object_f1"),
-                val_best_threshold_object_precision=val.get(
-                    "best_threshold_object_precision"
-                ),
-                val_best_threshold_object_recall=val.get(
-                    "best_threshold_object_recall"
-                ),
-                val_macro_pixel_f1=val.get("macro_pixel_f1"),
-                val_macro_pixel_precision=val.get("macro_pixel_precision"),
-                val_macro_pixel_recall=val.get("macro_pixel_recall"),
-                val_macro_pixel_iou=val.get("macro_pixel_iou"),
-                val_micro_pixel_f1=val.get("micro_pixel_f1"),
-                val_micro_pixel_precision=val.get("micro_pixel_precision"),
-                val_micro_pixel_recall=val.get("micro_pixel_recall"),
-                val_foreground_pixel_f1=val.get("foreground_pixel_f1"),
-                val_foreground_pixel_precision=val.get("foreground_pixel_precision"),
-                val_foreground_pixel_recall=val.get("foreground_pixel_recall"),
-                val_per_class_metrics=val.get("per_class_metrics", []),
-                val_multiclass_threshold_sweep=val.get("threshold_sweep", {}),
-                val_metric_warnings=val.get("metric_warnings", []),
-                epoch_time_sec=perf_counter() - epoch_started,
-            )
-            history.append(metrics)
+                _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
+                _ensure_finite_scalar(val["loss"], "val_loss", epoch)
+                metrics = EpochMetrics(
+                    epoch=epoch,
+                    train_loss=train_epoch["loss"],
+                    val_loss=val["loss"],
+                    quality_metric=config.quality_metric,
+                    val_quality_f1=val["quality_f1"],
+                    val_quality_precision=val["quality_precision"],
+                    val_quality_recall=val["quality_recall"],
+                    val_best_threshold=val["best_threshold"],
+                    val_best_pixel_threshold=val["best_pixel_threshold"],
+                    val_best_threshold_pixel_f1=val["best_threshold_pixel_f1"],
+                    val_best_threshold_pixel_precision=val["best_threshold_pixel_precision"],
+                    val_best_threshold_pixel_recall=val["best_threshold_pixel_recall"],
+                    val_best_threshold_precision=val["best_threshold_precision"],
+                    val_best_threshold_recall=val["best_threshold_recall"],
+                    val_best_threshold_object_f1=val.get("best_threshold_object_f1"),
+                    val_best_threshold_object_precision=val.get("best_threshold_object_precision"),
+                    val_best_threshold_object_recall=val.get("best_threshold_object_recall"),
+                    val_macro_pixel_f1=val.get("macro_pixel_f1"),
+                    val_macro_pixel_precision=val.get("macro_pixel_precision"),
+                    val_macro_pixel_recall=val.get("macro_pixel_recall"),
+                    val_macro_pixel_iou=val.get("macro_pixel_iou"),
+                    val_micro_pixel_f1=val.get("micro_pixel_f1"),
+                    val_micro_pixel_precision=val.get("micro_pixel_precision"),
+                    val_micro_pixel_recall=val.get("micro_pixel_recall"),
+                    val_foreground_pixel_f1=val.get("foreground_pixel_f1"),
+                    val_foreground_pixel_precision=val.get("foreground_pixel_precision"),
+                    val_foreground_pixel_recall=val.get("foreground_pixel_recall"),
+                    val_per_class_metrics=val.get("per_class_metrics", []),
+                    val_multiclass_threshold_sweep=val.get("threshold_sweep", {}),
+                    val_metric_warnings=val.get("metric_warnings", []),
+                    epoch_time_sec=perf_counter() - epoch_started,
+                )
+                history.append(metrics)
 
-            score = _checkpoint_score(metrics)
-            if score > best_score:
-                best_score = score
-                best_metrics = metrics
-                patience = 0
-                _save_training_checkpoint(request, str(best_checkpoint_path), metrics, "best")
-            else:
-                patience += 1
+                score = _checkpoint_score(metrics)
+                if score > best_score:
+                    best_score = score
+                    best_metrics = metrics
+                    patience = 0
+                    _save_training_checkpoint(
+                        request,
+                        str(best_checkpoint_path),
+                        metrics,
+                        "best",
+                    )
+                else:
+                    patience += 1
 
-            _emit(progress_sink, epoch, "epoch_finished", metrics)
-            if _training_time_exceeded(config, total_started):
-                break
-            if patience >= config.early_stopping_patience:
-                break
+                _emit(progress_sink, epoch, "epoch_finished", metrics)
+                if _training_time_exceeded(config, total_started):
+                    break
+                if patience >= config.early_stopping_patience:
+                    break
+        except _TrainingStopAndSaveBestRequested:
+            stopped_early = True
 
         if not history:
             raise TrainError("Обучение не выполнило ни одной эпохи.")
+        if stopped_early and not best_checkpoint_path.is_file():
+            raise TrainError(
+                    "Нельзя остановить обучение с сохранением: лучший чекпойнт ещё не создан."
+            )
 
-        _save_training_checkpoint(request, str(final_checkpoint_path), history[-1], "final")
+        artifacts = [CheckpointArtifact(uri=str(best_checkpoint_path), label="best")]
+        final_checkpoint: str | None = None
+        if not stopped_early:
+            _save_training_checkpoint(request, str(final_checkpoint_path), history[-1], "final")
+            final_checkpoint = str(final_checkpoint_path)
+            artifacts.append(CheckpointArtifact(uri=str(final_checkpoint_path), label="final"))
         return TrainResult(
             history=history,
             epochs_total=len(history),
             training_time_sec=perf_counter() - total_started,
-            best_checkpoint_path=str(best_checkpoint_path) if best_checkpoint_path.exists() else None,
-            final_checkpoint_path=str(final_checkpoint_path),
-            artifacts=[
-                CheckpointArtifact(uri=str(best_checkpoint_path), label="best"),
-                CheckpointArtifact(uri=str(final_checkpoint_path), label="final"),
-            ],
+            best_checkpoint_path=str(best_checkpoint_path),
+            final_checkpoint_path=final_checkpoint,
+            artifacts=artifacts,
             task=config.task,
             class_schema=list(config.class_schema),
-            best_threshold=(
-                best_metrics.val_best_threshold if best_metrics is not None else None
-            ),
+            best_threshold=(best_metrics.val_best_threshold if best_metrics is not None else None),
+            stopped_early=stopped_early,
         )
     except TrainError:
         raise
@@ -273,9 +298,7 @@ def _train_epoch(
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
-        masks, hard_negative_pixels = _prepare_supervision_masks(
-            torch, masks, config, device
-        )
+        masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
         class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
             torch,
             meta,
@@ -388,12 +411,10 @@ def _validate_epoch(
     total_loss = 0.0
     batches = 0
     threshold_counts = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0}
-        for threshold in THRESHOLD_CANDIDATES
+        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES
     }
     object_threshold_counts = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0}
-        for threshold in THRESHOLD_CANDIDATES
+        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES
     }
     object_instances_seen = False
     object_metric_workers = min(OBJECT_METRIC_MAX_WORKERS, max(1, os.cpu_count() or 1))
@@ -404,9 +425,7 @@ def _validate_epoch(
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
-            masks, hard_negative_pixels = _prepare_supervision_masks(
-                torch, masks, config, device
-            )
+            masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             _validate_binary_targets(torch, masks, epoch, batch_index, "val")
@@ -557,8 +576,7 @@ def _validate_multiclass_epoch(
         threshold: {} for threshold in MULTICLASS_THRESHOLD_CANDIDATES
     }
     foreground_stats: dict[float, dict[str, int]] = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0}
-        for threshold in MULTICLASS_THRESHOLD_CANDIDATES
+        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in MULTICLASS_THRESHOLD_CANDIDATES
     }
     expected_num_classes = len(config.class_schema) + 1
 
@@ -566,9 +584,7 @@ def _validate_multiclass_epoch(
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
-            masks, hard_negative_pixels = _prepare_supervision_masks(
-                torch, masks, config, device
-            )
+            masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
                 torch,
                 meta,
@@ -899,8 +915,7 @@ def _prepare_class_hard_negative_pixels(torch, meta, config, device):
     expected_channels = len(config.class_schema)
     if value.ndim != 4 or int(value.shape[1]) != expected_channels:
         raise TrainError(
-            "Классовая hard negative маска должна иметь форму "
-            f"B×{expected_channels}×H×W."
+            f"Классовая hard negative маска должна иметь форму B×{expected_channels}×H×W."
         )
     return value
 
@@ -936,13 +951,17 @@ def _loss(
             config,
         )
         if config.loss == "cross_entropy_dice":
-            return cross_entropy + class_hard_negative_loss + _multiclass_dice_loss(
-                torch,
-                logits,
-                masks,
-                hard_negative_pixels,
-                config,
-                class_hard_negative_pixels,
+            return (
+                cross_entropy
+                + class_hard_negative_loss
+                + _multiclass_dice_loss(
+                    torch,
+                    logits,
+                    masks,
+                    hard_negative_pixels,
+                    config,
+                    class_hard_negative_pixels,
+                )
             )
         return cross_entropy + class_hard_negative_loss
     if config.loss == "bce_dice":
@@ -981,9 +1000,7 @@ def _loss(
         )
     if config.loss == "focal_tversky":
         weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
-        focal, _bce = _focal_loss_with_bce(
-            torch, logits, masks, config, weights
-        )
+        focal, _bce = _focal_loss_with_bce(torch, logits, masks, config, weights)
         return focal + _tversky_loss(
             torch,
             logits,
@@ -1120,9 +1137,7 @@ def _dice_loss(
     config=None,
 ):
     probs = torch.sigmoid(logits)
-    probability_weights = _pixel_loss_weights(
-        torch, logits, hard_negative_pixels, config
-    )
+    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
     if probability_weights is not None:
         probs = probs * probability_weights
     smooth = 1.0
@@ -1151,15 +1166,17 @@ def _multiclass_dice_loss(
     probs = probs[:, 1:, :, :]
     target = target[:, 1:, :, :]
     if class_hard_negative_pixels is not None:
-        valid = (~class_hard_negative_pixels.any(dim=1)).unsqueeze(1).to(
-            device=logits.device,
-            dtype=probs.dtype,
+        valid = (
+            (~class_hard_negative_pixels.any(dim=1))
+            .unsqueeze(1)
+            .to(
+                device=logits.device,
+                dtype=probs.dtype,
+            )
         )
         probs = probs * valid
         target = target * valid
-    probability_weights = _pixel_loss_weights(
-        torch, logits, hard_negative_pixels, config
-    )
+    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
     if probability_weights is not None:
         probs = probs * probability_weights.unsqueeze(1)
     smooth = 1.0
@@ -1181,9 +1198,7 @@ def _tversky_loss(
     smooth = 1.0
     true_positive = torch.sum(probs * masks)
     false_positive_pixels = probs * (1.0 - masks)
-    weights = _pixel_loss_weights(
-        torch, logits, hard_negative_pixels, config
-    )
+    weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
     if weights is not None:
         false_positive_pixels = false_positive_pixels * weights
     false_positive = torch.sum(false_positive_pixels)

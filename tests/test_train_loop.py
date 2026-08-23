@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 import threading
@@ -179,7 +179,9 @@ def test_train_model_respects_batch_limits(tmp_path: Path) -> None:
     assert len(result.history) == 1
 
 
-def test_train_model_stops_after_training_time_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_train_model_stops_after_training_time_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     torch = pytest.importorskip("torch")
 
     from mlsystem2.train import _trainer
@@ -568,6 +570,138 @@ def test_object_quality_drives_checkpoint_and_early_stopping(
 
     assert result.epochs_total == 2
     assert saved == [("best", 0.9), ("final", 0.8)]
+
+
+def test_stop_request_keeps_best_f1_checkpoint_and_does_not_create_final(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train import _trainer
+
+    class TinyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(1))
+
+        def forward(self, images):
+            return images * self.weight
+
+    quality_scores = [0.9, 0.7, 0.6]
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    monkeypatch.setenv(_trainer.TRAINING_CONTROL_DIR_ENV, str(control_dir))
+    monkeypatch.setattr(_trainer, "_train_epoch", lambda *args, **kwargs: {"loss": 1.0})
+
+    def fake_validate(*args, **kwargs):
+        epoch = int(args[-1])
+        score = quality_scores[epoch - 1]
+        return {
+            "loss": 1.0,
+            "best_threshold": 0.7,
+            "best_pixel_threshold": 0.5,
+            "best_threshold_pixel_f1": score,
+            "best_threshold_pixel_precision": score,
+            "best_threshold_pixel_recall": score,
+            "best_threshold_precision": score,
+            "best_threshold_recall": score,
+            "best_threshold_object_f1": score,
+            "best_threshold_object_precision": score,
+            "best_threshold_object_recall": score,
+            "quality_f1": score,
+            "quality_precision": score,
+            "quality_recall": score,
+        }
+
+    saved: list[tuple[str, int, float]] = []
+
+    def fake_save(request, path: str, metrics: EpochMetrics, label: str) -> None:
+        del request
+        checkpoint_path = Path(path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_bytes(b"checkpoint")
+        saved.append((label, metrics.epoch, metrics.val_quality_f1))
+
+    def progress(event) -> None:
+        if event.message == "epoch_finished" and event.epoch == 2:
+            (control_dir / _trainer.STOP_AND_SAVE_BEST_REQUEST_FILE).write_text(
+                "operator-request\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(_trainer, "_validate_epoch", fake_validate)
+    monkeypatch.setattr(_trainer, "_save_training_checkpoint", fake_save)
+    request = TrainRequest(
+        model=ModelHandle(
+            spec=ModelSpec(name="segformer_b0", input_channels=1, output_channels=1),
+            model=TinyModel(),
+        ),
+        train_loader=[],
+        val_loader=[],
+        config=TrainConfig(
+            quality_metric="objects",
+            epochs=5,
+            batch_size=1,
+            device="cpu",
+            learning_rate=0.001,
+            weight_decay=0.0,
+            loss="bce_dice",
+            threshold=0.5,
+            early_stopping_patience=5,
+        ),
+        checkpoint_dir=str(tmp_path / "checkpoints"),
+    )
+
+    result = train_model(request, progress_sink=progress)
+
+    assert result.stopped_early is True
+    assert result.epochs_total == 2
+    assert result.final_checkpoint_path is None
+    assert [artifact.label for artifact in result.artifacts] == ["best"]
+    assert saved == [("best", 1, 0.9)]
+
+
+def test_stop_request_interrupts_paused_training(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train import _trainer
+
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    pause_path = control_dir / _trainer.PAUSE_REQUEST_FILE
+    marker_path = control_dir / _trainer.PAUSED_MARKER_FILE
+    pause_path.write_text("pause-token\n", encoding="utf-8")
+    controller = _trainer._TrainingPauseController(
+        torch,
+        model,
+        optimizer,
+        torch.device("cpu"),
+        str(control_dir),
+    )
+    errors: list[BaseException] = []
+
+    def pause() -> None:
+        try:
+            controller.pause_if_requested()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    thread = threading.Thread(target=pause)
+    thread.start()
+    deadline = time.monotonic() + 3
+    while not marker_path.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    (control_dir / _trainer.STOP_AND_SAVE_BEST_REQUEST_FILE).write_text(
+        "stop-token\n",
+        encoding="utf-8",
+    )
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], _trainer._TrainingStopAndSaveBestRequested)
+    assert not marker_path.exists()
 
 
 def test_object_training_checkpoint_contains_both_metric_families(tmp_path: Path) -> None:
@@ -1245,8 +1379,8 @@ def test_binary_loss_has_zero_gradient_in_context_frame(loss_name: str) -> None:
         threshold=0.5,
         early_stopping_patience=1,
     )
-    cropped_logits, cropped_masks, cropped_hard_negative = (
-        _trainer._crop_supervision_tensors(logits, masks, hard_negative, 1)
+    cropped_logits, cropped_masks, cropped_hard_negative = _trainer._crop_supervision_tensors(
+        logits, masks, hard_negative, 1
     )
 
     _trainer._loss(
@@ -1288,8 +1422,8 @@ def test_multiclass_loss_has_zero_gradient_in_context_frame(loss_name: str) -> N
         early_stopping_patience=1,
         class_slugs=["first", "second"],
     )
-    cropped_logits, cropped_masks, cropped_hard_negative = (
-        _trainer._crop_supervision_tensors(logits, masks, hard_negative, 1)
+    cropped_logits, cropped_masks, cropped_hard_negative = _trainer._crop_supervision_tensors(
+        logits, masks, hard_negative, 1
     )
 
     _trainer._loss(

@@ -1,4 +1,4 @@
-﻿"""Обертка клиента MLflow."""
+"""Обертка клиента MLflow."""
 
 from __future__ import annotations
 
@@ -66,7 +66,9 @@ def create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment:
         experiment_id = mlflow.create_experiment(request.name)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось создать эксперимент MLflow") from exc
-    return MLflowExperiment(experiment_id=experiment_id, name=request.name, lifecycle_stage="active")
+    return MLflowExperiment(
+        experiment_id=experiment_id, name=request.name, lifecycle_stage="active"
+    )
 
 
 def get_best_training_checkpoint(
@@ -92,7 +94,9 @@ def get_best_training_checkpoint(
             metric_name = BEST_CHECKPOINT_METRIC
         thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
     except Exception as exc:
-        raise MLflowAdapterError("Не удалось прочитать лучшую метрику training run из MLflow") from exc
+        raise MLflowAdapterError(
+            "Не удалось прочитать лучшую метрику training run из MLflow"
+        ) from exc
     if not history:
         return None
     best = max(history, key=lambda item: (float(item.value), -int(item.step)))
@@ -163,8 +167,7 @@ def get_finished_run_artifact(
     except Exception as exc:
         raise MLflowAdapterError("Не удалось проверить MLflow-артефакт завершённого run") from exc
     if not any(
-        str(getattr(item, "path", "")) == normalized
-        and not bool(getattr(item, "is_dir", False))
+        str(getattr(item, "path", "")) == normalized and not bool(getattr(item, "is_dir", False))
         for item in artifacts
     ):
         return None
@@ -219,11 +222,7 @@ def download_run_artifact(
 
 
 def _metric_value_at_step(history: object, step: int) -> float | None:
-    values = [
-        float(item.value)
-        for item in history or []
-        if int(getattr(item, "step", -1)) == step
-    ]
+    values = [float(item.value) for item in history or [] if int(getattr(item, "step", -1)) == step]
     return values[-1] if values else None
 
 
@@ -349,9 +348,15 @@ def log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> No
             try:
                 shutil.copy2(source_path, temp_path)
             except OSError as exc:
-                raise MLflowAdapterError(f"Не удалось подготовить файл датасета для MLflow: {source_path}") from exc
+                raise MLflowAdapterError(
+                    f"Не удалось подготовить файл датасета для MLflow: {source_path}"
+                ) from exc
             artifact_parent = temp_path.relative_to(temp_root).parent
-            artifact_path = "dataset" if artifact_parent == Path(".") else f"dataset/{artifact_parent.as_posix()}"
+            artifact_path = (
+                "dataset"
+                if artifact_parent == Path(".")
+                else f"dataset/{artifact_parent.as_posix()}"
+            )
             _log_artifact(temp_path, artifact_path)
 
 
@@ -384,9 +389,13 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
         mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
-        mlflow.log_metric("val/best_pixel_threshold", metrics.val_best_pixel_threshold, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/best_pixel_threshold", metrics.val_best_pixel_threshold, step=metrics.epoch
+        )
         mlflow.log_metric("val/quality_f1", metrics.val_quality_f1, step=metrics.epoch)
-        mlflow.log_metric("val/quality_precision", metrics.val_quality_precision, step=metrics.epoch)
+        mlflow.log_metric(
+            "val/quality_precision", metrics.val_quality_precision, step=metrics.epoch
+        )
         mlflow.log_metric("val/quality_recall", metrics.val_quality_recall, step=metrics.epoch)
         if hasattr(mlflow, "set_tag"):
             mlflow.set_tag("quality_metric", metrics.quality_metric)
@@ -448,9 +457,7 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                         step=metrics.epoch,
                     )
         object_scalars = {
-            "val/best_threshold_object_precision": (
-                metrics.val_best_threshold_object_precision
-            ),
+            "val/best_threshold_object_precision": (metrics.val_best_threshold_object_precision),
             "val/best_threshold_object_recall": metrics.val_best_threshold_object_recall,
             "val/object_f1": metrics.val_best_threshold_object_f1,
             "val/object_precision": metrics.val_best_threshold_object_precision,
@@ -471,6 +478,7 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
     try:
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
+        mlflow.log_metric("train/stopped_early", int(result.stopped_early))
         if result.history:
             mlflow.log_metric(
                 "train/best_quality_f1",
@@ -595,9 +603,7 @@ def _mlflow():
     try:
         import mlflow
     except ImportError as exc:
-        raise MLflowAdapterError(
-            "MLflow обязателен, когда логирование MLflow включено"
-        ) from exc
+        raise MLflowAdapterError("MLflow обязателен, когда логирование MLflow включено") from exc
     return mlflow
 
 
@@ -637,9 +643,7 @@ def _log_dict(payload: dict[str, object], artifact_file: str) -> None:
     try:
         mlflow.log_dict(payload, artifact_file)
     except Exception as exc:
-        raise MLflowAdapterError(
-            f"Не удалось записать артефакт MLflow: {artifact_file}"
-        ) from exc
+        raise MLflowAdapterError(f"Не удалось записать артефакт MLflow: {artifact_file}") from exc
 
 
 def _log_text(content: str, artifact_file: str) -> None:
@@ -657,9 +661,7 @@ def _log_artifact(path: str | Path, artifact_path: str) -> None:
     try:
         mlflow.log_artifact(path, artifact_path=artifact_path)
     except Exception as exc:
-        raise MLflowAdapterError(
-            f"Не удалось записать файл артефакта MLflow: {path}"
-        ) from exc
+        raise MLflowAdapterError(f"Не удалось записать файл артефакта MLflow: {path}") from exc
 
 
 def _safe_dataset_artifact_name(value: str) -> Path:
@@ -670,8 +672,7 @@ def _safe_dataset_artifact_name(value: str) -> Path:
     is_multiclass_manifest = path.name == ".mlsystem2-dataset.json"
     if suffix not in {".txt", ".geojson"} and not is_multiclass_manifest:
         raise MLflowAdapterError(
-            "Файл датасета должен быть .txt, .geojson или "
-            f".mlsystem2-dataset.json: {value}"
+            f"Файл датасета должен быть .txt, .geojson или .mlsystem2-dataset.json: {value}"
         )
     return path
 

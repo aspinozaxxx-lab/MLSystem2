@@ -1,4 +1,4 @@
-﻿"""Сервисные операции training UI API."""
+"""Сервисные операции training UI API."""
 
 from __future__ import annotations
 
@@ -95,6 +95,7 @@ from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
+    STOP_AND_SAVE_BEST_CONFIG_KEY,
     ensure_queue_positions,
     is_secondary_job,
     next_queue_position,
@@ -193,6 +194,8 @@ ACTIVE_JOB_STATUSES = {
     JobStatus.PAUSED.value,
 }
 JOB_LOG_MAX_BYTES = 128 * 1024
+JOB_CONTROL_DIR = "control"
+STOP_AND_SAVE_BEST_REQUEST_FILE = "stop-and-save-best.request"
 
 
 def app_links(config: TrainingUIAPIConfig) -> AppLinksResponse:
@@ -512,7 +515,9 @@ def _ensure_seed_inference_templates(session: Session) -> None:
         for payload in initial_inference_templates()
     ]
     base_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is None]
-    dataset_payloads = [payload for payload in seed_payloads if payload.get("dataset_key") is not None]
+    dataset_payloads = [
+        payload for payload in seed_payloads if payload.get("dataset_key") is not None
+    ]
     for payload in base_payloads:
         row = existing.get((payload["architecture"], None))
         if row is None:
@@ -555,17 +560,14 @@ def _reconcile_seed_inference_config(
 ) -> None:
     current = dict(row.default_config or {})
     previous_baseline = dict(row.baseline_default_config or {})
-    next_baseline = sanitize_inference_template_config(
-        payload["baseline_default_config"]
-    )
+    next_baseline = sanitize_inference_template_config(payload["baseline_default_config"])
     reconciled = sanitize_inference_template_config(
         current,
         fallback=next_baseline,
     )
     for key, next_value in next_baseline.items():
         if key not in current or (
-            key in previous_baseline
-            and current[key] == previous_baseline[key]
+            key in previous_baseline and current[key] == previous_baseline[key]
         ):
             reconciled[key] = next_value
     row.default_config = reconciled
@@ -740,7 +742,9 @@ def apply_training_template_field_to_all(
     for template in session.scalars(select(TrainingTemplateRow)).all():
         current = dict(template.default_config)
         current[request.key] = request.value
-        template.default_config = sanitize_template_config(current, fallback=template.default_config)
+        template.default_config = sanitize_template_config(
+            current, fallback=template.default_config
+        )
         template.source = TemplateSource.MANUAL.value
         template.source_mlflow_run_id = None
         template.version += 1
@@ -951,7 +955,9 @@ def create_training_job(
     ensure_seed_templates(session)
     dataset = _resolve_dataset_name(session, request.dataset_key, request.custom_dataset_id, config)
     model_name = MODEL_DISPLAY_NAMES.get(request.architecture, request.architecture)
-    template_row = training_template_row_for_dataset(session, request.architecture, request.dataset_key)
+    template_row = training_template_row_for_dataset(
+        session, request.architecture, request.dataset_key
+    )
     job_config = sanitize_template_config(
         request.config,
         fallback=template_row.default_config if template_row is not None else None,
@@ -1120,7 +1126,9 @@ def delete_job(
     if row is None:
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     if row.source == JobSource.AUTOMATION.value:
-        raise TrainingUIAPIError("Автоматические задания отменяются только через форму автоматизации")
+        raise TrainingUIAPIError(
+            "Автоматические задания отменяются только через форму автоматизации"
+        )
     detail = _job_detail(session, row).model_copy(update={"status": JobStatus.CANCELLED})
     mlflow_run_id = _job_mlflow_run_id(session, row)
     if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
@@ -1136,6 +1144,47 @@ def delete_job(
     _delete_job_rows(session, row)
     session.flush()
     return detail
+
+
+def stop_training_job_and_save_best(
+    session: Session,
+    job_id: uuid.UUID,
+) -> JobDetail:
+    """Запросить штатную остановку ручного обучения с публикацией лучшего чекпойнта."""
+
+    row = session.get(JobRow, job_id)
+    if row is None:
+        raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
+    if row.type != JobType.TRAINING.value:
+        raise TrainingUIAPIError("Сохранить лучший чекпойнт можно только при остановке обучения.")
+    if row.source == JobSource.AUTOMATION.value:
+        raise TrainingUIAPIError(
+            "Автоматические задания останавливаются только через форму автоматизации."
+        )
+    if row.status not in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
+        raise TrainingUIAPIError("Сохранить чекпойнт можно только у выполняющегося обучения.")
+    if _stop_and_save_best_requested(row):
+        return _job_detail(session, row)
+    if not _best_training_checkpoint_available(row):
+        raise TrainingUIAPIError(
+            "Лучший чекпойнт ещё не создан. Дождитесь завершения хотя бы одной эпохи "
+            "или остановите обучение без сохранения результата."
+        )
+    if not row.tmp_path:
+        raise TrainingUIAPIError("Рабочая папка обучения не найдена.")
+
+    control_dir = Path(row.tmp_path) / JOB_CONTROL_DIR
+    control_dir.mkdir(parents=True, exist_ok=True)
+    request_path = control_dir / STOP_AND_SAVE_BEST_REQUEST_FILE
+    temporary = control_dir / f".{STOP_AND_SAVE_BEST_REQUEST_FILE}.{uuid.uuid4().hex}.tmp"
+    temporary.write_text(f"{uuid.uuid4()}\n", encoding="utf-8")
+    temporary.replace(request_path)
+    row.config = {
+        **dict(row.config or {}),
+        STOP_AND_SAVE_BEST_CONFIG_KEY: True,
+    }
+    session.flush()
+    return _job_detail(session, row)
 
 
 def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetail:
@@ -1188,7 +1237,10 @@ def dataset_results(
         [
             job_id
             for row in rows
-            for job_id in [row.job_id, *[item.job_id for item in pseudo_by_training_id.get(row.id, [])]]
+            for job_id in [
+                row.job_id,
+                *[item.job_id for item in pseudo_by_training_id.get(row.id, [])],
+            ]
             if job_id is not None
         ],
     )
@@ -1232,10 +1284,11 @@ def dataset_results(
     ]
     if not primary_test_samples:
         test_f1_status = "unavailable"
-    elif successful_test_statuses and all(
-        item == "current" for item in successful_test_statuses
-    ) and len(successful_test_statuses) == sum(
-        row.status == ResultStatus.OK.value for row in rows
+    elif (
+        successful_test_statuses
+        and all(item == "current" for item in successful_test_statuses)
+        and len(successful_test_statuses)
+        == sum(row.status == ResultStatus.OK.value for row in rows)
     ):
         test_f1_status = "current"
     elif any(item in {"queued", "running"} for item in successful_test_statuses):
@@ -1350,9 +1403,7 @@ def result_changes(
     limit: int = 20,
 ) -> ResultChangesResponse:
     ensure_queue_positions(session)
-    datasets_by_key = {
-        item.key: item for item in list_managed_datasets(session, config)
-    }
+    datasets_by_key = {item.key: item for item in list_managed_datasets(session, config)}
     active_changes = [
         _job_change_info(session, row, datasets_by_key) for row in _queue_rows(session)
     ]
@@ -1382,7 +1433,9 @@ def result_changes(
                 job_id=row.job_id,
                 type=JobType.TRAINING,
                 dataset_key=row.class_key,
-                class_key=(dataset.class_key or row.class_key) if dataset is not None else row.class_key,
+                class_key=(dataset.class_key or row.class_key)
+                if dataset is not None
+                else row.class_key,
                 class_name=(
                     dataset.class_name
                     if dataset is not None
@@ -1399,7 +1452,9 @@ def result_changes(
         )
     for row in pseudo_rows:
         dataset = datasets_by_key.get(row.class_key)
-        model_name = row.training_result.model_name if row.training_result is not None else "псевдоразметка"
+        model_name = (
+            row.training_result.model_name if row.training_result is not None else "псевдоразметка"
+        )
         changes.append(
             ResultChangeInfo(
                 id=row.id,
@@ -1407,7 +1462,9 @@ def result_changes(
                 job_id=row.job_id,
                 type=JobType.INFERENCE,
                 dataset_key=row.class_key,
-                class_key=(dataset.class_key or row.class_key) if dataset is not None else row.class_key,
+                class_key=(dataset.class_key or row.class_key)
+                if dataset is not None
+                else row.class_key,
                 class_name=(
                     dataset.class_name
                     if dataset is not None
@@ -1509,10 +1566,14 @@ def create_pseudo_markup_job(
     dataset_key = (dataset_key or "").strip() or None
     image_folder_key = (image_folder_key or "").strip().strip("/").replace("\\", "/") or None
     has_uploaded_scenes = scenes_bytes is not None and scenes_name is not None
-    source_count = sum(1 for value in (has_uploaded_scenes, bool(dataset_key), bool(image_folder_key)) if value)
+    source_count = sum(
+        1 for value in (has_uploaded_scenes, bool(dataset_key), bool(image_folder_key)) if value
+    )
     if source_count != 1:
         if source_count == 0:
-            raise TrainingUIAPIError("Выберите датасет, папку снимков или загрузите txt со снимками")
+            raise TrainingUIAPIError(
+                "Выберите датасет, папку снимков или загрузите txt со снимками"
+            )
         raise TrainingUIAPIError("Выберите только один источник снимков")
     class_dataset = find_managed_dataset(session, config, class_key)
     class_name = class_dataset.name if class_dataset else class_key
@@ -1592,9 +1653,7 @@ def create_pseudo_markup_job(
                 config=config,
             )
             scenes_file_id = scenes_row.id
-            inference_annotation_files = per_image_annotation_files(
-                Path(dataset.annotations_dir)
-            )
+            inference_annotation_files = per_image_annotation_files(Path(dataset.annotations_dir))
         else:
             inference_annotation_files = [
                 path
@@ -1654,7 +1713,9 @@ def create_pseudo_markup_job(
             "imagery_type": imagery_type,
             "input_channels": input_channels,
             "training_result_id": str(training_result_id) if training_result_id else None,
-            "inference_template_id": str(inference_template.id) if inference_template is not None else None,
+            "inference_template_id": str(inference_template.id)
+            if inference_template is not None
+            else None,
             "inference_template_config": inference_template_config,
             SECONDARY_PRIORITY_CONFIG_KEY: secondary_priority,
             **_checkpoint_config(session, training_result, config),
@@ -1672,9 +1733,7 @@ def create_pseudo_markup_job(
         else None
     )
     if scenes_file_id is not None and image_count == 0:
-        raise TrainingUIAPIError(
-            f"В выбранном источнике не найдены снимки типа «{imagery_type}»"
-        )
+        raise TrainingUIAPIError(f"В выбранном источнике не найдены снимки типа «{imagery_type}»")
     session.add(
         PseudoMarkupResultRow(
             source=JobSource.MANUAL.value,
@@ -1701,9 +1760,7 @@ def ensure_test_sample_pseudo_markup_job(
     """Идемпотентно запустить штатную псевдоразметку источника тестового набора."""
 
     sample = session.scalar(
-        select(TestSampleRow)
-        .where(TestSampleRow.id == sample_id)
-        .with_for_update()
+        select(TestSampleRow).where(TestSampleRow.id == sample_id).with_for_update()
     )
     if sample is None:
         raise TrainingUIAPIError("Тестовая разметка не найдена")
@@ -1741,12 +1798,15 @@ def ensure_test_sample_pseudo_markup_job(
         if existing.job_id is None:
             continue
         job = session.get(JobRow, existing.job_id)
-        if job is not None and pseudo_markup_covers_dataset(
-            session, existing, sample.dataset_key, config
-        ) and job.status not in {
-            JobStatus.FAILED.value,
-            JobStatus.CANCELLED.value,
-        }:
+        if (
+            job is not None
+            and pseudo_markup_covers_dataset(session, existing, sample.dataset_key, config)
+            and job.status
+            not in {
+                JobStatus.FAILED.value,
+                JobStatus.CANCELLED.value,
+            }
+        ):
             return _job_detail(session, job)
     return create_pseudo_markup_job(
         session,
@@ -1863,8 +1923,12 @@ def export_training_results_triton_zip(
                     "model_name": model_name,
                     "class_key": row.class_key,
                     "dataset_key": row.dataset_key,
-                    "trained_at": row.trained_at.isoformat() if row.trained_at is not None else None,
-                    "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+                    "trained_at": row.trained_at.isoformat()
+                    if row.trained_at is not None
+                    else None,
+                    "created_at": row.created_at.isoformat()
+                    if row.created_at is not None
+                    else None,
                     "model_archive": f"models-serving-service/{model_name}.zip",
                     "pipeline": f"pipelines/{model_name}_triton.yaml",
                     "metadata": f"metadata/{model_name}_export_metadata.json",
@@ -1928,9 +1992,7 @@ def _build_training_result_export_archive(
     except ExternalModelError as exc:
         raise TrainingUIAPIError(str(exc)) from exc
     artifact_path = (
-        external_manifest.artifact_path
-        if external_manifest is not None
-        else "checkpoints/best.pt"
+        external_manifest.artifact_path if external_manifest is not None else "checkpoints/best.pt"
     )
     with tempfile.TemporaryDirectory(prefix="mlsystem2-result-export-") as temp_dir:
         try:
@@ -2000,7 +2062,9 @@ def _copy_model_export_files(
 
 
 def _write_export_json(path: Path, content: dict[str, object]) -> None:
-    path.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _zip_directory(source_dir: Path, zip_path: Path) -> None:
@@ -2103,15 +2167,11 @@ def _resolve_dataset_name(
         return DatasetInfo(key=CUSTOM_KEY, name=custom.name, is_custom=True)
     dataset = find_managed_dataset(session, config, dataset_key)
     if dataset is not None:
-        ready = (
-            dataset.scenes_file is not None and dataset.annotation_file is not None
-        ) or (
+        ready = (dataset.scenes_file is not None and dataset.annotation_file is not None) or (
             dataset.annotations_dir is not None and (dataset.image_count or 0) > 0
         )
         if not dataset.source_available or dataset.images_dir is None or not ready:
-            raise TrainingUIAPIError(
-                "Датасет недоступен: " + "; ".join(dataset.diagnostics)
-            )
+            raise TrainingUIAPIError("Датасет недоступен: " + "; ".join(dataset.diagnostics))
         return dataset
     raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
 
@@ -2145,7 +2205,9 @@ def _base_template_row(session: Session, architecture: str) -> TrainingTemplateR
     )
 
 
-def _base_inference_template_row(session: Session, architecture: str) -> InferenceTemplateRow | None:
+def _base_inference_template_row(
+    session: Session, architecture: str
+) -> InferenceTemplateRow | None:
     return session.scalar(
         select(InferenceTemplateRow).where(
             InferenceTemplateRow.architecture == architecture,
@@ -2265,15 +2327,17 @@ def _queue_rows(
     manual_only: bool = False,
     queued_only: bool = False,
 ) -> list[JobRow]:
-    conditions = [JobRow.status == JobStatus.QUEUED.value] if queued_only else [JobRow.status.in_(ACTIVE_JOB_STATUSES)]
+    conditions = (
+        [JobRow.status == JobStatus.QUEUED.value]
+        if queued_only
+        else [JobRow.status.in_(ACTIVE_JOB_STATUSES)]
+    )
     if job_type is not None:
         conditions.append(JobRow.type == job_type.value)
     if manual_only:
         conditions.append(JobRow.source == JobSource.MANUAL.value)
     rows = session.scalars(
-        select(JobRow)
-        .where(*conditions)
-        .order_by(JobRow.queue_position, JobRow.created_at)
+        select(JobRow).where(*conditions).order_by(JobRow.queue_position, JobRow.created_at)
     ).all()
     rows.sort(key=queue_sort_key)
     return rows
@@ -2298,9 +2362,7 @@ def _stop_process_and_cleanup(row: JobRow) -> None:
 def _delete_job_rows(session: Session, row: JobRow) -> None:
     if _job_purpose(row) == "test_sample_f1":
         metric = session.scalar(
-            select(TrainingResultTestMetricRow).where(
-                TrainingResultTestMetricRow.job_id == row.id
-            )
+            select(TrainingResultTestMetricRow).where(TrainingResultTestMetricRow.job_id == row.id)
         )
         if metric is not None:
             metric.status = "stale" if metric.f1 is not None else "unavailable"
@@ -2309,15 +2371,21 @@ def _delete_job_rows(session: Session, row: JobRow) -> None:
             metric.updated_at = _now()
         session.delete(row)
         return
-    training_results = session.scalars(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)).all()
+    training_results = session.scalars(
+        select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)
+    ).all()
     training_result_ids = [item.id for item in training_results]
     pseudo_results = {
         result.id: result
-        for result in session.scalars(select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)).all()
+        for result in session.scalars(
+            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.job_id == row.id)
+        ).all()
     }
     if training_result_ids:
         for result in session.scalars(
-            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
+            select(PseudoMarkupResultRow).where(
+                PseudoMarkupResultRow.training_result_id.in_(training_result_ids)
+            )
         ).all():
             pseudo_results[result.id] = result
     for result in pseudo_results.values():
@@ -2348,7 +2416,9 @@ def _delete_cancelled_results_for_class(session: Session, class_key: str) -> Non
         session.delete(result)
     if training_result_ids:
         for result in session.scalars(
-            select(PseudoMarkupResultRow).where(PseudoMarkupResultRow.training_result_id.in_(training_result_ids))
+            select(PseudoMarkupResultRow).where(
+                PseudoMarkupResultRow.training_result_id.in_(training_result_ids)
+            )
         ).all():
             session.delete(result)
     for result in training_results:
@@ -2482,6 +2552,8 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
         progress=_job_progress(session, row),
         actions=_job_actions(row),
         secondary_priority=is_secondary_job(row),
+        best_checkpoint_available=_best_training_checkpoint_available(row),
+        stop_and_save_best_requested=_stop_and_save_best_requested(row),
     )
 
 
@@ -2522,12 +2594,15 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
                 POST_TRAINING_INFERENCE_CONFIG_KEY,
                 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
                 SECONDARY_PRIORITY_CONFIG_KEY,
+                STOP_AND_SAVE_BEST_CONFIG_KEY,
             }
         },
         run_inference_after_training=bool(
             (row.config or {}).get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)
         ),
         secondary_priority=is_secondary_job(row),
+        best_checkpoint_available=_best_training_checkpoint_available(row),
+        stop_and_save_best_requested=_stop_and_save_best_requested(row),
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
@@ -2754,16 +2829,15 @@ def _training_result_info(
         error=job.error if job is not None else None,
         progress=_training_result_progress(session, row, jobs_by_id),
         test_f1=training_result_test_f1_info(session, row, config),
-        pseudo_markup_results=[_pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows],
+        pseudo_markup_results=[
+            _pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows
+        ],
     )
 
 
 def _is_primary_training_result(session: Session, row: TrainingResultRow) -> bool:
     class_row = dataset_class_row(session, row.dataset_key or row.class_key)
-    return (
-        class_row is not None
-        and class_row.primary_training_result_id == row.id
-    )
+    return class_row is not None and class_row.primary_training_result_id == row.id
 
 
 def _pseudo_markup_info(
@@ -2787,9 +2861,7 @@ def _pseudo_markup_info(
         progress=_pseudo_result_progress(session, row, jobs_by_id),
         task=(row.training_result.task if row.training_result is not None else "binary"),
         class_schema=(
-            list(row.training_result.class_schema or [])
-            if row.training_result is not None
-            else []
+            list(row.training_result.class_schema or []) if row.training_result is not None else []
         ),
         by_type_download_url=(
             f"/api/v1/files/{row.geojson_file_id}/download-by-type"
@@ -2950,10 +3022,31 @@ def _job_actions(row: JobRow) -> list[str]:
     if row.source == JobSource.AUTOMATION.value:
         return []
     if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
-        return ["delete"]
+        actions = ["delete"]
+        if (
+            row.type == JobType.TRAINING.value
+            and _best_training_checkpoint_available(row)
+            and not _stop_and_save_best_requested(row)
+        ):
+            actions.insert(0, "stop_and_save_best")
+        return actions
     if row.status == JobStatus.QUEUED.value:
         return ["move_up", "move_down", "delete"]
     return []
+
+
+def _best_training_checkpoint_available(row: JobRow) -> bool:
+    if row.type != JobType.TRAINING.value or not row.tmp_path:
+        return False
+    path = Path(row.tmp_path) / "scratch" / "checkpoints" / "best.pt"
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _stop_and_save_best_requested(row: JobRow) -> bool:
+    return bool((row.config or {}).get(STOP_AND_SAVE_BEST_CONFIG_KEY, False))
 
 
 def _int_or_none(value: Any) -> int | None:

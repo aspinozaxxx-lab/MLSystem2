@@ -1331,6 +1331,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/stop-and-save-best": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Training Job And Save Best Route */
+        post: operations["stop_training_job_and_save_best_route_api_v1_jobs__job_id__stop_and_save_best_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/move-up": {
         parameters: {
             query?: never;
@@ -2609,6 +2626,16 @@ export interface components {
              */
             secondary_priority: boolean;
             /**
+             * Best Checkpoint Available
+             * @default false
+             */
+            best_checkpoint_available: boolean;
+            /**
+             * Stop And Save Best Requested
+             * @default false
+             */
+            stop_and_save_best_requested: boolean;
+            /**
              * Readonly
              * @default true
              */
@@ -2702,6 +2729,16 @@ export interface components {
              * @default false
              */
             secondary_priority: boolean;
+            /**
+             * Best Checkpoint Available
+             * @default false
+             */
+            best_checkpoint_available: boolean;
+            /**
+             * Stop And Save Best Requested
+             * @default false
+             */
+            stop_and_save_best_requested: boolean;
         };
         /**
          * JobType
@@ -7034,6 +7071,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobLogInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_training_job_and_save_best_route_api_v1_jobs__job_id__stop_and_save_best_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
                 };
             };
             /** @description Validation Error */

@@ -91,6 +91,7 @@
 - `PUT /api/v1/queues/inference/enabled`
 - `GET /api/v1/jobs/{job_id}`
 - `DELETE /api/v1/jobs/{job_id}`
+- `POST /api/v1/jobs/{job_id}/stop-and-save-best`
 - `POST /api/v1/jobs/{job_id}/move-up`
 - `POST /api/v1/jobs/{job_id}/move-down`
 - `GET /api/v1/results/classes`
@@ -367,8 +368,10 @@ Frontend не обращается к Postgres. Сервис не импорти
 запущенное обучение. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет
 его id в временный файл `mlflow_run_id`; worker читает этот файл и обновляет `training_results.mlflow_run_id`
-еще во время `running`. Pause/delete отправляют SIGTERM группе процесса, а `train_pipeline` штатно завершает
-MLflow run со статусом `KILLED`.
+еще во время `running`. Удаление active job отправляет SIGTERM группе процесса, а `train_pipeline` завершает
+MLflow run со статусом `KILLED`. Отдельная остановка с сохранением доступна после создания локального `best.pt`:
+API записывает `stop-and-save-best.request`, а сам train process на границе batch публикует в MLflow checkpoint
+завершённой эпохи с максимальной F1 и штатно выходит без создания `final.pt`.
 
 Срочная поснимочная псевдоразметка редактора использует ту же inference-очередь с признаком `priority=urgent`.
 Явно назначенная сеть класса имеет приоритет; без звезды редактор сначала использует последнюю успешную сеть

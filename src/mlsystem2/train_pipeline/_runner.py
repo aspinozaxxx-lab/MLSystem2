@@ -1,4 +1,4 @@
-﻿"""Оркестрация конвейера обучения."""
+"""Оркестрация конвейера обучения."""
 
 from __future__ import annotations
 
@@ -164,7 +164,9 @@ def run_train_pipeline(
             )
 
         if deps.log_dataset_artifacts is not None:
-            measure_mlflow(lambda: deps.log_dataset_artifacts(run, _dataset_artifact_files(settings)))
+            measure_mlflow(
+                lambda: deps.log_dataset_artifacts(run, _dataset_artifact_files(settings))
+            )
 
         _validate_prepared_dataset_train_consistency(dataset_result.dataset, settings)
 
@@ -264,10 +266,18 @@ def run_train_pipeline(
 
         report = PipelineReport(
             status=PipelineStatus.SUCCEEDED,
-            message="Конвейер обучения завершен.",
+            message=(
+                "Обучение остановлено пользователем; сохранён чекпойнт с лучшей F1."
+                if train_result.stopped_early
+                else "Конвейер обучения завершен."
+            ),
             dataset_status=dataset_result.report.status,
             errors=[],
-            warnings=[],
+            warnings=(
+                ["Незавершённая эпоха отброшена; файл final.pt не создавался."]
+                if train_result.stopped_early
+                else []
+            ),
             artifacts={
                 "best_checkpoint_path": train_result.best_checkpoint_path,
                 "final_checkpoint_path": train_result.final_checkpoint_path,
@@ -370,7 +380,9 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
         files: dict[str, str] = {}
         for item in settings.dataset.classes:
             files[f"{item.slug}_scenes{Path(item.scenes_file).suffix}"] = item.scenes_file
-            files[f"{item.slug}_annotation{Path(item.annotation_file).suffix}"] = item.annotation_file
+            files[f"{item.slug}_annotation{Path(item.annotation_file).suffix}"] = (
+                item.annotation_file
+            )
             if item.hard_negative_annotation_file is not None:
                 files[
                     f"{item.slug}_hard_negative{Path(item.hard_negative_annotation_file).suffix}"
@@ -518,9 +530,7 @@ def _seed_training(seed: int) -> None:
 
     torch.set_num_threads(_positive_env_int("MLSYSTEM2_TORCH_NUM_THREADS", 4))
     try:
-        torch.set_num_interop_threads(
-            _positive_env_int("MLSYSTEM2_TORCH_NUM_INTEROP_THREADS", 2)
-        )
+        torch.set_num_interop_threads(_positive_env_int("MLSYSTEM2_TORCH_NUM_INTEROP_THREADS", 2))
     except RuntimeError:
         # PyTorch разрешает задать interop pool только до первого параллельного вызова.
         pass
@@ -569,7 +579,9 @@ class _CountingLoader:
             tile_count = int(images.shape[0])
             meta = batch[2] if len(batch) > 2 else {}
             aug_count = int(meta.get("augmented_tile_count", 0)) if isinstance(meta, dict) else 0
-            positive_count = int(meta.get("positive_tile_count", 0)) if isinstance(meta, dict) else 0
+            positive_count = (
+                int(meta.get("positive_tile_count", 0)) if isinstance(meta, dict) else 0
+            )
             hard_negative_count = (
                 int(meta.get("hard_negative_tile_count", 0)) if isinstance(meta, dict) else 0
             )
@@ -713,9 +725,7 @@ class _CountingLoader:
             "background_ratio_abs_error": background_ratio_abs_error,
             "observed_augmented_tiles": self.observed_augmented_tiles,
             "observed_augmented_positive_tiles": self.observed_augmented_positive_tiles,
-            "observed_augmented_hard_negative_tiles": (
-                self.observed_augmented_hard_negative_tiles
-            ),
+            "observed_augmented_hard_negative_tiles": (self.observed_augmented_hard_negative_tiles),
             "observed_real_tiles": self.observed_tiles - self.observed_augmented_tiles,
             "warnings": warnings,
         }
@@ -729,9 +739,7 @@ def _tile_preparation_report(
     return {
         "tile_size": settings.tile_preparation.tile_size,
         "context": settings.tile_preparation.context,
-        "core_size": (
-            settings.tile_preparation.tile_size - 2 * settings.tile_preparation.context
-        ),
+        "core_size": (settings.tile_preparation.tile_size - 2 * settings.tile_preparation.context),
         "stride": settings.tile_preparation.stride,
         "seed": settings.tile_preparation.seed,
         "batch_size": settings.train.batch_size,
@@ -902,9 +910,7 @@ def _validate_prepared_dataset_train_consistency(
             f"но настройки обучения задают task={settings.train.task}."
         )
     expected_channels = (
-        len(dataset.classes or dataset.class_annotations) + 1
-        if dataset_is_multiclass
-        else 1
+        len(dataset.classes or dataset.class_annotations) + 1 if dataset_is_multiclass else 1
     )
     if settings.train.output_channels != expected_channels:
         raise TrainPipelineError(

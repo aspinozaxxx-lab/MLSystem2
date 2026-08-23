@@ -3620,6 +3620,46 @@
         }
       }
     },
+    "/api/v1/jobs/{job_id}/stop-and-save-best": {
+      "post": {
+        "summary": "Stop Training Job And Save Best Route",
+        "operationId": "stop_training_job_and_save_best_route_api_v1_jobs__job_id__stop_and_save_best_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{job_id}/move-up": {
       "post": {
         "summary": "Move Job Up",
@@ -7106,6 +7146,16 @@
             "title": "Secondary Priority",
             "default": false
           },
+          "best_checkpoint_available": {
+            "type": "boolean",
+            "title": "Best Checkpoint Available",
+            "default": false
+          },
+          "stop_and_save_best_requested": {
+            "type": "boolean",
+            "title": "Stop And Save Best Requested",
+            "default": false
+          },
           "readonly": {
             "type": "boolean",
             "title": "Readonly",
@@ -7356,6 +7406,16 @@
           "secondary_priority": {
             "type": "boolean",
             "title": "Secondary Priority",
+            "default": false
+          },
+          "best_checkpoint_available": {
+            "type": "boolean",
+            "title": "Best Checkpoint Available",
+            "default": false
+          },
+          "stop_and_save_best_requested": {
+            "type": "boolean",
+            "title": "Stop And Save Best Requested",
             "default": false
           }
         },
