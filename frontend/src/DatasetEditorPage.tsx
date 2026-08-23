@@ -263,6 +263,7 @@ export function DatasetEditorPage({
   initialDatasetKey?: string;
 }) {
   const [datasets, setDatasets] = useState<EditorDataset[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(true);
   const [classKey, setClassKey] = useState("");
   const [datasetKey, setDatasetKey] = useState("");
   const [scenes, setScenes] = useState<EditorScene[]>([]);
@@ -439,15 +440,20 @@ export function DatasetEditorPage({
   }, [registerRouteGuard]);
 
   const loadDatasets = useCallback(async () => {
-    const payload = await run(() =>
-      apiJson<{ datasets: EditorDataset[] }>("/dataset-editor/datasets"),
-    );
-    if (!payload) return;
-    setDatasets(payload.datasets);
-    const firstClass = payload.datasets[0]?.class_key || "";
-    setClassKey((current) =>
-      payload.datasets.some((item) => item.class_key === current) ? current : firstClass,
-    );
+    setDatasetsLoading(true);
+    try {
+      const payload = await run(() =>
+        apiJson<{ datasets: EditorDataset[] }>("/dataset-editor/datasets"),
+      );
+      if (!payload) return;
+      setDatasets(payload.datasets);
+      const firstClass = payload.datasets[0]?.class_key || "";
+      setClassKey((current) =>
+        payload.datasets.some((item) => item.class_key === current) ? current : firstClass,
+      );
+    } finally {
+      setDatasetsLoading(false);
+    }
   }, [run]);
 
   useEffect(() => {
@@ -1846,7 +1852,9 @@ export function DatasetEditorPage({
         </section>
       ) : null}
 
-      {!datasets.length ? (
+      {datasetsLoading ? (
+        <section className="panel empty-state">Загружаем каталог датасетов…</section>
+      ) : !datasets.length ? (
         <section className="panel empty-state">Per-image датасеты в editor-клоне не найдены.</section>
       ) : (
         <section className="dataset-editor-layout">

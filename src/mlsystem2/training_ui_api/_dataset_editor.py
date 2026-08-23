@@ -129,18 +129,38 @@ def list_editor_datasets(
     with _editor_lock(config):
         _synchronize_editor_clone_if_stale(config)
         result: list[DatasetEditorDatasetInfo] = []
-        for dataset in list_managed_datasets(session, config, include_custom=False):
+        for dataset in list_managed_datasets(
+            session,
+            config,
+            include_custom=False,
+            materialize_managed=False,
+        ):
             try:
                 if dataset.managed:
-                    dataset, source_dir = _editor_dataset_context(
+                    scene_count = _managed_editor_scene_count(
                         session,
                         config,
                         dataset.key,
-                        allow_missing=True,
                     )
                 else:
                     source_dir = _editor_source_dir(config, dataset)
             except TrainingUIAPIError:
+                continue
+            if dataset.managed:
+                primary = _editor_effective_training_result(
+                    session,
+                    dataset.key,
+                    dataset.class_key or dataset.key,
+                )
+                result.append(
+                    _editor_dataset_info(
+                        dataset,
+                        scene_count,
+                        primary_training_result_id=(
+                            primary.id if primary is not None else None
+                        ),
+                    )
+                )
                 continue
             if source_dir.exists() and not source_dir.is_dir():
                 continue
@@ -1662,12 +1682,69 @@ def _managed_editor_dataset(
     config: TrainingUIAPIConfig,
     dataset_key: str,
 ) -> DatasetInfo:
-    dataset = find_managed_dataset(session, config, dataset_key)
+    dataset = find_managed_dataset(
+        session,
+        config,
+        dataset_key,
+        materialize_managed=False,
+    )
     if dataset is None or dataset.is_custom or dataset.source_path is None:
         raise TrainingUIAPIError(f"Датасет редактора не найден: {dataset_key}")
     if dataset.images_dir is None or dataset.imagery_type is None:
         raise TrainingUIAPIError("Для датасета не настроен каталог снимков")
     return dataset
+
+
+def _managed_editor_scene_count(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+) -> int:
+    row = session.scalar(
+        select(DatasetRow).where(
+            DatasetRow.key == dataset_key,
+            DatasetRow.source_type == SOURCE_MANAGED,
+            DatasetRow.deleted_at.is_(None),
+        )
+    )
+    if row is None:
+        raise TrainingUIAPIError(f"Управляемый датасет редактора не найден: {dataset_key}")
+    annotation_names = {
+        scene.annotation_name.casefold()
+        for scene in session.scalars(
+            select(ManagedDatasetSceneRow).where(
+                ManagedDatasetSceneRow.managed_dataset_id == row.id
+            )
+        ).all()
+    }
+    editor_root = config.mlmarkup_editor_root.resolve()
+    for source in managed_sources(session, row.id):
+        relative = PurePosixPath(source.dataset.source_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise TrainingUIAPIError(
+                "Некорректный source_path исходного датасета: "
+                f"{source.dataset.source_path}"
+            )
+        source_dir = editor_root.joinpath(*relative.parts).resolve()
+        _ensure_within(
+            source_dir,
+            editor_root,
+            "Источник управляемого датасета выходит за пределы editor-клона",
+        )
+        if not source_dir.is_dir():
+            raise TrainingUIAPIError(
+                "Источник управляемого датасета отсутствует в editor-клоне: "
+                f"{source.dataset.source_path}"
+            )
+        if _direct_files(source_dir, ".txt"):
+            raise TrainingUIAPIError(
+                "Источник управляемого датасета не является per-image: "
+                f"{source.dataset.source_path}"
+            )
+        annotation_names.update(
+            path.name.casefold() for path in _direct_annotation_files(source_dir)
+        )
+    return len(annotation_names)
 
 
 def _editor_dataset_context(

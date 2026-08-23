@@ -316,6 +316,7 @@ def list_managed_datasets(
     config: TrainingUIAPIConfig,
     *,
     include_custom: bool = True,
+    materialize_managed: bool = True,
 ) -> list[DatasetInfo]:
     _synchronize_dataset_catalog_if_stale(session, config)
     rows = session.execute(
@@ -334,6 +335,7 @@ def list_managed_datasets(
             config,
             image_indexes=image_indexes,
             per_image_indexes=per_image_indexes,
+            materialize_managed=materialize_managed,
         )
         for dataset, class_row in rows
     ]
@@ -400,6 +402,8 @@ def find_managed_dataset(
     session: Session,
     config: TrainingUIAPIConfig,
     dataset_key: str,
+    *,
+    materialize_managed: bool = True,
 ) -> DatasetInfo | None:
     if dataset_key == CUSTOM_KEY:
         return _custom_dataset_info(config)
@@ -414,7 +418,12 @@ def find_managed_dataset(
     ).one_or_none()
     if row is None:
         return None
-    return _dataset_info(session, *row, config)
+    return _dataset_info(
+        session,
+        *row,
+        config,
+        materialize_managed=materialize_managed,
+    )
 
 
 def find_managed_class(
@@ -1031,6 +1040,7 @@ def _dataset_info(
     *,
     image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
     per_image_indexes: dict[Path, dict[str, list[Path]]] | None = None,
+    materialize_managed: bool = True,
 ) -> DatasetInfo:
     _ensure_model_name_stem(session, dataset, class_row, config)
     if dataset.source_type == SOURCE_MANAGED:
@@ -1040,6 +1050,7 @@ def _dataset_info(
             class_row,
             config,
             per_image_indexes=per_image_indexes,
+            materialize=materialize_managed,
         )
     source_path = _resolved_source_path(config.mlmarkup_root, dataset.source_path)
     images_dir = imagery_images_dir(config.images_root, class_row.imagery_type)
@@ -1194,6 +1205,7 @@ def _managed_dataset_info(
     config: TrainingUIAPIConfig,
     *,
     per_image_indexes: dict[Path, dict[str, list[Path]]] | None,
+    materialize: bool,
 ) -> DatasetInfo:
     images_dir = imagery_images_dir(config.images_root, class_row.imagery_type)
     diagnostics: list[str] = []
@@ -1204,29 +1216,33 @@ def _managed_dataset_info(
     updated_at = None
     class_counts = {item.slug: 0 for item in manifest.classes}
     hard_negative_count = 0
-    try:
-        materialized = materialize_managed_dataset(
-            session,
-            config,
-            dataset,
-            source_root=config.mlmarkup_root,
-            scope="live",
-        )
-        annotations_dir = materialized.path
-        version = materialized.version
-        updated_at = materialized.updated_at
-        manifest = materialized.manifest
-        class_counts = materialized.class_counts
-        hard_negative_count = materialized.hard_negative_count
-    except TrainingUIAPIError as exc:
-        diagnostics.append(str(exc))
+    if materialize:
+        try:
+            materialized = materialize_managed_dataset(
+                session,
+                config,
+                dataset,
+                source_root=config.mlmarkup_root,
+                scope="live",
+            )
+            annotations_dir = materialized.path
+            version = materialized.version
+            updated_at = materialized.updated_at
+            manifest = materialized.manifest
+            class_counts = materialized.class_counts
+            hard_negative_count = materialized.hard_negative_count
+        except TrainingUIAPIError as exc:
+            diagnostics.append(str(exc))
+    if annotations_dir is None:
         try:
             version, updated_at = managed_dataset_version(
                 session,
                 dataset,
                 config.mlmarkup_root,
             )
-        except TrainingUIAPIError:
+        except TrainingUIAPIError as exc:
+            if not diagnostics:
+                diagnostics.append(str(exc))
             version = f"managed:unavailable:{dataset.config_revision}"
     image_count = 0
     if annotations_dir is not None and images_dir.is_dir():

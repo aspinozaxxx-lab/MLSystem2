@@ -1092,10 +1092,26 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )["datasets"][0]
     assert managed["managed"] is True
 
+    editor_cache = (
+        Path(get_config().stored_files_root).parent
+        / "managed-datasets"
+        / "editor"
+        / managed["key"]
+    )
+    shutil.rmtree(editor_cache, ignore_errors=True)
+    editor_catalog = env.client.get("/api/v1/dataset-editor/datasets")
+    assert editor_catalog.status_code == 200, editor_catalog.text
+    assert any(
+        item["key"] == managed["key"]
+        for item in editor_catalog.json()["datasets"]
+    )
+    assert not editor_cache.exists()
+
     scenes_response = env.client.get(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
     )
     assert scenes_response.status_code == 200, scenes_response.text
+    assert editor_cache.is_dir()
     scene = scenes_response.json()["scenes"][0]
     detail_response = env.client.get(
         "/api/v1/dataset-editor/datasets/"
