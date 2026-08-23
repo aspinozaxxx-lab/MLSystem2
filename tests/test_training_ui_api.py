@@ -742,7 +742,10 @@ def test_successful_training_does_not_assign_primary_star(
             dataset_name="Лес\\main",
             model_name="segformer b2",
             architecture="smp_segformer_b2",
-            config={"ui.run_inference_after_training": True},
+            config={
+                "ui.run_inference_after_training": True,
+                "ui.secondary_priority": True,
+            },
         )
         session.add_all([dataset, job])
         session.flush()
@@ -768,6 +771,7 @@ def test_successful_training_does_not_assign_primary_star(
         assert len(post_training_inference_calls) == 1
         assert post_training_inference_calls[0]["dataset_key"] == dataset.key
         assert post_training_inference_calls[0]["training_result_id"] == result.id
+        assert post_training_inference_calls[0]["secondary_priority"] is True
         assert job.config["ui.post_training_inference_job_ids"] == [
             "00000000-0000-0000-0000-000000000123"
         ]
@@ -1450,6 +1454,183 @@ def test_training_worker_preempts_and_resumes_training_for_urgent_inference(
         dispatch_queue_once(session, config)
         assert training.status == JobStatus.RUNNING.value
         assert training.process_pid == 4321
+
+
+def test_secondary_job_waits_for_regular_job_regardless_of_queue_block(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+
+    monkeypatch.setattr(_worker, "_start_training_job", fake_start)
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start)
+    created_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        secondary = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at)
+        secondary.config = {"ui.secondary_priority": True}
+        regular = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 99, created_at)
+        session.add_all([secondary, regular])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+
+        assert started == [regular.id]
+        assert secondary.status == JobStatus.QUEUED.value
+
+
+def test_secondary_training_pauses_for_regular_job_and_resumes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start_inference(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+        row.process_pid = 5678
+
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start_inference)
+    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    created_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        secondary = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 1, created_at)
+        secondary.config = {"ui.secondary_priority": True}
+        secondary.status = JobStatus.RUNNING.value
+        secondary.process_pid = 4321
+        secondary.tmp_path = str(tmp_path / "secondary-training")
+        Path(secondary.tmp_path).mkdir(parents=True)
+        regular = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 2, created_at)
+        session.add_all([secondary, regular])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        request_path = Path(secondary.tmp_path) / "control" / "pause.request"
+        marker_path = Path(secondary.tmp_path) / "control" / "paused"
+        assert request_path.is_file()
+        assert started == []
+
+        regular.status = JobStatus.CANCELLED.value
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert not request_path.exists()
+        assert secondary.status == JobStatus.RUNNING.value
+
+        regular.status = JobStatus.QUEUED.value
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert request_path.is_file()
+
+        marker_path.write_text(request_path.read_text(encoding="utf-8"), encoding="utf-8")
+        dispatch_queue_once(session, config)
+        assert secondary.status == JobStatus.PAUSED.value
+        assert started == [regular.id]
+
+        regular.status = JobStatus.COMPLETED.value
+        regular.process_pid = None
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert not request_path.exists()
+        assert secondary.status == JobStatus.PAUSED.value
+
+        marker_path.unlink()
+        dispatch_queue_once(session, config)
+        assert secondary.status == JobStatus.RUNNING.value
+        assert secondary.process_pid == 4321
+
+
+def test_secondary_inference_pauses_for_regular_training_and_resumes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start_training(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+        row.process_pid = 8765
+
+    monkeypatch.setattr(_worker, "_start_training_job", fake_start_training)
+    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    created_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        secondary = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at)
+        secondary.config = {"ui.secondary_priority": True}
+        secondary.status = JobStatus.RUNNING.value
+        secondary.process_pid = 4321
+        secondary.tmp_path = str(tmp_path / "secondary-inference")
+        Path(secondary.tmp_path).mkdir(parents=True)
+        regular = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 2, created_at)
+        session.add_all([secondary, regular])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        request_path = Path(secondary.tmp_path) / "control" / "pause.request"
+        marker_path = Path(secondary.tmp_path) / "control" / "paused"
+        assert request_path.is_file()
+        assert started == []
+
+        marker_path.write_text(request_path.read_text(encoding="utf-8"), encoding="utf-8")
+        dispatch_queue_once(session, config)
+        assert secondary.status == JobStatus.PAUSED.value
+        assert started == [regular.id]
+
+        regular.status = JobStatus.COMPLETED.value
+        regular.process_pid = None
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert not request_path.exists()
+
+        regular.status = JobStatus.QUEUED.value
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert request_path.is_file()
+        assert started == [regular.id]
+
+        marker_path.write_text(request_path.read_text(encoding="utf-8"), encoding="utf-8")
+        dispatch_queue_once(session, config)
+        assert started == [regular.id, regular.id]
+
+        regular.status = JobStatus.COMPLETED.value
+        regular.process_pid = None
+        session.flush()
+        dispatch_queue_once(session, config)
+        assert not request_path.exists()
+
+        marker_path.unlink()
+        dispatch_queue_once(session, config)
+        assert secondary.status == JobStatus.RUNNING.value
+        assert secondary.process_pid == 4321
 
 
 def _queue_test_job(
@@ -2740,6 +2921,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
                 "architecture": "smp_segformer_b2",
                 "config": reset["default_config"],
                 "run_inference_after_training": True,
+                "secondary_priority": True,
             },
         ).json()
         assert job["status"] == "queued"
@@ -2748,16 +2930,20 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "train.device" not in job["config"]
         assert "dataset.split_granularity" not in job["config"]
         assert job["run_inference_after_training"] is True
+        assert job["secondary_priority"] is True
         assert "ui.run_inference_after_training" not in job["config"]
+        assert "ui.secondary_priority" not in job["config"]
 
         queues = client.get("/api/v1/queues").json()
         assert queues["training_enabled"] is True
         assert len(queues["training_jobs"]) == 1
+        assert queues["training_jobs"][0]["secondary_priority"] is True
         assert client.get("/api/v1/queues/count").json() == {"active_jobs": 1}
 
         detail = client.get(f"/api/v1/jobs/{job['id']}").json()
         assert detail["readonly"] is True
         assert detail["run_inference_after_training"] is True
+        assert detail["secondary_priority"] is True
 
         custom_results = client.get("/api/v1/results/datasets/custom").json()
         training_result_id = custom_results["results"][0]["id"]

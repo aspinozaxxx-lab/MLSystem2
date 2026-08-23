@@ -29,7 +29,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `ConfigField`, `ConfigSchema`, `TrainingTemplate`, `TrainingTemplateListResponse`, `TrainingTemplateCreate`, `TrainingTemplateUpdate`, `TrainingTemplateApplyField`, `InferenceTemplate`, `InferenceTemplateListResponse`, `InferenceTemplateCreate`, `InferenceTemplateUpdate`, `InferenceTemplateApplyField` - шаблоны обучения и инференса; `ConfigField` содержит `tooltip`, допустимые границы и optional `recommended_range` для UI-подсказок.
 - Встроенный датасетный inference-шаблон хранит человекочитаемую цель, но при инициализации привязывается к ключу действующей строки каталога по паре `класс/имя`; это сохраняет специальные настройки после смены ключа или миграции legacy-датасета.
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
-- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; ручной training request может включить `run_inference_after_training`.
+- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; ручной training request может включить `run_inference_after_training` и `secondary_priority`.
 - `PseudolabelJobCreate`, `PseudolabelClassInfo`, `PseudolabelClassListResponse`, `PseudolabelJobInfo`, `PseudolabelErrorInfo` - AOI, доступная зафиксированная модель, состояние и структурированная ошибка QGIS-контракта.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `DatasetResultsResponse`, `ResultClassInfo`, `ResultDatasetInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, task/class schema, структурированные per-class метрики, отдельный test F1, основная разметка и карточки классов; multiclass pseudo result дополнительно содержит ZIP-download по типам.
@@ -152,7 +152,7 @@ auto training job для текущей версии датасета, если 
 связь однозначно восстанавливается по имени `класс\датасет`; если датасетный шаблон не создан, используется
 базовый шаблон сети `(architecture, null)`. После успешного auto training result с MLflow run id создается auto pseudo-markup job;
 для per-image датасета временный TXT формируется из сопоставленных TIFF. Очередь jobs единая: ручная псевдоразметка имеет приоритет выше ручного обучения,
-ручное обучение выше auto псевдоразметки, auto псевдоразметка выше auto обучения. Auto jobs нельзя удалить или двигать
+ручное обучение выше auto псевдоразметки, auto псевдоразметка выше auto обучения, а второстепенные ручные jobs идут после всех обычных. Auto jobs нельзя удалить или двигать
 через endpoints очереди; снятие галочки отменяет соответствующие queued/running auto jobs. Если меняется версия
 конкретного датасета, активные auto jobs предыдущей версии отменяются только для этого датасета и модели. Failed
 auto attempt не ретраится до новой версии или снятия и повторного включения галочки.
@@ -160,7 +160,7 @@ auto attempt не ретраится до новой версии или сня�
 ревизию TIFF, effective inference-конфигурацию и версию алгоритма; повторные запросы возвращают существующий job,
 а ошибочный job перезапускается только явно. Running training получает файловый
 pause-request: на границе batch модель и optimizer state переносятся в CPU, CUDA освобождается, а job получает
-`paused`. После завершения срочных jobs запрос снимается, тот же PID и MLflow-run продолжают обучение. Уже
+`paused`. После завершения срочных jobs запрос снимается, тот же PID и MLflow-run продолжают обучение. Обычный
 выполняющийся inference не прерывается.
 
 При ручном запуске обучения оператор может включить штатный инференс по снимкам обучающего датасета. Опция
@@ -169,6 +169,12 @@ worker идемпотентно ставит обычный full pseudo-markup j
 меняет успешный статус уже завершённого обучения. Счётчик рядом с пунктом «Очередь» читает отдельный лёгкий
 endpoint и показывает сумму `queued`, `running` и `paused`, а строка задания ведёт в тот же экран Job, что и
 кнопка из результатов обучения.
+Флаг `secondary_priority` также хранится только в служебной части задания и наследуется этой full-псевдоразметкой.
+Второстепенный job запускается только при отсутствии разрешённых обычных jobs. При их появлении training
+освобождает CUDA штатным batch-boundary pause, PyTorch inference сохраняет завершённые поснимочные результаты и
+переносит модель в CPU между снимками, а Geoalert Compose между снимками выгружает модель из Triton. После
+опустошения обычной очереди запрос паузы снимается и тот же процесс продолжает работу без повторной обработки
+готовых снимков. Состояние `paused` в API одинаково для обучения и псевдоразметки.
 
 Глобальное выключение автоматизации через `PUT /api/v1/automation/enabled` с `enabled=false` отменяет все active
 auto jobs: queued rows уходят из очередей, running process получает SIGTERM, временная директория удаляется,

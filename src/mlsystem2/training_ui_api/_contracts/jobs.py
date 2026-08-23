@@ -22,6 +22,7 @@ class TrainingJobCreate(BaseModel):
     architecture: str
     config: dict[str, Any]
     run_inference_after_training: bool = False
+    secondary_priority: bool = False
 
 
 class QueueEnabledUpdate(BaseModel):
@@ -65,6 +66,7 @@ class JobSummary(BaseModel):
     started_at: datetime | None = None
     progress: RuntimeProgress | None = None
     actions: list[str] = Field(default_factory=list)
+    secondary_priority: bool = False
 
 
 class QueueSnapshot(BaseModel):
@@ -98,6 +100,7 @@ class JobDetail(BaseModel):
     mlflow_run_name: str | None = None
     config: dict[str, Any]
     run_inference_after_training: bool = False
+    secondary_priority: bool = False
     readonly: bool = True
     created_at: datetime
     started_at: datetime | None = None

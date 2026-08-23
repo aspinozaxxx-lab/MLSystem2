@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -16,6 +18,7 @@ from shapely.ops import transform as shapely_transform
 from mlsystem2.training_ui_api import _pseudo_runner
 from mlsystem2.training_ui_api._external_models import ExternalTestPrediction
 from mlsystem2.training_ui_api._pseudo_runner import (
+    _InferencePauseController,
     PSEUDO_INFERENCE_BACKEND,
     _completed_image_count,
     _final_status,
@@ -37,6 +40,42 @@ from mlsystem2.training_ui_api._pseudo_runner import (
     run_pseudo_markup,
     run_test_sample_f1,
 )
+
+
+def test_inference_pause_controller_moves_model_to_cpu_and_resumes(tmp_path: Path) -> None:
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    request_path = control_dir / "pause.request"
+    request_path.write_text("pause-token\n", encoding="utf-8")
+    moved_to: list[str] = []
+    emptied: list[bool] = []
+    model = SimpleNamespace(to=lambda device: moved_to.append(str(device)))
+    torch = SimpleNamespace(
+        device=lambda value: value,
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            empty_cache=lambda: emptied.append(True),
+        ),
+    )
+    controller = _InferencePauseController(torch, [model], "cuda", str(control_dir))
+
+    thread = threading.Thread(target=controller.pause_if_requested)
+    thread.start()
+    marker_path = control_dir / "paused"
+    deadline = time.monotonic() + 2
+    while not marker_path.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert marker_path.read_text(encoding="utf-8").strip() == "pause-token"
+    assert moved_to == ["cpu"]
+    assert emptied == [True]
+
+    request_path.unlink()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert moved_to == ["cpu", "cuda"]
+    assert not marker_path.exists()
 
 
 def test_multiclass_wrong_type_is_fp_and_fn_but_foreground_match() -> None:

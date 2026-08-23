@@ -11,6 +11,13 @@ import re
 import shutil
 import time
 from typing import Any
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
+
+
+PAUSE_REQUEST_FILE = "pause.request"
+PAUSED_MARKER_FILE = "paused"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     started = time.time()
 
     for number, scene in enumerate(scenes, start=1):
+        _pause_if_requested(spec)
         scene_id = str(scene["scene_id"])
         image_path = Path(scene["image_path"]).resolve()
         workdir = compose_root / _safe_workdir_name(scene_id, number)
@@ -113,6 +121,73 @@ def main(argv: list[str] | None = None) -> int:
     _write_json_atomic(result_path, result)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if not failures else 1
+
+
+def _pause_if_requested(spec: dict[str, Any]) -> None:
+    raw_control_dir = str(spec.get("control_dir") or "").strip()
+    if not raw_control_dir:
+        return
+    control_dir = Path(raw_control_dir)
+    request_path = control_dir / PAUSE_REQUEST_FILE
+    if not request_path.is_file():
+        return
+    pause_token = request_path.read_text(encoding="utf-8").strip()
+    if not pause_token:
+        return
+    model_name = str(spec.get("triton_model_name") or "").strip()
+    triton_http_url = str(spec.get("triton_http_url") or "").strip()
+    if not model_name or not triton_http_url:
+        raise RuntimeError("Для паузы Geoalert не заданы модель Triton и HTTP-адрес.")
+    marker_path = control_dir / PAUSED_MARKER_FILE
+    control_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _triton_repository_action(triton_http_url, model_name, "unload")
+        temporary = marker_path.with_suffix(".tmp")
+        temporary.write_text(f"{pause_token}\n", encoding="utf-8")
+        os.replace(temporary, marker_path)
+        while request_path.is_file():
+            time.sleep(0.2)
+        _triton_repository_action(triton_http_url, model_name, "load")
+        _wait_for_triton_model(triton_http_url, model_name)
+    finally:
+        marker_path.unlink(missing_ok=True)
+
+
+def _triton_repository_action(http_url: str, model_name: str, action: str) -> None:
+    url = (
+        f"{http_url.rstrip('/')}/v2/repository/models/"
+        f"{urllib_parse.quote(model_name)}/{action}"
+    )
+    request = urllib_request.Request(
+        url,
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=120) as response:
+            if not 200 <= response.status < 300:
+                raise RuntimeError(f"Triton вернул HTTP {response.status} для {action}.")
+    except urllib_error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Triton не выполнил {action} модели {model_name}: {details}"
+        ) from exc
+
+
+def _wait_for_triton_model(http_url: str, model_name: str) -> None:
+    ready_url = f"{http_url.rstrip('/')}/v2/models/{urllib_parse.quote(model_name)}/ready"
+    deadline = time.monotonic() + 120.0
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib_request.urlopen(ready_url, timeout=5) as response:
+                if 200 <= response.status < 300:
+                    return
+        except (OSError, urllib_error.URLError) as exc:
+            last_error = exc
+        time.sleep(0.5)
+    raise RuntimeError(f"Triton не перевёл модель {model_name} в READY: {last_error!r}")
 
 
 def _safe_workdir_name(scene_id: str, number: int) -> str:

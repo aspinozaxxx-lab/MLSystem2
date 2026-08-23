@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from .contracts import JobSource, JobStatus, JobType
 DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
 POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
+SECONDARY_PRIORITY_CONFIG_KEY = "ui.secondary_priority"
 
 
 class _QueueRow(Protocol):
@@ -23,6 +24,7 @@ class _QueueRow(Protocol):
     status: str
     queue_position: int
     created_at: datetime
+    config: dict[str, Any] | None
 
 
 _JOB_PRIORITIES = {
@@ -51,13 +53,19 @@ def job_priority(row: _QueueRow) -> int:
     return _JOB_PRIORITIES.get((row.type, row.source), 0)
 
 
-def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, datetime]:
+def is_secondary_job(row: _QueueRow) -> bool:
+    return bool((row.config or {}).get(SECONDARY_PRIORITY_CONFIG_KEY, False))
+
+
+def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, int, datetime]:
     status_rank = 0 if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value} else 1
-    return status_rank, row.queue_position, -job_priority(row), row.created_at
+    secondary_rank = 1 if is_secondary_job(row) else 0
+    return status_rank, secondary_rank, row.queue_position, -job_priority(row), row.created_at
 
 
-def dispatch_sort_key(row: _QueueRow) -> tuple[int, int, datetime]:
-    return row.queue_position, -job_priority(row), row.created_at
+def dispatch_sort_key(row: _QueueRow) -> tuple[int, int, int, datetime]:
+    secondary_rank = 1 if is_secondary_job(row) else 0
+    return secondary_rank, row.queue_position, -job_priority(row), row.created_at
 
 
 def next_queue_position(session: Session, job_type: JobType, source: JobSource) -> int:

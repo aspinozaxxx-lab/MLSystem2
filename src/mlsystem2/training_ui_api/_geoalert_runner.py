@@ -666,6 +666,9 @@ def _run_compose(
         "source_image_ids": source_image_ids,
         "coverage_percent": coverage_percent,
         "warnings": warnings,
+        "control_dir": config.get("control_dir"),
+        "triton_http_url": config.get("geoalert_triton_http_url"),
+        "triton_model_name": runtime_export.model_name,
         "scenes": [
             {
                 "scene_id": scene.scene_id,

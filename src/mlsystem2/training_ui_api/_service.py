@@ -94,7 +94,9 @@ from ._processes import terminate_job_process
 from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+    SECONDARY_PRIORITY_CONFIG_KEY,
     ensure_queue_positions,
+    is_secondary_job,
     next_queue_position,
     queue_sort_key,
 )
@@ -967,6 +969,7 @@ def create_training_job(
     if dataset.images_dir is not None:
         job_config["dataset.images_dir"] = dataset.images_dir
     job_config[POST_TRAINING_INFERENCE_CONFIG_KEY] = request.run_inference_after_training
+    job_config[SECONDARY_PRIORITY_CONFIG_KEY] = request.secondary_priority
     _validate_tile_factor_config(job_config)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
@@ -1144,7 +1147,11 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
     if row.status != JobStatus.QUEUED.value:
         raise TrainingUIAPIError("Можно двигать только queued задания")
     ensure_queue_positions(session)
-    queued = _queue_rows(session, manual_only=True, queued_only=True)
+    queued = [
+        item
+        for item in _queue_rows(session, manual_only=True, queued_only=True)
+        if is_secondary_job(item) == is_secondary_job(row)
+    ]
     index = next((i for i, item in enumerate(queued) if item.id == row.id), None)
     if index is None:
         return _job_detail(session, row)
@@ -1468,10 +1475,12 @@ def _job_change_action(row: JobRow) -> str:
     running = row.status == JobStatus.RUNNING.value
     if row.type == JobType.TRAINING.value:
         if row.status == JobStatus.PAUSED.value:
-            return "обучение приостановлено для срочного инференса"
+            return "обучение приостановлено для более приоритетного задания"
         return "идёт обучение" if running else "запланировано обучение"
     if _job_purpose(row) == "test_sample_f1":
         return "считается тестовый F1" if running else "запланирован тестовый F1"
+    if row.status == JobStatus.PAUSED.value:
+        return "псевдоразметка приостановлена для более приоритетного задания"
     return "идёт псевдоразметка" if running else "запланирована псевдоразметка"
 
 
@@ -1494,6 +1503,7 @@ def create_pseudo_markup_job(
     scenes_content_type: str | None,
     scenes_bytes: bytes | None,
     config: TrainingUIAPIConfig,
+    secondary_priority: bool = False,
 ) -> JobDetail:
     ensure_seed_templates(session)
     dataset_key = (dataset_key or "").strip() or None
@@ -1646,6 +1656,7 @@ def create_pseudo_markup_job(
             "training_result_id": str(training_result_id) if training_result_id else None,
             "inference_template_id": str(inference_template.id) if inference_template is not None else None,
             "inference_template_config": inference_template_config,
+            SECONDARY_PRIORITY_CONFIG_KEY: secondary_priority,
             **_checkpoint_config(session, training_result, config),
         },
     )
@@ -1760,7 +1771,10 @@ def delete_pseudo_markup_result(
         raise TrainingUIAPIError(f"Результат псевдоразметки не найден: {result_id}")
     detail = _pseudo_markup_info(session, row)
     job = session.get(JobRow, row.job_id) if row.job_id is not None else None
-    if job is not None and job.status == JobStatus.RUNNING.value:
+    if job is not None and job.status in {
+        JobStatus.RUNNING.value,
+        JobStatus.PAUSED.value,
+    }:
         _stop_process_and_cleanup(job)
     mark_test_samples_stale_for_pseudo_markup(session, row.id)
     stored_files = [row.scenes_file, row.geojson_file]
@@ -2467,6 +2481,7 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
         started_at=row.started_at,
         progress=_job_progress(session, row),
         actions=_job_actions(row),
+        secondary_priority=is_secondary_job(row),
     )
 
 
@@ -2506,11 +2521,13 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
             not in {
                 POST_TRAINING_INFERENCE_CONFIG_KEY,
                 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+                SECONDARY_PRIORITY_CONFIG_KEY,
             }
         },
         run_inference_after_training=bool(
             (row.config or {}).get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)
         ),
+        secondary_priority=is_secondary_job(row),
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
@@ -2793,7 +2810,11 @@ def _public_result_status(
     if result_status != ResultStatus.RUNNING.value or job_id is None:
         return result_status
     job = _job_from_map(session, job_id, jobs_by_id)
-    if job is not None and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+    if job is not None and job.status in {
+        JobStatus.QUEUED.value,
+        JobStatus.RUNNING.value,
+        JobStatus.PAUSED.value,
+    }:
         return job.status
     return result_status
 

@@ -2604,6 +2604,11 @@ export interface components {
              */
             run_inference_after_training: boolean;
             /**
+             * Secondary Priority
+             * @default false
+             */
+            secondary_priority: boolean;
+            /**
              * Readonly
              * @default true
              */
@@ -2692,6 +2697,11 @@ export interface components {
             progress?: components["schemas"]["RuntimeProgress"] | null;
             /** Actions */
             actions?: string[];
+            /**
+             * Secondary Priority
+             * @default false
+             */
+            secondary_priority: boolean;
         };
         /**
          * JobType
@@ -2929,7 +2939,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "ok" | "error" | "cancelled";
+            status: "queued" | "running" | "paused" | "ok" | "error" | "cancelled";
             /**
              * Created At
              * Format: date-time
@@ -3217,7 +3227,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "ok" | "error" | "cancelled";
+            status: "queued" | "running" | "paused" | "ok" | "error" | "cancelled";
             /**
              * Changed At
              * Format: date-time
@@ -3908,6 +3918,11 @@ export interface components {
              * @default false
              */
             run_inference_after_training: boolean;
+            /**
+             * Secondary Priority
+             * @default false
+             */
+            secondary_priority: boolean;
         };
         /** TrainingResultBatchExportRequest */
         TrainingResultBatchExportRequest: {
@@ -3998,7 +4013,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "ok" | "error" | "cancelled";
+            status: "queued" | "running" | "paused" | "ok" | "error" | "cancelled";
             /** Error */
             error?: string | null;
             progress?: components["schemas"]["RuntimeProgress"] | null;

@@ -586,6 +586,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   const [config, setConfig] = useState<JsonRecord>({});
   const [busy, setBusy] = useState(false);
   const [runInferenceAfterTraining, setRunInferenceAfterTraining] = useState(false);
+  const [secondaryPriority, setSecondaryPriority] = useState(false);
 
   const template = useMemo(
     () => templateFor(bootstrap.training_templates, architecture, datasetKey),
@@ -673,6 +674,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           architecture,
           config,
           run_inference_after_training: runInferenceAfterTraining,
+          secondary_priority: secondaryPriority,
         },
       }),
     );
@@ -778,6 +780,17 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           </label>
           <p className="muted">
             После успешного обучения штатная псевдоразметка будет поставлена в очередь для всех снимков выбранного датасета.
+          </p>
+          <label className="field checkbox-field">
+            <input
+              type="checkbox"
+              checked={secondaryPriority}
+              onChange={(event) => setSecondaryPriority(event.target.checked)}
+            />
+            <span>Второстепенный приоритет</span>
+          </label>
+          <p className="muted">
+            Обучение и последующая псевдоразметка выполняются в свободное время, приостанавливаются для любых обычных заданий и затем продолжаются с сохранённого места.
           </p>
         </section>
         <div className="button-row">
@@ -3440,6 +3453,7 @@ function JobPage({ bootstrap, run, jobId }: RoutedPageProps & { jobId: string })
           <Metric label="Статус" value={statusBadge(job.status, job.type, job.progress)} />
           <Metric label="Тип" value={job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение"} />
           <Metric label="Источник" value={sourceBadge(job.source)} />
+          <Metric label="Приоритет" value={job.secondary_priority ? "второстепенный" : "обычный"} />
           <Metric label="Создано" value={formatDateTime(job.created_at)} />
           <Metric label="Старт" value={formatDateTime(job.started_at)} />
           <Metric label="Финиш" value={formatDateTime(job.finished_at)} />
@@ -3971,7 +3985,12 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
             <tr className="clickable-row" key={job.id} onClick={() => navigate(`jobs/${job.id}`)}>
               <td className="technical-value">{job.queue_position}</td>
               <td>{statusBadge(job.status, job.type, job.progress)}</td>
-              <td>{jobTypeBadge(job)}</td>
+              <td>
+                <span className="inline-row">
+                  {jobTypeBadge(job)}
+                  {job.secondary_priority ? <span className="badge neutral">второстепенное</span> : null}
+                </span>
+              </td>
               <td>{queueDatasetCell(job)}</td>
               <td>{queueModelCell(job)}</td>
               <td className="technical-value">{formatDateTime(job.created_at)}</td>
@@ -4605,7 +4624,7 @@ function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     queued: "в очереди",
     running: "в процессе",
-    paused: "приостановлено для срочного инференса",
+    paused: "приостановлено для более приоритетного задания",
     ok: "ok",
     completed: "завершено",
     error: "ошибка",

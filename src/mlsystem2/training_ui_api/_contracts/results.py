@@ -34,7 +34,7 @@ class PseudoMarkupResultInfo(BaseModel):
     scenes_file: StoredFileInfo | None = None
     geojson_file: StoredFileInfo | None = None
     image_count: int | None = None
-    status: Literal["queued", "running", "ok", "error", "cancelled"]
+    status: Literal["queued", "running", "paused", "ok", "error", "cancelled"]
     created_at: datetime
     runtime_minutes: int | None = None
     progress: RuntimeProgress | None = None
@@ -116,7 +116,7 @@ class TrainingResultInfo(BaseModel):
     started_at: datetime | None = None
     mlflow_run_url: str | None = None
     sample_size_hint: int | None = None
-    status: Literal["queued", "running", "ok", "error", "cancelled"]
+    status: Literal["queued", "running", "paused", "ok", "error", "cancelled"]
     error: str | None = None
     progress: RuntimeProgress | None = None
     test_f1: TrainingResultTestF1Info | None = None
@@ -201,7 +201,7 @@ class ResultChangeInfo(BaseModel):
     model_name: str
     action: str
     source: JobSource = JobSource.MANUAL
-    status: Literal["queued", "running", "ok", "error", "cancelled"]
+    status: Literal["queued", "running", "paused", "ok", "error", "cancelled"]
     changed_at: datetime
     mlflow_run_url: str | None = None
 

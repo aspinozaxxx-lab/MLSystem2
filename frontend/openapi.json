@@ -7101,6 +7101,11 @@
             "title": "Run Inference After Training",
             "default": false
           },
+          "secondary_priority": {
+            "type": "boolean",
+            "title": "Secondary Priority",
+            "default": false
+          },
           "readonly": {
             "type": "boolean",
             "title": "Readonly",
@@ -7347,6 +7352,11 @@
             },
             "type": "array",
             "title": "Actions"
+          },
+          "secondary_priority": {
+            "type": "boolean",
+            "title": "Secondary Priority",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -8031,6 +8041,7 @@
             "enum": [
               "queued",
               "running",
+              "paused",
               "ok",
               "error",
               "cancelled"
@@ -8728,6 +8739,7 @@
             "enum": [
               "queued",
               "running",
+              "paused",
               "ok",
               "error",
               "cancelled"
@@ -10636,6 +10648,11 @@
             "type": "boolean",
             "title": "Run Inference After Training",
             "default": false
+          },
+          "secondary_priority": {
+            "type": "boolean",
+            "title": "Secondary Priority",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -10878,6 +10895,7 @@
             "enum": [
               "queued",
               "running",
+              "paused",
               "ok",
               "error",
               "cancelled"

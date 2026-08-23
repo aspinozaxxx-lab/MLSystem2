@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import threading
+import time
 import zipfile
 
 import numpy as np
@@ -12,7 +14,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 import yaml
 
-from mlsystem2.training_ui_api import _model_export, _worker
+from mlsystem2.training_ui_api import _geoalert_compose_runner, _model_export, _worker
 from mlsystem2.training_ui_api._geoalert_runner import (
     _effective_postprocess_config,
     _extract_model_archive,
@@ -27,6 +29,58 @@ from mlsystem2.training_ui_api._inference_backend import (
     inference_backend_for_imagery,
 )
 from mlsystem2.training_ui_api._pseudo_runner import run_test_sample_f1
+
+
+def test_geoalert_pause_unloads_triton_and_loads_it_on_resume(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    request_path = control_dir / "pause.request"
+    request_path.write_text("pause-token\n", encoding="utf-8")
+    actions: list[tuple[str, str]] = []
+    ready: list[str] = []
+    monkeypatch.setattr(
+        _geoalert_compose_runner,
+        "_triton_repository_action",
+        lambda _url, model, action: actions.append((model, action)),
+    )
+    monkeypatch.setattr(
+        _geoalert_compose_runner,
+        "_wait_for_triton_model",
+        lambda _url, model: ready.append(model),
+    )
+
+    thread = threading.Thread(
+        target=_geoalert_compose_runner._pause_if_requested,
+        args=(
+            {
+                "control_dir": str(control_dir),
+                "triton_http_url": "http://triton",
+                "triton_model_name": "secondary-model",
+            },
+        ),
+    )
+    thread.start()
+    marker_path = control_dir / "paused"
+    deadline = time.monotonic() + 2
+    while not marker_path.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert marker_path.read_text(encoding="utf-8").strip() == "pause-token"
+    assert actions == [("secondary-model", "unload")]
+
+    request_path.unlink()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert actions == [
+        ("secondary-model", "unload"),
+        ("secondary-model", "load"),
+    ]
+    assert ready == ["secondary-model"]
+    assert not marker_path.exists()
 
 
 def test_ortho_uses_geoalert_backend_and_kanopus_keeps_compatible_backend() -> None:

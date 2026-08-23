@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 import math
+import os
 from queue import Queue
 import shutil
 import threading
@@ -60,6 +61,55 @@ from ._external_imagery import ExternalImageryError, prepare_external_imagery
 
 
 PSEUDO_INFERENCE_BACKEND = PYTORCH_INFERENCE_BACKEND
+PAUSE_REQUEST_FILE = "pause.request"
+PAUSED_MARKER_FILE = "paused"
+
+
+class _InferencePauseController:
+    """Кооперативно освобождает GPU между снимками псевдоразметки."""
+
+    def __init__(
+        self,
+        torch: Any,
+        models: list[Any],
+        device: str,
+        control_dir: str | None,
+    ) -> None:
+        self._torch = torch
+        self._models = [model for model in models if model is not None]
+        self._device = device
+        self._control_dir = Path(control_dir) if control_dir else None
+
+    def pause_if_requested(self) -> None:
+        if self._control_dir is None:
+            return
+        request_path = self._control_dir / PAUSE_REQUEST_FILE
+        if not request_path.is_file():
+            return
+        marker_path = self._control_dir / PAUSED_MARKER_FILE
+        self._control_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            pause_token = request_path.read_text(encoding="utf-8").strip()
+            if not pause_token:
+                return
+            cpu = self._torch.device("cpu")
+            for model in self._models:
+                model.to(cpu)
+            _release_cuda_cache(self._torch, self._device)
+            temporary = marker_path.with_suffix(".tmp")
+            temporary.write_text(f"{pause_token}\n", encoding="utf-8")
+            os.replace(temporary, marker_path)
+            while request_path.is_file():
+                time.sleep(0.2)
+            target_device = self._torch.device(self._device)
+            for model in self._models:
+                model.to(target_device)
+        finally:
+            marker_path.unlink(missing_ok=True)
+
+    def close(self) -> None:
+        if self._control_dir is not None:
+            (self._control_dir / PAUSED_MARKER_FILE).unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -1044,6 +1094,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
     external_loaded = None
     external_manifest: ExternalModelManifest | None = None
     model = None
+    pause_controller: _InferencePauseController | None = None
     try:
         external_manifest = external_model_manifest(config)
         if external_manifest is not None:
@@ -1084,6 +1135,12 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             _validate_configured_input_channels(config, input_channels)
             model.to(torch.device(device))
             model.eval()
+        pause_controller = _InferencePauseController(
+            torch,
+            [getattr(external_loaded, "model", None) if external_loaded is not None else model],
+            device,
+            str(config.get("control_dir") or "") or None,
+        )
     except Exception as exc:  # noqa: BLE001
         try:
             del model
@@ -1156,6 +1213,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
         )
 
         for scene_input in scene_inputs:
+            assert pause_controller is not None
+            pause_controller.pause_if_requested()
             scene_started = time.time()
             try:
                 if external_loaded is not None:
@@ -1235,6 +1294,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 **progress_context,
             )
 
+        assert pause_controller is not None
+        pause_controller.pause_if_requested()
         feature_count_before_merge = len(all_features)
         _write_pseudo_progress(
             progress_path,
@@ -1329,6 +1390,8 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             performance=performance,
         )
     finally:
+        if pause_controller is not None:
+            pause_controller.close()
         try:
             del model
             del loaded

@@ -74,8 +74,10 @@ from ._queueing import (
     DATASET_EDITOR_PSEUDO_OPERATION,
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+    SECONDARY_PRIORITY_CONFIG_KEY,
     dispatch_sort_key,
     ensure_queue_positions,
+    is_secondary_job,
 )
 from ._templates import normalize_tile_factors
 from ._test_samples import (
@@ -97,9 +99,9 @@ from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKi
 LOGGER = logging.getLogger(__name__)
 MLFLOW_RUN_ID_FILE = "mlflow_run_id"
 JOB_ERROR_MAX_BYTES = 8 * 1024
-TRAINING_CONTROL_DIR = "control"
-TRAINING_PAUSE_REQUEST = "pause.request"
-TRAINING_PAUSED_MARKER = "paused"
+JOB_CONTROL_DIR = "control"
+JOB_PAUSE_REQUEST = "pause.request"
+JOB_PAUSED_MARKER = "paused"
 URGENT_JOB_PRIORITY = "urgent"
 
 
@@ -159,7 +161,7 @@ def dispatch_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
-    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+    if _coordinate_job_preemption(session, config, popen_factory=popen_factory):
         return
     if _has_running_job(session):
         return
@@ -181,7 +183,7 @@ def dispatch_training_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
-    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+    if _coordinate_job_preemption(session, config, popen_factory=popen_factory):
         return
     if _has_running_job(session):
         return
@@ -206,7 +208,7 @@ def dispatch_inference_queue_once(
     _reconcile_running_training_jobs(session, config)
     _reconcile_running_inference_jobs(session, config)
     ensure_queue_positions(session)
-    if _coordinate_urgent_inference(session, config, popen_factory=popen_factory):
+    if _coordinate_job_preemption(session, config, popen_factory=popen_factory):
         return
     if _has_running_job(session):
         return
@@ -239,45 +241,98 @@ def _next_dispatch_job(session: Session, job_type: JobType | None = None) -> Job
     return candidates[0] if candidates else None
 
 
-def _coordinate_urgent_inference(
+def _coordinate_job_preemption(
     session: Session,
     config: TrainingUIAPIConfig,
     *,
     popen_factory: ProcessLauncher,
 ) -> bool:
-    """Приостановить обучение, выполнить срочный инференс и затем продолжить его."""
+    """Освободить ресурс для более приоритетной работы и затем продолжить прежний job."""
 
-    running_inference = session.scalar(
-        select(JobRow).where(
-            JobRow.type == JobType.INFERENCE.value,
-            JobRow.status == JobStatus.RUNNING.value,
-        )
+    running = session.scalar(
+        select(JobRow)
+        .where(JobRow.status == JobStatus.RUNNING.value)
+        .order_by(JobRow.started_at, JobRow.created_at)
     )
-    if running_inference is not None:
+    paused = session.scalar(
+        select(JobRow)
+        .where(JobRow.status == JobStatus.PAUSED.value)
+        .order_by(JobRow.started_at, JobRow.created_at)
+    )
+    if running is not None:
+        preemptor = _preempting_job(session, running)
+        if preemptor is None:
+            if running.tmp_path is not None and _job_pause_request(running).is_file():
+                _request_job_resume(running)
+            return True
+        token = _request_job_pause(running)
+        if not _job_pause_confirmed(running, token):
+            return True
+        running.status = JobStatus.PAUSED.value
+        session.flush()
+        _start_job(session, preemptor, config, popen_factory=popen_factory)
         return True
-    training = session.scalar(
-        select(JobRow).where(
-            JobRow.type == JobType.TRAINING.value,
-            JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
-        )
-    )
-    urgent = _next_urgent_inference_job(session)
-    if urgent is not None:
-        if training is not None:
-            token = _request_training_pause(training)
-            if not _training_pause_confirmed(training, token):
+
+    if paused is None:
+        return False
+    if is_secondary_job(paused):
+        preemptor = _next_urgent_inference_job(session) or _next_non_secondary_job(session)
+        if preemptor is not None:
+            token = _request_job_pause(paused)
+            if not _job_pause_confirmed(paused, token):
                 return True
-            training.status = JobStatus.PAUSED.value
-            session.flush()
-        _start_inference_job(session, urgent, config, popen_factory=popen_factory)
-        return True
-    if training is not None and training.status == JobStatus.PAUSED.value:
-        _request_training_resume(training)
-        if not _training_paused_marker(training).is_file():
-            training.status = JobStatus.RUNNING.value
-            session.flush()
-        return True
-    return training is not None
+            _start_job(session, preemptor, config, popen_factory=popen_factory)
+            return True
+    elif paused.type == JobType.TRAINING.value:
+        urgent = _next_urgent_inference_job(session)
+        if urgent is not None:
+            token = _request_job_pause(paused)
+            if not _job_pause_confirmed(paused, token):
+                return True
+            _start_inference_job(session, urgent, config, popen_factory=popen_factory)
+            return True
+    _request_job_resume(paused)
+    if not _job_paused_marker(paused).is_file():
+        paused.status = JobStatus.RUNNING.value
+        session.flush()
+    return True
+
+
+def _preempting_job(session: Session, running: JobRow) -> JobRow | None:
+    if running.type == JobType.TRAINING.value or is_secondary_job(running):
+        urgent = _next_urgent_inference_job(session)
+        if urgent is not None:
+            return urgent
+    if is_secondary_job(running):
+        return _next_non_secondary_job(session)
+    return None
+
+
+def _next_non_secondary_job(session: Session) -> JobRow | None:
+    rows = session.scalars(
+        select(JobRow).where(JobRow.status == JobStatus.QUEUED.value)
+    ).all()
+    automation_enabled = _automation_enabled(session)
+    candidates = [
+        row
+        for row in rows
+        if not is_secondary_job(row) and _dispatch_allowed(session, row, automation_enabled)
+    ]
+    candidates.sort(key=dispatch_sort_key)
+    return candidates[0] if candidates else None
+
+
+def _start_job(
+    session: Session,
+    row: JobRow,
+    config: TrainingUIAPIConfig,
+    *,
+    popen_factory: ProcessLauncher,
+) -> None:
+    if row.type == JobType.INFERENCE.value:
+        _start_inference_job(session, row, config, popen_factory=popen_factory)
+    else:
+        _start_training_job(session, row, config, popen_factory=popen_factory)
 
 
 def _next_urgent_inference_job(session: Session) -> JobRow | None:
@@ -300,22 +355,22 @@ def _is_urgent_job(row: JobRow) -> bool:
     return (row.config or {}).get("priority") == URGENT_JOB_PRIORITY
 
 
-def _training_control_dir(row: JobRow) -> Path:
+def _job_control_dir(row: JobRow) -> Path:
     if row.tmp_path is None:
-        raise RuntimeError("У выполняющегося обучения отсутствует рабочая директория.")
-    return Path(row.tmp_path) / TRAINING_CONTROL_DIR
+        raise RuntimeError("У выполняющегося задания отсутствует рабочая директория.")
+    return Path(row.tmp_path) / JOB_CONTROL_DIR
 
 
-def _training_pause_request(row: JobRow) -> Path:
-    return _training_control_dir(row) / TRAINING_PAUSE_REQUEST
+def _job_pause_request(row: JobRow) -> Path:
+    return _job_control_dir(row) / JOB_PAUSE_REQUEST
 
 
-def _training_paused_marker(row: JobRow) -> Path:
-    return _training_control_dir(row) / TRAINING_PAUSED_MARKER
+def _job_paused_marker(row: JobRow) -> Path:
+    return _job_control_dir(row) / JOB_PAUSED_MARKER
 
 
-def _request_training_pause(row: JobRow) -> str:
-    request_path = _training_pause_request(row)
+def _request_job_pause(row: JobRow) -> str:
+    request_path = _job_pause_request(row)
     request_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         token = request_path.read_text(encoding="utf-8").strip()
@@ -330,15 +385,15 @@ def _request_training_pause(row: JobRow) -> str:
     return token
 
 
-def _training_pause_confirmed(row: JobRow, token: str) -> bool:
+def _job_pause_confirmed(row: JobRow, token: str) -> bool:
     try:
-        return _training_paused_marker(row).read_text(encoding="utf-8").strip() == token
+        return _job_paused_marker(row).read_text(encoding="utf-8").strip() == token
     except OSError:
         return False
 
 
-def _request_training_resume(row: JobRow) -> None:
-    _training_pause_request(row).unlink(missing_ok=True)
+def _request_job_resume(row: JobRow) -> None:
+    _job_pause_request(row).unlink(missing_ok=True)
 
 
 def _dispatch_allowed(session: Session, row: JobRow, automation_enabled: bool) -> bool:
@@ -382,7 +437,7 @@ def _reconcile_running_inference_jobs(session: Session, config: TrainingUIAPICon
     rows = session.scalars(
         select(JobRow).where(
             JobRow.type == JobType.INFERENCE.value,
-            JobRow.status == JobStatus.RUNNING.value,
+            JobRow.status.in_([JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
         )
     ).all()
     for row in rows:
@@ -454,7 +509,7 @@ def _start_training_job(
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "scratch").mkdir(parents=True, exist_ok=True)
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
-    (run_dir / TRAINING_CONTROL_DIR).mkdir(parents=True, exist_ok=True)
+    (run_dir / JOB_CONTROL_DIR).mkdir(parents=True, exist_ok=True)
 
     try:
         config_path = run_dir / "run.yml"
@@ -502,6 +557,7 @@ def _start_inference_job(
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (run_dir / JOB_CONTROL_DIR).mkdir(parents=True, exist_ok=True)
     row.tmp_path = str(run_dir)
     try:
         config_path = run_dir / (
@@ -517,6 +573,7 @@ def _start_inference_job(
             payload = _build_pseudolabel_aoi_config(row, config, run_dir)
         else:
             payload = _build_pseudo_markup_config(session, row, config, run_dir)
+        payload["control_dir"] = str(run_dir / JOB_CONTROL_DIR)
         _write_yaml(config_path, payload)
         script_path = _write_pseudo_run_script(
             config,
@@ -1278,7 +1335,7 @@ def _write_run_script(
                 f"cd {shlex.quote(str(config.project_root))}",
                 f"export MLSYSTEM2_MLFLOW_RUN_ID_FILE={shlex.quote(str(mlflow_run_id_path))}",
                 "export MLSYSTEM2_TRAINING_CONTROL_DIR="
-                f"{shlex.quote(str(run_dir / TRAINING_CONTROL_DIR))}",
+                f"{shlex.quote(str(run_dir / JOB_CONTROL_DIR))}",
                 f"export MLSYSTEM2_TORCH_NUM_THREADS={config.training_torch_num_threads}",
                 "export MLSYSTEM2_TORCH_NUM_INTEROP_THREADS="
                 f"{config.training_torch_num_interop_threads}",
@@ -1473,6 +1530,9 @@ def _queue_post_training_inference(
                     scenes_content_type=scenes_content_type,
                     scenes_bytes=scenes_bytes,
                     config=config,
+                    secondary_priority=bool(
+                        job_config.get(SECONDARY_PRIORITY_CONFIG_KEY, False)
+                    ),
                 )
             queued_job_ids.append(str(detail.id))
         except Exception:  # noqa: BLE001
