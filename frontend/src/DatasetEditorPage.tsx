@@ -2277,7 +2277,7 @@ export function DatasetEditorPage({
                           </label>
                           {pseudoTarget === "hard_negative" && selectedDataset?.managed ? (
                             <div className="dataset-editor-pseudo-negative-targets">
-                              <span>Исходные датасеты:</span>
+                              <span>Классы:</span>
                               <label>
                                 <input
                                   type="checkbox"
@@ -2302,7 +2302,7 @@ export function DatasetEditorPage({
                                       return next;
                                     })}
                                   />
-                                  {source.dataset_name}
+                                  {source.class_name}
                                 </label>
                               ))}
                             </div>
