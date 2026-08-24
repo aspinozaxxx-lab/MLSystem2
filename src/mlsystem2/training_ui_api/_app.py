@@ -1,8 +1,10 @@
-﻿"""FastAPI application factory for the training UI API."""
+"""FastAPI application factory for the training UI API."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 
@@ -41,6 +43,9 @@ from ._test_samples import (
 )
 from ._worker import run_queue_worker
 from .contracts import PseudolabelAPIError, TrainingUIAPIError
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -88,6 +93,34 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.middleware("http")
+    async def request_timing(request: Request, call_next):
+        started_at = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            LOGGER.exception(
+                "HTTP-запрос завершился ошибкой: %s %s, %.1f мс",
+                request.method,
+                request.url.path,
+                duration_ms,
+            )
+            raise
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+        response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+        if duration_ms >= 1_000:
+            LOGGER.warning(
+                "Медленный HTTP-запрос: %s %s -> %s, %.1f мс",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
+        return response
+
     if config.database_url.startswith("sqlite"):
         Base.metadata.create_all(session_factory.kw["bind"])
 
@@ -178,7 +211,9 @@ def main() -> None:
     import uvicorn
 
     config = get_config()
-    uvicorn.run("mlsystem2.training_ui_api.api:create_app", host=config.host, port=config.port, factory=True)
+    uvicorn.run(
+        "mlsystem2.training_ui_api.api:create_app", host=config.host, port=config.port, factory=True
+    )
 
 
 def worker_main() -> None:

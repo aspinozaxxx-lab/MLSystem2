@@ -27,6 +27,7 @@
 - `MLSYSTEM2_OPEN_WEBUI_URL` — ссылка на Open WebUI LLM-стека, default `/open-webui/`.
 - `MLSYSTEM2_TRAINING_UI_WORKER_ENABLED` — включает фоновый исполнитель очереди, default `true`.
 - `MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS` — период проверки очереди, default `5`.
+- `MLSYSTEM2_AUTOMATION_SYNC_INTERVAL_SECONDS` — отдельный период дешёвой сверки автоматизации, default `30`.
 - `MLSYSTEM2_GEOALERT_PYTHON_PATH` — Python окружения Workflow Engine, default `/opt/geoalert/inference/.venv/bin/python`.
 - `MLSYSTEM2_GEOALERT_INFERENCE_ROOT` — рабочая установка Geoalert, default `/opt/geoalert/inference`.
 - `MLSYSTEM2_GEOALERT_MODEL_REPOSITORY` — model repository explicit-control Triton, default `/opt/geoalert/triton_models`.

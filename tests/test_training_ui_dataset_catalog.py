@@ -12,6 +12,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
 from sqlalchemy import func, select
 
+from mlsystem2.training_ui_api import _dataset_editor
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import (
@@ -33,6 +34,9 @@ from mlsystem2.training_ui_api._models import (
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
+)
+from mlsystem2.training_ui_api._managed_datasets import (
+    process_next_managed_materialization,
 )
 from mlsystem2.training_ui_api.contracts import (
     DatasetClassCreate,
@@ -69,8 +73,7 @@ def test_initial_import_preserves_legacy_keys_and_missing_history(
         synchronize_dataset_catalog(session, config)
 
         datasets = {
-            item.key: item
-            for item in list_managed_datasets(session, config, include_custom=False)
+            item.key: item for item in list_managed_datasets(session, config, include_custom=False)
         }
         assert set(datasets) == {"Вырубки\\main", "Реки\\main"}
         assert datasets["Вырубки\\main"].dataset_name == "main"
@@ -106,9 +109,7 @@ def test_sync_adds_sources_idempotently_and_keeps_missing_source(
         new_class = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Пожары"))
         assert new_class is not None
         uuid.UUID(new_class.key)
-        new_dataset = session.scalar(
-            select(DatasetRow).where(DatasetRow.class_id == new_class.id)
-        )
+        new_dataset = session.scalar(select(DatasetRow).where(DatasetRow.class_id == new_class.id))
         assert new_dataset is not None
         uuid.UUID(new_dataset.key)
         assert new_dataset.name == "summer"
@@ -197,12 +198,15 @@ def test_manual_settings_and_ortho_type_survive_sync(
         assert managed.input_channels == 3
         assert managed.imagery_type == "ortho"
         assert session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес")) is None
-        assert session.scalar(
-            select(DatasetRow).where(
-                DatasetRow.class_id == class_row.id,
-                DatasetRow.name == "new",
+        assert (
+            session.scalar(
+                select(DatasetRow).where(
+                    DatasetRow.class_id == class_row.id,
+                    DatasetRow.name == "new",
+                )
             )
-        ) is not None
+            is not None
+        )
 
 
 def test_editor_creates_dataset_directly_and_preserves_source_owner_key(
@@ -313,8 +317,7 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
     with session_factory() as session:
         synchronize_dataset_catalog(session, config)
         source_classes = {
-            item.name: item
-            for item in list_managed_classes(session, config, include_custom=False)
+            item.name: item for item in list_managed_classes(session, config, include_custom=False)
         }
         target_catalog = create_dataset_class(
             session,
@@ -345,6 +348,20 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         managed = next(item for item in catalog.classes if item.key == target_class.key).datasets[0]
         assert managed.managed is True
         assert managed.source_type == "managed"
+        assert managed.materialization_status == "queued"
+        assert managed.annotations_dir is None
+        monkeypatch.setattr(
+            _dataset_editor,
+            "_footprint_geojson_payload",
+            lambda _path: pytest.fail("Готовый footprint источника не должен пересчитываться"),
+        )
+        assert process_next_managed_materialization(session, config) is True
+        managed = next(
+            item
+            for item in list_managed_datasets(session, config, include_custom=False)
+            if item.key == managed.key
+        )
+        assert managed.materialization_status == "current"
         assert managed.annotations_dir is not None
         assert managed.image_count == 1
         assert managed.class_counts == {
@@ -357,8 +374,7 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
             (Path(managed.annotations_dir) / annotation_name).read_text(encoding="utf-8")
         )
         by_class = {
-            feature["properties"]["_mlsystem2_class"]: feature
-            for feature in payload["features"]
+            feature["properties"]["_mlsystem2_class"]: feature for feature in payload["features"]
         }
         assert all(
             feature["properties"].get("_mlsystem2_source_dataset_key")
@@ -368,9 +384,22 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         second_slug = managed.object_types[1].slug
         assert first_slug == source_classes["Первый"].technical_name
         assert second_slug == source_classes["Второй"].technical_name
-        assert shape(by_class[first_slug]["geometry"]).intersection(
-            shape(by_class[second_slug]["geometry"])
-        ).area == 0
+        assert (
+            shape(by_class[first_slug]["geometry"])
+            .intersection(shape(by_class[second_slug]["geometry"]))
+            .area
+            == 0
+        )
+        (Path(managed.annotations_dir) / annotation_name).write_text(
+            "{повреждённый-кэш-разметки",
+            encoding="utf-8",
+        )
+        warm_catalog = next(
+            item
+            for item in list_managed_datasets(session, config, include_custom=False)
+            if item.key == managed.key
+        )
+        assert warm_catalog.class_counts == managed.class_counts
 
         pseudo_path = tmp_path / "managed-pseudo.geojson"
         pseudo_path.write_text(
@@ -427,14 +456,10 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
                     item.model_dump(mode="json") for item in managed.object_types
                 ],
                 "dataset": {
-                    "object_types": [
-                        item.model_dump(mode="json") for item in managed.object_types
-                    ]
+                    "object_types": [item.model_dump(mode="json") for item in managed.object_types]
                 },
                 "editor_pseudo": {
-                    "object_types": [
-                        item.model_dump(mode="json") for item in managed.object_types
-                    ]
+                    "object_types": [item.model_dump(mode="json") for item in managed.object_types]
                 },
             },
         )
@@ -467,10 +492,7 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
         assert training.training_metrics["val_per_class_metrics"][0]["slug"] == "first_objects"
         assert historical_job.config["dataset"]["object_types"][0]["slug"] == "first_objects"
         assert historical_job.config["dataset.object_types"][0]["slug"] == "first_objects"
-        assert (
-            historical_job.config["editor_pseudo"]["object_types"][0]["slug"]
-            == "first_objects"
-        )
+        assert historical_job.config["editor_pseudo"]["object_types"][0]["slug"] == "first_objects"
         migrated_pseudo = json.loads(pseudo_path.read_text(encoding="utf-8"))
         assert migrated_pseudo["features"][0]["properties"] == {
             "_mlsystem2_class": "first_objects",
@@ -499,9 +521,7 @@ def test_managed_composition_is_virtual_and_follows_source_versions(
             config,
         )
         updated = next(
-            item
-            for item in updated_catalog.classes
-            if item.key == target_class.key
+            item for item in updated_catalog.classes if item.key == target_class.key
         ).datasets[0]
         assert updated.key == managed.key
         assert updated.dataset_name == "обновлённый"
@@ -570,6 +590,24 @@ def _write_per_image_source(
                         "id": feature_id,
                         "properties": {"_mlsystem2_role": "positive"},
                         "geometry": mapping(geometry),
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    footprint_name = f"{Path(annotation_name).stem}_footprint.geojson"
+    (path / footprint_name).write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"_mlsystem2_role": "footprint"},
+                        "geometry": mapping(box(0, 0, 10, 10)),
                     }
                 ],
             },

@@ -4986,7 +4986,17 @@ type ClassF1Value = {
   f1: number | null;
 };
 
-function perClassF1Values(metrics: unknown, section: "pixel" | "objects"): ClassF1Value[] {
+const CLASS_F1_COLLATOR = new Intl.Collator("ru", {
+  sensitivity: "base",
+  numeric: true,
+});
+
+function compareClassF1Values(left: ClassF1Value, right: ClassF1Value): number {
+  return CLASS_F1_COLLATOR.compare(left.name, right.name)
+    || CLASS_F1_COLLATOR.compare(left.slug, right.slug);
+}
+
+export function perClassF1Values(metrics: unknown, section: "pixel" | "objects"): ClassF1Value[] {
   if (!metrics || typeof metrics !== "object") return [];
   const sectionValue = (metrics as Record<string, unknown>)[section];
   if (!sectionValue || typeof sectionValue !== "object") return [];
@@ -5001,7 +5011,7 @@ function perClassF1Values(metrics: unknown, section: "pixel" | "objects"): Class
       color: /^#[0-9A-Fa-f]{6}$/.test(String(item.color || "")) ? String(item.color) : "#808080",
       f1: typeof item.f1 === "number" ? item.f1 : null,
     }];
-  });
+  }).sort(compareClassF1Values);
 }
 
 function metricAggregationLabel(
@@ -5017,17 +5027,19 @@ function metricAggregationLabel(
 function PerClassF1Table({ metrics }: { metrics: unknown }) {
   const pixel = perClassF1Values(metrics, "pixel");
   const objects = perClassF1Values(metrics, "objects");
-  const slugs = [...new Set([...pixel.map((item) => item.slug), ...objects.map((item) => item.slug)])];
-  if (!slugs.length) return null;
   const pixelBySlug = new Map(pixel.map((item) => [item.slug, item]));
   const objectsBySlug = new Map(objects.map((item) => [item.slug, item]));
+  const rows = [...new Set([...pixel.map((item) => item.slug), ...objects.map((item) => item.slug)])]
+    .map((slug) => pixelBySlug.get(slug) || objectsBySlug.get(slug)!)
+    .sort(compareClassF1Values);
+  if (!rows.length) return null;
   return (
     <div className="table-wrap multiclass-f1-table-wrap">
       <table className="multiclass-f1-table">
         <thead><tr><th>Тип объекта</th><th>F1 пиксельный</th><th>F1 объектовый</th></tr></thead>
         <tbody>
-          {slugs.map((slug) => {
-            const item = pixelBySlug.get(slug) || objectsBySlug.get(slug)!;
+          {rows.map((item) => {
+            const { slug } = item;
             return (
               <tr key={slug}>
                 <td><span className="inline-row"><span className="class-color-dot" style={{ backgroundColor: item.color }} />{item.name}<small className="technical-value muted">{slug}</small></span></td>

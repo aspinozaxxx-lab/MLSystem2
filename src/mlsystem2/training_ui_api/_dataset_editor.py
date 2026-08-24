@@ -66,8 +66,8 @@ from ._models import (
 from ._managed_datasets import (
     SOURCE_MANAGED,
     invalidate_managed_cache,
+    managed_dataset_cache_state,
     managed_sources,
-    materialize_managed_dataset,
 )
 from ._pseudolabel import _select_model
 from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
@@ -147,6 +147,40 @@ def list_editor_datasets(
             except TrainingUIAPIError:
                 continue
             if dataset.managed:
+                row = session.scalar(
+                    select(DatasetRow).where(
+                        DatasetRow.key == dataset.key,
+                        DatasetRow.deleted_at.is_(None),
+                    )
+                )
+                if row is None:
+                    continue
+                try:
+                    cache_state = managed_dataset_cache_state(
+                        session,
+                        config,
+                        row,
+                        source_root=config.mlmarkup_editor_root,
+                        scope="editor",
+                    )
+                    dataset = dataset.model_copy(
+                        update={
+                            "materialization_status": cache_state.status,
+                            "materialized_version": (
+                                cache_state.materialization.version
+                                if cache_state.materialization is not None
+                                else None
+                            ),
+                            "materialization_error": cache_state.error,
+                        }
+                    )
+                except TrainingUIAPIError as exc:
+                    dataset = dataset.model_copy(
+                        update={
+                            "materialization_status": "failed",
+                            "materialization_error": str(exc),
+                        }
+                    )
                 primary = _editor_effective_training_result(
                     session,
                     dataset.key,
@@ -156,9 +190,7 @@ def list_editor_datasets(
                     _editor_dataset_info(
                         dataset,
                         scene_count,
-                        primary_training_result_id=(
-                            primary.id if primary is not None else None
-                        ),
+                        primary_training_result_id=(primary.id if primary is not None else None),
                     )
                 )
                 continue
@@ -954,10 +986,7 @@ def publish_editor_scenes(
                     config,
                     "rm",
                     "--",
-                    *(
-                        path.as_posix()
-                        for path in [*deletion_paths, *footprint_deletion_paths]
-                    ),
+                    *(path.as_posix() for path in [*deletion_paths, *footprint_deletion_paths]),
                 )
             change_count = len(prepared) + len(resolved_deletions)
             if change_count == 1 and prepared:
@@ -1087,7 +1116,7 @@ def delete_editor_dataset(
                     DatasetEditorDraftRow.dataset_key == dataset_key
                 )
             )
-            invalidate_managed_cache(config, dataset_key)
+            invalidate_managed_cache(config, dataset_key, remove_ready=True)
             session.flush()
             commit = _git(config, "rev-parse", "HEAD").stdout.strip()
             return DatasetEditorMutationResult(
@@ -1722,8 +1751,7 @@ def _managed_editor_scene_count(
         relative = PurePosixPath(source.dataset.source_path)
         if relative.is_absolute() or ".." in relative.parts:
             raise TrainingUIAPIError(
-                "Некорректный source_path исходного датасета: "
-                f"{source.dataset.source_path}"
+                f"Некорректный source_path исходного датасета: {source.dataset.source_path}"
             )
         source_dir = editor_root.joinpath(*relative.parts).resolve()
         _ensure_within(
@@ -1764,13 +1792,19 @@ def _editor_dataset_context(
         )
         if row is None:
             raise TrainingUIAPIError(f"Датасет редактора не найден: {dataset_key}")
-        materialized = materialize_managed_dataset(
+        cache_state = managed_dataset_cache_state(
             session,
             config,
             row,
             source_root=config.mlmarkup_editor_root,
             scope="editor",
+            request_if_missing=True,
+            priority="urgent",
         )
+        materialized = cache_state.materialization
+        if materialized is None:
+            message = cache_state.error or "Материализация поставлена в очередь."
+            raise TrainingUIAPIError("Управляемый датасет подготавливается в фоне. " + message)
         dataset = dataset.model_copy(
             update={
                 "path": str(materialized.path),
@@ -1778,6 +1812,9 @@ def _editor_dataset_context(
                 "version": materialized.version,
                 "updated_at": materialized.updated_at,
                 "source_available": True,
+                "materialization_status": "current",
+                "materialized_version": materialized.version,
+                "materialization_error": None,
             }
         )
         return dataset, materialized.path
@@ -1933,11 +1970,7 @@ def _unique_basename_reference_matches(
 ) -> bool:
     resolved_image = image_path.resolve()
     basename = _scene_reference_key(resolved_image.name)
-    if basename not in {
-        reference
-        for reference in normalized_references
-        if "/" not in reference
-    }:
+    if basename not in {reference for reference in normalized_references if "/" not in reference}:
         return False
     candidates = {
         candidate.resolve()
@@ -2223,6 +2256,9 @@ def _editor_dataset_info(
         class_counts=dict(dataset.class_counts),
         hard_negative_count=dataset.hard_negative_count,
         primary_training_result_id=primary_training_result_id,
+        materialization_status=dataset.materialization_status,
+        materialized_version=dataset.materialized_version,
+        materialization_error=dataset.materialization_error,
     )
 
 
@@ -2293,17 +2329,20 @@ def _add_managed_editor_scenes(
     row.config_revision += 1
     session.flush()
     invalidate_managed_cache(config, dataset.key)
-    refreshed, source_dir = _editor_dataset_context(session, config, dataset.key)
-    added_names = {name for name, _image_path in names.values()}
+    managed_dataset_cache_state(
+        session,
+        config,
+        row,
+        source_root=config.mlmarkup_editor_root,
+        scope="editor",
+        request_if_missing=True,
+        priority="urgent",
+    )
     commit = _git(config, "rev-parse", "HEAD").stdout.strip()
     return DatasetEditorMutationResult(
         commit=commit,
         publication_status=_publication_status(config, commit),
-        scenes=[
-            scene
-            for scene in _scene_infos(config, refreshed, source_dir)
-            if scene.annotation_name in added_names
-        ],
+        scenes=[],
     )
 
 
@@ -2327,10 +2366,7 @@ def _publish_managed_editor_scenes(
         raise TrainingUIAPIError(f"Управляемый датасет не найден: {dataset.key}")
     source_specs = managed_sources(session, row.id)
     source_by_key = {item.dataset.key: item for item in source_specs}
-    source_by_slug = {
-        item.relation.object_type_slug: item
-        for item in source_specs
-    }
+    source_by_slug = {item.relation.object_type_slug: item for item in source_specs}
 
     normalized: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     conflicts: list[str] = []
@@ -2358,7 +2394,9 @@ def _publish_managed_editor_scenes(
     mutations: dict[tuple[str, str], tuple[Path, dict[str, Any], str | None]] = {}
     created_paths: list[Path] = []
 
-    def source_payload(source_key: str, annotation_name: str) -> tuple[Path, dict[str, Any], str | None]:
+    def source_payload(
+        source_key: str, annotation_name: str
+    ) -> tuple[Path, dict[str, Any], str | None]:
         cache_key = (source_key, annotation_name)
         cached = mutations.get(cache_key)
         if cached is not None:
@@ -2396,9 +2434,7 @@ def _publish_managed_editor_scenes(
                 if _managed_editor_features_equal(old_feature, new_feature):
                     continue
             old_properties = (
-                old_feature.get("properties") or {}
-                if isinstance(old_feature, dict)
-                else {}
+                old_feature.get("properties") or {} if isinstance(old_feature, dict) else {}
             )
             old_source_key = old_properties.get("_mlsystem2_source_dataset_key")
             old_source = source_by_key.get(str(old_source_key))
@@ -2408,7 +2444,9 @@ def _publish_managed_editor_scenes(
             old_sources = (
                 [old_source]
                 if old_source is not None
-                else (source_specs if old_feature is not None and old_role == "hard_negative" else [])
+                else (
+                    source_specs if old_feature is not None and old_role == "hard_negative" else []
+                )
             )
             new_sources = []
             if new_feature is not None:
@@ -2468,9 +2506,7 @@ def _publish_managed_editor_scenes(
         for name in session.scalars(
             select(ManagedDatasetSceneRow.annotation_name).where(
                 ManagedDatasetSceneRow.managed_dataset_id == row.id,
-                ManagedDatasetSceneRow.annotation_name.in_(
-                    [item[0] for item in deletions]
-                ),
+                ManagedDatasetSceneRow.annotation_name.in_([item[0] for item in deletions]),
             )
         ).all()
     }
@@ -2520,7 +2556,9 @@ def _publish_managed_editor_scenes(
             if not footprint.is_file():
                 _write_geojson_atomic(
                     footprint,
-                    _footprint_geojson_payload(_image_path_for_annotation(dataset, annotation_name)),
+                    _footprint_geojson_payload(
+                        _image_path_for_annotation(dataset, annotation_name)
+                    ),
                 )
                 footprint_relative = _repo_relative(config, footprint)
                 expected_revisions[footprint_relative] = None
@@ -2570,7 +2608,15 @@ def _publish_managed_editor_scenes(
         row.config_revision += 1
         session.flush()
     invalidate_managed_cache(config, dataset.key)
-    refreshed, refreshed_dir = _editor_dataset_context(session, config, dataset.key)
+    managed_dataset_cache_state(
+        session,
+        config,
+        row,
+        source_root=config.mlmarkup_editor_root,
+        scope="editor",
+        request_if_missing=True,
+        priority="urgent",
+    )
     if normalized:
         session.execute(
             delete(DatasetEditorDraftRow).where(
@@ -2587,18 +2633,10 @@ def _publish_managed_editor_scenes(
             )
         )
     session.flush()
-    refreshed_scenes = {
-        item.annotation_name: item
-        for item in _scene_infos(config, refreshed, refreshed_dir)
-    }
     return DatasetEditorMutationResult(
         commit=commit,
         publication_status=_publication_status(config, commit),
-        scenes=[
-            refreshed_scenes[name]
-            for name, _previous, _candidate in normalized
-            if name in refreshed_scenes
-        ],
+        scenes=[],
     )
 
 
@@ -2616,13 +2654,8 @@ def _remove_managed_source_feature(
         properties = feature.get("properties") or {}
         identity = _managed_source_identity(feature, properties, index)
         origin = properties.get("_mlsystem2_origin_key")
-        if (
-            isinstance(source_identity, str)
-            and identity == source_identity
-        ) or (
-            isinstance(source_origin_key, str)
-            and source_origin_key
-            and origin == source_origin_key
+        if (isinstance(source_identity, str) and identity == source_identity) or (
+            isinstance(source_origin_key, str) and source_origin_key and origin == source_origin_key
         ):
             return {**payload, "features": [*features[: index - 1], *features[index:]]}
     if fallback_geometry is None:
@@ -2688,9 +2721,7 @@ def _append_managed_source_feature(
     properties[_ROLE_PROPERTY] = role
     source_origin = source_properties.get("_mlsystem2_source_origin_key")
     properties["_mlsystem2_origin_key"] = (
-        source_origin
-        if isinstance(source_origin, str) and source_origin
-        else origin_key
+        source_origin if isinstance(source_origin, str) and source_origin else origin_key
     )
     added = {
         "type": "Feature",
@@ -2720,14 +2751,20 @@ def _managed_source_identity(
     )
     content = hashlib.sha256(content_payload.encode("utf-8")).hexdigest()
     if feature.get("id") is not None:
-        return "feature-id:" + json.dumps(
-            feature["id"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ) + f"|content:{content}"
+        return (
+            "feature-id:"
+            + json.dumps(feature["id"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            + f"|content:{content}"
+        )
     for key in ("id", "fid"):
         if properties.get(key) is not None:
-            return f"property-{key}:" + json.dumps(
-                properties[key], ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ) + f"|content:{content}"
+            return (
+                f"property-{key}:"
+                + json.dumps(
+                    properties[key], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                + f"|content:{content}"
+            )
     return f"index:{index}|content:{content}"
 
 

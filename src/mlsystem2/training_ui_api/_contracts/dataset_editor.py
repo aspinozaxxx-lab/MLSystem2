@@ -41,6 +41,11 @@ class DatasetEditorDatasetInfo(BaseModel):
     class_counts: dict[str, int] = Field(default_factory=dict)
     hard_negative_count: int = Field(default=0, ge=0)
     primary_training_result_id: UUID | None = None
+    materialization_status: Literal[
+        "not_applicable", "current", "queued", "building", "failed", "missing"
+    ] = "not_applicable"
+    materialized_version: str | None = None
+    materialization_error: str | None = None
 
 
 class DatasetEditorDatasetListResponse(BaseModel):

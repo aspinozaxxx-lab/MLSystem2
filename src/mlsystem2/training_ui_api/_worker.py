@@ -1,4 +1,4 @@
-﻿"""Фоновый исполнитель очереди training UI API."""
+"""Фоновый исполнитель очереди training UI API."""
 
 from __future__ import annotations
 
@@ -57,6 +57,10 @@ from ._inference_backend import (
     GEOALERT_INFERENCE_BACKEND,
     inference_backend_for_imagery,
 )
+from ._managed_datasets import (
+    has_pending_managed_materialization,
+    process_next_managed_materialization,
+)
 from ._models import (
     AutomationControlRow,
     CustomDatasetRow,
@@ -105,6 +109,10 @@ JOB_PAUSED_MARKER = "paused"
 URGENT_JOB_PRIORITY = "urgent"
 
 
+class _ManagedDatasetNotReady(RuntimeError):
+    """Материализация уже запрошена, поэтому queued job нужно оставить в очереди."""
+
+
 class _StartedProcess(Protocol):
     pid: int
 
@@ -138,18 +146,61 @@ async def run_queue_worker(
     config: TrainingUIAPIConfig,
 ) -> None:
     interval = max(1, config.worker_interval_seconds)
-    LOGGER.info("Training UI worker started with interval %s sec", interval)
-    while True:
-        try:
-            with session_factory() as session:
-                sync_automation_once(session, config)
-                dispatch_queue_once(session, config)
-                session.commit()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            LOGGER.exception("Training UI worker tick failed")
-        await asyncio.sleep(interval)
+    automation_interval = max(interval, config.automation_sync_interval_seconds)
+    next_automation_at = 0.0
+    materialization_task: asyncio.Task[bool] | None = None
+    LOGGER.info(
+        "Training UI worker started: queue interval %s sec, automation interval %s sec",
+        interval,
+        automation_interval,
+    )
+    try:
+        while True:
+            if materialization_task is not None and materialization_task.done():
+                try:
+                    materialization_task.result()
+                except Exception:
+                    LOGGER.exception("Managed dataset materialization failed")
+                materialization_task = None
+            try:
+                with session_factory() as session:
+                    now = asyncio.get_running_loop().time()
+                    if now >= next_automation_at:
+                        sync_automation_once(session, config)
+                        next_automation_at = now + automation_interval
+                    dispatch_queue_once(session, config)
+                    session.commit()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("Training UI worker tick failed")
+            if materialization_task is None and has_pending_managed_materialization(config):
+                materialization_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        _process_managed_materialization_request,
+                        session_factory,
+                        config,
+                    )
+                )
+            await asyncio.sleep(interval)
+    finally:
+        if materialization_task is not None:
+            try:
+                await asyncio.shield(materialization_task)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                LOGGER.exception("Managed dataset materialization stopped with worker")
+
+
+def _process_managed_materialization_request(
+    session_factory: sessionmaker[Session],
+    config: TrainingUIAPIConfig,
+) -> bool:
+    with session_factory() as session:
+        processed = process_next_managed_materialization(session, config)
+        session.commit()
+        return processed
 
 
 def dispatch_queue_once(
@@ -228,15 +279,9 @@ def _next_dispatch_job(session: Session, job_type: JobType | None = None) -> Job
     conditions = [JobRow.status == JobStatus.QUEUED.value]
     if job_type is not None:
         conditions.append(JobRow.type == job_type.value)
-    rows = session.scalars(
-        select(JobRow).where(*conditions)
-    ).all()
+    rows = session.scalars(select(JobRow).where(*conditions)).all()
     automation_enabled = _automation_enabled(session)
-    candidates = [
-        row
-        for row in rows
-        if _dispatch_allowed(session, row, automation_enabled)
-    ]
+    candidates = [row for row in rows if _dispatch_allowed(session, row, automation_enabled)]
     candidates.sort(key=dispatch_sort_key)
     return candidates[0] if candidates else None
 
@@ -309,9 +354,7 @@ def _preempting_job(session: Session, running: JobRow) -> JobRow | None:
 
 
 def _next_non_secondary_job(session: Session) -> JobRow | None:
-    rows = session.scalars(
-        select(JobRow).where(JobRow.status == JobStatus.QUEUED.value)
-    ).all()
+    rows = session.scalars(select(JobRow).where(JobRow.status == JobStatus.QUEUED.value)).all()
     automation_enabled = _automation_enabled(session)
     candidates = [
         row
@@ -522,12 +565,18 @@ def _start_training_job(
             cwd=str(config.project_root),
             start_new_session=True,
         )
+    except _ManagedDatasetNotReady:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        row.tmp_path = None
+        row.error = None
+        session.flush()
+        LOGGER.info("Training job %s waits for managed dataset materialization", row.id)
+        return
     except Exception:
         LOGGER.exception("Failed to start training job %s", row.id)
         _write_worker_error(
             run_dir,
-            "Не удалось запустить обучение.\n\n"
-            f"{traceback.format_exc()}",
+            f"Не удалось запустить обучение.\n\n{traceback.format_exc()}",
         )
         _finish_training_job(session, row, config, succeeded=False)
         return
@@ -667,11 +716,7 @@ def _build_training_config(
             else "cross_entropy_dice"
         )
     else:
-        loss = (
-            raw_loss
-            if raw_loss in {"bce_dice", "focal_dice", "focal_tversky"}
-            else "bce_dice"
-        )
+        loss = raw_loss if raw_loss in {"bce_dice", "focal_dice", "focal_tversky"} else "bce_dice"
     return {
         "runtime": {
             "project_root": str(config.project_root),
@@ -769,9 +814,7 @@ def _build_pseudo_markup_config(
         scenes_file = result.scenes_file.path
         images_root = str(snapshot.get("images_root") or config.images_root)
         annotation_files = [
-            str(value)
-            for value in (snapshot.get("annotation_files") or [])
-            if value
+            str(value) for value in (snapshot.get("annotation_files") or []) if value
         ]
         if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
             dataset = find_managed_dataset(session, config, result.dataset_key)
@@ -787,13 +830,9 @@ def _build_pseudo_markup_config(
                 )
         class_key = result.class_key
         class_name = (
-            training_result.class_display_name
-            if training_result is not None
-            else result.class_key
+            training_result.class_display_name if training_result is not None else result.class_key
         )
-        source_model = (
-            training_result.model_name if training_result is not None else row.model_name
-        )
+        source_model = training_result.model_name if training_result is not None else row.model_name
 
     source_training_job = (
         session.get(JobRow, training_result.job_id)
@@ -873,9 +912,7 @@ def _build_pseudo_markup_config(
             else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
         ),
         "batch_size": (
-            1
-            if external_manifest is not None
-            else _int_value(flat, "train.batch_size", 1)
+            1 if external_manifest is not None else _int_value(flat, "train.batch_size", 1)
         ),
         "device": "cuda",
         **_geoalert_runtime_config(config, inference_backend),
@@ -909,7 +946,9 @@ def _build_pseudolabel_aoi_config(
         "report_path": str(run_dir / "scratch" / "report.json"),
         "images_root": images_root,
         "raster_index_path": (
-            str(config.stored_files_root / "cache" / "pseudolabel-image-index" / f"{index_key}.json")
+            str(
+                config.stored_files_root / "cache" / "pseudolabel-image-index" / f"{index_key}.json"
+            )
             if index_key
             else None
         ),
@@ -994,9 +1033,7 @@ def _build_test_sample_f1_config(
     else:
         plan = _training_result_test_plan(session, training_result)
         if plan.error is not None or not plan.targets:
-            raise RuntimeError(
-                plan.error or "Основные тестовые разметки были удалены."
-            )
+            raise RuntimeError(plan.error or "Основные тестовые разметки были удалены.")
         if plan.managed:
             if list(row.config.get("test_samples") or []) != _training_result_test_scope(plan):
                 raise RuntimeError(
@@ -1020,16 +1057,12 @@ def _build_test_sample_f1_config(
             int(value) for value in (row.config.get("test_sample_tile_indices") or [])
         }
         enabled_tiles = [tile for tile in sample.tiles if tile.enabled]
-        if not enabled_tiles or {
-            tile.tile_index for tile in enabled_tiles
-        } != expected_indices:
+        if not enabled_tiles or {tile.tile_index for tile in enabled_tiles} != expected_indices:
             raise RuntimeError("Состав включённых тайлов не совпадает с ревизией задания.")
     if not training_result.mlflow_run_id:
         raise RuntimeError("У результата обучения отсутствует MLflow run id.")
     source_training_job = (
-        session.get(JobRow, training_result.job_id)
-        if training_result.job_id is not None
-        else None
+        session.get(JobRow, training_result.job_id) if training_result.job_id is not None else None
     )
     flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
     class_row = dataset_class_row(session, training_result.class_key)
@@ -1087,16 +1120,10 @@ def _build_test_sample_f1_config(
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
     tiles: list[dict[str, Any]] = []
-    targets = (
-        list(plan.targets)
-        if plan is not None and plan.managed
-        else [None]
-    )
+    targets = list(plan.targets) if plan is not None and plan.managed else [None]
     for target in targets:
         target_sample = target.sample if target is not None else sample
-        sample_root = (
-            Path(config.stored_files_root) / "test-samples" / str(target_sample.id)
-        )
+        sample_root = Path(config.stored_files_root) / "test-samples" / str(target_sample.id)
         target_tiles = sorted(
             (tile for tile in target_sample.tiles if tile.enabled),
             key=lambda item: item.tile_index,
@@ -1106,11 +1133,7 @@ def _build_test_sample_f1_config(
             tif_path = sample_root / f"{base_name}.tif"
             mask_path = sample_root / f"{base_name}_mask.png"
             geojson_path = sample_root / f"{base_name}.geojson"
-            if (
-                not tif_path.is_file()
-                or not mask_path.is_file()
-                or not geojson_path.is_file()
-            ):
+            if not tif_path.is_file() or not mask_path.is_file() or not geojson_path.is_file():
                 raise RuntimeError(
                     "Не найдены TIFF, GeoJSON или маска тестового тайла "
                     f"{target_sample.name}/{base_name}."
@@ -1146,21 +1169,15 @@ def _build_test_sample_f1_config(
         "object_types": list(training_result.class_schema or []),
         "source_model": training_result.model_name,
         "training_result_id": str(training_result.id),
-        "test_sample_id": (
-            None if plan is not None and plan.managed else str(sample.id)
-        ),
+        "test_sample_id": (None if plan is not None and plan.managed else str(sample.id)),
         "test_sample_revision": (
             None if plan is not None and plan.managed else sample.content_revision
         ),
         "managed_test_samples": bool(plan is not None and plan.managed),
         "test_samples": (
-            _training_result_test_scope(plan)
-            if plan is not None and plan.managed
-            else []
+            _training_result_test_scope(plan) if plan is not None and plan.managed else []
         ),
-        "f1_aggregation": (
-            "macro" if plan is not None and plan.managed else "foreground"
-        ),
+        "f1_aggregation": ("macro" if plan is not None and plan.managed else "foreground"),
         "tiles": tiles,
         "mlflow_tracking_uri": config.mlflow_tracking_uri,
         "mlflow_run_id": training_result.mlflow_run_id,
@@ -1232,16 +1249,12 @@ def _dataset_config(
             ),
             None,
         )
-    if (
-        dataset is None
-        or not dataset.source_available
-        or dataset.images_dir is None
-    ):
+    if dataset is None or not dataset.source_available or dataset.images_dir is None:
         raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
+    if dataset.managed and dataset.annotations_dir is None:
+        raise _ManagedDatasetNotReady(f"Управляемый датасет подготавливается: {row.dataset_name}")
     images_dir = str(
-        row.config.get("dataset.images_dir")
-        or dataset.images_dir
-        or config.images_root
+        row.config.get("dataset.images_dir") or dataset.images_dir or config.images_root
     )
     snapshot_dir = run_dir / "dataset_snapshot"
     if dataset.annotations_dir:
@@ -1255,9 +1268,7 @@ def _dataset_config(
             key=lambda path: path.name.casefold(),
         )
         annotation_files = [
-            path
-            for path in geojson_files
-            if not is_per_image_footprint_name(path.name)
+            path for path in geojson_files if not is_per_image_footprint_name(path.name)
         ]
         if not annotation_files:
             raise RuntimeError(f"Per-image датасет пуст: {row.dataset_name}")
@@ -1351,7 +1362,7 @@ def _write_run_script(
                 f"{quoted_command} > {shlex.quote(str(log_path))} 2>&1",
                 "code=$?",
                 f"printf '%s\\n' \"$code\" > {shlex.quote(str(exit_code_path))}",
-                "exit \"$code\"",
+                'exit "$code"',
                 "",
             ]
         ),
@@ -1393,7 +1404,7 @@ def _write_pseudo_run_script(
                 f"{quoted_command} > {shlex.quote(str(log_path))} 2>&1",
                 "code=$?",
                 f"printf '%s\\n' \"$code\" > {shlex.quote(str(exit_code_path))}",
-                "exit \"$code\"",
+                'exit "$code"',
                 "",
             ]
         ),
@@ -1416,14 +1427,10 @@ def _finish_training_job(
     row.process_pid = None
     mlflow_run_id = _extract_mlflow_run_id(row)
     mlflow_experiment_id = (
-        _resolve_mlflow_experiment_id(row, config)
-        if mlflow_run_id
-        else row.mlflow_experiment_id
+        _resolve_mlflow_experiment_id(row, config) if mlflow_run_id else row.mlflow_experiment_id
     )
     best_checkpoint = (
-        _best_training_checkpoint(config, mlflow_run_id)
-        if succeeded and mlflow_run_id
-        else None
+        _best_training_checkpoint(config, mlflow_run_id) if succeeded and mlflow_run_id else None
     )
     checkpoint_metadata = _local_training_checkpoint_metadata(row) if succeeded else {}
     training_results = _training_results(session, row)
@@ -1530,9 +1537,7 @@ def _queue_post_training_inference(
                     scenes_content_type=scenes_content_type,
                     scenes_bytes=scenes_bytes,
                     config=config,
-                    secondary_priority=bool(
-                        job_config.get(SECONDARY_PRIORITY_CONFIG_KEY, False)
-                    ),
+                    secondary_priority=bool(job_config.get(SECONDARY_PRIORITY_CONFIG_KEY, False)),
                 )
             queued_job_ids.append(str(detail.id))
         except Exception:  # noqa: BLE001
@@ -1658,9 +1663,7 @@ def _finish_inference_job(
                 dataset_keys=evaluated_dataset_keys,
             )
         except Exception:  # noqa: BLE001
-            LOGGER.exception(
-                "Не удалось восстановить тестовый F1 после новой псевдоразметки"
-            )
+            LOGGER.exception("Не удалось восстановить тестовый F1 после новой псевдоразметки")
     _cleanup_inference_scratch(row)
     LOGGER.info(
         "Finished pseudo-markup job %s with status %s report=%s",
@@ -1885,9 +1888,7 @@ def _finish_test_sample_f1_job(
                 section="objects" if managed_evaluation else None,
             )
             report_threshold = report.get("threshold")
-            metric.threshold = (
-                float(report_threshold) if report_threshold is not None else None
-            )
+            metric.threshold = float(report_threshold) if report_threshold is not None else None
             metric.metrics = dict(report.get("metrics") or {})
             metric.status = "current"
             metric.evaluated_at = row.finished_at
@@ -1929,9 +1930,7 @@ def _finish_saved_test_sample_evaluation_job(
         int(value) for value in (row.config or {}).get("test_sample_tile_indices") or []
     }
     current_primary = (
-        current_primary_training_result(session, sample.class_key)
-        if sample is not None
-        else None
+        current_primary_training_result(session, sample.class_key) if sample is not None else None
     )
     compatibility_error = (
         test_sample_model_compatibility_error(session, sample, training_result)
@@ -1979,9 +1978,9 @@ def _finish_saved_test_sample_evaluation_job(
             sample.evaluation_inference_template_version = _optional_scalar_int(
                 (row.config or {}).get("inference_template_version")
             )
-            sample.evaluation_inference_config_hash = str(
-                (row.config or {}).get("inference_config_hash") or ""
-            ) or None
+            sample.evaluation_inference_config_hash = (
+                str((row.config or {}).get("inference_config_hash") or "") or None
+            )
             sample.evaluation_evaluator_version = _optional_scalar_int(
                 (row.config or {}).get("test_f1_evaluator_version")
             )
@@ -2093,9 +2092,7 @@ def _test_sample_f1_metric(
     row: JobRow,
 ) -> TrainingResultTestMetricRow | None:
     return session.scalar(
-        select(TrainingResultTestMetricRow).where(
-            TrainingResultTestMetricRow.job_id == row.id
-        )
+        select(TrainingResultTestMetricRow).where(TrainingResultTestMetricRow.job_id == row.id)
     )
 
 
@@ -2172,6 +2169,7 @@ def _pseudo_report_allows_success(report: dict[str, Any] | None) -> bool:
 
 def _pseudo_markup_error(report: dict[str, Any] | None, row: JobRow) -> str:
     if report is not None:
+
         def report_count(key: str, default: int = 0) -> int:
             try:
                 return int(report.get(key) or default)
@@ -2320,7 +2318,11 @@ def _pseudo_geojson_download_name(
         or (result.class_key if result is not None else None)
         or row.dataset_name
     )
-    model_name = result.training_result.model_name if result is not None and result.training_result is not None else row.model_name
+    model_name = (
+        result.training_result.model_name
+        if result is not None and result.training_result is not None
+        else row.model_name
+    )
     timestamp = (created_at or _now()).strftime("%H_%M_%d_%m")
     return f"{_filename_part(dataset_name)}_{_filename_part(model_name)}_{timestamp}.geojson"
 
@@ -2348,7 +2350,9 @@ def _best_training_checkpoint(
 
 
 def _training_results(session: Session, row: JobRow) -> list[TrainingResultRow]:
-    return session.scalars(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)).all()
+    return session.scalars(
+        select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)
+    ).all()
 
 
 def _pseudo_markup_results(session: Session, row: JobRow) -> list[PseudoMarkupResultRow]:

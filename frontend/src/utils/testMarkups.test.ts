@@ -94,6 +94,7 @@ describe("тестовые разметки", () => {
       managed: false,
       source_status: "current",
       hard_negative_count: 0,
+      materialization_status: "not_applicable",
       ...update,
     });
     const legacy = dataset({

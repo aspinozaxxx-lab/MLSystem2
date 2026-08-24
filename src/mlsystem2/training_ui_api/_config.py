@@ -1,4 +1,4 @@
-﻿"""Конфигурация training UI API из переменных окружения."""
+"""Конфигурация training UI API из переменных окружения."""
 
 from __future__ import annotations
 
@@ -101,6 +101,7 @@ class TrainingUIAPIConfig:
     geoalert_pipeline_root: Path = Path("/opt/geoalert/pipelines/mlsystem2-runtime")
     geoalert_triton_http_url: str = "http://127.0.0.1:8000"
     geoalert_triton_python_site_packages: str = "/mlsystem2-venv/lib/python3.12/site-packages"
+    automation_sync_interval_seconds: int = 30
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -136,13 +137,19 @@ def get_config() -> TrainingUIAPIConfig:
         ),
         images_root=Path(os.getenv("MLSYSTEM2_IMAGES_ROOT", "/data/mlsystem2/prepared_images")),
         stored_files_root=Path(
-            os.getenv("MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", "/data/mlsystem2/training-ui/files")
+            os.getenv(
+                "MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT", "/data/mlsystem2/training-ui/files"
+            )
         ),
         scratch_root=Path(
             os.getenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", "/data/mlsystem2/training-ui/tmp")
         ),
-        training_settings_path=Path(os.getenv("MLSYSTEM2_TRAINING_SETTINGS_PATH", "configs/settings.server.yaml")),
-        frontend_dist=Path(os.getenv("MLSYSTEM2_TRAINING_UI_FRONTEND_DIST", "/opt/mlsystem2/frontend")),
+        training_settings_path=Path(
+            os.getenv("MLSYSTEM2_TRAINING_SETTINGS_PATH", "configs/settings.server.yaml")
+        ),
+        frontend_dist=Path(
+            os.getenv("MLSYSTEM2_TRAINING_UI_FRONTEND_DIST", "/opt/mlsystem2/frontend")
+        ),
         mlflow_tracking_uri=os.getenv(
             "MLSYSTEM2_MLFLOW_TRACKING_URI",
             os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
@@ -168,7 +175,9 @@ def get_config() -> TrainingUIAPIConfig:
         ),
         session_ttl_seconds=_int_env("MLSYSTEM2_TRAINING_UI_SESSION_TTL_SECONDS", 28800),
         secure_cookies=_bool_env("MLSYSTEM2_TRAINING_UI_COOKIE_SECURE", False),
-        grafana_url=os.getenv("MLSYSTEM2_GRAFANA_URL", os.getenv("FRONTEND_GRAFANA_URL", "/grafana/")),
+        grafana_url=os.getenv(
+            "MLSYSTEM2_GRAFANA_URL", os.getenv("FRONTEND_GRAFANA_URL", "/grafana/")
+        ),
         mlflow_ui_url=os.getenv(
             "MLSYSTEM2_MLFLOW_UI_URL",
             os.getenv("FRONTEND_MLFLOW_UI_URL", "/mlflow/"),
@@ -177,8 +186,12 @@ def get_config() -> TrainingUIAPIConfig:
             "MLSYSTEM2_MINIO_UI_URL",
             os.getenv("FRONTEND_MINIO_UI_URL", "/minio/browser/mlsystems/images/"),
         ),
-        open_webui_url=os.getenv("MLSYSTEM2_OPEN_WEBUI_URL", os.getenv("FRONTEND_OPEN_WEBUI_URL", "/open-webui/")),
-        journal_unit=os.getenv("MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT", "mlsystem2-training-ui-api.service"),
+        open_webui_url=os.getenv(
+            "MLSYSTEM2_OPEN_WEBUI_URL", os.getenv("FRONTEND_OPEN_WEBUI_URL", "/open-webui/")
+        ),
+        journal_unit=os.getenv(
+            "MLSYSTEM2_TRAINING_UI_JOURNAL_UNIT", "mlsystem2-training-ui-api.service"
+        ),
         cors_origin=os.getenv("MLSYSTEM2_TRAINING_UI_CORS_ORIGIN"),
         worker_enabled=_bool_env("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", True),
         worker_interval_seconds=_int_env("MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS", 5),
@@ -276,6 +289,10 @@ def get_config() -> TrainingUIAPIConfig:
         geoalert_triton_python_site_packages=os.getenv(
             "MLSYSTEM2_GEOALERT_TRITON_PYTHON_SITE_PACKAGES",
             "/mlsystem2-venv/lib/python3.12/site-packages",
+        ),
+        automation_sync_interval_seconds=max(
+            5,
+            _int_env("MLSYSTEM2_AUTOMATION_SYNC_INTERVAL_SECONDS", 30),
         ),
     )
 

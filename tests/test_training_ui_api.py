@@ -2832,7 +2832,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
 
     with TestClient(create_app()) as client:
-        assert client.get("/api/v1/health").json()["status"] == "ok"
+        health = client.get("/api/v1/health")
+        assert health.json()["status"] == "ok"
+        assert health.headers["server-timing"].startswith("app;dur=")
+        assert float(health.headers["x-process-time-ms"]) >= 0
         assert client.get("/").text.startswith("<!doctype html>")
         app_js = client.get("/assets/index-test.js")
         assert app_js.text == "console.log('MLSystem2')"

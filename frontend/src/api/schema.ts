@@ -1939,6 +1939,16 @@ export interface components {
             hard_negative_count: number;
             /** Primary Training Result Id */
             primary_training_result_id?: string | null;
+            /**
+             * Materialization Status
+             * @default not_applicable
+             * @enum {string}
+             */
+            materialization_status: "not_applicable" | "current" | "queued" | "building" | "failed" | "missing";
+            /** Materialized Version */
+            materialized_version?: string | null;
+            /** Materialization Error */
+            materialization_error?: string | null;
         };
         /** DatasetEditorDatasetListResponse */
         DatasetEditorDatasetListResponse: {
@@ -2417,6 +2427,16 @@ export interface components {
             hard_negative_count: number;
             /** Manifest Path */
             manifest_path?: string | null;
+            /**
+             * Materialization Status
+             * @default not_applicable
+             * @enum {string}
+             */
+            materialization_status: "not_applicable" | "current" | "queued" | "building" | "failed" | "missing";
+            /** Materialized Version */
+            materialized_version?: string | null;
+            /** Materialization Error */
+            materialization_error?: string | null;
         };
         /** DatasetListResponse */
         DatasetListResponse: {

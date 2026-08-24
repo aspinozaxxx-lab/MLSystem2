@@ -22,7 +22,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
 - `BootstrapInfo` - стартовый DTO для React frontend: links, datasets, image folders, classes, models и оба набора templates одним ответом.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
-- `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetObjectType`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `ClassInfo.technical_name` задаёт редактируемую каноническую основу имени модели и semantic slug типа, а `DatasetInfo` содержит `format=legacy|per_image|per_image_multiclass`, `task`, `object_types`, `combined`, source status/changes, class counts, совместимый исторический `model_name_stem`, legacy-файлы либо `annotations_dir`.
+- `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetObjectType`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `ClassInfo.technical_name` задаёт редактируемую каноническую основу имени модели и semantic slug типа, а `DatasetInfo` содержит `format=legacy|per_image|per_image_multiclass`, `task`, `object_types`, `combined`, source status/changes, class counts, состояние фоновой материализации, совместимый исторический `model_name_stem`, legacy-файлы либо `annotations_dir` готовой текущей версии.
 - `DatasetCatalogInfo`, `DatasetSourceInfo`, `DatasetClassCreate`, `DatasetClassUpdate`, `DatasetPrimaryDatasetUpdate`, `ManagedDatasetCreate`, `ManagedDatasetUpdate` - чтение и изменение активных классов и датасетов; мягко удалённые строки остаются в Postgres, но в каталог не входят.
 - `ImageFolderInfo`, `ImageFolderListResponse` - папки подготовленных снимков из `MLSYSTEM2_IMAGES_ROOT` с количеством TIFF.
 - `ModelInfo`, `ModelListResponse` - публичные модели из `models`.
@@ -42,6 +42,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `DatasetEditorRebuildPreview`, `DatasetEditorRebuildRequest`, `DatasetEditorRebuildResult`, `DatasetEditorRebuildChange` - preview token, source/local changes, конфликты и атомарная пересборка `merge|replace`.
 - `DatasetEditorRasterFolderInfo`, `DatasetEditorRasterInfo`, `DatasetEditorRasterBrowserResponse` - прямые папки и TIFF из разрешённого server-side каталога.
 - `DatasetEditorAddScenesRequest`, `DatasetEditorSaveSceneRequest`, `DatasetEditorSaveDraftRequest`, `DatasetEditorDiscardDraftsResult`, `DatasetEditorPublishSceneRequest`, `DatasetEditorPublishRequest`, `DatasetEditorDeleteSceneRequest`, `DatasetEditorMutationResult`, `DatasetEditorPublicationInfo` - серверные черновики, одиночные и атомарные batch optimistic-lock мутации и статус публикации commit SHA.
+- Все HTTP-ответы содержат `Server-Timing` и `X-Process-Time-Ms`; запросы дольше одной секунды журналируются с методом, путём, статусом и временем без query-параметров.
 - `GET /api/v1/bootstrap` - агрегированный стартовый endpoint для frontend; старые catalog/template endpoints остаются рабочими.
 - `GET /api/v1/dataset-catalog` и `POST /api/v1/dataset-catalog/sync` - иерархия редактора и явная идемпотентная синхронизация с MLMarkup.
 - `POST|PATCH /api/v1/dataset-classes`, `PUT /api/v1/dataset-classes/{class_key}/primary-dataset`, `POST|PATCH /api/v1/managed-datasets` - создание и редактирование каталога. PATCH управляемого виртуального датасета меняет его имя и composition `sources/priority/color` с сохранением ключа; изменение composition при наличии пользовательских черновиков отклоняется. Назначение занятого обычного источника переносит существующий датасет с сохранением его ключа, а смена источника безопасно обменивает источники и увеличивает ревизии обеих сущностей.
@@ -147,7 +148,7 @@ Seed inference-шаблона рек идемпотентно добавляет
 `git:{commit_sha}`; иначе используется `fs:{mtime_ns}`. После изменения источника, типа снимков или метрики версия содержит управляемую ревизию и
 файловую версию, поэтому активное правило видит значимое изменение.
 
-HTTP API и worker очередей запускаются отдельными процессами; API не исполняет фоновые jobs. Worker перед dispatch очередей вызывает синхронизацию автоматизации. При включенном глобальном switch он создает
+HTTP API и worker очередей запускаются отдельными процессами; API не исполняет фоновые jobs и не материализует управляемые датасеты. Каталог создаёт идемпотентный запрос, а worker под межпроцессным lock строит по одному cache и атомарно публикует его. Готовая сводка устраняет повторный разбор GeoJSON; footprint переиспользуется из источника. Dispatch очереди выполняется с коротким интервалом, а синхронизация автоматизации — с отдельным более редким интервалом. При включенном глобальном switch автоматизация создаёт
 auto training job для текущей версии датасета, если нет текущего auto result/job для этой версии. Defaults берутся
 из активного шаблона конкретного датасета `(architecture, dataset_key)`. После смены ключа датасета осиротевшая
 связь однозначно восстанавливается по имени `класс\датасет`; если датасетный шаблон не создан, используется

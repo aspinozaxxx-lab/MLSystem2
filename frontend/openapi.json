@@ -5231,6 +5231,41 @@
               }
             ],
             "title": "Primary Training Result Id"
+          },
+          "materialization_status": {
+            "type": "string",
+            "enum": [
+              "not_applicable",
+              "current",
+              "queued",
+              "building",
+              "failed",
+              "missing"
+            ],
+            "title": "Materialization Status",
+            "default": "not_applicable"
+          },
+          "materialized_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialized Version"
+          },
+          "materialization_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialization Error"
           }
         },
         "additionalProperties": false,
@@ -6560,6 +6595,41 @@
               }
             ],
             "title": "Manifest Path"
+          },
+          "materialization_status": {
+            "type": "string",
+            "enum": [
+              "not_applicable",
+              "current",
+              "queued",
+              "building",
+              "failed",
+              "missing"
+            ],
+            "title": "Materialization Status",
+            "default": "not_applicable"
+          },
+          "materialized_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialized Version"
+          },
+          "materialization_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialization Error"
           }
         },
         "additionalProperties": false,

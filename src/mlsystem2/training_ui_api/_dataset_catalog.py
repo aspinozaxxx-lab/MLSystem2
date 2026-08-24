@@ -76,10 +76,9 @@ from .contracts import (
 )
 from ._managed_datasets import (
     SOURCE_MANAGED,
-    managed_dataset_version,
+    managed_dataset_cache_state,
     managed_manifest,
     managed_source_infos,
-    materialize_managed_dataset,
 )
 from ._template_selection import reconcile_dataset_template_keys
 
@@ -121,9 +120,7 @@ _HISTORICAL_MODEL_NAME_STEMS = {
     ("Обвально-оползневые и осыпные", "main"): "landslides",
     ("Озера", "main"): "lakes",
     ("Опустынивание", "main"): "desertification",
-    ("Опустынивание и ветровая эрозия", "main"): (
-        "desertification_wind_erosion"
-    ),
+    ("Опустынивание и ветровая эрозия", "main"): ("desertification_wind_erosion"),
     ("Пашни", "main"): "areas_of_used_arable_land",
     ("Переувлажнения", "main"): "floodings",
     ("Переувлажнения", "test"): "floodings",
@@ -320,10 +317,12 @@ def list_managed_datasets(
 ) -> list[DatasetInfo]:
     _synchronize_dataset_catalog_if_stale(session, config)
     rows = session.execute(
-        select(DatasetRow, DatasetClassRow).join(
+        select(DatasetRow, DatasetClassRow)
+        .join(
             DatasetClassRow,
             DatasetClassRow.id == DatasetRow.class_id,
-        ).where(DatasetRow.deleted_at.is_(None))
+        )
+        .where(DatasetRow.deleted_at.is_(None))
     ).all()
     image_indexes: dict[Path, dict[str, list[Path]]] = {}
     per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
@@ -494,12 +493,10 @@ def update_dataset_class(
             )
 
     metric_changed = (
-        request.quality_metric is not None
-        and request.quality_metric.value != row.quality_metric
+        request.quality_metric is not None and request.quality_metric.value != row.quality_metric
     )
     imagery_changed = (
-        request.imagery_type is not None
-        and request.imagery_type.value != row.imagery_type
+        request.imagery_type is not None and request.imagery_type.value != row.imagery_type
     )
     if metric_changed:
         row.quality_metric = request.quality_metric.value
@@ -604,9 +601,7 @@ def _managed_composition_source_specs(
     class_row: DatasetClassRow,
     requested_sources: list[ManagedDatasetCompositionSourceCreate],
     existing_relations: list[ManagedDatasetSourceRow] | None = None,
-) -> list[
-    tuple[DatasetRow, DatasetClassRow, ManagedDatasetCompositionSourceCreate, int, str]
-]:
+) -> list[tuple[DatasetRow, DatasetClassRow, ManagedDatasetCompositionSourceCreate, int, str]]:
     requested_by_key = {item.dataset_key: item for item in requested_sources}
     source_rows = session.execute(
         select(DatasetRow, DatasetClassRow)
@@ -627,7 +622,9 @@ def _managed_composition_source_specs(
         )
     for source, source_class in source_rows:
         if source.source_type != SOURCE_MLMARKUP:
-            raise TrainingUIAPIError("Управляемый датасет нельзя использовать как источник другого.")
+            raise TrainingUIAPIError(
+                "Управляемый датасет нельзя использовать как источник другого."
+            )
         if source_class.imagery_type != class_row.imagery_type:
             raise TrainingUIAPIError(
                 f"Тип снимков источника «{source_class.name}» не совпадает с целевым классом."
@@ -642,9 +639,7 @@ def _managed_composition_source_specs(
                 f"Источник «{source_class.name}\\{source.name}» должен быть binary."
             )
 
-    existing_by_source = {
-        item.source_dataset_id: item for item in (existing_relations or [])
-    }
+    existing_by_source = {item.source_dataset_id: item for item in (existing_relations or [])}
     ordered_sources = sorted(
         source_rows,
         key=lambda item: (
@@ -667,9 +662,7 @@ def _managed_composition_source_specs(
             (
                 requested_by_key[source.key].color
                 or (
-                    existing_by_source[source.id].color
-                    if source.id in existing_by_source
-                    else None
+                    existing_by_source[source.id].color if source.id in existing_by_source else None
                 )
                 or MANAGED_DATASET_PALETTE[(index - 1) % len(MANAGED_DATASET_PALETTE)]
             ).upper(),
@@ -766,9 +759,7 @@ def update_managed_dataset(
     if row.source_type != SOURCE_MANAGED and request.sources is not None:
         raise TrainingUIAPIError("Состав задаётся только для виртуального управляемого датасета.")
     desired_name = (
-        _clean_name(request.name, "Название датасета")
-        if request.name is not None
-        else row.name
+        _clean_name(request.name, "Название датасета") if request.name is not None else row.name
     )
     desired_source = (
         _validate_source_path(config.mlmarkup_root, request.source_path, require_exists=True)
@@ -811,23 +802,21 @@ def update_managed_dataset(
             )
             for relation in current_relations
         ]
-        composition_changed = current_signature != _managed_composition_signature(
-            composition_specs
-        )
-        if composition_changed and session.scalar(
-            select(DatasetEditorDraftRow.id)
-            .where(DatasetEditorDraftRow.dataset_key == row.key)
-            .limit(1)
-        ) is not None:
+        composition_changed = current_signature != _managed_composition_signature(composition_specs)
+        if (
+            composition_changed
+            and session.scalar(
+                select(DatasetEditorDraftRow.id)
+                .where(DatasetEditorDraftRow.dataset_key == row.key)
+                .limit(1)
+            )
+            is not None
+        ):
             raise TrainingUIAPIError(
                 "Сначала опубликуйте или отмените все черновики управляемого датасета."
             )
 
-    changed = (
-        desired_name != row.name
-        or desired_source != row.source_path
-        or composition_changed
-    )
+    changed = desired_name != row.name or desired_source != row.source_path or composition_changed
     source_owner: DatasetRow | None = None
     if desired_source != row.source_path:
         source_owner = session.scalar(
@@ -1001,7 +990,10 @@ def _discover_mlmarkup_sources(root: Path) -> list[tuple[str, str, str | None]]:
                         dataset_dir.relative_to(root).as_posix(),
                     )
                 )
-        elif _first_file(class_dir, ".txt") is not None or _first_file(class_dir, ".geojson") is not None:
+        elif (
+            _first_file(class_dir, ".txt") is not None
+            or _first_file(class_dir, ".geojson") is not None
+        ):
             discovered.append(
                 (class_dir.name, DEFAULT_DATASET_NAME, class_dir.relative_to(root).as_posix())
             )
@@ -1080,9 +1072,7 @@ def _dataset_info(
         scenes_file = _first_file(source_path, ".txt")
         if scenes_file is not None:
             dataset_format = DatasetFormat.LEGACY
-            annotation_file, hard_negative_file, source_diagnostics = _annotation_files(
-                source_path
-            )
+            annotation_file, hard_negative_file, source_diagnostics = _annotation_files(source_path)
             diagnostics.extend(source_diagnostics)
             if annotation_file is None and not source_diagnostics:
                 diagnostics.append("В legacy-датасете не найден positive GeoJSON.")
@@ -1191,9 +1181,7 @@ def _dataset_info(
         class_counts=class_counts,
         hard_negative_count=hard_negative_count,
         manifest_path=(
-            str(source_path / ".mlsystem2-dataset.json")
-            if manifest is not None
-            else None
+            str(source_path / ".mlsystem2-dataset.json") if manifest is not None else None
         ),
     )
 
@@ -1216,44 +1204,41 @@ def _managed_dataset_info(
     updated_at = None
     class_counts = {item.slug: 0 for item in manifest.classes}
     hard_negative_count = 0
-    if materialize:
-        try:
-            materialized = materialize_managed_dataset(
-                session,
-                config,
-                dataset,
-                source_root=config.mlmarkup_root,
-                scope="live",
-            )
+    image_count = 0
+    materialization_status = "missing"
+    materialized_version = None
+    materialization_error = None
+    try:
+        cache_state = managed_dataset_cache_state(
+            session,
+            config,
+            dataset,
+            source_root=config.mlmarkup_root,
+            scope="live",
+            request_if_missing=materialize,
+        )
+        version = cache_state.desired_version
+        updated_at = cache_state.updated_at
+        materialization_status = cache_state.status
+        materialization_error = cache_state.error
+        if cache_state.materialization is not None:
+            materialized = cache_state.materialization
             annotations_dir = materialized.path
-            version = materialized.version
-            updated_at = materialized.updated_at
+            materialized_version = materialized.version
             manifest = materialized.manifest
             class_counts = materialized.class_counts
             hard_negative_count = materialized.hard_negative_count
-        except TrainingUIAPIError as exc:
-            diagnostics.append(str(exc))
-    if annotations_dir is None:
-        try:
-            version, updated_at = managed_dataset_version(
-                session,
-                dataset,
-                config.mlmarkup_root,
-            )
-        except TrainingUIAPIError as exc:
-            if not diagnostics:
-                diagnostics.append(str(exc))
-            version = f"managed:unavailable:{dataset.config_revision}"
-    image_count = 0
-    if annotations_dir is not None and images_dir.is_dir():
-        if per_image_indexes is None:
-            index = build_per_image_index(images_dir)
-        else:
-            index = per_image_indexes.get(images_dir)
-            if index is None:
-                index = build_per_image_index(images_dir)
-                per_image_indexes[images_dir] = index
-        image_count = _per_image_catalog_count(annotations_dir, index, diagnostics)
+            image_count = materialized.image_count
+        elif cache_state.last_ready is not None:
+            class_counts = cache_state.last_ready.class_counts
+            hard_negative_count = cache_state.last_ready.hard_negative_count
+            image_count = cache_state.last_ready.image_count
+            materialized_version = cache_state.last_ready.version
+    except TrainingUIAPIError as exc:
+        diagnostics.append(str(exc))
+        version = f"managed:unavailable:{dataset.config_revision}"
+        materialization_status = "failed"
+        materialization_error = str(exc)
     display_name = f"{class_row.name}\\{dataset.name}"
     return DatasetInfo(
         key=dataset.key,
@@ -1299,6 +1284,9 @@ def _managed_dataset_info(
             if annotations_dir is not None
             else None
         ),
+        materialization_status=materialization_status,
+        materialized_version=materialized_version,
+        materialization_error=materialization_error,
     )
 
 
@@ -1419,15 +1407,14 @@ def _per_image_catalog_count(
         (
             path
             for path in annotations_dir.iterdir()
-            if path.is_file() and path.suffix.casefold() == ".geojson"
+            if path.is_file()
+            and path.suffix.casefold() == ".geojson"
             and not is_per_image_footprint_name(path.name)
         ),
         key=lambda item: item.name.casefold(),
     )
     missing = [
-        path.name
-        for path in annotation_files
-        if not images_by_annotation.get(path.name.casefold())
+        path.name for path in annotation_files if not images_by_annotation.get(path.name.casefold())
     ]
     ambiguous = [
         path.name
@@ -1435,13 +1422,10 @@ def _per_image_catalog_count(
         if len(images_by_annotation.get(path.name.casefold(), [])) > 1
     ]
     if missing:
-        diagnostics.append(
-            "Для GeoJSON не найдены TIFF: " + ", ".join(missing)
-        )
+        diagnostics.append("Для GeoJSON не найдены TIFF: " + ", ".join(missing))
     if ambiguous:
         diagnostics.append(
-            "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
-            + ", ".join(ambiguous)
+            "Имена GeoJSON неоднозначно сопоставлены с TIFF: " + ", ".join(ambiguous)
         )
     if not annotation_files:
         diagnostics.append(
@@ -1626,9 +1610,7 @@ def _ensure_class_technical_name_available(
     *,
     exclude_id: uuid.UUID | None = None,
 ) -> None:
-    statement = select(DatasetClassRow).where(
-        DatasetClassRow.technical_name == technical_name
-    )
+    statement = select(DatasetClassRow).where(DatasetClassRow.technical_name == technical_name)
     if exclude_id is not None:
         statement = statement.where(DatasetClassRow.id != exclude_id)
     if session.scalar(statement) is not None:
@@ -1660,11 +1642,12 @@ def _class_technical_name(
     base = _clean_technical_name(historical) if historical else "class"
     candidate = base
     suffix = 2
-    while session.scalar(
-        select(DatasetClassRow.id).where(
-            DatasetClassRow.technical_name == candidate
+    while (
+        session.scalar(
+            select(DatasetClassRow.id).where(DatasetClassRow.technical_name == candidate)
         )
-    ) is not None:
+        is not None
+    ):
         candidate = f"{base}_{suffix}"
         suffix += 1
     return candidate
@@ -1732,9 +1715,7 @@ def _canonicalize_managed_dataset_history(
         result_ids.append(result.id)
         mapping_by_result[result.id] = mapping
 
-    for job in session.scalars(
-        select(JobRow).where(JobRow.dataset_key == dataset.key)
-    ).all():
+    for job in session.scalars(select(JobRow).where(JobRow.dataset_key == dataset.key)).all():
         state = dict(job.config or {})
         schema_mapping = _nested_class_schema_mapping(state, canonical_schema)
         mapping = {**schema_mapping, **identifier_mapping}
@@ -1962,12 +1943,15 @@ def _unique_dataset_name(session: Session, class_id: uuid.UUID, preferred: str) 
     base = preferred or DEFAULT_DATASET_NAME
     name = base
     suffix = 2
-    while session.scalar(
-        select(DatasetRow).where(
-            DatasetRow.class_id == class_id,
-            DatasetRow.name == name,
+    while (
+        session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.class_id == class_id,
+                DatasetRow.name == name,
+            )
         )
-    ) is not None:
+        is not None
+    ):
         name = f"{base} (MLMarkup)" if suffix == 2 else f"{base} (MLMarkup) {suffix}"
         suffix += 1
     return name

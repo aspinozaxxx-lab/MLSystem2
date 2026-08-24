@@ -2170,7 +2170,9 @@ def _resolve_dataset_name(
         ready = (dataset.scenes_file is not None and dataset.annotation_file is not None) or (
             dataset.annotations_dir is not None and (dataset.image_count or 0) > 0
         )
-        if not dataset.source_available or dataset.images_dir is None or not ready:
+        if not dataset.source_available or dataset.images_dir is None:
+            raise TrainingUIAPIError("Датасет недоступен: " + "; ".join(dataset.diagnostics))
+        if not ready and not dataset.managed:
             raise TrainingUIAPIError("Датасет недоступен: " + "; ".join(dataset.diagnostics))
         return dataset
     raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")

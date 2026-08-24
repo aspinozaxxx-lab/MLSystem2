@@ -99,6 +99,9 @@ type EditorDataset = {
   class_counts: Record<string, number>;
   hard_negative_count: number;
   primary_training_result_id: string | null;
+  materialization_status: "not_applicable" | "current" | "queued" | "building" | "failed" | "missing";
+  materialized_version: string | null;
+  materialization_error: string | null;
 };
 
 type EditorManagedSource = {
@@ -439,8 +442,8 @@ export function DatasetEditorPage({
     };
   }, [registerRouteGuard]);
 
-  const loadDatasets = useCallback(async () => {
-    setDatasetsLoading(true);
+  const loadDatasets = useCallback(async (showLoading = true) => {
+    if (showLoading) setDatasetsLoading(true);
     try {
       const payload = await run(() =>
         apiJson<{ datasets: EditorDataset[] }>("/dataset-editor/datasets"),
@@ -452,7 +455,7 @@ export function DatasetEditorPage({
         payload.datasets.some((item) => item.class_key === current) ? current : firstClass,
       );
     } finally {
-      setDatasetsLoading(false);
+      if (showLoading) setDatasetsLoading(false);
     }
   }, [run]);
 
@@ -541,6 +544,11 @@ export function DatasetEditorPage({
     setBandMode("RGB");
     bandModeRef.current = "RGB";
     setBandMenuOpen(false);
+    setSelectedPseudoCount(0);
+    setRebuildPreview(null);
+  }, [datasetKey, resetDrafts]);
+
+  useEffect(() => {
     const defaultRole = selectedDataset?.task === "multiclass"
       ? selectedDataset.object_types[0]?.slug || "positive"
       : "positive";
@@ -550,10 +558,34 @@ export function DatasetEditorPage({
     setPseudoNegativeDatasetKeys(
       new Set((selectedDataset?.managed_sources || []).map((source) => source.dataset_key)),
     );
-    setSelectedPseudoCount(0);
-    setRebuildPreview(null);
-    void loadScenes(datasetKey);
-  }, [datasetKey, loadScenes, resetDrafts, selectedDataset]);
+  }, [datasetKey]);
+
+  useEffect(() => {
+    if (!datasetKey || !selectedDataset) return;
+    if (!selectedDataset.managed || selectedDataset.materialization_status === "current") {
+      void loadScenes(datasetKey);
+      return;
+    }
+    if (
+      selectedDataset.materialization_status === "missing"
+      || selectedDataset.materialization_status === "failed"
+    ) {
+      void apiJson(
+        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes`,
+      ).catch(() => undefined);
+    }
+  }, [datasetKey, loadScenes, selectedDataset?.key, selectedDataset?.materialization_status]);
+
+  useEffect(() => {
+    if (
+      !selectedDataset?.managed
+      || selectedDataset.materialization_status === "current"
+    ) return undefined;
+    const timer = window.setInterval(() => {
+      void loadDatasets(false);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [loadDatasets, selectedDataset?.key, selectedDataset?.managed, selectedDataset?.materialization_status]);
 
   const loadScene = useCallback(
     async (key: string, name: string) => {
@@ -1737,6 +1769,10 @@ export function DatasetEditorPage({
       live_commit: null,
       status: result.publication_status,
     });
+    if (selectedDataset?.managed) {
+      await loadDatasets(false);
+      return;
+    }
     await loadScenes(datasetKey, active);
     if (active) await loadScene(datasetKey, active);
   };
@@ -1788,6 +1824,10 @@ export function DatasetEditorPage({
     const preferred = result.scenes[0]?.annotation_name || "";
     setPublication({ commit: result.commit, live_commit: null, status: result.publication_status });
     setBrowser(null);
+    if (selectedDataset?.managed) {
+      await loadDatasets(false);
+      return;
+    }
     await loadScenes(datasetKey, preferred);
   };
 
@@ -1823,7 +1863,13 @@ export function DatasetEditorPage({
         <button
           className="secondary"
           type="button"
-          disabled={!datasetKey}
+          disabled={
+            !datasetKey
+            || Boolean(
+              selectedDataset?.managed
+              && selectedDataset.materialization_status !== "current"
+            )
+          }
           title="Открыть список серверных TIFF для добавления в датасет"
           onClick={() => void loadBrowser("")}
         >
@@ -1856,6 +1902,21 @@ export function DatasetEditorPage({
         <section className="panel empty-state">Загружаем каталог датасетов…</section>
       ) : !datasets.length ? (
         <section className="panel empty-state">Per-image датасеты в editor-клоне не найдены.</section>
+      ) : selectedDataset?.managed && selectedDataset.materialization_status !== "current" ? (
+        <section className="panel empty-state" role="status">
+          <strong>
+            {selectedDataset.materialization_status === "failed"
+              ? "Не удалось подготовить управляемый датасет. Повтор будет выполнен автоматически."
+              : selectedDataset.materialization_status === "building"
+                ? "Управляемый датасет пересобирается в фоне…"
+                : "Управляемый датасет поставлен на фоновую пересборку…"}
+          </strong>
+          {selectedDataset.materialization_error ? (
+            <p>{selectedDataset.materialization_error}</p>
+          ) : (
+            <p>Страница остаётся доступной; список снимков появится сразу после готовности кэша.</p>
+          )}
+        </section>
       ) : (
         <section className="dataset-editor-layout">
           <aside className="panel dataset-editor-scenes">

@@ -46,6 +46,9 @@ from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
     _migration_features_equal,
 )
+from mlsystem2.training_ui_api._managed_datasets import (
+    process_next_managed_materialization,
+)
 
 
 @dataclass(frozen=True)
@@ -599,9 +602,7 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     assert footprint_path.is_file()
     footprint = json.loads(footprint_path.read_text(encoding="utf-8"))
     assert len(footprint["features"]) == 1
-    assert footprint["features"][0]["properties"] == {
-        "_mlsystem2_type": "valid_data_footprint"
-    }
+    assert footprint["features"][0]["properties"] == {"_mlsystem2_type": "valid_data_footprint"}
     assert env.live_annotation.read_bytes() == live_before
     assert not (env.live_annotation.parent / "batch_SCN02.geojson").exists()
     already_added = env.client.post(scenes_url, json={"folder_path": "batch"})
@@ -1074,9 +1075,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
             "sources": [
                 {
                     "dataset_key": next(
-                        item["key"]
-                        for item in rivers["datasets"]
-                        if item["dataset_name"] == "test"
+                        item["key"] for item in rivers["datasets"] if item["dataset_name"] == "test"
                     ),
                     "priority": 100,
                 },
@@ -1086,27 +1085,27 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert composed_response.status_code == 200, composed_response.text
     managed = next(
-        item
-        for item in composed_response.json()["classes"]
-        if item["key"] == target_class["key"]
+        item for item in composed_response.json()["classes"] if item["key"] == target_class["key"]
     )["datasets"][0]
     assert managed["managed"] is True
 
     editor_cache = (
-        Path(get_config().stored_files_root).parent
-        / "managed-datasets"
-        / "editor"
-        / managed["key"]
+        Path(get_config().stored_files_root).parent / "managed-datasets" / "editor" / managed["key"]
     )
     shutil.rmtree(editor_cache, ignore_errors=True)
     editor_catalog = env.client.get("/api/v1/dataset-editor/datasets")
     assert editor_catalog.status_code == 200, editor_catalog.text
-    assert any(
-        item["key"] == managed["key"]
-        for item in editor_catalog.json()["datasets"]
-    )
+    assert any(item["key"] == managed["key"] for item in editor_catalog.json()["datasets"])
     assert not editor_cache.exists()
 
+    scenes_response = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
+    )
+    assert scenes_response.status_code == 400
+    session_factory = create_session_factory(get_config())
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
     scenes_response = env.client.get(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
     )
@@ -1152,12 +1151,16 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert publish.status_code == 200, publish.text
     saved = json.loads((editor_second / annotation_name).read_text(encoding="utf-8"))
-    assert sum(
-        feature["properties"]["_mlsystem2_role"] == "positive"
-        for feature in saved["features"]
-    ) == 2
+    assert (
+        sum(feature["properties"]["_mlsystem2_role"] == "positive" for feature in saved["features"])
+        == 2
+    )
     assert any(feature.get("id") == "new-lake" for feature in saved["features"])
     assert not (env.editor_root / "Реки и озера" / "main").exists()
+
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
 
     added_image = env.editor_root.parent / "images" / "kanopus" / "batch" / "MANAGED04.tif"
     _write_raster(added_image, value=44)
@@ -1166,7 +1169,17 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         json={"image_paths": ["batch/MANAGED04.tif"]},
     )
     assert added.status_code == 200, added.text
-    added_scene = added.json()["scenes"][0]
+    assert added.json()["scenes"] == []
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
+    refreshed_scenes = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
+    )
+    assert refreshed_scenes.status_code == 200, refreshed_scenes.text
+    added_scene = next(
+        item for item in refreshed_scenes.json()["scenes"] if item["image_name"] == "MANAGED04.tif"
+    )
     added_annotation = added_scene["annotation_name"]
     river_target = env.editor_dataset / added_annotation
     lake_target = editor_second / added_annotation
@@ -1238,19 +1251,19 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert published_added.status_code == 200, published_added.text
     river_features = json.loads(river_target.read_text(encoding="utf-8"))["features"]
     lake_features = json.loads(lake_target.read_text(encoding="utf-8"))["features"]
-    assert [item["properties"]["_mlsystem2_role"] for item in river_features] == [
-        "hard_negative"
-    ]
+    assert [item["properties"]["_mlsystem2_role"] for item in river_features] == ["hard_negative"]
     assert {item["properties"]["_mlsystem2_role"] for item in lake_features} == {
         "positive",
         "hard_negative",
     }
-    assert sum(
-        item["properties"]["_mlsystem2_role"] == "hard_negative"
-        for item in lake_features
-    ) == 2
+    assert (
+        sum(item["properties"]["_mlsystem2_role"] == "hard_negative" for item in lake_features) == 2
+    )
     assert not any(item.get("id") == "managed-lake-hard-negative" for item in river_features)
     assert any(item.get("id") == "managed-lake-hard-negative" for item in lake_features)
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
     refreshed_added = env.client.get(added_detail_url).json()
     assert refreshed_added["scene"]["positive_count"] == 1
     assert refreshed_added["scene"]["hard_negative_count"] == 2
@@ -1259,9 +1272,10 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         for item in refreshed_added["geojson"]["features"]
         if item["properties"]["_mlsystem2_role"] == "hard_negative"
     ]
-    assert {
-        item["properties"].get("_mlsystem2_class") for item in materialized_negatives
-    } == {None, lake_type["slug"]}
+    assert {item["properties"].get("_mlsystem2_class") for item in materialized_negatives} == {
+        None,
+        lake_type["slug"],
+    }
 
     marked_deleted = env.client.request(
         "DELETE",
@@ -1277,31 +1291,52 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert not river_target.exists()
     assert not lake_target.exists()
     with create_session_factory(get_config())() as session:
-        assert session.scalar(
-            select(ManagedDatasetSceneRow).where(
-                ManagedDatasetSceneRow.annotation_name == added_annotation
+        assert (
+            session.scalar(
+                select(ManagedDatasetSceneRow).where(
+                    ManagedDatasetSceneRow.annotation_name == added_annotation
+                )
             )
-        ) is None
+            is None
+        )
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
 
     empty_image = added_image.with_name("MANAGED05.tif")
     _write_raster(empty_image, value=55)
-    empty_added = env.client.post(
+    empty_add_response = env.client.post(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes",
         json={"image_paths": ["batch/MANAGED05.tif"]},
-    ).json()["scenes"][0]
+    )
+    assert empty_add_response.status_code == 200, empty_add_response.text
+    assert empty_add_response.json()["scenes"] == []
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
+    empty_scenes = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
+    ).json()["scenes"]
+    empty_added = next(item for item in empty_scenes if item["image_name"] == "MANAGED05.tif")
     empty_url = (
         "/api/v1/dataset-editor/datasets/"
         f"{quote(managed['key'], safe='')}/scenes/{quote(empty_added['annotation_name'], safe='')}"
     )
-    assert env.client.request(
-        "DELETE",
-        empty_url,
-        json={"revision": empty_added["revision"]},
-    ).status_code == 200
+    assert (
+        env.client.request(
+            "DELETE",
+            empty_url,
+            json={"revision": empty_added["revision"]},
+        ).status_code
+        == 200
+    )
     empty_deleted = env.client.post(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/drafts/publish"
     )
     assert empty_deleted.status_code == 200, empty_deleted.text
+    with session_factory() as session:
+        assert process_next_managed_materialization(session, get_config()) is True
+        session.commit()
     assert env.client.get(empty_url).status_code == 400
 
 
@@ -1333,9 +1368,7 @@ def test_managed_migration_ignores_serialization_noise_but_detects_markup_change
         [[1.0, 1.0], [1.0, 3.0], [3.0, 3.0], [3.0, 1.0], [1.0, 1.0]]
     ]
     moved = deepcopy(previous)
-    moved["geometry"]["coordinates"] = [
-        [[1, 1], [4, 1], [4, 3], [1, 3], [1, 1]]
-    ]
+    moved["geometry"]["coordinates"] = [[[1, 1], [4, 1], [4, 3], [1, 3], [1, 1]]]
 
     assert _migration_features_equal(previous, reordered)
     assert not _migration_features_equal(previous, moved)
