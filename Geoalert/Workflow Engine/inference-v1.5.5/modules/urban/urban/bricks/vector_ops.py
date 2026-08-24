@@ -293,6 +293,29 @@ class FilterCompactObjects(PolygonProcessingBrick):
         return max(width, height) / shortest
 
 
+class FilterNonCompactObjects(FilterCompactObjects):
+    """Keep compact polygons and remove non-compact ones.
+
+    Compactness is evaluated using the same configurable thresholds as in
+    :class:`FilterCompactObjects`. Raster-boundary fragments can be preserved
+    regardless of their shape.
+    """
+
+    def process(self, fc: FeatureCollection) -> FeatureCollection:
+        _require_boundary_tag(fc, self.preserve_boundary_objects, self.boundary_tag)
+        length = len(fc)
+        fc.filter(
+            lambda feature: (
+                self.preserve_boundary_objects
+                and _is_boundary_object(feature, self.boundary_tag)
+            )
+            or self._is_compact(feature.geometry),
+            inplace=True,
+        )
+        logger.trace(f'{length - len(fc)} polygons deleted')
+        return fc
+
+
 def _require_boundary_tag(
     fc: FeatureCollection,
     preserve_boundary_objects: bool,

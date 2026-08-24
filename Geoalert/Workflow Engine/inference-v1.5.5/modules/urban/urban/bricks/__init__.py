@@ -20,6 +20,7 @@ from .vector_ops import (
     Simplify,
     Smooth,
     FilterCompactObjects,
+    FilterNonCompactObjects,
     FilterSmallObjects,
     RemoveSmallHoles,
     FilterOutput,

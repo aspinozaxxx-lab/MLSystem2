@@ -16,6 +16,11 @@ from typing import Any
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 
 from ._external_models import ExternalModelManifest, validate_external_archive
+from ._templates import (
+    COMPACT_FILTER_KEEP,
+    COMPACT_FILTER_MODES,
+    COMPACT_FILTER_REMOVE,
+)
 from .contracts import TrainingUIAPIError
 
 MODEL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$")
@@ -1128,13 +1133,26 @@ def _vector_postprocess_yaml(
             f"        - _class: RemoveSmallHoles\n          min_hole_area: {min_hole_area}"
         )
     if bool(values.get("postprocess.filter_compact_objects.enabled")):
+        mode = str(
+            values.get("postprocess.filter_compact_objects.mode")
+            or COMPACT_FILTER_REMOVE
+        )
+        if mode not in COMPACT_FILTER_MODES:
+            raise TrainingUIAPIError(
+                "Режим compact-фильтра должен быть remove_compact или keep_compact."
+            )
+        brick_class = (
+            "FilterNonCompactObjects"
+            if mode == COMPACT_FILTER_KEEP
+            else "FilterCompactObjects"
+        )
         quotient = float(
             values.get("postprocess.filter_compact_objects.min_isoperimetric_quotient")
             or 0.25
         )
         ratio = float(values.get("postprocess.filter_compact_objects.max_bbox_ratio") or 3.5)
         nested.append(
-            "        - _class: FilterCompactObjects\n"
+            f"        - _class: {brick_class}\n"
             f"          min_isoperimetric_quotient: {quotient}\n"
             f"          max_bbox_ratio: {ratio}\n"
             "          preserve_boundary_objects: true\n"

@@ -538,6 +538,7 @@ def test_postprocess_profile_accepts_template_overrides() -> None:
     assert profile.smooth_iterations == 1
     assert profile.smooth_offset == 0.125
     assert profile.simplify_m == 1.0
+    assert profile.filter_compact_mode == "remove_compact"
     assert profile.filter_compact_min_isoperimetric_quotient == 0.25
     assert profile.filter_compact_max_bbox_ratio == 3.5
 
@@ -870,6 +871,32 @@ def test_geometry_postprocess_removes_compact_objects_regardless_of_area() -> No
     assert small_square.is_empty
     assert large_square.is_empty
     assert not elongated.is_empty
+
+
+def test_geometry_postprocess_inverse_mode_keeps_only_compact_objects() -> None:
+    profile = replace(
+        _postprocess_profile_from_config(
+            _select_postprocess_profile(51),
+            {
+                "postprocess.filter_compact_objects.enabled": True,
+                "postprocess.filter_compact_objects.mode": "keep_compact",
+                "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+                "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+            },
+        ),
+        mask_min_object_pixels=None,
+        mask_min_hole_pixels=None,
+        min_area_m2=None,
+        min_hole_area_m2=None,
+        simplify_m=None,
+    )
+    small_square = _postprocess_geometry(box(0, 0, 10, 10), "EPSG:32637", profile)
+    large_square = _postprocess_geometry(box(0, 0, 1000, 1000), "EPSG:32637", profile)
+    elongated = _postprocess_geometry(box(0, 0, 100, 10), "EPSG:32637", profile)
+
+    assert not small_square.is_empty
+    assert not large_square.is_empty
+    assert elongated.is_empty
 
 
 def test_geometry_postprocess_smooths_before_simplifying() -> None:

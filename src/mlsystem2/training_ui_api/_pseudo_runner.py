@@ -58,6 +58,11 @@ from ._external_models import (
 from ._inference_backend import PYTORCH_INFERENCE_BACKEND
 from ._markup_export import find_intersecting_images
 from ._external_imagery import ExternalImageryError, prepare_external_imagery
+from ._templates import (
+    COMPACT_FILTER_KEEP,
+    COMPACT_FILTER_MODES,
+    COMPACT_FILTER_REMOVE,
+)
 
 
 PSEUDO_INFERENCE_BACKEND = PYTORCH_INFERENCE_BACKEND
@@ -124,6 +129,7 @@ class _PostprocessProfile:
     smooth_iterations: int | None = None
     smooth_offset: float | None = None
     simplify_m: float | None = None
+    filter_compact_mode: str = COMPACT_FILTER_REMOVE
     filter_compact_min_isoperimetric_quotient: float | None = None
     filter_compact_max_bbox_ratio: float | None = None
 
@@ -3173,9 +3179,18 @@ def _postprocess_profile_from_config(
         if value is not None:
             updates[profile_field] = value
     if bool(config.get("postprocess.filter_compact_objects.enabled")):
+        mode = str(
+            config.get("postprocess.filter_compact_objects.mode")
+            or COMPACT_FILTER_REMOVE
+        )
+        if mode not in COMPACT_FILTER_MODES:
+            raise RuntimeError(
+                "Режим compact-фильтра должен быть remove_compact или keep_compact."
+            )
         min_iso = config.get("postprocess.filter_compact_objects.min_isoperimetric_quotient")
         max_ratio = config.get("postprocess.filter_compact_objects.max_bbox_ratio")
         if min_iso is not None and max_ratio is not None:
+            updates["filter_compact_mode"] = mode
             updates["filter_compact_min_isoperimetric_quotient"] = float(min_iso)
             updates["filter_compact_max_bbox_ratio"] = float(max_ratio)
     else:
@@ -3201,8 +3216,8 @@ def _postprocess_profile_from_config(
     return replace(base, **updates)
 
 
-def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float | int | bool]:
-    params: dict[str, float | int | bool] = {}
+def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float | int | bool | str]:
+    params: dict[str, float | int | bool | str] = {}
     for field in (
         "mask_min_object_pixels",
         "mask_min_hole_pixels",
@@ -3218,6 +3233,11 @@ def _postprocess_profile_params(profile: _PostprocessProfile) -> dict[str, float
         value = getattr(profile, field)
         if value is not None:
             params[field] = value
+    if (
+        profile.filter_compact_min_isoperimetric_quotient is not None
+        and profile.filter_compact_max_bbox_ratio is not None
+    ):
+        params["filter_compact_mode"] = profile.filter_compact_mode
     return params
 
 
@@ -3414,10 +3434,13 @@ def _filter_compact_geometry(
         [
             polygon
             for polygon in _iter_polygons(geometry)
-            if not _is_compact_polygon(
-                polygon,
-                min_isoperimetric_quotient=profile.filter_compact_min_isoperimetric_quotient,
-                max_bbox_ratio=profile.filter_compact_max_bbox_ratio,
+            if (
+                _is_compact_polygon(
+                    polygon,
+                    min_isoperimetric_quotient=profile.filter_compact_min_isoperimetric_quotient,
+                    max_bbox_ratio=profile.filter_compact_max_bbox_ratio,
+                )
+                == (profile.filter_compact_mode == COMPACT_FILTER_KEEP)
             )
         ]
     )

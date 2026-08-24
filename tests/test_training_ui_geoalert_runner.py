@@ -21,7 +21,10 @@ from mlsystem2.training_ui_api._geoalert_runner import (
     _pipeline_bricks,
     _rasterize_scene_prediction,
 )
-from mlsystem2.training_ui_api._templates import INFERENCE_BASE_DEFAULT_CONFIG
+from mlsystem2.training_ui_api._templates import (
+    INFERENCE_BASE_DEFAULT_CONFIG,
+    initial_inference_templates,
+)
 from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 from mlsystem2.training_ui_api._inference_backend import (
     GEOALERT_INFERENCE_BACKEND,
@@ -221,7 +224,7 @@ def test_native_geoalert_pipeline_rejects_smooth_offset_above_half() -> None:
         )
 
 
-def test_lake_default_pipeline_has_no_compact_filter_or_smoothing() -> None:
+def test_base_default_pipeline_has_no_compact_filter_or_smoothing() -> None:
     effective_config = _effective_postprocess_config(
         {
             "postprocess_config": INFERENCE_BASE_DEFAULT_CONFIG,
@@ -256,6 +259,55 @@ def test_lake_default_pipeline_has_no_compact_filter_or_smoothing() -> None:
     assert "FilterCompactObjects" not in pipeline_bricks
     assert "Smooth" not in pipeline_bricks
     assert "RemoveTags" not in pipeline_bricks
+
+
+def test_lake_seed_pipeline_keeps_compact_objects_with_configured_thresholds() -> None:
+    lake_template = next(
+        item
+        for item in initial_inference_templates()
+        if item.get("dataset_key") == "Озера\\main"
+    )
+    pipeline = yaml.safe_load(
+        _model_export._pipeline_yaml(
+            "lakes_kanopus",
+            768,
+            4,
+            postprocess_config=lake_template["default_config"],
+        )
+    )
+    bricks = pipeline["config"]["bricks"]
+    vectorize = next(brick for brick in bricks if brick["_class"] == "VectorizeMasks")
+    vector_processing = next(
+        brick for brick in bricks if brick["_class"] == "UnifiedVectorProcessing"
+    )
+    inverse_filter = next(
+        brick
+        for brick in vector_processing["bricks"]
+        if brick["_class"] == "FilterNonCompactObjects"
+    )
+
+    assert vectorize["mark_boundary_objects"] is True
+    assert vectorize["boundary_tolerance_pixels"] == 1.0
+    assert inverse_filter["min_isoperimetric_quotient"] == 0.25
+    assert inverse_filter["max_bbox_ratio"] == 3.5
+    assert inverse_filter["preserve_boundary_objects"] is True
+    assert [brick["_class"] for brick in vector_processing["bricks"]] == [
+        "FilterNonCompactObjects",
+        "RemoveTags",
+    ]
+
+
+def test_native_geoalert_pipeline_rejects_unknown_compact_filter_mode() -> None:
+    with pytest.raises(TrainingUIAPIError, match="Режим compact-фильтра"):
+        _model_export._pipeline_yaml(
+            "lakes_kanopus",
+            768,
+            4,
+            postprocess_config={
+                "postprocess.filter_compact_objects.enabled": True,
+                "postprocess.filter_compact_objects.mode": "unknown",
+            },
+        )
 
 
 def test_test_f1_accepts_prediction_calculated_by_geoalert(tmp_path: Path) -> None:

@@ -6,6 +6,11 @@ from copy import deepcopy
 from typing import Any
 
 
+COMPACT_FILTER_REMOVE = "remove_compact"
+COMPACT_FILTER_KEEP = "keep_compact"
+COMPACT_FILTER_MODES = (COMPACT_FILTER_REMOVE, COMPACT_FILTER_KEEP)
+
+
 CONFIG_SCHEMA: dict[str, Any] = {
     "fields": [
         {
@@ -287,9 +292,16 @@ INFERENCE_CONFIG_SCHEMA: dict[str, Any] = {
         },
         {
             "key": "postprocess.filter_compact_objects.enabled",
-            "label": "Удалять компактные объекты",
+            "label": "Фильтровать объекты по компактности",
             "value_type": "boolean",
-            "tooltip": "Включает FilterCompactObjects для удаления объектов, похожих на озера/пруды.",
+            "tooltip": "Включает прямой или обратный фильтр формы объектов.",
+        },
+        {
+            "key": "postprocess.filter_compact_objects.mode",
+            "label": "Режим фильтра компактности",
+            "value_type": "select",
+            "tooltip": "remove_compact удаляет компактные объекты, keep_compact оставляет только компактные.",
+            "options": list(COMPACT_FILTER_MODES),
         },
         {
             "key": "postprocess.filter_compact_objects.min_isoperimetric_quotient",
@@ -320,6 +332,7 @@ INFERENCE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "postprocess.smooth.offset": 0.125,
     "postprocess.simplify_m": None,
     "postprocess.filter_compact_objects.enabled": False,
+    "postprocess.filter_compact_objects.mode": COMPACT_FILTER_REMOVE,
     "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
     "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
 }
@@ -332,6 +345,14 @@ RIVERS_INFERENCE_CONFIG: dict[str, Any] = {
     "postprocess.smooth.offset": 0.125,
     "postprocess.simplify_m": 1.0,
     "postprocess.filter_compact_objects.enabled": True,
+    "postprocess.filter_compact_objects.mode": COMPACT_FILTER_REMOVE,
+    "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
+    "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
+}
+
+LAKES_INFERENCE_CONFIG: dict[str, Any] = {
+    "postprocess.filter_compact_objects.enabled": True,
+    "postprocess.filter_compact_objects.mode": COMPACT_FILTER_KEEP,
     "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
     "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
 }
@@ -469,8 +490,12 @@ _INFERENCE_FIELD_HELP: dict[str, tuple[str, str]] = {
         "Пусто для авто-профиля; 1..20 м. Повышать для тяжелых/шумных контуров, снижать для точной границы.",
     ),
     "postprocess.filter_compact_objects.enabled": (
-        "Включает удаление компактных объектов по форме. Полезно для рек, когда нужно убрать озера и пруды, но опасно для классов, где объект сам компактный.",
-        "Обычно выключено; включать для вытянутых классов вроде рек, где компактные полигоны являются ложными.",
+        "Включает фильтрацию объектов по форме в выбранном прямом или обратном режиме.",
+        "Включать для рек в режиме remove_compact и для озёр в режиме keep_compact.",
+    ),
+    "postprocess.filter_compact_objects.mode": (
+        "Определяет направление фильтра: remove_compact удаляет компактные объекты, keep_compact удаляет некомпактные.",
+        "remove_compact для вытянутых классов вроде рек; keep_compact для компактных классов вроде озёр.",
     ),
     "postprocess.filter_compact_objects.min_isoperimetric_quotient": (
         "Порог компактности: чем выше, тем меньше объектов считаются достаточно компактными для удаления.",
@@ -692,6 +717,14 @@ def initial_inference_templates() -> list[dict[str, Any]]:
             dataset_key="Реки\\main",
             dataset_name="Реки\\main",
             overrides=RIVERS_INFERENCE_CONFIG,
+        ),
+        _inference_template(
+            "smp_segformer_b2",
+            "segformer b2 / Озера\\main",
+            source="analogy",
+            dataset_key="Озера\\main",
+            dataset_name="Озера\\main",
+            overrides=LAKES_INFERENCE_CONFIG,
         ),
     ]
     return rows

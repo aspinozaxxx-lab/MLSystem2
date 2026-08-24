@@ -444,6 +444,7 @@ def test_seed_inference_template_uses_active_dataset_key_after_migration(
             select(InferenceTemplateRow).where(
                 InferenceTemplateRow.architecture == "smp_segformer_b2",
                 InferenceTemplateRow.dataset_key.is_not(None),
+                InferenceTemplateRow.dataset_name == "Реки\\main",
             )
         ).all()
         assert len(river_templates) == 1
@@ -456,6 +457,7 @@ def test_seed_inference_template_uses_active_dataset_key_after_migration(
             select(InferenceTemplateRow).where(
                 InferenceTemplateRow.architecture == "smp_segformer_b2",
                 InferenceTemplateRow.dataset_key.is_not(None),
+                InferenceTemplateRow.dataset_name == "Реки\\main",
             )
         ).all()
         assert [(row.id, row.dataset_key) for row in river_templates] == [(template_id, active_key)]
@@ -485,6 +487,7 @@ def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
         old_baseline.pop("postprocess.smooth.enabled")
         old_baseline.pop("postprocess.smooth.iterations")
         old_baseline.pop("postprocess.smooth.offset")
+        old_baseline.pop("postprocess.filter_compact_objects.mode")
         old_baseline["postprocess.simplify_m"] = 15.0
         current = {
             **old_baseline,
@@ -501,6 +504,7 @@ def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
         assert river.default_config["postprocess.smooth.iterations"] == 1
         assert river.default_config["postprocess.smooth.offset"] == 0.125
         assert river.default_config["postprocess.simplify_m"] == 1.0
+        assert river.default_config["postprocess.filter_compact_objects.mode"] == "remove_compact"
         assert river.default_config["postprocess.filter_compact_objects.max_bbox_ratio"] == 4.25
         first_reconciled = dict(river.default_config)
 
@@ -2863,6 +2867,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         }
         assert [item["name"] for item in bootstrap["datasets"]] == [
             "Вырубки\\main",
+            "Озера\\main",
             "Реки\\main",
             "Custom",
         ]
@@ -2870,7 +2875,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert len(bootstrap["training_templates"]) == 7
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
-        assert [item["name"] for item in datasets] == ["Вырубки\\main", "Реки\\main", "Custom"]
+        assert [item["name"] for item in datasets] == [
+            "Вырубки\\main",
+            "Озера\\main",
+            "Реки\\main",
+            "Custom",
+        ]
         assert datasets[0]["image_count"] == 1
         assert datasets[0]["hard_negative_annotation_file"] is None
         image_folders = client.get("/api/v1/image-folders").json()["folders"]
@@ -2896,6 +2906,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         refreshed = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in refreshed] == [
             "Вырубки\\main",
+            "Озера\\main",
             "Пожары\\main",
             "Реки\\main",
             "Custom",
@@ -3008,7 +3019,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
-        assert len(inference_templates) == 9
+        assert len(inference_templates) == 10
         inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
         inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
         assert "postprocess.min_area_m2" in inference_keys
@@ -3016,6 +3027,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "postprocess.smooth.iterations" in inference_keys
         assert "postprocess.smooth.offset" in inference_keys
         assert "postprocess.filter_compact_objects.enabled" in inference_keys
+        assert "postprocess.filter_compact_objects.mode" in inference_keys
         assert "train.batch_size" not in inference_keys
         river_inference_template = next(
             item for item in inference_templates if item.get("dataset_key") == "Реки\\main"
@@ -3029,6 +3041,33 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert (
             river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"]
             is True
+        )
+        assert (
+            river_inference_template["default_config"]["postprocess.filter_compact_objects.mode"]
+            == "remove_compact"
+        )
+        lake_inference_template = next(
+            item for item in inference_templates if item.get("dataset_key") == "Озера\\main"
+        )
+        assert (
+            lake_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"]
+            is True
+        )
+        assert (
+            lake_inference_template["default_config"]["postprocess.filter_compact_objects.mode"]
+            == "keep_compact"
+        )
+        assert (
+            lake_inference_template["default_config"][
+                "postprocess.filter_compact_objects.min_isoperimetric_quotient"
+            ]
+            == 0.25
+        )
+        assert (
+            lake_inference_template["default_config"][
+                "postprocess.filter_compact_objects.max_bbox_ratio"
+            ]
+            == 3.5
         )
         inference_dataset_template = client.post(
             "/api/v1/inference-templates",
