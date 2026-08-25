@@ -195,7 +195,9 @@ class DatasetEditorDraftRow(Base):
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
     __table_args__ = (
-        UniqueConstraint("architecture", "dataset_key", name="uq_training_templates_architecture_dataset"),
+        UniqueConstraint(
+            "architecture", "dataset_key", name="uq_training_templates_architecture_dataset"
+        ),
         Index("ix_training_templates_architecture", "architecture"),
         Index("ix_training_templates_dataset_key", "dataset_key"),
     )
@@ -235,7 +237,9 @@ class TrainingTemplateRow(Base):
 class InferenceTemplateRow(Base):
     __tablename__ = "inference_templates"
     __table_args__ = (
-        UniqueConstraint("architecture", "dataset_key", name="uq_inference_templates_architecture_dataset"),
+        UniqueConstraint(
+            "architecture", "dataset_key", name="uq_inference_templates_architecture_dataset"
+        ),
         Index("ix_inference_templates_architecture", "architecture"),
         Index("ix_inference_templates_dataset_key", "dataset_key"),
     )
@@ -290,7 +294,9 @@ class CustomDatasetRow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(180))
-    scenes_file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("stored_files.id"))
+    scenes_file_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("stored_files.id")
+    )
     annotation_file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("stored_files.id"),
@@ -328,7 +334,9 @@ class AutomationControlRow(Base):
 class AutomationRuleRow(Base):
     __tablename__ = "automation_rules"
     __table_args__ = (
-        UniqueConstraint("dataset_key", "architecture", name="uq_automation_rules_dataset_architecture"),
+        UniqueConstraint(
+            "dataset_key", "architecture", name="uq_automation_rules_dataset_architecture"
+        ),
         Index("ix_automation_rules_dataset_key", "dataset_key"),
         Index("ix_automation_rules_architecture", "architecture"),
     )
@@ -419,7 +427,9 @@ class TrainingResultRow(Base):
     mlflow_run_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
-    job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("jobs.id"), nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -459,7 +469,9 @@ class PseudoMarkupResultRow(Base):
         nullable=True,
     )
     status: Mapped[str] = mapped_column(String(32), index=True)
-    job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("jobs.id"), nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -496,6 +508,18 @@ class TestSampleRow(Base):
     class_key: Mapped[str] = mapped_column(String(180))
     class_name: Mapped[str] = mapped_column(String(240))
     dataset_short_name: Mapped[str] = mapped_column(String(240))
+    source_training_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_pseudo_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("pseudo_markup_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     task: Mapped[str] = mapped_column(String(32), default="binary")
     class_schema: Mapped[list[dict[str, Any]]] = mapped_column(_json_type(), default=list)
@@ -574,7 +598,15 @@ class TestSampleRow(Base):
         onupdate=func.now(),
     )
 
-    evaluation_pseudo_result: Mapped[PseudoMarkupResultRow | None] = relationship()
+    source_training_result: Mapped[TrainingResultRow | None] = relationship(
+        foreign_keys=[source_training_result_id]
+    )
+    source_pseudo_result: Mapped[PseudoMarkupResultRow | None] = relationship(
+        foreign_keys=[source_pseudo_result_id]
+    )
+    evaluation_pseudo_result: Mapped[PseudoMarkupResultRow | None] = relationship(
+        foreign_keys=[evaluation_pseudo_result_id]
+    )
     evaluation_training_result: Mapped[TrainingResultRow | None] = relationship(
         foreign_keys=[evaluation_training_result_id]
     )
@@ -669,6 +701,16 @@ class TestSampleBatchItemRow(Base):
     class_key: Mapped[str] = mapped_column(String(180))
     class_name: Mapped[str] = mapped_column(String(240))
     dataset_short_name: Mapped[str] = mapped_column(String(240))
+    training_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("training_results.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    pseudo_markup_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("pseudo_markup_results.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     min_object_count: Mapped[int] = mapped_column(Integer)
     metric: Mapped[str] = mapped_column(String(32))
     exclude_boundary_objects: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -692,6 +734,12 @@ class TestSampleBatchItemRow(Base):
 
     batch: Mapped[TestSampleBatchRow] = relationship(back_populates="items")
     sample: Mapped[TestSampleRow | None] = relationship()
+    training_result: Mapped[TrainingResultRow | None] = relationship(
+        foreign_keys=[training_result_id]
+    )
+    pseudo_markup_result: Mapped[PseudoMarkupResultRow | None] = relationship(
+        foreign_keys=[pseudo_markup_result_id]
+    )
 
 
 class TrainingResultTestMetricRow(Base):

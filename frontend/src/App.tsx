@@ -73,7 +73,9 @@ import type {
   TrainingTemplate,
   TestSampleCatalogResponse,
   TestSampleBatchCreate,
+  TestSampleBatchDatasetOption,
   TestSampleBatchInfo,
+  TestSampleBatchOptionsResponse,
   TestSampleBulkDownloadRequest,
   TestSampleDetail,
   TestSampleDownloadRequest,
@@ -106,8 +108,6 @@ import {
   containedImageOneToOneScale,
   flattenTestMarkups,
   initialTestMarkupDownloadSelection,
-  isDatasetReadyForTestMarkup,
-  sortTestMarkupDatasets,
   testMarkupDownloadOptions,
   testMarkupDraft,
   testMarkupDraftChanged,
@@ -135,7 +135,7 @@ const DatasetEditorPage = lazy(() =>
 );
 
 type TestSampleBatchFormRow = {
-  dataset: DatasetInfo;
+  dataset: TestSampleBatchDatasetOption;
   selected: boolean;
   minObjectCount: number;
   excludeBoundaryObjects: boolean;
@@ -1119,28 +1119,21 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
   );
 }
 
-function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
-  const datasets = useMemo(
-    () =>
-      bootstrap.datasets
-        .filter(isDatasetReadyForTestMarkup)
-        .sort((left, right) => testMarkupDatasetLabel(left).localeCompare(testMarkupDatasetLabel(right), "ru")),
-    [bootstrap.datasets],
-  );
+function TestMarkupCreatePage({ run }: RoutedPageProps) {
   const [tileSize, setTileSize] = useState(1536);
   const [minImageCount, setMinImageCount] = useState(5);
   const [maxImageCount, setMaxImageCount] = useState(10);
-  const [rows, setRows] = useState<TestSampleBatchFormRow[]>(() =>
-    datasets.map((dataset) => ({
-      dataset,
-      selected: false,
-      minObjectCount: 150,
-      excludeBoundaryObjects: false,
-    })),
-  );
+  const [options, setOptions] = useState<TestSampleBatchOptionsResponse | null>(null);
+  const [rows, setRows] = useState<TestSampleBatchFormRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
   const [batch, setBatch] = useState<TestSampleBatchInfo | null>(null);
+  const appliedBatchDefaultsRef = useRef<string | null>(null);
+
+  const loadOptions = useCallback(async () => {
+    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>("/test-sample-batches/options"));
+    if (payload) setOptions(payload);
+  }, [run]);
 
   const loadCatalog = useCallback(async () => {
     const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
@@ -1149,13 +1142,15 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
 
   useEffect(() => {
     void loadCatalog();
-  }, [loadCatalog]);
+    void loadOptions();
+  }, [loadCatalog, loadOptions]);
 
   useEffect(() => {
+    const datasets = (options?.classes || []).flatMap((item) => item.datasets || []);
     setRows((current) =>
       datasets.map((dataset) => {
-        const existing = current.find((item) => item.dataset.key === dataset.key);
-        return existing || {
+        const existing = current.find((item) => item.dataset.dataset_key === dataset.dataset_key);
+        return existing ? { ...existing, dataset } : {
           dataset,
           selected: false,
           minObjectCount: 150,
@@ -1163,7 +1158,7 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
         };
       }),
     );
-  }, [datasets]);
+  }, [options]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1174,22 +1169,6 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
         setTileSize(latest.tile_size);
         setMinImageCount(latest.min_image_count);
         setMaxImageCount(latest.image_count);
-        setRows((current) =>
-          current.map((row) => {
-            const previous = (latest.items || []).find((item) => item.dataset_key === row.dataset.key);
-            return previous
-              ? {
-                  ...row,
-                  selected: false,
-                  minObjectCount: previous.min_object_count,
-                  excludeBoundaryObjects: Boolean(
-                    row.dataset.quality_metric === "objects"
-                    && previous.exclude_boundary_objects,
-                  ),
-                }
-              : row;
-          }),
-        );
       })
       .catch((error: unknown) => {
         if (!(error instanceof ApiError) || error.status !== 404) {
@@ -1201,7 +1180,26 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
     };
   }, [run]);
 
+  useEffect(() => {
+    if (!batch || !rows.length || appliedBatchDefaultsRef.current === batch.id) return;
+    setRows((current) => current.map((row) => {
+      const previous = (batch.items || []).find((item) => item.dataset_key === row.dataset.dataset_key);
+      return previous ? {
+        ...row,
+        selected: false,
+        minObjectCount: previous.min_object_count,
+        excludeBoundaryObjects: Boolean(
+          row.dataset.quality_metric === "objects" && previous.exclude_boundary_objects
+        ),
+      } : row;
+    }));
+    appliedBatchDefaultsRef.current = batch.id;
+  }, [batch, rows.length]);
+
   const batchActive = batch?.status === "queued" || batch?.status === "running";
+  const pseudoActive = (options?.classes || []).some((item) =>
+    (item.datasets || []).some((dataset) => dataset.pseudo_status === "queued" || dataset.pseudo_status === "running"),
+  );
   useEffect(() => {
     if (!batchActive || !batch) return undefined;
     const timer = window.setTimeout(() => {
@@ -1214,12 +1212,23 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
     return () => window.clearTimeout(timer);
   }, [batch, batchActive, loadCatalog, run]);
 
+  useEffect(() => {
+    if (!pseudoActive) return undefined;
+    const timer = window.setTimeout(() => void loadOptions(), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [loadOptions, options, pseudoActive]);
+
   const updateRow = (datasetKey: string, update: Partial<(typeof rows)[number]>) => {
-    setRows((current) => current.map((row) => (row.dataset.key === datasetKey ? { ...row, ...update } : row)));
+    setRows((current) => current.map((row) => (row.dataset.dataset_key === datasetKey ? { ...row, ...update } : row)));
   };
-  const displayedRows = sortTestMarkupDatasets(rows.map((row) => row.dataset), catalog)
-    .map((dataset) => rows.find((row) => row.dataset.key === dataset.key))
-    .filter((row): row is TestSampleBatchFormRow => Boolean(row));
+
+  const launchPseudoMarkup = async (datasetKey: string) => {
+    const job = await run(() => apiJson<JobDetail>(
+      `/test-sample-batches/options/${encodeURIComponent(datasetKey)}/pseudo-markup`,
+      { method: "POST" },
+    ));
+    if (job) await loadOptions();
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1232,7 +1241,8 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
         items: rows
           .filter((row) => row.selected)
           .map((row) => ({
-            dataset_key: row.dataset.key,
+            dataset_key: row.dataset.dataset_key,
+            training_result_id: row.dataset.training_result_id,
             min_object_count: row.minObjectCount,
             metric: row.dataset.quality_metric || "pixel",
             exclude_boundary_objects:
@@ -1250,14 +1260,15 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
 
   return (
     <>
-      <PageHeader title="Создание тестовых разметок" subtitle="Групповая подготовка постоянных тестовых разметок" />
+      <PageHeader
+        title="Создание тестовых разметок"
+        subtitle="Разметка создаётся для класса на основе выбранного датасета и сети, обученной именно на этом датасете"
+      />
       <form className="form-stack" onSubmit={submit}>
         <section className="panel">
-          <PanelHeader
-            title="Групповое создание тестовых разметок"
-            subtitle="Пул содержит до тройного максимума тайлов, итоговый состав выбирается в заданном диапазоне"
-          />
-          {datasets.length ? (
+          <PanelHeader title="Выберите исходные датасеты" />
+          {options === null ? <div className="empty-state">Загрузка доступных датасетов...</div> : null}
+          {(options?.classes || []).length ? (
             <>
               <div className="form-grid test-sample-batch-settings">
                 <label className="field">
@@ -1275,60 +1286,89 @@ function TestMarkupCreatePage({ bootstrap, run }: RoutedPageProps) {
                   <input type="number" min={minImageCount} step="1" required value={maxImageCount} disabled={busy || batchActive} onChange={(event) => setMaxImageCount(Number(event.target.value))} />
                 </label>
               </div>
-              <p className="muted test-sample-batch-pool-hint">
-                До оптимизации будет сформирован пул до {Math.max(0, maxImageCount * 3)} тайлов на датасет.
-              </p>
               <div className="button-row test-sample-batch-select-actions">
-                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: true })))}>Выбрать все</button>
+                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: row.dataset.pseudo_status === "ready" })))}>Выбрать готовые</button>
                 <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: false })))}>Снять все</button>
               </div>
-              <div className="test-sample-batch-grid">
-                {displayedRows.map((row) => {
-                  const stats = testMarkupStats(catalog, row.dataset.class_key || row.dataset.key);
+              <div className="test-sample-batch-class-list">
+                {(options?.classes || []).map((classOption) => {
+                  const stats = testMarkupStats(catalog, classOption.class_key);
                   return (
-                  <div className={`test-sample-batch-row ${row.selected ? "" : "disabled-row"}`} key={row.dataset.key}>
-                    <label className="test-sample-batch-choice">
-                      <input type="checkbox" checked={row.selected} disabled={busy || batchActive} aria-label={`Создать разметку ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { selected: event.target.checked })} />
-                      <span className="source-lines">
-                        <strong>{row.dataset.class_name || row.dataset.name}</strong>
-                        <span>{row.dataset.dataset_name || row.dataset.name}</span>
+                    <section className="test-sample-batch-class" key={classOption.class_key}>
+                      <div className="test-sample-batch-class-header">
+                        <strong>{classOption.class_name}</strong>
                         <span className="test-markup-creation-status">
                           {stats.hasPrimary ? <><Star className="primary-star" size={13} fill="currentColor" />Основная есть</> : "Основной нет"}
                           <span>Разметок: {stats.count}</span>
                         </span>
-                      </span>
-                    </label>
-                    <label className="test-sample-batch-field">
-                      <span>Мин. объектов</span>
-                      <input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive} aria-label={`Минимум объектов ${row.dataset.name}`} onChange={(event) => updateRow(row.dataset.key, { minObjectCount: Number(event.target.value) })} />
-                    </label>
-                    <label className="test-sample-batch-field">
-                      <span>Основная метрика</span>
-                      <input value={qualityMetricLabel(row.dataset.quality_metric)} readOnly disabled />
-                    </label>
-                    {row.dataset.quality_metric === "objects" ? (
-                      <label className="test-sample-boundary-option">
-                        <input
-                          type="checkbox"
-                          checked={row.excludeBoundaryObjects}
-                          disabled={busy || batchActive}
-                          aria-label={`Не учитывать объекты, выходящие за тайл ${row.dataset.name}`}
-                          onChange={(event) => updateRow(row.dataset.key, {
-                            excludeBoundaryObjects: event.target.checked,
-                          })}
-                        />
-                        <span>
-                          <strong>Не учитывать объекты, выходящие за тайл</strong>
-                          <small>Пересекающий границу объект будет исключён целиком.</small>
-                        </span>
-                      </label>
-                    ) : null}
-                  </div>
+                      </div>
+                      <div className="test-sample-batch-datasets">
+                        {(classOption.datasets || []).map((dataset) => {
+                          const row = rows.find((item) => item.dataset.dataset_key === dataset.dataset_key);
+                          if (!row) return null;
+                          const ready = dataset.pseudo_status === "ready";
+                          const active = dataset.pseudo_status === "queued" || dataset.pseudo_status === "running";
+                          return (
+                            <div className={`test-sample-batch-row ${row.selected ? "selected-row" : ""}`} key={dataset.dataset_key}>
+                              <label className="test-sample-batch-choice">
+                                <input
+                                  type="checkbox"
+                                  checked={row.selected}
+                                  disabled={busy || batchActive || !ready}
+                                  aria-label={`Создать разметку ${classOption.class_name}, датасет ${dataset.dataset_name}`}
+                                  onChange={(event) => updateRow(dataset.dataset_key, { selected: event.target.checked })}
+                                />
+                                <span className="source-lines">
+                                  <strong>{dataset.dataset_name}</strong>
+                                  <span>{dataset.image_count} снимков · {qualityMetricLabel(dataset.quality_metric)}</span>
+                                  <span className="test-sample-batch-network">
+                                    Сеть: {dataset.training_model_name || "нет успешной сети"}
+                                    {dataset.training_trained_at ? ` · ${formatDateTime(dataset.training_trained_at)}` : ""}
+                                    {dataset.training_is_primary ? <Star className="primary-star" size={13} fill="currentColor" aria-label="Основная сеть" /> : null}
+                                  </span>
+                                </span>
+                              </label>
+                              <div className="test-sample-batch-pseudo-state">
+                                <span className={`badge ${ready ? "ok" : dataset.pseudo_status === "error" ? "error" : active ? "neutral" : "warning"}`}>
+                                  {testSampleBatchPseudoStatusLabel(dataset.pseudo_status)}
+                                </span>
+                                {!ready && !active && dataset.training_result_id ? (
+                                  <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => void launchPseudoMarkup(dataset.dataset_key)}>
+                                    <Play size={14} />
+                                    Создать псевдоразметку
+                                  </button>
+                                ) : null}
+                                {dataset.error ? <small className="error-text">{dataset.error}</small> : null}
+                              </div>
+                              <label className="test-sample-batch-field">
+                                <span>Мин. объектов</span>
+                                <input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive || !ready} aria-label={`Минимум объектов ${dataset.dataset_name}`} onChange={(event) => updateRow(dataset.dataset_key, { minObjectCount: Number(event.target.value) })} />
+                              </label>
+                              {dataset.quality_metric === "objects" ? (
+                                <label className="test-sample-boundary-option">
+                                  <input
+                                    type="checkbox"
+                                    checked={row.excludeBoundaryObjects}
+                                    disabled={busy || batchActive || !ready}
+                                    aria-label={`Не учитывать объекты, выходящие за тайл ${dataset.dataset_name}`}
+                                    onChange={(event) => updateRow(dataset.dataset_key, { excludeBoundaryObjects: event.target.checked })}
+                                  />
+                                  <span>
+                                    <strong>Не учитывать объекты, выходящие за тайл</strong>
+                                    <small>Пересекающий границу объект будет исключён целиком.</small>
+                                  </span>
+                                </label>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
                   );
                 })}
               </div>
             </>
-          ) : <div className="empty-state">Нет готовых датасетов с размеченными снимками.</div>}
+          ) : options ? <div className="empty-state">Нет готовых датасетов с размеченными снимками.</div> : null}
         </section>
         <div className="button-row">
           <button className="primary" type="submit" disabled={busy || batchActive || minImageCount > maxImageCount || !rows.some((row) => row.selected)}>
@@ -1670,6 +1710,16 @@ function batchItemStatusLabel(status: NonNullable<TestSampleBatchInfo["items"]>[
   return { queued: "в очереди", running: "выполняется", ok: "готово", error: "ошибка" }[status];
 }
 
+function testSampleBatchPseudoStatusLabel(status: TestSampleBatchDatasetOption["pseudo_status"]): string {
+  return {
+    ready: "псевдоразметка готова",
+    queued: "псевдоразметка в очереди",
+    running: "псевдоразметка выполняется",
+    unavailable: "псевдоразметки нет",
+    error: "ошибка псевдоразметки",
+  }[status];
+}
+
 function TestSampleCatalog({
   catalog,
   onDelete,
@@ -1677,56 +1727,66 @@ function TestSampleCatalog({
   catalog: TestSampleCatalogResponse;
   onDelete: (sample: TestSampleSummary) => void;
 }) {
-  const samples = flattenTestMarkups(catalog).sort((left, right) => {
-    const classOrder = left.class_name.localeCompare(right.class_name, "ru");
-    if (classOrder) return classOrder;
-    const datasetOrder = left.source_dataset_name.localeCompare(right.source_dataset_name, "ru");
-    if (datasetOrder) return datasetOrder;
-    return right.created_at.localeCompare(left.created_at);
-  });
-  if (!samples.length) return <div className="empty-state">Тестовые разметки ещё не созданы.</div>;
+  const classes = (catalog.classes || [])
+    .map((item) => ({
+      ...item,
+      samples: [...(item.samples || [])].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    }))
+    .filter((item) => item.samples.length)
+    .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  if (!classes.length) return <div className="empty-state">Тестовые разметки ещё не созданы.</div>;
   return (
-    <div className="test-markup-card-grid">
-      {samples.map((sample) => (
-        <article className="test-markup-card" key={sample.id}>
-          <div className="test-markup-card-header">
-            <a href={`#/test-markups/${sample.id}`}>
-              <strong>{sample.class_name}</strong>
-              <span>{sample.name}</span>
-              <small className="muted">На основе: {sample.source_dataset_name}</small>
-            </a>
-            <div className="inline-row">
-              {sample.is_primary ? <Star className="primary-star" size={20} fill="currentColor" aria-label="Основная разметка" /> : null}
-              <button
-                className="danger icon-button"
-                type="button"
-                aria-label={`Удалить разметку ${sample.name}`}
-                title="Удалить разметку"
-                onClick={() => onDelete(sample)}
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
+    <div className="test-markup-class-list">
+      {classes.map((classGroup) => (
+        <section className="test-markup-class-group" key={classGroup.key}>
+          <div className="test-markup-class-header">
+            <h3>{classGroup.name}</h3>
+            <span className="muted">Разметок: {classGroup.samples.length}</span>
           </div>
-          <a className="test-markup-card-body" href={`#/test-markups/${sample.id}`}>
-            <span><small>F1 pix</small><strong>{formatF1Score(sample.evaluation.pixel?.f1)}</strong></span>
-            <span><small>F1 obj</small><strong>{formatF1Score(sample.evaluation.objects?.f1)}</strong></span>
-            <span><small>Тайлы</small><strong>{sample.enabled_image_count}/{sample.image_count}</strong></span>
-          </a>
-          <CompactPerClassF1
-            metrics={sample.evaluation.metrics}
-            section={sample.quality_metric === "objects" ? "objects" : "pixel"}
-          />
-          <div className="test-markup-card-footer">
-            <TestSampleEvaluationBadge evaluation={sample.evaluation} />
-            <span className="muted">
-              {sample.evaluation.status !== "current" && (sample.evaluation.pixel || sample.evaluation.objects)
-                ? "предыдущие значения · "
-                : ""}
-              {formatDateTime(sample.created_at)}
-            </span>
+          <div className="test-markup-card-grid">
+            {classGroup.samples.map((sample) => (
+              <article className="test-markup-card" key={sample.id}>
+                <div className="test-markup-card-header">
+                  <a href={`#/test-markups/${sample.id}`}>
+                    <strong>{sample.name}</strong>
+                    <small className="muted">На основе датасета: {sample.source_dataset_name}</small>
+                    <small className="muted">
+                      Сеть: {sample.source_model_name || "не зафиксирована"}
+                      {sample.source_trained_at ? ` · ${formatDateTime(sample.source_trained_at)}` : ""}
+                    </small>
+                  </a>
+                  <div className="inline-row">
+                    {sample.is_primary ? <Star className="primary-star" size={20} fill="currentColor" aria-label="Основная разметка" /> : null}
+                    <button
+                      className="danger icon-button"
+                      type="button"
+                      aria-label={`Удалить разметку ${sample.name}`}
+                      title="Удалить разметку"
+                      onClick={() => onDelete(sample)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+                <a className="test-markup-card-body" href={`#/test-markups/${sample.id}`}>
+                  <span><small>F1 pix</small><strong>{formatF1Score(sample.evaluation.pixel?.f1)}</strong></span>
+                  <span><small>F1 obj</small><strong>{formatF1Score(sample.evaluation.objects?.f1)}</strong></span>
+                  <span><small>Тайлы</small><strong>{sample.enabled_image_count}/{sample.image_count}</strong></span>
+                </a>
+                <CompactPerClassF1
+                  metrics={sample.evaluation.metrics}
+                  section={sample.quality_metric === "objects" ? "objects" : "pixel"}
+                />
+                <div className="test-markup-card-footer">
+                  <TestSampleEvaluationBadge evaluation={sample.evaluation} />
+                  {sample.evaluation.status !== "current" && (sample.evaluation.pixel || sample.evaluation.objects)
+                    ? <span className="muted">предыдущие значения</span>
+                    : null}
+                </div>
+              </article>
+            ))}
           </div>
-        </article>
+        </section>
       ))}
     </div>
   );
@@ -2535,7 +2595,7 @@ function TestSampleEvaluationPanel({
                 onClick={onRecalculate}
               >
                 <RefreshCw size={15} />
-                {recalculating ? "Постановка..." : "Пересчитать основной сетью"}
+                {recalculating ? "Постановка..." : "Пересчитать основной сетью класса"}
               </button>
             ) : null}
           </div>
@@ -2554,16 +2614,16 @@ function TestSampleEvaluationPanel({
           <strong>{direct ? "Рассчитано сетью:" : "Псевдоразметка сети:"}</strong>{" "}
           {evaluation.model_name || (direct ? "ещё не рассчитано" : "нет подходящей псевдоразметки")}
           {evaluation.training_dataset_name ? ` · датасет обучения: ${evaluation.training_dataset_name}` : ""}
+          {direct && evaluation.trained_at ? ` · обучение: ${formatDateTime(evaluation.trained_at)}` : ""}
         </span>
         {direct && evaluation.target_model_name && evaluation.target_model_name !== evaluation.model_name ? (
           <span>
             <strong>Текущая основная сеть:</strong> {evaluation.target_model_name}
             {evaluation.target_training_dataset_name ? ` · датасет обучения: ${evaluation.target_training_dataset_name}` : ""}
+            {evaluation.target_trained_at ? ` · обучение: ${formatDateTime(evaluation.target_trained_at)}` : ""}
           </span>
         ) : null}
         {!direct && evaluation.markup_created_at ? <span><strong>Псевдоразметка:</strong> {formatDateTime(evaluation.markup_created_at)}</span> : null}
-        {direct && evaluation.threshold != null ? <span><strong>Порог:</strong> {evaluation.threshold.toFixed(3)}</span> : null}
-        {evaluation.evaluated_at ? <span><strong>Расчёт:</strong> {formatDateTime(evaluation.evaluated_at)}</span> : null}
       </div>
       {direct && progress?.total ? (
         <div className="info-box">
@@ -2613,10 +2673,6 @@ function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvalu
     error: "error",
   };
   return <span className={`badge ${classes[evaluation.status]}`}>{labels[evaluation.status]}</span>;
-}
-
-function testMarkupDatasetLabel(dataset: DatasetInfo): string {
-  return dataset.name;
 }
 
 function formatTestF1Percent(value: number): string {
@@ -3729,12 +3785,10 @@ function DatasetResultsPage({
               ))}
             </span>
           </div>
-          {payload.test_f1_status !== "current" ? (
-            <button className="primary" type="button" disabled={payload.test_f1_status === "running"} onClick={() => void recalculateTestF1()}>
-              <RefreshCw size={16} />
-              {payload.test_f1_status === "running" ? "Пересчёт..." : "Запустить пересчёт"}
-            </button>
-          ) : null}
+          <button className="primary" type="button" disabled={payload.test_f1_status === "running"} onClick={() => void recalculateTestF1()}>
+            <RefreshCw size={16} />
+            {payload.test_f1_status === "running" ? "Пересчёт..." : "Пересчитать по всем сетям датасета"}
+          </button>
         </section>
       ) : (
         <section className="status-banner neutral"><strong>Основная тестовая разметка не назначена</strong></section>

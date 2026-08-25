@@ -115,14 +115,17 @@ from ._template_selection import (
 )
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
-    current_primary_training_result,
-    latest_pseudo_markup,
+    dataset_test_sample_pseudo_markup,
+    dataset_test_sample_training_result,
     mark_test_samples_stale_for_pseudo_markup,
     pseudo_markup_covers_dataset,
     primary_test_sample,
     queue_class_test_f1,
+    queue_dataset_test_f1_all,
     reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
+    test_sample_source_pseudo_markup,
+    test_sample_source_training_result,
     training_result_test_f1_info,
 )
 from .contracts import (
@@ -1328,7 +1331,7 @@ def recalculate_dataset_test_f1(
     dataset_key: str,
     config: TrainingUIAPIConfig,
 ) -> DatasetResultsResponse:
-    queue_class_test_f1(session, dataset_key, config)
+    queue_dataset_test_f1_all(session, dataset_key, config)
     session.flush()
     return dataset_results(session, dataset_key, config)
 
@@ -1764,16 +1767,10 @@ def ensure_test_sample_pseudo_markup_job(
     )
     if sample is None:
         raise TrainingUIAPIError("Тестовая разметка не найдена")
-    primary = current_primary_training_result(session, sample.class_key)
+    primary = test_sample_source_training_result(session, sample)
     if primary is None:
-        raise TrainingUIAPIError("Для класса нет успешной сети")
-    ready = latest_pseudo_markup(
-        session,
-        sample.dataset_key,
-        class_key=sample.class_key,
-        dataset_version=sample.dataset_version,
-        config=config,
-    )
+        raise TrainingUIAPIError("Сеть, выбранная при создании разметки, недоступна")
+    ready = test_sample_source_pseudo_markup(session, sample, config)
     if ready is not None and ready.job_id is not None:
         ready_job = session.get(JobRow, ready.job_id)
         if ready_job is not None and ready_job.status not in {
@@ -1784,6 +1781,7 @@ def ensure_test_sample_pseudo_markup_job(
     existing_rows = session.scalars(
         select(PseudoMarkupResultRow)
         .where(
+            PseudoMarkupResultRow.dataset_key == sample.dataset_key,
             PseudoMarkupResultRow.training_result_id == primary.id,
             PseudoMarkupResultRow.status == "running",
         )
@@ -1793,9 +1791,6 @@ def ensure_test_sample_pseudo_markup_job(
             PseudoMarkupResultRow.id.desc(),
         )
     ).all()
-    existing_rows.sort(
-        key=lambda existing: existing.dataset_key != sample.dataset_key
-    )
     for existing in existing_rows:
         if existing.job_id is None:
             continue
@@ -1816,6 +1811,65 @@ def ensure_test_sample_pseudo_markup_job(
         dataset_key=sample.dataset_key,
         image_folder_key=None,
         training_result_id=primary.id,
+        scenes_name=None,
+        scenes_content_type=None,
+        scenes_bytes=None,
+        config=config,
+    )
+
+
+def ensure_test_sample_batch_dataset_pseudo_markup_job(
+    session: Session,
+    dataset_key: str,
+    config: TrainingUIAPIConfig,
+) -> JobDetail:
+    """Идемпотентно запустить псевдоразметку сети конкретного датасета."""
+
+    dataset = find_managed_dataset(session, config, dataset_key)
+    if dataset is None or dataset.is_custom:
+        raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
+    training_result = dataset_test_sample_training_result(session, dataset.key)
+    if training_result is None:
+        raise TrainingUIAPIError("Для датасета нет успешной обученной сети")
+    ready = dataset_test_sample_pseudo_markup(
+        session,
+        dataset.key,
+        training_result.id,
+        config=config,
+    )
+    if ready is not None:
+        if ready.job_id is not None:
+            job = session.get(JobRow, ready.job_id)
+            if job is not None:
+                return _job_detail(session, job)
+        raise TrainingUIAPIError("Псевдоразметка этой пары датасет-сеть уже готова")
+
+    existing_rows = session.scalars(
+        select(PseudoMarkupResultRow)
+        .where(
+            PseudoMarkupResultRow.dataset_key == dataset.key,
+            PseudoMarkupResultRow.training_result_id == training_result.id,
+            PseudoMarkupResultRow.status == ResultStatus.RUNNING.value,
+        )
+        .order_by(
+            PseudoMarkupResultRow.updated_at.desc(),
+            PseudoMarkupResultRow.created_at.desc(),
+            PseudoMarkupResultRow.id.desc(),
+        )
+    ).all()
+    for existing in existing_rows:
+        job = session.get(JobRow, existing.job_id) if existing.job_id is not None else None
+        if job is not None and job.status not in {
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        }:
+            return _job_detail(session, job)
+    return create_pseudo_markup_job(
+        session,
+        class_key=training_result.class_key,
+        dataset_key=dataset.key,
+        image_folder_key=None,
+        training_result_id=training_result.id,
         scenes_name=None,
         scenes_content_type=None,
         scenes_bytes=None,

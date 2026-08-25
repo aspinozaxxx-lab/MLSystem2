@@ -725,6 +725,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-sample-batches/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Batch Options */
+        get: operations["get_test_sample_batch_options_api_v1_test_sample_batches_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Batch Dataset Pseudo Markup */
+        post: operations["post_test_sample_batch_dataset_pseudo_markup_api_v1_test_sample_batches_options__dataset_key__pseudo_markup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-sample-batches": {
         parameters: {
             query?: never;
@@ -3407,6 +3441,15 @@ export interface components {
          * @enum {string}
          */
         TemplateSource: "hpo_best" | "analogy" | "manual";
+        /** TestSampleBatchClassOption */
+        TestSampleBatchClassOption: {
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Datasets */
+            datasets?: components["schemas"]["TestSampleBatchDatasetOption"][];
+        };
         /** TestSampleBatchCreate */
         TestSampleBatchCreate: {
             /**
@@ -3428,6 +3471,55 @@ export interface components {
             image_count: number;
             /** Items */
             items: components["schemas"]["TestSampleBatchItemCreate"][];
+        };
+        /** TestSampleBatchDatasetOption */
+        TestSampleBatchDatasetOption: {
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /** Image Count */
+            image_count: number;
+            /**
+             * Quality Metric
+             * @default pixel
+             * @enum {string}
+             */
+            quality_metric: "pixel" | "objects";
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Training Model Name */
+            training_model_name?: string | null;
+            /** Training Trained At */
+            training_trained_at?: string | null;
+            /**
+             * Training Is Primary
+             * @default false
+             */
+            training_is_primary: boolean;
+            /** Pseudo Markup Result Id */
+            pseudo_markup_result_id?: string | null;
+            /**
+             * Pseudo Status
+             * @enum {string}
+             */
+            pseudo_status: "ready" | "queued" | "running" | "unavailable" | "error";
+            /** Pseudo Job Id */
+            pseudo_job_id?: string | null;
+            /** Error */
+            error?: string | null;
         };
         /** TestSampleBatchInfo */
         TestSampleBatchInfo: {
@@ -3469,6 +3561,8 @@ export interface components {
         TestSampleBatchItemCreate: {
             /** Dataset Key */
             dataset_key: string;
+            /** Training Result Id */
+            training_result_id?: string | null;
             /**
              * Min Object Count
              * @default 150
@@ -3505,6 +3599,14 @@ export interface components {
             class_key: string;
             /** Class Name */
             class_name: string;
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Training Model Name */
+            training_model_name?: string | null;
+            /** Training Trained At */
+            training_trained_at?: string | null;
+            /** Pseudo Markup Result Id */
+            pseudo_markup_result_id?: string | null;
             /** Min Object Count */
             min_object_count: number;
             /**
@@ -3536,6 +3638,11 @@ export interface components {
             started_at?: string | null;
             /** Finished At */
             finished_at?: string | null;
+        };
+        /** TestSampleBatchOptionsResponse */
+        TestSampleBatchOptionsResponse: {
+            /** Classes */
+            classes?: components["schemas"]["TestSampleBatchClassOption"][];
         };
         /** TestSampleBulkDownloadRequest */
         TestSampleBulkDownloadRequest: {
@@ -3631,6 +3738,14 @@ export interface components {
             source_dataset_name: string;
             /** Source Dataset Version */
             source_dataset_version?: string | null;
+            /** Source Training Result Id */
+            source_training_result_id?: string | null;
+            /** Source Model Name */
+            source_model_name?: string | null;
+            /** Source Trained At */
+            source_trained_at?: string | null;
+            /** Source Pseudo Markup Result Id */
+            source_pseudo_markup_result_id?: string | null;
             /** Class Key */
             class_key: string;
             /** Class Name */
@@ -3744,6 +3859,10 @@ export interface components {
             model_name?: string | null;
             /** Target Model Name */
             target_model_name?: string | null;
+            /** Trained At */
+            trained_at?: string | null;
+            /** Target Trained At */
+            target_trained_at?: string | null;
             /** Training Dataset Key */
             training_dataset_key?: string | null;
             /** Training Dataset Name */
@@ -3856,6 +3975,14 @@ export interface components {
             source_dataset_name: string;
             /** Source Dataset Version */
             source_dataset_version?: string | null;
+            /** Source Training Result Id */
+            source_training_result_id?: string | null;
+            /** Source Model Name */
+            source_model_name?: string | null;
+            /** Source Trained At */
+            source_trained_at?: string | null;
+            /** Source Pseudo Markup Result Id */
+            source_pseudo_markup_result_id?: string | null;
             /** Class Key */
             class_key: string;
             /** Class Name */
@@ -5680,6 +5807,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_batch_options_api_v1_test_sample_batches_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchOptionsResponse"];
+                };
+            };
+        };
+    };
+    post_test_sample_batch_dataset_pseudo_markup_api_v1_test_sample_batches_options__dataset_key__pseudo_markup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
                 };
             };
             /** @description Validation Error */

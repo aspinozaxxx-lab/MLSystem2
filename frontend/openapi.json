@@ -1847,6 +1847,63 @@
         }
       }
     },
+    "/api/v1/test-sample-batches/options": {
+      "get": {
+        "summary": "Get Test Sample Batch Options",
+        "operationId": "get_test_sample_batch_options_api_v1_test_sample_batches_options_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchOptionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup": {
+      "post": {
+        "summary": "Post Test Sample Batch Dataset Pseudo Markup",
+        "operationId": "post_test_sample_batch_dataset_pseudo_markup_api_v1_test_sample_batches_options__dataset_key__pseudo_markup_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-sample-batches": {
       "post": {
         "summary": "Post Test Sample Batch",
@@ -9232,6 +9289,32 @@
         ],
         "title": "TemplateSource"
       },
+      "TestSampleBatchClassOption": {
+        "properties": {
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleBatchDatasetOption"
+            },
+            "type": "array",
+            "title": "Datasets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "class_key",
+          "class_name"
+        ],
+        "title": "TestSampleBatchClassOption"
+      },
       "TestSampleBatchCreate": {
         "properties": {
           "tile_size": {
@@ -9284,6 +9367,157 @@
           "items"
         ],
         "title": "TestSampleBatchCreate"
+      },
+      "TestSampleBatchDatasetOption": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
+          "training_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Model Name"
+          },
+          "training_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Trained At"
+          },
+          "training_is_primary": {
+            "type": "boolean",
+            "title": "Training Is Primary",
+            "default": false
+          },
+          "pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pseudo Markup Result Id"
+          },
+          "pseudo_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "queued",
+              "running",
+              "unavailable",
+              "error"
+            ],
+            "title": "Pseudo Status"
+          },
+          "pseudo_job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pseudo Job Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key",
+          "dataset_name",
+          "class_key",
+          "class_name",
+          "image_count",
+          "pseudo_status"
+        ],
+        "title": "TestSampleBatchDatasetOption"
       },
       "TestSampleBatchInfo": {
         "properties": {
@@ -9392,6 +9626,18 @@
             "minLength": 1,
             "title": "Dataset Key"
           },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
           "min_object_count": {
             "type": "integer",
             "exclusiveMinimum": 0.0,
@@ -9458,6 +9704,53 @@
           "class_name": {
             "type": "string",
             "title": "Class Name"
+          },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
+          "training_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Model Name"
+          },
+          "training_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Trained At"
+          },
+          "pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pseudo Markup Result Id"
           },
           "min_object_count": {
             "type": "integer",
@@ -9584,6 +9877,20 @@
           "status"
         ],
         "title": "TestSampleBatchItemInfo"
+      },
+      "TestSampleBatchOptionsResponse": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleBatchClassOption"
+            },
+            "type": "array",
+            "title": "Classes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TestSampleBatchOptionsResponse"
       },
       "TestSampleBulkDownloadRequest": {
         "properties": {
@@ -9782,6 +10089,53 @@
               }
             ],
             "title": "Source Dataset Version"
+          },
+          "source_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Training Result Id"
+          },
+          "source_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Model Name"
+          },
+          "source_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Trained At"
+          },
+          "source_pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Pseudo Markup Result Id"
           },
           "class_key": {
             "type": "string",
@@ -10088,6 +10442,30 @@
               }
             ],
             "title": "Target Model Name"
+          },
+          "trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trained At"
+          },
+          "target_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Trained At"
           },
           "training_dataset_key": {
             "anyOf": [
@@ -10480,6 +10858,53 @@
               }
             ],
             "title": "Source Dataset Version"
+          },
+          "source_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Training Result Id"
+          },
+          "source_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Model Name"
+          },
+          "source_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Trained At"
+          },
+          "source_pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Pseudo Markup Result Id"
           },
           "class_key": {
             "type": "string",

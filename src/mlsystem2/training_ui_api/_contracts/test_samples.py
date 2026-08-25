@@ -32,11 +32,7 @@ class TestSampleUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> Self:
-        if (
-            self.name is None
-            and self.is_primary is None
-            and self.enabled_tile_indices is None
-        ):
+        if self.name is None and self.is_primary is None and self.enabled_tile_indices is None:
             raise ValueError("Нужно передать хотя бы одно изменение тестовой разметки.")
         return self
 
@@ -118,6 +114,8 @@ class TestSampleEvaluationInfo(BaseModel):
     target_training_result_id: UUID | None = None
     model_name: str | None = None
     target_model_name: str | None = None
+    trained_at: datetime | None = None
+    target_trained_at: datetime | None = None
     training_dataset_key: str | None = None
     training_dataset_name: str | None = None
     target_training_dataset_key: str | None = None
@@ -156,6 +154,10 @@ class TestSampleSummary(BaseModel):
     source_dataset_key: str
     source_dataset_name: str
     source_dataset_version: str | None = None
+    source_training_result_id: UUID | None = None
+    source_model_name: str | None = None
+    source_trained_at: datetime | None = None
+    source_pseudo_markup_result_id: UUID | None = None
     class_key: str
     class_name: str
     task: Literal["binary", "multiclass"] = "binary"
@@ -237,6 +239,7 @@ class TestSampleBatchItemCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset_key: str = Field(min_length=1)
+    training_result_id: UUID | None = None
     min_object_count: int = Field(default=150, gt=0)
     metric: Literal["pixel", "objects"] = "pixel"
     exclude_boundary_objects: bool = False
@@ -257,9 +260,7 @@ class TestSampleBatchCreate(BaseModel):
     min_image_count: int | None = Field(
         default=None,
         gt=0,
-        description=(
-            "Минимальное число включённых тайлов; без поля используется image_count."
-        ),
+        description=("Минимальное число включённых тайлов; без поля используется image_count."),
     )
     image_count: int = Field(
         default=10,
@@ -273,9 +274,7 @@ class TestSampleBatchCreate(BaseModel):
         if self.min_image_count is None:
             self.min_image_count = self.image_count
         if self.min_image_count > self.image_count:
-            raise ValueError(
-                "Минимальное число снимков не может быть больше максимального."
-            )
+            raise ValueError("Минимальное число снимков не может быть больше максимального.")
         return self
 
 
@@ -289,6 +288,10 @@ class TestSampleBatchItemInfo(BaseModel):
     dataset_version: str | None = None
     class_key: str
     class_name: str
+    training_result_id: UUID | None = None
+    training_model_name: str | None = None
+    training_trained_at: datetime | None = None
+    pseudo_markup_result_id: UUID | None = None
     min_object_count: int = Field(gt=0)
     metric: Literal["pixel", "objects"]
     exclude_boundary_objects: bool = False
@@ -300,6 +303,41 @@ class TestSampleBatchItemInfo(BaseModel):
     error: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class TestSampleBatchDatasetOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str
+    dataset_name: str
+    dataset_version: str | None = None
+    class_key: str
+    class_name: str
+    image_count: int = Field(gt=0)
+    quality_metric: Literal["pixel", "objects"] = "pixel"
+    task: Literal["binary", "multiclass"] = "binary"
+    training_result_id: UUID | None = None
+    training_model_name: str | None = None
+    training_trained_at: datetime | None = None
+    training_is_primary: bool = False
+    pseudo_markup_result_id: UUID | None = None
+    pseudo_status: Literal["ready", "queued", "running", "unavailable", "error"]
+    pseudo_job_id: UUID | None = None
+    error: str | None = None
+
+
+class TestSampleBatchClassOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    class_key: str
+    class_name: str
+    datasets: list[TestSampleBatchDatasetOption] = Field(default_factory=list)
+
+
+class TestSampleBatchOptionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    classes: list[TestSampleBatchClassOption] = Field(default_factory=list)
 
 
 class TestSampleBatchInfo(BaseModel):
@@ -321,9 +359,12 @@ class TestSampleBatchInfo(BaseModel):
 
 __all__ = [
     "TestSampleBatchCreate",
+    "TestSampleBatchClassOption",
+    "TestSampleBatchDatasetOption",
     "TestSampleBatchInfo",
     "TestSampleBatchItemCreate",
     "TestSampleBatchItemInfo",
+    "TestSampleBatchOptionsResponse",
     "TestSampleBulkDownloadRequest",
     "TestSampleCatalogResponse",
     "TestSampleClassGroup",

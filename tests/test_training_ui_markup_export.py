@@ -62,6 +62,8 @@ from mlsystem2.training_ui_api._test_samples import (
     mark_test_samples_stale_for_pseudo_markup,
     optimize_test_sample,
     optimize_test_sample_preview,
+    queue_class_test_f1,
+    queue_dataset_test_f1_all,
     queue_test_sample_evaluation,
     queue_training_result_test_f1,
     reconcile_test_sample_evaluations,
@@ -194,9 +196,7 @@ def test_markup_export_builds_black_free_georeferenced_archive(
         assert payload["features"]
         assert all("kind" in feature["properties"] for feature in payload["features"])
         assert all("id" in feature for feature in payload["features"])
-        assert {
-            feature["geometry"]["type"] for feature in payload["features"]
-        } == {"MultiPolygon"}
+        assert {feature["geometry"]["type"] for feature in payload["features"]} == {"MultiPolygon"}
     for path in output_root.glob("*_mask.png"):
         with rasterio.open(path) as dataset:
             values = set(np.unique(dataset.read(1)).tolist())
@@ -265,10 +265,7 @@ def test_markup_export_uses_only_positive_features_from_per_image_dataset(
         for feature in json.loads(path.read_text(encoding="utf-8"))["features"]
     ]
     assert {feature["id"] for feature in features} == {1, 3}
-    assert all(
-        feature["properties"]["_mlsystem2_role"] == "positive"
-        for feature in features
-    )
+    assert all(feature["properties"]["_mlsystem2_role"] == "positive" for feature in features)
 
     pool_root = tmp_path / "per-image-pool"
     pool_root.mkdir()
@@ -297,9 +294,7 @@ def test_markup_export_can_exclude_objects_crossing_tile_boundary(
     class_name = "Границы legacy" if dataset_format == "legacy" else "Границы per-image"
     dataset_root = config.mlmarkup_root / class_name / "main"
     dataset_root.mkdir(parents=True)
-    image_path = (
-        config.images_root / "kanopus" / "region_boundary" / "scene.tif"
-    )
+    image_path = config.images_root / "kanopus" / "region_boundary" / "scene.tif"
     _write_cog(
         image_path,
         left=0,
@@ -494,8 +489,7 @@ def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None
     assert edge[64, 63]
     assert edge[64, 64]
     unchanged_error = np.abs(
-        decoded["rgb_markup"][:12, :12].astype(int)
-        - decoded["rgb"][:12, :12].astype(int)
+        decoded["rgb_markup"][:12, :12].astype(int) - decoded["rgb"][:12, :12].astype(int)
     ).mean()
     assert unchanged_error < 4.0
 
@@ -1238,19 +1232,16 @@ def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
 
     assert artifact.filename == "Разметка рек.txt"
     assert artifact.scene_count == 2
-    assert artifact.content.decode("utf-8") == (
-        "регион_а/Яблоня\n"
-        "регион_б/Берёза\n"
-    )
+    assert artifact.content.decode("utf-8") == ("регион_а/Яблоня\nрегион_б/Берёза\n")
     assert artifact.footprints_filename == "Разметка рек_футпринты.geojson"
     footprints = json.loads(artifact.footprints_content)
     assert footprints["type"] == "FeatureCollection"
-    assert [
-        feature["properties"]["scene_id"] for feature in footprints["features"]
-    ] == ["регион_а/Яблоня", "регион_б/Берёза"]
+    assert [feature["properties"]["scene_id"] for feature in footprints["features"]] == [
+        "регион_а/Яблоня",
+        "регион_б/Берёза",
+    ]
     assert all(
-        feature["properties"]["imagery_type"] == "kanopus"
-        for feature in footprints["features"]
+        feature["properties"]["imagery_type"] == "kanopus" for feature in footprints["features"]
     )
     expected_first = transform_geometry(to_wgs84.transform, box(0, 0, 64, 64))
     assert shape(footprints["features"][0]["geometry"]).bounds == pytest.approx(
@@ -1262,10 +1253,7 @@ def test_scene_list_export_finds_recursive_unicode_scenes_and_excludes_touching(
             "Разметка рек_футпринты.geojson",
         ]
         assert archive.read("Разметка рек.txt") == artifact.content
-        assert (
-            archive.read("Разметка рек_футпринты.geojson")
-            == artifact.footprints_content
-        )
+        assert archive.read("Разметка рек_футпринты.geojson") == artifact.footprints_content
 
     touching_artifact = _markup_export.build_scene_list_export(
         imagery_type=ImageryType.KANOPUS,
@@ -1372,16 +1360,11 @@ def test_scene_list_export_disambiguates_duplicate_stems_with_relative_paths(
     artifact = _markup_export.build_scene_list_export(
         imagery_type=ImageryType.KANOPUS,
         geojson_filename="разметка.geojson",
-        geojson_bytes=_geojson_bytes(
-            [box(10, 10, 20, 20), box(110, 10, 120, 20)]
-        ),
+        geojson_bytes=_geojson_bytes([box(10, 10, 20, 20), box(110, 10, 120, 20)]),
         config=config,
     )
 
-    assert artifact.content.decode("utf-8") == (
-        "вторая/одинаковая\n"
-        "первая/Одинаковая\n"
-    )
+    assert artifact.content.decode("utf-8") == ("вторая/одинаковая\nпервая/Одинаковая\n")
 
 
 def test_scene_list_export_is_accepted_by_training_pipeline(
@@ -1433,9 +1416,7 @@ def test_scene_list_export_is_accepted_by_training_pipeline(
         )
     )
 
-    assert artifact.content.decode("utf-8") == (
-        "Ольхонский район/Канопус PMS.SCN02\n"
-    )
+    assert artifact.content.decode("utf-8") == ("Ольхонский район/Канопус PMS.SCN02\n")
     assert [Path(item.image_path) for item in resolution.images] == [selected]
     assert prepared.report.status == "ok"
     assert prepared.dataset is not None
@@ -1548,16 +1529,19 @@ def test_scene_list_export_http_downloads_unicode_filename(
     empty_geojson = _geojson_bytes([box(500, 500, 510, 510)])
 
     with TestClient(create_app()) as client:
-        assert client.post(
-            "/api/v1/scene-list-export",
-            data={"imagery_type": "kanopus"},
-            files={"geojson": ("Разметка рек.geojson", matching_geojson)},
-        ).status_code == 401
+        assert (
+            client.post(
+                "/api/v1/scene-list-export",
+                data={"imagery_type": "kanopus"},
+                files={"geojson": ("Разметка рек.geojson", matching_geojson)},
+            ).status_code
+            == 401
+        )
         _login(client)
         openapi = client.get("/openapi.json").json()
-        response_content = openapi["paths"]["/api/v1/scene-list-export"]["post"][
-            "responses"
-        ]["200"]["content"]
+        response_content = openapi["paths"]["/api/v1/scene-list-export"]["post"]["responses"][
+            "200"
+        ]["content"]
         assert "text/plain" in response_content
         assert "application/zip" in response_content
 
@@ -1590,20 +1574,14 @@ def test_scene_list_export_http_downloads_unicode_filename(
         )
         assert archive_response.status_code == 200
         assert archive_response.headers["content-type"] == "application/zip"
-        assert "Разметка рек.zip" in unquote(
-            archive_response.headers["content-disposition"]
-        )
+        assert "Разметка рек.zip" in unquote(archive_response.headers["content-disposition"])
         with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
             assert archive.namelist() == [
                 "Разметка рек.txt",
                 "Разметка рек_футпринты.geojson",
             ]
-            assert archive.read("Разметка рек.txt").decode("utf-8") == (
-                "регион/Сцена один\n"
-            )
-            footprint_payload = json.loads(
-                archive.read("Разметка рек_футпринты.geojson")
-            )
+            assert archive.read("Разметка рек.txt").decode("utf-8") == ("регион/Сцена один\n")
+            footprint_payload = json.loads(archive.read("Разметка рек_футпринты.geojson"))
             assert footprint_payload["features"][0]["properties"] == {
                 "scene_id": "регион/Сцена один",
                 "relative_path": "регион/Сцена один.tif",
@@ -1635,15 +1613,16 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
     with TestClient(create_app()) as client:
         openapi = client.get("/openapi.json").json()
         assert "MarkupExportRequest" in openapi["components"]["schemas"]
-        assert "exclude_boundary_objects" in openapi["components"]["schemas"][
-            "TestSampleBatchItemCreate"
-        ]["properties"]
+        assert (
+            "exclude_boundary_objects"
+            in openapi["components"]["schemas"]["TestSampleBatchItemCreate"]["properties"]
+        )
         preview_contract = openapi["paths"][
             "/api/v1/markup-export/{export_id}/tiles/{tile_index}/preview"
         ]["get"]["responses"]["200"]["content"]
-        download_contract = openapi["paths"][
-            "/api/v1/markup-export/{export_id}/download"
-        ]["get"]["responses"]["200"]["content"]
+        download_contract = openapi["paths"]["/api/v1/markup-export/{export_id}/download"]["get"][
+            "responses"
+        ]["200"]["content"]
         assert set(preview_contract) == {"image/png"}
         assert set(download_contract) == {"application/zip"}
         assert client.post("/api/v1/markup-export", json={}).status_code == 401
@@ -1652,17 +1631,26 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
             json={"username": "mluser", "password": "secret"},
         )
         assert login.status_code == 200
-        assert client.post(
-            "/api/v1/markup-export",
-            json={"dataset_key": "Вырубки\\main", "image_count": 0},
-        ).status_code == 422
-        assert client.post(
-            "/api/v1/markup-export",
-            json={"dataset_key": "Неизвестно\\main"},
-        ).status_code == 400
-        assert client.get(
-            "/api/v1/markup-export/00000000-0000-0000-0000-000000000000/download"
-        ).status_code == 404
+        assert (
+            client.post(
+                "/api/v1/markup-export",
+                json={"dataset_key": "Вырубки\\main", "image_count": 0},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/v1/markup-export",
+                json={"dataset_key": "Неизвестно\\main"},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.get(
+                "/api/v1/markup-export/00000000-0000-0000-0000-000000000000/download"
+            ).status_code
+            == 404
+        )
         response = client.post(
             "/api/v1/markup-export",
             json={
@@ -1684,9 +1672,9 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
         assert download.headers["content-type"] == "application/zip"
         content_disposition = unquote(download.headers["content-disposition"])
         assert "вырубки_test_markup.zip" in content_disposition.casefold()
-        assert client.get(
-            f"/api/v1/markup-export/{payload['id']}/tiles/99/preview"
-        ).status_code == 404
+        assert (
+            client.get(f"/api/v1/markup-export/{payload['id']}/tiles/99/preview").status_code == 404
+        )
 
         manifest_path = (
             config.scratch_root
@@ -1710,24 +1698,25 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
     with TestClient(create_app()) as client:
         assert client.get("/api/v1/test-samples").status_code == 401
         assert client.post("/api/v1/test-samples", json={}).status_code == 401
-        assert client.post(
-            "/api/v1/test-samples/00000000-0000-0000-0000-000000000000/optimize",
-            json={
-                "min_tile_count": 1,
-                "max_tile_count": 1,
-                "min_object_count": 1,
-                "metric": "objects",
-            },
-        ).status_code == 401
+        assert (
+            client.post(
+                "/api/v1/test-samples/00000000-0000-0000-0000-000000000000/optimize",
+                json={
+                    "min_tile_count": 1,
+                    "max_tile_count": 1,
+                    "min_object_count": 1,
+                    "metric": "objects",
+                },
+            ).status_code
+            == 401
+        )
         _login(client)
         openapi = client.get("/openapi.json").json()
         assert "TestSampleDetail" in openapi["components"]["schemas"]
-        assert "f1_score" in openapi["components"]["schemas"]["TestSampleTileInfo"][
-            "properties"
-        ]
-        assert "thumbnail_url" in openapi["components"]["schemas"][
-            "TestSampleTileInfo"
-        ]["properties"]
+        assert "f1_score" in openapi["components"]["schemas"]["TestSampleTileInfo"]["properties"]
+        assert (
+            "thumbnail_url" in openapi["components"]["schemas"]["TestSampleTileInfo"]["properties"]
+        )
         assert "TestSampleDraftPreview" in openapi["components"]["schemas"]
         assert "/api/v1/test-samples/reconcile" in openapi["paths"]
         assert "/api/v1/test-samples/{sample_id}/evaluate" in openapi["paths"]
@@ -1739,21 +1728,22 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             "/api/v1/test-samples/{sample_id}/tiles/{tile_index}/thumbnail"
         ]["get"]["responses"]["200"]["content"]
         assert set(thumbnail_contract) == {"image/jpeg"}
-        assert "post" in openapi["paths"][
-            "/api/v1/test-samples/{sample_id}/download"
-        ]
+        assert "post" in openapi["paths"]["/api/v1/test-samples/{sample_id}/download"]
         assert "post" in openapi["paths"]["/api/v1/test-samples/download"]
         assert "/api/v1/test-samples/primary/download" not in openapi["paths"]
         assert "TestSampleBulkDownloadRequest" in openapi["components"]["schemas"]
-        assert "не более одной разметки" in (
-            openapi["components"]["schemas"]["TestSampleBulkDownloadRequest"][
-                "properties"
-            ]["sample_ids"]["description"]
+        assert (
+            "не более одной разметки"
+            in (
+                openapi["components"]["schemas"]["TestSampleBulkDownloadRequest"]["properties"][
+                    "sample_ids"
+                ]["description"]
+            )
         )
         assert (
-            openapi["components"]["schemas"]["TestSampleCreate"]["properties"][
-                "tile_width"
-            ]["default"]
+            openapi["components"]["schemas"]["TestSampleCreate"]["properties"]["tile_width"][
+                "default"
+            ]
             == 1536
         )
         response = client.post(
@@ -1781,9 +1771,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert draft_preview.status_code == 200
         assert draft_preview.json()["enabled_tile_indices"] == [2]
         assert draft_preview.json()["enabled_image_count"] == 1
-        assert client.get(f"/api/v1/test-samples/{sample_id}").json()[
-            "enabled_image_count"
-        ] == 2
+        assert client.get(f"/api/v1/test-samples/{sample_id}").json()["enabled_image_count"] == 2
         unavailable_optimization = client.post(
             f"/api/v1/test-samples/{sample_id}/optimize",
             json={
@@ -1801,39 +1789,29 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert catalog["classes"][0]["name"] == "Вырубки"
         assert catalog["classes"][0]["datasets"] == []
         assert catalog["classes"][0]["samples"][0]["name"] == "Контрольная выборка"
-        assert catalog["classes"][0]["samples"][0]["source_dataset_name"] == (
-            "Вырубки\\main"
-        )
+        assert catalog["classes"][0]["samples"][0]["source_dataset_name"] == ("Вырубки\\main")
         reconciled = client.post("/api/v1/test-samples/reconcile")
         assert reconciled.status_code == 200
-        assert reconciled.json()["classes"][0]["samples"][0][
-            "evaluation"
-        ]["status"] == "unavailable"
+        assert (
+            reconciled.json()["classes"][0]["samples"][0]["evaluation"]["status"] == "unavailable"
+        )
 
         preview = client.get(sample["tiles"][0]["preview_url"])
         assert preview.status_code == 200
         assert "renderer=instance-boundaries-v1" in sample["tiles"][0]["preview_url"]
         assert preview.headers["content-type"] == "image/png"
-        assert preview.headers["cache-control"] == (
-            "private, max-age=31536000, immutable"
-        )
+        assert preview.headers["cache-control"] == ("private, max-age=31536000, immutable")
         thumbnail_url = sample["tiles"][0]["thumbnail_url"]
         assert "renderer=instance-boundaries-v1" in thumbnail_url
         thumbnail = client.get(thumbnail_url)
         assert thumbnail.status_code == 200
         assert thumbnail.headers["content-type"] == "image/jpeg"
-        assert thumbnail.headers["cache-control"] == (
-            "private, max-age=31536000, immutable"
-        )
+        assert thumbnail.headers["cache-control"] == ("private, max-age=31536000, immutable")
         with Image.open(BytesIO(thumbnail.content)) as thumbnail_image:
             assert thumbnail_image.format == "JPEG"
             assert max(thumbnail_image.size) <= 384
 
-        sample_root = (
-            config.stored_files_root
-            / _test_samples.TEST_SAMPLE_ROOT_NAME
-            / sample_id
-        )
+        sample_root = config.stored_files_root / _test_samples.TEST_SAMPLE_ROOT_NAME / sample_id
         thumbnail_path = sample_root / "tile_001_thumbnail.jpg"
         preview_path = sample_root / "tile_001_preview.png"
         preview_version_path = _markup_export._preview_version_path(preview_path)
@@ -1857,9 +1835,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         with Image.open(BytesIO(regenerated.content)) as regenerated_image:
             assert regenerated_image.size == (384, 192)
         assert thumbnail_path.is_file()
-        assert client.get(
-            f"/api/v1/test-samples/{sample_id}/tiles/99/thumbnail"
-        ).status_code == 404
+        assert client.get(f"/api/v1/test-samples/{sample_id}/tiles/99/thumbnail").status_code == 404
         renamed = client.patch(
             f"/api/v1/test-samples/{sample_id}",
             json={"name": "Переименованная выборка"},
@@ -1871,10 +1847,13 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         ).json()
         assert toggled["enabled_image_count"] == 1
         assert toggled["tiles"][0]["enabled"] is False
-        assert client.patch(
-            f"/api/v1/test-samples/{sample_id}/tiles/99",
-            json={"enabled": False},
-        ).status_code == 404
+        assert (
+            client.patch(
+                f"/api/v1/test-samples/{sample_id}/tiles/99",
+                json={"enabled": False},
+            ).status_code
+            == 404
+        )
 
         archive_response = client.get(toggled["download_url"])
         assert archive_response.status_code == 200
@@ -1891,12 +1870,11 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert draft_archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(draft_archive_response.content)) as archive:
             assert set(archive.namelist()) == (
-                _downloaded_tile_names("tile001")
-                | _downloaded_tile_names("tile002")
+                _downloaded_tile_names("tile001") | _downloaded_tile_names("tile002")
             )
-            assert archive.read("tile001.geojson") == (
-                sample_root / "tile_001.geojson"
-            ).read_bytes()
+            assert (
+                archive.read("tile001.geojson") == (sample_root / "tile_001.geojson").read_bytes()
+            )
         draft_without_previews = client.post(
             toggled["download_url"],
             json={
@@ -1912,18 +1890,27 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
                 "tile002.tif",
                 "tile002.geojson",
             }
-        assert client.post(
-            "/api/v1/test-samples/download",
-            json={"sample_ids": []},
-        ).status_code == 422
-        assert client.post(
-            "/api/v1/test-samples/download",
-            json={"sample_ids": [sample_id, sample_id]},
-        ).status_code == 422
-        assert client.post(
-            "/api/v1/test-samples/download",
-            json={"sample_ids": [str(uuid.uuid4())]},
-        ).status_code == 404
+        assert (
+            client.post(
+                "/api/v1/test-samples/download",
+                json={"sample_ids": []},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/v1/test-samples/download",
+                json={"sample_ids": [sample_id, sample_id]},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/v1/test-samples/download",
+                json={"sample_ids": [str(uuid.uuid4())]},
+            ).status_code
+            == 404
+        )
         second_sample_response = client.post(
             "/api/v1/test-samples",
             json={
@@ -1937,14 +1924,20 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         assert second_sample_response.status_code == 200
         second_sample_id = second_sample_response.json()["id"]
-        assert client.put(
-            f"/api/v1/test-samples/{sample_id}/primary",
-            json={"is_primary": True},
-        ).json()["is_primary"] is True
-        assert client.put(
-            f"/api/v1/test-samples/{second_sample_id}/primary",
-            json={"is_primary": True},
-        ).json()["is_primary"] is True
+        assert (
+            client.put(
+                f"/api/v1/test-samples/{sample_id}/primary",
+                json={"is_primary": True},
+            ).json()["is_primary"]
+            is True
+        )
+        assert (
+            client.put(
+                f"/api/v1/test-samples/{second_sample_id}/primary",
+                json={"is_primary": True},
+            ).json()["is_primary"]
+            is True
+        )
         assert client.get(f"/api/v1/test-samples/{sample_id}").json()["is_primary"] is False
         duplicate_class_response = client.post(
             "/api/v1/test-samples/download",
@@ -1952,9 +1945,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         assert duplicate_class_response.status_code == 400
         assert "не более одной разметки" in duplicate_class_response.json()["detail"]
-        assert client.delete(
-            f"/api/v1/test-samples/{second_sample_id}"
-        ).status_code == 204
+        assert client.delete(f"/api/v1/test-samples/{second_sample_id}").status_code == 204
         bulk_without_previews = client.post(
             "/api/v1/test-samples/download",
             json={
@@ -1968,31 +1959,27 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
                 "Вырубки_main/tile001.tif",
                 "Вырубки_main/tile001.geojson",
             }
-            assert all(
-                info.compress_type == zipfile.ZIP_STORED
-                for info in archive.infolist()
-            )
-        persisted_after_download = client.get(
-            f"/api/v1/test-samples/{sample_id}"
-        ).json()
+            assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+        persisted_after_download = client.get(f"/api/v1/test-samples/{sample_id}").json()
         assert persisted_after_download["enabled_image_count"] == 1
         assert [tile["enabled"] for tile in persisted_after_download["tiles"]] == [
             False,
             True,
         ]
-        assert client.post(
-            toggled["download_url"],
-            json={"enabled_tile_indices": [1, 1]},
-        ).status_code == 400
+        assert (
+            client.post(
+                toggled["download_url"],
+                json={"enabled_tile_indices": [1, 1]},
+            ).status_code
+            == 400
+        )
         disabled = client.patch(
             f"/api/v1/test-samples/{sample_id}/tiles/2",
             json={"enabled": False},
         ).json()
         assert disabled["enabled_image_count"] == 0
         assert client.get(disabled["download_url"]).status_code == 400
-        unavailable = client.post(
-            f"/api/v1/test-samples/{sample_id}/evaluate"
-        ).json()
+        unavailable = client.post(f"/api/v1/test-samples/{sample_id}/evaluate").json()
         assert unavailable["evaluation"]["status"] == "unavailable"
         client.patch(
             f"/api/v1/test-samples/{sample_id}/tiles/2",
@@ -2005,11 +1992,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert persisted.status_code == 200
         assert persisted.json()["name"] == "Переименованная выборка"
         assert persisted.json()["tiles"][0]["enabled"] is False
-        sample_root = (
-            config.stored_files_root
-            / "test-samples"
-            / sample_id
-        )
+        sample_root = config.stored_files_root / "test-samples" / sample_id
         assert sample_root.is_dir()
         assert client.delete(f"/api/v1/test-samples/{sample_id}").status_code == 204
         assert not sample_root.exists()
@@ -2025,6 +2008,18 @@ def test_test_sample_batch_latest_preserves_next_form_defaults(
 
     with TestClient(create_app()) as client:
         _login(client)
+        training_id, pseudo_id = _seed_test_sample_batch_source(config, "Вырубки\\main")
+        options = client.get("/api/v1/test-sample-batches/options")
+        assert options.status_code == 200
+        source_option = next(
+            item
+            for class_option in options.json()["classes"]
+            for item in class_option["datasets"]
+            if item["dataset_key"] == "Вырубки\\main"
+        )
+        assert source_option["training_result_id"] == str(training_id)
+        assert source_option["pseudo_markup_result_id"] == str(pseudo_id)
+        assert source_option["pseudo_status"] == "ready"
         created = client.post(
             "/api/v1/test-sample-batches",
             json={
@@ -2078,15 +2073,14 @@ def test_test_sample_batch_accepts_per_image_dataset(
         bootstrap_response = client.get("/api/v1/bootstrap")
         assert bootstrap_response.status_code == 200
         dataset = next(
-            item
-            for item in bootstrap_response.json()["datasets"]
-            if item["key"] == "Реки\\main"
+            item for item in bootstrap_response.json()["datasets"] if item["key"] == "Реки\\main"
         )
         assert dataset["format"] == "per_image"
         assert dataset["scenes_file"] is None
         assert dataset["annotation_file"] is None
         assert dataset["annotations_dir"]
         assert dataset["image_count"] == 1
+        _seed_test_sample_batch_source(config, "Реки\\main")
 
         created = client.post(
             "/api/v1/test-sample-batches",
@@ -2199,6 +2193,17 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_effective_network_wit
         assert selected.source == "manual"
         assert selected.training_result_id == manual.id
 
+        options = _test_samples.test_sample_batch_options(session, config)
+        main_option = next(
+            item
+            for class_option in options.classes
+            for item in class_option.datasets
+            if item.dataset_key == dataset.key
+        )
+        assert main_option.training_result_id == manual.id
+        assert main_option.pseudo_markup_result_id == pseudo.id
+        assert main_option.pseudo_status == "ready"
+
         class_row.primary_training_result_id = primary.id
         session.flush()
         assert (
@@ -2261,15 +2266,17 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_effective_network_wit
             dataset_version=dataset.version,
             config=config,
         )
-        assert selected_from_other_dataset is not None
-        assert selected_from_other_dataset.id == pseudo.id
+        assert selected_from_other_dataset is None
         cross_dataset_info = _test_samples.test_sample_pseudo_markup_info(
             session,
             sample_row,
             config,
         )
-        assert cross_dataset_info.status == "ready"
-        assert cross_dataset_info.result_id == pseudo.id
+        assert cross_dataset_info.status == "unavailable"
+        assert cross_dataset_info.result_id is None
+
+        pseudo.dataset_key = dataset.key
+        session.flush()
 
         incomplete_scenes_path = tmp_path / "incomplete-scenes.txt"
         incomplete_scenes_path.write_text("missing-scene.tif\n", encoding="utf-8")
@@ -2353,6 +2360,67 @@ def test_test_sample_batch_request_rejects_unlisted_tile_size() -> None:
         )
 
 
+def test_automatic_test_f1_uses_latest_three_and_manual_dataset_action_uses_all(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        sample = create_test_sample(
+            session,
+            _TestSampleCreate(
+                name="Основная",
+                dataset_key="Вырубки\\main",
+                tile_width=16,
+                tile_height=16,
+                image_count=1,
+                object_count=1,
+            ),
+            config,
+        )
+        update_test_sample_primary(
+            session,
+            sample.id,
+            _TestSamplePrimaryUpdate(is_primary=True),
+        )
+        base_time = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        results = [
+            TrainingResultRow(
+                source="manual",
+                dataset_key="Вырубки\\main",
+                class_key="Вырубки\\main",
+                class_display_name="Вырубки\\main",
+                architecture="segformer_b2",
+                model_name=f"Сеть {index}",
+                mlflow_run_id=f"run-{index}",
+                trained_at=base_time + timedelta(days=index),
+                status="ok",
+            )
+            for index in range(5)
+        ]
+        session.add_all(results)
+        session.flush()
+
+        assert queue_class_test_f1(session, "Вырубки\\main", config) == 3
+        queued_ids = {
+            metric.training_result_id
+            for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
+        }
+        assert queued_ids == {result.id for result in results[-3:]}
+
+        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 2
+        all_ids = {
+            metric.training_result_id
+            for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
+        }
+        assert all_ids == {result.id for result in results}
+
+
 def test_persistent_test_sample_metrics_and_stale_revision(
     tmp_path: Path,
     monkeypatch,
@@ -2429,10 +2497,10 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert _test_sample_detail(session, sample_id).evaluation.status == "unavailable"
 
         pseudo = PseudoMarkupResultRow(
-            dataset_key="Вырубки\\archive",
+            dataset_key="Вырубки\\main",
             training_result_id=training.id,
             class_key="Вырубки\\main",
-            source_dataset_name="Вырубки\\archive",
+            source_dataset_name="Вырубки\\main",
             scenes_file_id=scenes_stored.id,
             geojson_file_id=stored.id,
             status="ok",
@@ -2485,22 +2553,15 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         first_tile.pixel_f1 = 0.25
         first_tile.object_f1 = 0.75
         sample_row.quality_metric = "objects"
-        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(
-            0.75
-        )
+        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(0.75)
         sample_row.quality_metric = "pixel"
-        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(
-            0.25
-        )
+        assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(0.25)
         evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
 
         saved_revision = sample_row.content_revision
         saved_evaluated_revision = sample_row.evaluated_revision
         saved_enabled = [tile.tile_index for tile in sample_row.tiles if tile.enabled]
-        saved_tile_f1 = [
-            (tile.pixel_f1, tile.object_f1)
-            for tile in sample_row.tiles
-        ]
+        saved_tile_f1 = [(tile.pixel_f1, tile.object_f1) for tile in sample_row.tiles]
         evaluation_preview = evaluate_test_sample_preview(
             session,
             sample_id,
@@ -2527,10 +2588,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert sample_row.content_revision == saved_revision
         assert sample_row.evaluated_revision == saved_evaluated_revision
         assert [tile.tile_index for tile in sample_row.tiles if tile.enabled] == saved_enabled
-        assert [
-            (tile.pixel_f1, tile.object_f1)
-            for tile in sample_row.tiles
-        ] == saved_tile_f1
+        assert [(tile.pixel_f1, tile.object_f1) for tile in sample_row.tiles] == saved_tile_f1
 
         # Дальше тест проверяет только устаревание псевдоразметки без прямого инференса.
         update_test_sample_tile(
@@ -2742,9 +2800,7 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         assert queued.pseudo_markup.training_result_id == first_result.id
 
         first_job = next(
-            job
-            for job in direct_jobs
-            if (job.config or {}).get("test_sample_id") == str(first.id)
+            job for job in direct_jobs if (job.config or {}).get("test_sample_id") == str(first.id)
         )
         run_root = tmp_path / "direct-evaluation-1"
         (run_root / "scratch").mkdir(parents=True)
@@ -2799,11 +2855,14 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         session.flush()
         class_row.primary_training_result_id = second_result.id
         session.flush()
-        assert reconcile_test_sample_evaluations(
-            session,
-            config,
-            class_keys={first.class_key},
-        ) == 2
+        assert (
+            reconcile_test_sample_evaluations(
+                session,
+                config,
+                class_keys={first.class_key},
+            )
+            == 2
+        )
         pending = _test_sample_detail(session, first.id)
         assert pending.evaluation.status == "queued"
         assert pending.evaluation.training_result_id == first_result.id
@@ -2826,11 +2885,14 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         failed = _test_sample_detail(session, first.id)
         assert failed.evaluation.status == "error"
         assert failed.evaluation.pixel is not None
-        assert reconcile_test_sample_evaluations(
-            session,
-            config,
-            sample_ids={first.id},
-        ) == 0
+        assert (
+            reconcile_test_sample_evaluations(
+                session,
+                config,
+                sample_ids={first.id},
+            )
+            == 0
+        )
         first_row = session.get(_TestSampleRow, first.id)
         assert first_row is not None
         assert queue_test_sample_evaluation(
@@ -3372,15 +3434,43 @@ def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
         report_metrics = {
             "pixel": {
                 "per_class": {
-                    "first_objects": {"f1": 0.6},
-                    "second_objects": {"f1": 0.8},
+                    "first_objects": {
+                        "precision": 0.6,
+                        "recall": 0.6,
+                        "f1": 0.6,
+                        "true_positive": 3,
+                        "false_positive": 2,
+                        "false_negative": 2,
+                    },
+                    "second_objects": {
+                        "precision": 0.8,
+                        "recall": 0.8,
+                        "f1": 0.8,
+                        "true_positive": 4,
+                        "false_positive": 1,
+                        "false_negative": 1,
+                    },
                 },
                 "macro": {"precision": 0.65, "recall": 0.75, "f1": 0.7},
             },
             "objects": {
                 "per_class": {
-                    "first_objects": {"f1": 0.4},
-                    "second_objects": {"f1": 0.8},
+                    "first_objects": {
+                        "precision": 1 / 3,
+                        "recall": 0.5,
+                        "f1": 0.4,
+                        "true_positive": 1,
+                        "false_positive": 2,
+                        "false_negative": 1,
+                    },
+                    "second_objects": {
+                        "precision": 1.0,
+                        "recall": 2 / 3,
+                        "f1": 0.8,
+                        "true_positive": 2,
+                        "false_positive": 0,
+                        "false_negative": 1,
+                    },
                 },
                 "macro": {"precision": 0.55, "recall": 0.65, "f1": 0.6},
             },
@@ -3444,12 +3534,82 @@ def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
         assert metric.status == "queued"
         refreshed_job = session.get(JobRow, metric.job_id)
         assert refreshed_job is not None
-        second_scope = next(
-            item
-            for item in refreshed_job.config["test_samples"]
-            if item["class_slug"] == "second_objects"
-        )
+        assert len(refreshed_job.config["test_samples"]) == 1
+        assert len(refreshed_job.config["managed_full_test_samples"]) == 2
+        assert refreshed_job.config["managed_partial_class_keys"] == [second_class.key]
+        second_scope = refreshed_job.config["test_samples"][0]
+        assert second_scope["class_slug"] == "second_objects"
         assert second_scope["sample_revision"] == second_sample.content_revision
+
+        partial_root = tmp_path / "managed-network-partial-test-f1"
+        partial_payload = _worker._build_test_sample_f1_config(
+            session,
+            refreshed_job,
+            config,
+            partial_root,
+        )
+        assert [tile["target_class_id"] for tile in partial_payload["tiles"]] == [2]
+        partial_metrics = {
+            "pixel": {
+                "per_class": {
+                    "first_objects": {
+                        "true_positive": 0,
+                        "false_positive": 0,
+                        "false_negative": 0,
+                    },
+                    "second_objects": {
+                        "true_positive": 8,
+                        "false_positive": 0,
+                        "false_negative": 0,
+                    },
+                }
+            },
+            "objects": {
+                "per_class": {
+                    "first_objects": {
+                        "true_positive": 0,
+                        "false_positive": 0,
+                        "false_negative": 0,
+                    },
+                    "second_objects": {
+                        "true_positive": 3,
+                        "false_positive": 0,
+                        "false_negative": 0,
+                    },
+                }
+            },
+        }
+        (partial_root / "scratch").mkdir(parents=True)
+        (partial_root / "scratch" / "report.json").write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "processed": 1,
+                    "threshold": 0.5,
+                    "true_positive": 8,
+                    "false_positive": 0,
+                    "false_negative": 0,
+                    "object_true_positive": 3,
+                    "object_false_positive": 0,
+                    "object_false_negative": 0,
+                    "metrics": partial_metrics,
+                }
+            ),
+            encoding="utf-8",
+        )
+        refreshed_job.tmp_path = str(partial_root)
+        refreshed_job.status = "running"
+        _finish_test_sample_f1_job(
+            session,
+            refreshed_job,
+            config,
+            succeeded=True,
+        )
+        assert metric.status == "current"
+        assert metric.metrics["pixel"]["per_class"]["first_objects"]["f1"] == pytest.approx(0.6)
+        assert metric.metrics["pixel"]["per_class"]["second_objects"]["f1"] == pytest.approx(1.0)
+        assert metric.f1 == pytest.approx(0.8)
+        assert metric.object_f1 == pytest.approx(0.7)
 
 
 def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
@@ -3520,10 +3680,7 @@ def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
         try:
             with zipfile.ZipFile(artifact.path) as archive:
                 names = set(archive.namelist())
-                assert all(
-                    info.compress_type == zipfile.ZIP_STORED
-                    for info in archive.infolist()
-                )
+                assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
             assert names == (
                 _downloaded_tile_names(
                     "tile001",
@@ -3676,21 +3833,14 @@ def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
                 folders = {name.split("/", maxsplit=1)[0] for name in archive.namelist()}
                 assert len(folders) == 9
                 assert len(archive.namelist()) == 18
-                assert all(
-                    info.compress_type == zipfile.ZIP_STORED
-                    for info in archive.infolist()
-                )
+                assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
         finally:
             artifact.cleanup()
 
         assert call_count == 9
         assert maximum_active == 8
 
-        broken_root = (
-            config.stored_files_root
-            / "test-samples"
-            / str(samples[0].id)
-        )
+        broken_root = config.stored_files_root / "test-samples" / str(samples[0].id)
         (broken_root / "tile_001.geojson").unlink()
         with pytest.raises(TrainingUIAPIError, match="Файл тестового тайла не найден"):
             build_test_samples_download(
@@ -3809,9 +3959,7 @@ def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_ide
         assert first_row.content_revision == 2
         metrics = [session.get(TrainingResultTestMetricRow, result.id) for result in results]
         assert all(metric is not None and metric.status == "queued" for metric in metrics)
-        queued_jobs = session.scalars(
-            select(JobRow).where(JobRow.status == "queued")
-        ).all()
+        queued_jobs = session.scalars(select(JobRow).where(JobRow.status == "queued")).all()
         assert len(queued_jobs) == 3
         assert all(job.config["test_sample_tile_indices"] == [2] for job in queued_jobs)
         assert sum(job.config["metric_target"] == "training_result" for job in queued_jobs) == 2
@@ -4155,6 +4303,96 @@ def _configure_export_environment(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT", str(tmp_path / "scratch"))
     return get_config()
+
+
+def _seed_test_sample_batch_source(config, dataset_key: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Создать точную готовую пару датасет-сеть для API-тестов группового запуска."""
+
+    session_factory = create_session_factory(config)
+    with session_factory() as session:
+        dataset = _test_samples.find_managed_dataset(session, config, dataset_key)
+        assert dataset is not None
+        class_row = dataset_class_row(session, dataset.key)
+        assert class_row is not None
+        training = TrainingResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            class_key=dataset.key,
+            class_display_name=dataset.name,
+            architecture="segformer_b2",
+            model_name=f"Сеть {dataset.dataset_name or dataset.name}",
+            status="ok",
+        )
+        session.add(training)
+        session.flush()
+        class_row.primary_training_result_id = training.id
+
+        source_root = Path(config.stored_files_root) / "test-source-fixtures"
+        source_root.mkdir(parents=True, exist_ok=True)
+        suffix = uuid.uuid4().hex
+        scenes_path = source_root / f"{suffix}.txt"
+        if dataset.scenes_file:
+            scenes_path.write_text(
+                Path(dataset.scenes_file).read_text(encoding="utf-8-sig"),
+                encoding="utf-8",
+            )
+        else:
+            assert dataset.annotations_dir is not None
+            resolution = resolve_scene_images(
+                SceneImageResolutionRequest(
+                    images_dir=dataset.images_dir,
+                    annotations_dir=dataset.annotations_dir,
+                )
+            )
+            assert not resolution.missing_scenes
+            images_root = Path(dataset.images_dir).resolve()
+            scenes_path.write_text(
+                "\n".join(
+                    Path(item.image_path).resolve().relative_to(images_root).as_posix()
+                    for item in resolution.images
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        prediction_path = source_root / f"{suffix}.geojson"
+        if dataset.annotation_file:
+            prediction_path.write_bytes(Path(dataset.annotation_file).read_bytes())
+        else:
+            prediction_path.write_text(
+                json.dumps({"type": "FeatureCollection", "features": []}),
+                encoding="utf-8",
+            )
+        scenes_file = StoredFileRow(
+            kind=StoredFileKind.SCENES_TXT.value,
+            original_name=scenes_path.name,
+            content_type="text/plain",
+            path=str(scenes_path),
+            size_bytes=scenes_path.stat().st_size,
+        )
+        prediction_file = StoredFileRow(
+            kind=StoredFileKind.PSEUDO_MARKUP_GEOJSON.value,
+            original_name=prediction_path.name,
+            content_type="application/geo+json",
+            path=str(prediction_path),
+            size_bytes=prediction_path.stat().st_size,
+        )
+        session.add_all([scenes_file, prediction_file])
+        session.flush()
+        pseudo = PseudoMarkupResultRow(
+            source="manual",
+            dataset_key=dataset.key,
+            dataset_version=dataset.version,
+            training_result_id=training.id,
+            class_key=dataset.class_key or dataset.key,
+            source_dataset_name=dataset.name,
+            image_count=dataset.image_count,
+            scenes_file_id=scenes_file.id,
+            geojson_file_id=prediction_file.id,
+            status="ok",
+        )
+        session.add(pseudo)
+        session.commit()
+        return training.id, pseudo.id
 
 
 def _write_export_dataset(mlmarkup_root: Path, images_root: Path) -> None:

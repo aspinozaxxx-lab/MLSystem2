@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -1012,6 +1013,9 @@ def _build_test_sample_f1_config(
         raise RuntimeError("Успешный результат обучения для расчёта F1 не найден.")
     saved_evaluation = _is_saved_test_sample_evaluation_job(row)
     plan = None
+    managed_targets: tuple[Any, ...] = ()
+    managed_scope: list[dict[str, Any]] = []
+    managed_full_scope: list[dict[str, Any]] = []
     if saved_evaluation:
         try:
             sample_id = uuid.UUID(str(row.config.get("test_sample_id")))
@@ -1035,11 +1039,19 @@ def _build_test_sample_f1_config(
         if plan.error is not None or not plan.targets:
             raise RuntimeError(plan.error or "Основные тестовые разметки были удалены.")
         if plan.managed:
-            if list(row.config.get("test_samples") or []) != _training_result_test_scope(plan):
+            managed_full_scope = _training_result_test_scope(plan)
+            expected_full_scope = list(
+                row.config.get("managed_full_test_samples") or row.config.get("test_samples") or []
+            )
+            if expected_full_scope != managed_full_scope:
                 raise RuntimeError(
                     "Состав основных тестовых разметок управляемого датасета изменён."
                 )
-            sample = plan.targets[0].sample
+            managed_scope = list(row.config.get("test_samples") or [])
+            managed_targets = _managed_targets_for_scope(plan, managed_scope)
+            if not managed_targets:
+                raise RuntimeError("В задании не выбран класс управляемого датасета.")
+            sample = managed_targets[0].sample
         else:
             sample = plan.targets[0].sample
             compatibility_error = test_sample_model_compatibility_error(
@@ -1120,7 +1132,7 @@ def _build_test_sample_f1_config(
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
     tiles: list[dict[str, Any]] = []
-    targets = list(plan.targets) if plan is not None and plan.managed else [None]
+    targets = list(managed_targets) if plan is not None and plan.managed else [None]
     for target in targets:
         target_sample = target.sample if target is not None else sample
         sample_root = Path(config.stored_files_root) / "test-samples" / str(target_sample.id)
@@ -1174,8 +1186,9 @@ def _build_test_sample_f1_config(
             None if plan is not None and plan.managed else sample.content_revision
         ),
         "managed_test_samples": bool(plan is not None and plan.managed),
-        "test_samples": (
-            _training_result_test_scope(plan) if plan is not None and plan.managed else []
+        "test_samples": managed_scope if plan is not None and plan.managed else [],
+        "managed_full_test_samples": (
+            managed_full_scope if plan is not None and plan.managed else []
         ),
         "f1_aggregation": ("macro" if plan is not None and plan.managed else "foreground"),
         "tiles": tiles,
@@ -1200,6 +1213,28 @@ def _build_test_sample_f1_config(
         "device": "cuda",
         **_geoalert_runtime_config(config, inference_backend),
     }
+
+
+def _managed_targets_for_scope(
+    plan: Any,
+    requested_scope: list[dict[str, Any]],
+) -> tuple[Any, ...]:
+    full_scope = _training_result_test_scope(plan)
+    requested_indices: list[int] = []
+    for requested in requested_scope:
+        matches = [
+            index
+            for index, current in enumerate(full_scope)
+            if current == requested and index not in requested_indices
+        ]
+        if not matches:
+            raise RuntimeError(
+                "Выбранный класс или ревизия тестовой разметки управляемого датасета изменены."
+            )
+        requested_indices.append(matches[0])
+    if requested_indices != sorted(requested_indices):
+        raise RuntimeError("Порядок тестовых разметок управляемого датасета повреждён.")
+    return tuple(plan.targets[index] for index in requested_indices)
 
 
 def _geoalert_runtime_config(
@@ -1825,13 +1860,34 @@ def _finish_test_sample_f1_job(
     if metric is not None:
         training_result = _test_sample_f1_training_result(session, row)
         managed_evaluation = bool((row.config or {}).get("managed_test_samples"))
+        partial_managed_evaluation = False
+        managed_full_scope: list[dict[str, Any]] = []
+        managed_selected_slugs: list[str] = []
         if managed_evaluation and training_result is not None:
             plan = _training_result_test_plan(session, training_result)
+            managed_full_scope = list(
+                (row.config or {}).get("managed_full_test_samples")
+                or (row.config or {}).get("test_samples")
+                or []
+            )
+            managed_scope = list((row.config or {}).get("test_samples") or [])
+            try:
+                selected_targets = _managed_targets_for_scope(plan, managed_scope)
+            except RuntimeError:
+                selected_targets = ()
+            managed_selected_slugs = [
+                str(target.class_slug)
+                for target in selected_targets
+                if target.class_slug is not None
+            ]
+            partial_managed_evaluation = bool(
+                managed_scope != managed_full_scope and selected_targets
+            )
             still_current = bool(
                 plan.managed
                 and plan.error is None
-                and list((row.config or {}).get("test_samples") or [])
-                == _training_result_test_scope(plan)
+                and managed_full_scope == _training_result_test_scope(plan)
+                and selected_targets
                 and metric.sample_id is None
                 and metric.sample_revision is None
                 and metric.job_id == row.id
@@ -1863,7 +1919,33 @@ def _finish_test_sample_f1_job(
                 and metric.sample_revision == expected_revision
                 and metric.job_id == row.id
             )
+        merged_metrics: dict[str, Any] | None = None
+        if succeeded and still_current and report is not None and partial_managed_evaluation:
+            try:
+                merged_metrics = _merge_partial_managed_metrics(
+                    metric.metrics,
+                    report.get("metrics"),
+                    full_scope=managed_full_scope,
+                    selected_slugs=managed_selected_slugs,
+                )
+            except RuntimeError as exc:
+                succeeded = False
+                row.status = JobStatus.FAILED.value
+                row.error = str(exc)
         if succeeded and still_current and report is not None:
+            if merged_metrics is not None:
+                pixel_values = _managed_metric_values(merged_metrics, "pixel")
+                object_values = _managed_metric_values(merged_metrics, "objects")
+            else:
+                pixel_values = _report_metric_values(
+                    report,
+                    section="pixel" if managed_evaluation else None,
+                )
+                object_values = _report_metric_values(
+                    report,
+                    prefix="object_",
+                    section="objects" if managed_evaluation else None,
+                )
             (
                 metric.precision,
                 metric.recall,
@@ -1871,10 +1953,7 @@ def _finish_test_sample_f1_job(
                 metric.true_positive,
                 metric.false_positive,
                 metric.false_negative,
-            ) = _report_metric_values(
-                report,
-                section="pixel" if managed_evaluation else None,
-            )
+            ) = pixel_values
             (
                 metric.object_precision,
                 metric.object_recall,
@@ -1882,14 +1961,10 @@ def _finish_test_sample_f1_job(
                 metric.object_true_positive,
                 metric.object_false_positive,
                 metric.object_false_negative,
-            ) = _report_metric_values(
-                report,
-                prefix="object_",
-                section="objects" if managed_evaluation else None,
-            )
+            ) = object_values
             report_threshold = report.get("threshold")
             metric.threshold = float(report_threshold) if report_threshold is not None else None
-            metric.metrics = dict(report.get("metrics") or {})
+            metric.metrics = merged_metrics or dict(report.get("metrics") or {})
             metric.status = "current"
             metric.evaluated_at = row.finished_at
             metric.error = None
@@ -2054,6 +2129,132 @@ def _report_metric_values(
         true_positive,
         false_positive,
         false_negative,
+    )
+
+
+def _merge_partial_managed_metrics(
+    stored_metrics: Any,
+    report_metrics: Any,
+    *,
+    full_scope: list[dict[str, Any]],
+    selected_slugs: list[str],
+) -> dict[str, Any]:
+    stored = copy.deepcopy(stored_metrics) if isinstance(stored_metrics, dict) else {}
+    incoming = copy.deepcopy(report_metrics) if isinstance(report_metrics, dict) else {}
+    full_slugs = [
+        str(item.get("class_slug")) for item in full_scope if item.get("class_slug") is not None
+    ]
+    selected = set(selected_slugs)
+    if not full_slugs or not selected or not selected.issubset(full_slugs):
+        raise RuntimeError("Не удалось определить классы частичного пересчёта F1.")
+
+    merged = stored
+    for section_name in ("pixel", "objects"):
+        stored_section = stored.get(section_name)
+        incoming_section = incoming.get(section_name)
+        stored_per_class = (
+            stored_section.get("per_class") if isinstance(stored_section, dict) else None
+        )
+        incoming_per_class = (
+            incoming_section.get("per_class") if isinstance(incoming_section, dict) else None
+        )
+        if not isinstance(stored_per_class, dict) or not isinstance(incoming_per_class, dict):
+            raise RuntimeError("Сохранённые метрики не позволяют выполнить частичный пересчёт.")
+        merged_per_class: dict[str, dict[str, Any]] = {}
+        for slug in full_slugs:
+            source = incoming_per_class if slug in selected else stored_per_class
+            value = source.get(slug)
+            if not isinstance(value, dict):
+                raise RuntimeError(f"В результате отсутствует метрика класса {slug}.")
+            merged_per_class[slug] = _normalized_metric_payload(value)
+        summary = _managed_section_summary(merged_per_class)
+        merged[section_name] = {
+            **(stored_section if isinstance(stored_section, dict) else {}),
+            "per_class": merged_per_class,
+            **summary,
+        }
+
+    warnings = [
+        str(value)
+        for source in (stored.get("warnings"), incoming.get("warnings"))
+        for value in (source if isinstance(source, list) else [])
+    ]
+    merged["warnings"] = list(dict.fromkeys(warnings))
+    merged["aggregation"] = "macro"
+    merged["aggregation_label"] = "Среднее F1 по основным выборкам классов"
+    merged["test_samples"] = full_scope
+    return merged
+
+
+def _normalized_metric_payload(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        true_positive = int(value["true_positive"])
+        false_positive = int(value["false_positive"])
+        false_negative = int(value["false_negative"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("В поклассовой метрике отсутствуют TP/FP/FN.") from exc
+    calculated = _metric_payload_from_counts(
+        true_positive,
+        false_positive,
+        false_negative,
+    )
+    return {**value, **calculated}
+
+
+def _metric_payload_from_counts(
+    true_positive: int,
+    false_positive: int,
+    false_negative: int,
+) -> dict[str, float | int]:
+    precision_denominator = true_positive + false_positive
+    recall_denominator = true_positive + false_negative
+    precision = true_positive / precision_denominator if precision_denominator else 0.0
+    recall = true_positive / recall_denominator if recall_denominator else 0.0
+    f1_denominator = precision + recall
+    iou_denominator = true_positive + false_positive + false_negative
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": 2.0 * precision * recall / f1_denominator if f1_denominator else 0.0,
+        "iou": true_positive / iou_denominator if iou_denominator else 0.0,
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+    }
+
+
+def _managed_section_summary(
+    per_class: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, float | int]]:
+    values = list(per_class.values())
+    macro = {
+        key: sum(float(value[key]) for value in values) / len(values)
+        for key in ("precision", "recall", "f1", "iou")
+    }
+    micro = _metric_payload_from_counts(
+        sum(int(value["true_positive"]) for value in values),
+        sum(int(value["false_positive"]) for value in values),
+        sum(int(value["false_negative"]) for value in values),
+    )
+    return {"macro": macro, "micro": micro, "foreground": dict(micro)}
+
+
+def _managed_metric_values(
+    metrics: dict[str, Any],
+    section_name: str,
+) -> tuple[float, float, float, int, int, int]:
+    section = metrics.get(section_name)
+    macro = section.get("macro") if isinstance(section, dict) else None
+    micro = section.get("micro") if isinstance(section, dict) else None
+    if not isinstance(macro, dict) or not isinstance(micro, dict):
+        raise RuntimeError("Не удалось собрать итоговую метрику управляемого датасета.")
+    return (
+        float(macro["precision"]),
+        float(macro["recall"]),
+        float(macro["f1"]),
+        int(micro["true_positive"]),
+        int(micro["false_positive"]),
+        int(micro["false_negative"]),
     )
 
 

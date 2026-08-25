@@ -2741,10 +2741,12 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "Не учитывать объекты, выходящие за тайл" in app_tsx
     assert "defaultTrainingZipModelName" in app_tsx
     assert "metric: previous.metric" not in app_tsx
-    assert "qualityMetricLabel(row.dataset.quality_metric)" in app_tsx
+    assert "qualityMetricLabel(dataset.quality_metric)" in app_tsx
     assert 'head === "classes"' in app_tsx
     assert "/dataset-catalog/sync" in app_tsx
-    assert 'className="test-sample-batch-grid"' in app_tsx
+    assert 'className="test-sample-batch-class-list"' in app_tsx
+    assert '"/test-sample-batches/options"' in app_tsx
+    assert "Сеть: {dataset.training_model_name" in app_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx

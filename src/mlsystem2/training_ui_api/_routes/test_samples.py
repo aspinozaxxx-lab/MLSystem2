@@ -23,6 +23,7 @@ from mlsystem2.training_ui_api._test_samples import (
     optimize_test_sample,
     optimize_test_sample_preview,
     reconcile_test_sample_evaluations,
+    test_sample_batch_options,
     test_sample_batch_detail,
     test_sample_catalog,
     test_sample_detail,
@@ -32,11 +33,15 @@ from mlsystem2.training_ui_api._test_samples import (
     update_test_sample_primary,
     update_test_sample_tile,
 )
-from mlsystem2.training_ui_api._service import ensure_test_sample_pseudo_markup_job
+from mlsystem2.training_ui_api._service import (
+    ensure_test_sample_batch_dataset_pseudo_markup_job,
+    ensure_test_sample_pseudo_markup_job,
+)
 from mlsystem2.training_ui_api.contracts import (
     JobDetail,
     TestSampleBatchCreate,
     TestSampleBatchInfo,
+    TestSampleBatchOptionsResponse,
     TestSampleBulkDownloadRequest,
     TestSampleCatalogResponse,
     TestSampleCreate,
@@ -54,6 +59,33 @@ from .common import RouteContext
 
 
 def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get(
+        "/api/v1/test-sample-batches/options",
+        response_model=TestSampleBatchOptionsResponse,
+    )
+    def get_test_sample_batch_options(
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchOptionsResponse:
+        return test_sample_batch_options(db, ctx.config)
+
+    @app.post(
+        "/api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup",
+        response_model=JobDetail,
+    )
+    def post_test_sample_batch_dataset_pseudo_markup(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> JobDetail:
+        detail = ensure_test_sample_batch_dataset_pseudo_markup_job(
+            db,
+            dataset_key,
+            ctx.config,
+        )
+        db.commit()
+        return detail
+
     @app.post("/api/v1/test-sample-batches", response_model=TestSampleBatchInfo)
     def post_test_sample_batch(
         request: TestSampleBatchCreate,
@@ -111,11 +143,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": "ZIP выбранных сохранённых тестовых разметок.",
-                "content": {
-                    "application/zip": {
-                        "schema": {"type": "string", "format": "binary"}
-                    }
-                },
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
             }
         },
     )
@@ -145,9 +173,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        return _sample_or_404(
-            lambda: test_sample_detail(db, sample_id, ctx.config)
-        )
+        return _sample_or_404(lambda: test_sample_detail(db, sample_id, ctx.config))
 
     @app.patch("/api/v1/test-samples/{sample_id}", response_model=TestSampleDetail)
     def patch_test_sample(
@@ -156,9 +182,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        detail = _sample_or_404(
-            lambda: update_test_sample(db, sample_id, request, ctx.config)
-        )
+        detail = _sample_or_404(lambda: update_test_sample(db, sample_id, request, ctx.config))
         db.commit()
         return detail
 
@@ -234,9 +258,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        detail = _sample_or_404(
-            lambda: evaluate_test_sample_by_id(db, sample_id, ctx.config)
-        )
+        detail = _sample_or_404(lambda: evaluate_test_sample_by_id(db, sample_id, ctx.config))
         db.commit()
         return detail
 
@@ -265,9 +287,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleDetail:
-        detail = _sample_or_404(
-            lambda: optimize_test_sample(db, sample_id, request, ctx.config)
-        )
+        detail = _sample_or_404(lambda: optimize_test_sample(db, sample_id, request, ctx.config))
         db.commit()
         return detail
 
@@ -291,9 +311,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": "Постоянное PNG-превью тестового тайла.",
-                "content": {
-                    "image/png": {"schema": {"type": "string", "format": "binary"}}
-                },
+                "content": {"image/png": {"schema": {"type": "string", "format": "binary"}}},
             }
         },
     )
@@ -318,9 +336,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": "Компактная JPEG-миниатюра тестового тайла.",
-                "content": {
-                    "image/jpeg": {"schema": {"type": "string", "format": "binary"}}
-                },
+                "content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}},
             }
         },
     )
@@ -345,11 +361,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": "ZIP включённых тайлов постоянной тестовой разметки.",
-                "content": {
-                    "application/zip": {
-                        "schema": {"type": "string", "format": "binary"}
-                    }
-                },
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
             }
         },
     )
@@ -358,9 +370,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> FileResponse:
-        artifact = _sample_or_404(
-            lambda: build_test_sample_download(db, sample_id, ctx.config)
-        )
+        artifact = _sample_or_404(lambda: build_test_sample_download(db, sample_id, ctx.config))
         return FileResponse(
             artifact.path,
             filename=artifact.filename,
@@ -374,11 +384,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         responses={
             200: {
                 "description": "ZIP выбранных тайлов незаписанного черновика тестовой разметки.",
-                "content": {
-                    "application/zip": {
-                        "schema": {"type": "string", "format": "binary"}
-                    }
-                },
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
             }
         },
     )
