@@ -183,7 +183,7 @@ PY
 Поддерживаются два взаимоисключающих формата. В legacy-формате используй `dataset.scenes_file` и `dataset.annotation_file`. Если есть hard negative объекты, добавь `dataset.hard_negative_annotation_file`.
 Hard-negative GeoJSON содержит области, которые модель должна считать фоном: внутри tile supervision mask они
 получают служебное значение `-1`, перед loss превращаются в target background `0` и получают pixel weight из
-`train.hard_negative_weight`. Это не отдельный выходной класс модели.
+произведения `train.background_weight × train.hard_negative_weight`. Это не отдельный выходной класс модели.
 Nodata по значению, невалидные пиксели `dataset_mask` и padding за границей TIFF получают target background `0`.
 Ложный прогноз целевого класса на них увеличивает loss и учитывается validation-метриками как false positive.
 
@@ -262,6 +262,7 @@ train:
   loss: focal_tversky
   focal_alpha: 0.6
   pos_weight: 1.0
+  background_weight: 1.0
   hard_negative_weight: 1.0
   tversky_alpha: 0.4
   tversky_beta: 0.6
@@ -272,8 +273,9 @@ train:
   max_training_time_sec: 1800
 ```
 
-`tile_preparation.hard_negative_factor` управляет частотой hard-negative tiles в train sampler. `train.hard_negative_weight`
-управляет только штрафом loss на pixels внутри hard-negative геометрии; остальной background остается с весом `1`.
+`tile_preparation.hard_negative_factor` управляет частотой hard-negative tiles в train sampler.
+`train.background_weight` задаёт базовый вес всего фона, а `train.hard_negative_weight` дополнительно умножает
+штраф loss на pixels внутри hard-negative геометрии.
 
 Воркеры, prefetch, seed, device, binary task и каналы модели задаются defaults модулей.
 `max_train_batches_per_epoch`, `max_val_batches_per_epoch` и `max_training_time_sec` остаются параметрами запуска,

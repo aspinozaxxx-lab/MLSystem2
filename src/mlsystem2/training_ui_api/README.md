@@ -315,13 +315,14 @@ process получает SIGTERM, а известный MLflow run помеча�
 Шаблон хранит `config_schema` и `default_config` в JSONB. `default_config` использует ключи вида
 `train.learning_rate`, `tile_preparation.tile_size`; это только параметры, которые оператор меняет на сайте.
 В этот набор входят `tile_preparation.positive_factor`, `tile_preparation.hard_negative_factor`,
-`tile_preparation.background_factor`, `train.pos_weight`, `train.hard_negative_weight` и
+`tile_preparation.background_factor`, `train.pos_weight`, `train.background_weight`, `train.hard_negative_weight` и
 `train.max_training_time_sec`: пустое значение означает обучение без
 wall-clock лимита. Схема каждого параметра хранит label, tooltip, допустимые границы и рекомендуемый диапазон
 для одинаковых подсказок на страницах шаблонов, запуска и просмотра задания. Сумма трех tile factors должна быть равна `1`; если hard-negative разметки или tiles нет,
 недостающая hard-negative доля используется как positive внутри общего marked-бюджета.
-`train.hard_negative_weight` не меняет sampler и не взвешивает весь tile: он усиливает loss только на pixels,
-которые в supervision mask пришли из `hard_negative_annotation_file`.
+`train.background_weight` задаёт базовый вес всех background pixels в loss. `train.hard_negative_weight` не
+меняет sampler: он дополнительно умножает вес только pixels, которые в supervision mask пришли из
+`hard_negative_annotation_file`.
 Инфраструктурные defaults DataLoader, `train.device=cuda`, binary task и каналы модели задаются модулем
 `settings` и не сохраняются в UI-шаблонах.
 
@@ -373,8 +374,8 @@ Frontend не обращается к Postgres. Сервис не импорти
 `python -m mlsystem2.cli.train --settings configs/settings.server.yaml --run ...`.
 Стабильные параметры приложения, такие как workers/prefetch/seed/device, берутся из `settings.yml`
 и не записываются в `run.yml`. Worker всегда записывает в `run.yml` нормализованные три tile factors,
-`train.hard_negative_weight` и добавляет
-`hard_negative_annotation_file`, если он найден у legacy MLMarkup dataset. Для per-image worker атомарно копирует
+`train.background_weight`, `train.hard_negative_weight` и добавляет `hard_negative_annotation_file`, если он
+найден у legacy MLMarkup dataset. Для per-image worker атомарно копирует
 все GeoJSON в snapshot задания и записывает `annotations_dir`; дальнейшая публикация MLMarkup не меняет уже
 запущенное обучение. Секция `inference` в training `run.yml` не создается: checkpoint, threshold,
 batch size и output GeoJSON задаются в отдельном `pseudo_config.yaml` при запуске псевдоразметки. Training-процесс сразу после создания MLflow run пишет

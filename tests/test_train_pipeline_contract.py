@@ -382,6 +382,7 @@ def test_train_pipeline_marks_mlflow_run_killed_on_interrupt() -> None:
 
 def test_train_pipeline_builds_multiclass_requests() -> None:
     settings = _multiclass_settings()
+    settings.train.background_weight = 0.35
     model = ModelHandle(
         spec=ModelSpec(name="segformer_b2", input_channels=4, output_channels=3),
         model=object(),
@@ -419,6 +420,7 @@ def test_train_pipeline_builds_multiclass_requests() -> None:
     )
     assert train_request.config.task == "multiclass"
     assert train_request.config.loss == "cross_entropy"
+    assert train_request.config.background_weight == 0.35
     assert train_request.config.hard_negative_weight == 1.0
     assert train_request.config.class_slugs == ["class_a", "class_b"]
 

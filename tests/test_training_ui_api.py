@@ -515,6 +515,43 @@ def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
         assert river.baseline_default_config["postprocess.simplify_m"] == 1.0
 
 
+def test_seed_training_template_backfills_background_weight_and_preserves_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        template = session.scalar(
+            select(TrainingTemplateRow).where(
+                TrainingTemplateRow.architecture == "smp_segformer_b2",
+                TrainingTemplateRow.dataset_key.is_(None),
+            )
+        )
+        assert template is not None
+        current = dict(template.default_config)
+        baseline = dict(template.baseline_default_config)
+        current.pop("train.background_weight")
+        baseline.pop("train.background_weight")
+        current["train.batch_size"] = 3
+        template.default_config = current
+        template.baseline_default_config = baseline
+        session.flush()
+
+        ensure_seed_templates(session)
+        session.flush()
+
+        assert template.default_config["train.background_weight"] == 1.0
+        assert template.baseline_default_config["train.background_weight"] == 1.0
+        assert template.default_config["train.batch_size"] == 3
+
+
 def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -2959,6 +2996,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "train.max_train_batches_per_epoch" in template_keys
         assert "train.max_val_batches_per_epoch" in template_keys
         assert "train.max_training_time_sec" in template_keys
+        assert "train.background_weight" in template_keys
         assert "train.hard_negative_weight" in template_keys
         assert "tile_preparation.positive_factor" in template_keys
         assert "tile_preparation.hard_negative_factor" in template_keys
@@ -2966,6 +3004,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert segformer_template["default_config"]["tile_preparation.positive_factor"] == 0.8
         assert segformer_template["default_config"]["tile_preparation.hard_negative_factor"] == 0.0
         assert segformer_template["default_config"]["tile_preparation.background_factor"] == 0.2
+        assert segformer_template["default_config"]["train.background_weight"] == 1.0
         assert segformer_template["default_config"]["train.hard_negative_weight"] == 1.0
         assert segformer_template["default_config"]["train.max_train_batches_per_epoch"] == 72
         assert segformer_template["default_config"]["train.max_val_batches_per_epoch"] == 1000
@@ -2988,8 +3027,16 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             if item["key"] == "train.hard_negative_weight"
         )
         assert "размеченных hard-negative зон" in hard_weight_field["tooltip"]
-        assert "Остальной background" in hard_weight_field["tooltip"]
+        assert "умножается на background_weight" in hard_weight_field["tooltip"]
         assert "1..5" in hard_weight_field["recommended_range"]
+        background_weight_field = next(
+            item
+            for item in segformer_template["config_schema"]["fields"]
+            if item["key"] == "train.background_weight"
+        )
+        assert background_weight_field["label"] == "Вес фона"
+        assert "nodata" in background_weight_field["tooltip"]
+        assert "0.1..2" in background_weight_field["recommended_range"]
         changed_config = dict(segformer_template["default_config"])
         changed_config["train.batch_size"] = 3
         updated = client.put(
@@ -3414,6 +3461,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "train.loss": "bce_dice",
                     "train.focal_alpha": 0.6,
                     "train.pos_weight": 1.0,
+                    "train.background_weight": 0.4,
                     "train.hard_negative_weight": 2.0,
                     "train.tversky_alpha": 0.4,
                     "train.tversky_beta": 0.6,
@@ -3455,6 +3503,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         assert "positive_factor: 0.5" in config_yaml
         assert "hard_negative_factor: 0.3" in config_yaml
         assert "background_factor: 0.2" in config_yaml
+        assert "background_weight: 0.4" in config_yaml
         assert "hard_negative_weight: 2.0" in config_yaml
         assert "max_train_batches_per_epoch: 72" in config_yaml
         assert "max_val_batches_per_epoch: 1000" in config_yaml
@@ -4584,6 +4633,7 @@ def _short_training_config() -> dict[str, object]:
         "train.loss": "bce_dice",
         "train.focal_alpha": 0.6,
         "train.pos_weight": 1.0,
+        "train.background_weight": 1.0,
         "train.hard_negative_weight": 1.0,
         "train.tversky_alpha": 0.4,
         "train.tversky_beta": 0.6,

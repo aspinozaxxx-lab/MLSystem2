@@ -1,4 +1,4 @@
-﻿"""Публичные контракты настроек."""
+"""Публичные контракты настроек."""
 
 from __future__ import annotations
 
@@ -66,9 +66,7 @@ class DatasetSettings(BaseModel):
                 raise ValueError("annotations_dir не должен быть пустым")
             return self
         if not self.scenes_file or not self.annotation_file:
-            raise ValueError(
-                "binary dataset должен задавать scenes_file и annotation_file"
-            )
+            raise ValueError("binary dataset должен задавать scenes_file и annotation_file")
         return self
 
     @property
@@ -141,6 +139,7 @@ class TrainSettings(BaseModel):
     loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]
     focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     pos_weight: float = Field(default=1.0, gt=0.0)
+    background_weight: float = Field(default=1.0, gt=0.0)
     hard_negative_weight: float = Field(default=1.0, gt=0.0)
     tversky_alpha: float = Field(default=0.4, gt=0.0)
     tversky_beta: float = Field(default=0.6, gt=0.0)

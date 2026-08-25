@@ -251,7 +251,7 @@ def train_model(
             raise TrainError("Обучение не выполнило ни одной эпохи.")
         if stopped_early and not best_checkpoint_path.is_file():
             raise TrainError(
-                    "Нельзя остановить обучение с сохранением: лучший чекпойнт ещё не создан."
+                "Нельзя остановить обучение с сохранением: лучший чекпойнт ещё не создан."
             )
 
         artifacts = [CheckpointArtifact(uri=str(best_checkpoint_path), label="best")]
@@ -936,6 +936,7 @@ def _loss(
         weights = _multiclass_base_loss_weights(
             torch,
             logits,
+            masks,
             hard_negative_pixels,
             class_hard_negative_pixels,
             config,
@@ -966,7 +967,7 @@ def _loss(
         return cross_entropy + class_hard_negative_loss
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
@@ -982,7 +983,7 @@ def _loss(
         )
     if config.loss == "focal_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
@@ -999,7 +1000,7 @@ def _loss(
             config,
         )
     if config.loss == "focal_tversky":
-        weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
         focal, _bce = _focal_loss_with_bce(torch, logits, masks, config, weights)
         return focal + _tversky_loss(
             torch,
@@ -1034,21 +1035,45 @@ def _best_threshold_metrics(
 def _pixel_loss_weights(
     torch,
     logits,
+    masks,
     hard_negative_pixels,
     config,
 ):
+    background_weight = float(getattr(config, "background_weight", 1.0))
     hard_negative_weight = float(getattr(config, "hard_negative_weight", 1.0))
     has_hard_negative_weights = (
         hard_negative_weight != 1.0
         and hard_negative_pixels is not None
         and hasattr(hard_negative_pixels, "to")
     )
-    if not has_hard_negative_weights:
+    if background_weight == 1.0 and not has_hard_negative_weights:
         return None
-    return 1.0 + (hard_negative_weight - 1.0) * hard_negative_pixels.to(
+    weights = torch.ones_like(
+        masks,
         device=logits.device,
         dtype=logits.dtype,
     )
+    if background_weight != 1.0:
+        background_pixels = masks == 0
+        weights = torch.where(
+            background_pixels,
+            torch.as_tensor(
+                background_weight,
+                device=logits.device,
+                dtype=logits.dtype,
+            ),
+            weights,
+        )
+    if has_hard_negative_weights:
+        weights = weights * (
+            1.0
+            + (hard_negative_weight - 1.0)
+            * hard_negative_pixels.to(
+                device=logits.device,
+                dtype=logits.dtype,
+            )
+        )
+    return weights
 
 
 def _weighted_mean(values, weights):
@@ -1060,11 +1085,12 @@ def _weighted_mean(values, weights):
 def _multiclass_base_loss_weights(
     torch,
     logits,
+    masks,
     hard_negative_pixels,
     class_hard_negative_pixels,
     config,
 ):
-    weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
     if class_hard_negative_pixels is None:
         return weights
     valid = (~class_hard_negative_pixels.any(dim=1)).to(
@@ -1093,6 +1119,7 @@ def _class_hard_negative_loss(
     return (
         complement_loss.mul(masks).sum()
         / pixel_count
+        * float(getattr(config, "background_weight", 1.0))
         * float(getattr(config, "hard_negative_weight", 1.0))
     )
 
@@ -1137,7 +1164,13 @@ def _dice_loss(
     config=None,
 ):
     probs = torch.sigmoid(logits)
-    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    probability_weights = _pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        config,
+    )
     if probability_weights is not None:
         probs = probs * probability_weights
     smooth = 1.0
@@ -1176,7 +1209,13 @@ def _multiclass_dice_loss(
         )
         probs = probs * valid
         target = target * valid
-    probability_weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    probability_weights = _pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        config,
+    )
     if probability_weights is not None:
         probs = probs * probability_weights.unsqueeze(1)
     smooth = 1.0
@@ -1198,7 +1237,7 @@ def _tversky_loss(
     smooth = 1.0
     true_positive = torch.sum(probs * masks)
     false_positive_pixels = probs * (1.0 - masks)
-    weights = _pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
     if weights is not None:
         false_positive_pixels = false_positive_pixels * weights
     false_positive = torch.sum(false_positive_pixels)

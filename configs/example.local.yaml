@@ -29,6 +29,7 @@ train:
   loss: bce_dice
   focal_alpha: 0.6
   pos_weight: 1.0
+  background_weight: 1.0
   hard_negative_weight: 1.0
   tversky_alpha: 0.4
   tversky_beta: 0.6

@@ -122,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
             started=started,
             synthetic=args.synthetic,
         )
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report["smp_focal_tversky_passed"] else 1
 
@@ -153,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
         "sample_export_report": sample_export_report,
         "elapsed_sec": perf_counter() - started,
     }
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report.get("passed", False) else 1
 
@@ -241,7 +245,9 @@ def _run_case(
 ) -> dict[str, object]:
     case_started = perf_counter()
     try:
-        tiny_loader, eval_loader = _make_loaders(torch, images, masks, settings.tile_preparation.seed)
+        tiny_loader, eval_loader = _make_loaders(
+            torch, images, masks, settings.tile_preparation.seed
+        )
         effective_epochs = epochs or max(DEFAULT_EPOCHS, ceil(steps / len(tiny_loader)))
         model = _create_overfit_model(
             torch=torch,
@@ -261,6 +267,8 @@ def _run_case(
             loss=loss_name,
             focal_alpha=settings.train.focal_alpha,
             pos_weight=settings.train.pos_weight,
+            background_weight=settings.train.background_weight,
+            hard_negative_weight=settings.train.hard_negative_weight,
             tversky_alpha=settings.train.tversky_alpha,
             tversky_beta=settings.train.tversky_beta,
             threshold=settings.train.threshold,
@@ -345,14 +353,9 @@ def _collect_real_dataset(settings):
     # mode=val отключает train augmentation и shuffle для того же списка TIFF.
     source_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            scenes=[
-                TileSceneSource(**item.model_dump())
-                for item in dataset_result.dataset.scenes
-            ],
+            scenes=[TileSceneSource(**item.model_dump()) for item in dataset_result.dataset.scenes],
             annotation_file=dataset_result.dataset.annotation_file,
-            hard_negative_annotation_file=(
-                dataset_result.dataset.hard_negative_annotation_file
-            ),
+            hard_negative_annotation_file=(dataset_result.dataset.hard_negative_annotation_file),
             batch_size=settings.train.batch_size,
             mode="val",
         )
@@ -400,10 +403,15 @@ def _collect_tiny_dataset(loader: object):
 
     images = torch.stack([*positive_images, *negative_images], dim=0)
     masks = torch.stack([*positive_masks, *negative_masks], dim=0)
-    return images, masks, {
-        "positive_tiles": len(positive_images),
-        "negative_tiles": len(negative_images),
-    }, [*positive_records, *negative_records]
+    return (
+        images,
+        masks,
+        {
+            "positive_tiles": len(positive_images),
+            "negative_tiles": len(negative_images),
+        },
+        [*positive_records, *negative_records],
+    )
 
 
 def _make_synthetic_dataset(torch, input_channels: int):
@@ -412,7 +420,9 @@ def _make_synthetic_dataset(torch, input_channels: int):
         (SYNTHETIC_POSITIVE + SYNTHETIC_NEGATIVE, input_channels, size, size),
         dtype=torch.float32,
     )
-    masks = torch.zeros((SYNTHETIC_POSITIVE + SYNTHETIC_NEGATIVE, 1, size, size), dtype=torch.float32)
+    masks = torch.zeros(
+        (SYNTHETIC_POSITIVE + SYNTHETIC_NEGATIVE, 1, size, size), dtype=torch.float32
+    )
     for index in range(SYNTHETIC_POSITIVE):
         y = 16 + (index % 4) * 18
         x = 12 + (index // 4) * 42
@@ -437,10 +447,15 @@ def _make_synthetic_dataset(torch, input_channels: int):
         )
         for index in range(int(images.shape[0]))
     ]
-    return images, masks, {
-        "positive_tiles": SYNTHETIC_POSITIVE,
-        "negative_tiles": SYNTHETIC_NEGATIVE,
-    }, records
+    return (
+        images,
+        masks,
+        {
+            "positive_tiles": SYNTHETIC_POSITIVE,
+            "negative_tiles": SYNTHETIC_NEGATIVE,
+        },
+        records,
+    )
 
 
 def _make_loaders(torch, images, masks, seed: int):
@@ -486,9 +501,9 @@ def _collect_export_groups(
             largest = _collect_largest_positive_records(settings)
         groups["positive_largest_16"] = largest[:N_POSITIVE]
     if export_negative_samples:
-        groups["negative_16"] = [
-            record for record in tiny_records if not bool(record["positive"])
-        ][:N_NEGATIVE]
+        groups["negative_16"] = [record for record in tiny_records if not bool(record["positive"])][
+            :N_NEGATIVE
+        ]
     return groups
 
 
@@ -508,14 +523,9 @@ def _collect_largest_positive_records(settings) -> list[dict[str, object]]:
 
     source_loader = create_tile_dataloader(
         TileDataloaderRequest(
-            scenes=[
-                TileSceneSource(**item.model_dump())
-                for item in dataset_result.dataset.scenes
-            ],
+            scenes=[TileSceneSource(**item.model_dump()) for item in dataset_result.dataset.scenes],
             annotation_file=dataset_result.dataset.annotation_file,
-            hard_negative_annotation_file=(
-                dataset_result.dataset.hard_negative_annotation_file
-            ),
+            hard_negative_annotation_file=(dataset_result.dataset.hard_negative_annotation_file),
             batch_size=settings.train.batch_size,
             mode="val",
         )
@@ -751,8 +761,12 @@ def _create_overfit_model(
 ) -> ModelHandle:
     if model_name == "tiny_unet_4ch":
         return ModelHandle(
-            spec=ModelSpec(name=model_name, input_channels=input_channels, output_channels=output_channels),
-            model=_TinyUNet(input_channels=input_channels, output_channels=output_channels, torch=torch),
+            spec=ModelSpec(
+                name=model_name, input_channels=input_channels, output_channels=output_channels
+            ),
+            model=_TinyUNet(
+                input_channels=input_channels, output_channels=output_channels, torch=torch
+            ),
         )
     return create_model(
         ModelSpec(
@@ -815,7 +829,9 @@ def _save_sample_previews(images, masks, output_dir: Path) -> list[dict[str, obj
         Image.fromarray(preview, mode="RGB").save(preview_path)
         Image.fromarray(mask_u8, mode="L").save(mask_path)
         Image.fromarray(overlay, mode="RGB").save(overlay_path)
-        stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        stats_path.write_text(
+            json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         records.append(
             {
                 "sample_index": index,
@@ -848,9 +864,7 @@ def _sample_alignment_stats(image_chw, mask_chw) -> dict[str, object]:
         inside_means.append(inside_mean)
         outside_means.append(outside_mean)
         abs_diffs.append(
-            None
-            if inside_mean is None or outside_mean is None
-            else abs(inside_mean - outside_mean)
+            None if inside_mean is None or outside_mean is None else abs(inside_mean - outside_mean)
         )
     return {
         "positive_mask_pixels": inside_pixels,
@@ -887,7 +901,9 @@ def _all_channels_equal(image_chw) -> bool:
     if image_chw.shape[0] <= 1:
         return False
     first = image_chw[0]
-    return all(bool(np.array_equal(first, image_chw[index])) for index in range(1, image_chw.shape[0]))
+    return all(
+        bool(np.array_equal(first, image_chw[index])) for index in range(1, image_chw.shape[0])
+    )
 
 
 def _nonzero_channel_count(image_chw) -> int:

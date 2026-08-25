@@ -1,4 +1,4 @@
-﻿"""Исходные шаблоны обучения и инференса для миграций и reset."""
+"""Исходные шаблоны обучения и инференса для миграций и reset."""
 
 from __future__ import annotations
 
@@ -131,10 +131,17 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "min_value": 0,
         },
         {
+            "key": "train.background_weight",
+            "label": "Вес фона",
+            "value_type": "number",
+            "tooltip": "Базовый множитель штрафа для пикселей фона.",
+            "min_value": 0.000001,
+        },
+        {
             "key": "train.hard_negative_weight",
             "label": "Hard negative weight",
             "value_type": "number",
-            "tooltip": "Множитель штрафа только для пикселей внутри размеченных hard-negative зон. Остальной background имеет обычный вес 1.",
+            "tooltip": "Дополнительный множитель штрафа для размеченных hard-negative зон; умножается на вес фона.",
             "min_value": 0,
         },
         {
@@ -206,6 +213,7 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.loss": "focal_tversky",
     "train.focal_alpha": 0.6,
     "train.pos_weight": 1.0,
+    "train.background_weight": 1.0,
     "train.hard_negative_weight": 1.0,
     "train.tversky_alpha": 0.4,
     "train.tversky_beta": 0.6,
@@ -415,11 +423,15 @@ _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
         "0.4..0.8; повышать при низком recall, снижать при избытке false positive.",
     ),
     "train.pos_weight": (
-        "Вес positive пикселей в binary BCE/focal части loss. Background остается 1, hard negative регулируется отдельным hard_negative_weight.",
+        "Вес positive пикселей в binary BCE/focal части loss. Фон регулируется отдельным background_weight, hard negative — hard_negative_weight.",
         "1..5; повышать при пропусках объектов и низком recall, снижать при жирных масках и false positive.",
     ),
+    "train.background_weight": (
+        "Базовый вес всех пикселей фона, включая nodata и padding. В binary применяется к BCE/focal и false-positive части Dice/Tversky; в multiclass — к background-классу 0. Для размеченного hard negative дополнительно действует hard_negative_weight.",
+        "0.1..2; 1 сохраняет обычный вес. Снижать, если многочисленный фон подавляет обучение объектов, повышать при избытке false positive на обычном фоне.",
+    ),
     "train.hard_negative_weight": (
-        "Множитель штрафа только для пикселей внутри размеченных hard-negative зон. Остальной background имеет обычный вес 1; positive pixels регулируются отдельно через positive weight и Dice/Tversky-компоненты.",
+        "Дополнительный множитель штрафа только для пикселей внутри размеченных hard-negative зон. Он умножается на background_weight; positive pixels регулируются отдельно через positive weight и Dice/Tversky-компоненты.",
         "1..5; 1 выключает усиление. Повышать при false positive на hard-negative объектах, снижать если модель начинает терять похожие настоящие positive.",
     ),
     "train.tversky_alpha": (
@@ -507,6 +519,7 @@ _INFERENCE_FIELD_HELP: dict[str, tuple[str, str]] = {
     ),
 }
 
+
 def _apply_schema_help(schema: dict[str, Any], help_by_key: dict[str, tuple[str, str]]) -> None:
     for field in schema["fields"]:
         key = str(field["key"])
@@ -522,9 +535,7 @@ _apply_schema_help(INFERENCE_CONFIG_SCHEMA, _INFERENCE_FIELD_HELP)
 CONFIG_KEYS = {str(field["key"]) for field in CONFIG_SCHEMA["fields"]}
 CONFIG_FIELDS = {str(field["key"]): field for field in CONFIG_SCHEMA["fields"]}
 INFERENCE_CONFIG_KEYS = {str(field["key"]) for field in INFERENCE_CONFIG_SCHEMA["fields"]}
-INFERENCE_CONFIG_FIELDS = {
-    str(field["key"]): field for field in INFERENCE_CONFIG_SCHEMA["fields"]
-}
+INFERENCE_CONFIG_FIELDS = {str(field["key"]): field for field in INFERENCE_CONFIG_SCHEMA["fields"]}
 
 
 def sanitize_template_config(
@@ -534,9 +545,7 @@ def sanitize_template_config(
     normalize_factors: bool = True,
 ) -> dict[str, Any]:
     result = {
-        key: value
-        for key, value in (fallback or BASE_DEFAULT_CONFIG).items()
-        if key in CONFIG_KEYS
+        key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
     for key, value in (config or {}).items():
         if key in CONFIG_KEYS:
@@ -581,9 +590,7 @@ def _resolve_legacy_tile_factors(result: dict[str, Any], config: dict[str, Any])
         result.get("tile_preparation.hard_negative_factor"),
         0.0,
     )
-    result["tile_preparation.background_factor"] = (
-        1.0 - positive_factor - hard_negative_factor
-    )
+    result["tile_preparation.background_factor"] = 1.0 - positive_factor - hard_negative_factor
 
 
 def _float_or_default(value: Any, default: float) -> float:

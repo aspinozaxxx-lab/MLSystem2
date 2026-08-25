@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib
 from pathlib import Path
@@ -273,8 +273,7 @@ def test_load_settings_rejects_storage_section(tmp_path: Path) -> None:
     api = importlib.reload(settings_api)
     settings_path = tmp_path / "config.yaml"
     settings_path.write_text(
-        _minimal_config()
-        + f"\n{'stor' + 'age'}:\n  enabled: false\n",
+        _minimal_config() + f"\n{'stor' + 'age'}:\n  enabled: false\n",
         encoding="utf-8",
     )
 
@@ -406,6 +405,7 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.train.loss == "bce_dice"
     assert settings.train.focal_alpha == 0.6
     assert settings.train.pos_weight == 1.0
+    assert settings.train.background_weight == 1.0
     assert settings.train.hard_negative_weight == 1.0
     assert settings.train.tversky_alpha == 0.4
     assert settings.train.tversky_beta == 0.6
@@ -420,6 +420,22 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.tile_preparation.val_positive_factor == 0.5
     assert settings.tile_preparation.class_balance is False
     assert settings.tile_preparation.prefetch_epochs == 2.0
+
+
+def test_load_settings_accepts_background_weight(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    settings_path.write_text(
+        _minimal_config().replace(
+            "  pos_weight: 1.0",
+            "  pos_weight: 1.0\n  background_weight: 0.25",
+        ),
+        encoding="utf-8",
+    )
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.train.background_weight == 0.25
 
 
 def test_load_settings_rejects_negative_scene_limit_field(tmp_path: Path) -> None:

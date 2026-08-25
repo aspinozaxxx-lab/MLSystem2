@@ -835,6 +835,7 @@ def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() ->
         loss="bce_dice",
         focal_alpha=0.6,
         pos_weight=1.0,
+        background_weight=2.0,
         hard_negative_weight=1.0,
         tversky_alpha=0.4,
         tversky_beta=0.6,
@@ -851,12 +852,18 @@ def test_hard_negative_weight_penalizes_hard_negative_false_positive_pixels() ->
 
     base_loss = _trainer._loss(torch, logits, masks, base_config, hard_negative_pixels)
     hard_loss = _trainer._loss(torch, logits, masks, hard_config, hard_negative_pixels)
-    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, hard_config)
+    weights = _trainer._pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        hard_config,
+    )
 
     assert hard_loss > base_loss
     assert torch.equal(masks, torch.zeros_like(masks))
-    assert weights[0, 0, 0, 0].item() == pytest.approx(3.0)
-    assert weights[0, 0, 0, 1].item() == pytest.approx(1.0)
+    assert weights[0, 0, 0, 0].item() == pytest.approx(6.0)
+    assert weights[0, 0, 0, 1].item() == pytest.approx(2.0)
 
 
 def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixels() -> None:
@@ -878,6 +885,7 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
         loss="cross_entropy",
         focal_alpha=0.6,
         pos_weight=1.0,
+        background_weight=2.0,
         hard_negative_weight=1.0,
         tversky_alpha=0.4,
         tversky_beta=0.6,
@@ -895,12 +903,104 @@ def test_hard_negative_weight_penalizes_multiclass_hard_negative_foreground_pixe
 
     base_loss = _trainer._loss(torch, logits, masks, base_config, hard_negative_pixels)
     hard_loss = _trainer._loss(torch, logits, masks, hard_config, hard_negative_pixels)
-    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, hard_config)
+    weights = _trainer._pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        hard_config,
+    )
 
     assert hard_loss > base_loss
     assert torch.equal(masks, torch.zeros_like(masks))
+    assert weights[0, 0, 0].item() == pytest.approx(6.0)
+    assert weights[0, 0, 1].item() == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("loss_name", ["bce_dice", "focal_dice", "focal_tversky"])
+def test_background_weight_penalizes_binary_false_positive_pixels(loss_name: str) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.full((1, 1, 2, 2), 2.0, dtype=torch.float32, requires_grad=True)
+    masks = torch.tensor([[[[0.0, 0.0], [1.0, 1.0]]]], dtype=torch.float32)
+    base_config = TrainConfig(
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        background_weight=1.0,
+        threshold=0.5,
+        early_stopping_patience=1,
+    )
+    weighted_config = base_config.model_copy(update={"background_weight": 3.0})
+
+    base_loss = _trainer._loss(torch, logits, masks, base_config)
+    weighted_loss = _trainer._loss(torch, logits, masks, weighted_config)
+    weights = _trainer._pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        None,
+        weighted_config,
+    )
+    weighted_loss.backward()
+
+    assert weighted_loss > base_loss
+    assert weights[0, 0, 0, 0].item() == pytest.approx(3.0)
+    assert weights[0, 0, 1, 0].item() == pytest.approx(1.0)
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+
+
+@pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
+def test_background_weight_penalizes_multiclass_false_positive_pixels(
+    loss_name: str,
+) -> None:
+    torch = pytest.importorskip("torch")
+
+    from mlsystem2.train import _trainer
+
+    logits = torch.tensor(
+        [[[[0.0, 0.0], [0.0, 0.0]], [[2.0, 2.0], [2.0, 2.0]], [[0.0, 0.0], [0.0, 0.0]]]],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    masks = torch.tensor([[[0, 0], [1, 2]]], dtype=torch.long)
+    base_config = TrainConfig(
+        task="multiclass",
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        learning_rate=0.001,
+        weight_decay=0.0,
+        loss=loss_name,
+        background_weight=1.0,
+        threshold=0.5,
+        early_stopping_patience=1,
+        class_slugs=["class_a", "class_b"],
+    )
+    weighted_config = base_config.model_copy(update={"background_weight": 3.0})
+
+    base_loss = _trainer._loss(torch, logits, masks, base_config)
+    weighted_loss = _trainer._loss(torch, logits, masks, weighted_config)
+    weights = _trainer._pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        None,
+        weighted_config,
+    )
+    weighted_loss.backward()
+
+    assert weighted_loss > base_loss
     assert weights[0, 0, 0].item() == pytest.approx(3.0)
-    assert weights[0, 0, 1].item() == pytest.approx(1.0)
+    assert weights[0, 1, 0].item() == pytest.approx(1.0)
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
 
 
 @pytest.mark.parametrize("loss_name", ["cross_entropy", "cross_entropy_dice"])
@@ -945,9 +1045,18 @@ def test_multiclass_class_hard_negative_penalizes_only_its_object_type(
         global_hard_negative,
         class_hard_negative,
     )
+    weighted_loss_a = _trainer._loss(
+        torch,
+        predicts_a,
+        masks,
+        config.model_copy(update={"background_weight": 3.0}),
+        global_hard_negative,
+        class_hard_negative,
+    )
     loss_a.backward()
 
     assert loss_a > loss_b
+    assert weighted_loss_a.item() == pytest.approx(loss_a.item() * 3.0)
     assert predicts_a.grad is not None
     assert predicts_a.grad[0, 1, 0, 0].abs().item() > 0
 
@@ -1000,6 +1109,7 @@ def test_positive_pixels_do_not_receive_hard_negative_weight() -> None:
         learning_rate=0.001,
         weight_decay=0.0,
         loss="bce_dice",
+        background_weight=2.0,
         hard_negative_weight=4.0,
         threshold=0.5,
         early_stopping_patience=1,
@@ -1011,12 +1121,19 @@ def test_positive_pixels_do_not_receive_hard_negative_weight() -> None:
         config,
         torch.device("cpu"),
     )
-    weights = _trainer._pixel_loss_weights(torch, logits, hard_negative_pixels, config)
+    weights = _trainer._pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        config,
+    )
 
     assert masks[0, 0, 0, 0].item() == pytest.approx(0.0)
     assert masks[0, 0, 0, 1].item() == pytest.approx(1.0)
-    assert weights[0, 0, 0, 0].item() == pytest.approx(4.0)
+    assert weights[0, 0, 0, 0].item() == pytest.approx(8.0)
     assert weights[0, 0, 0, 1].item() == pytest.approx(1.0)
+    assert weights[0, 0, 1, 0].item() == pytest.approx(2.0)
 
 
 def test_hard_negative_weight_one_matches_base_loss() -> None:

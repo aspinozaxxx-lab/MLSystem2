@@ -854,6 +854,7 @@ def _train_request(
             loss=settings.train.loss,
             focal_alpha=settings.train.focal_alpha,
             pos_weight=settings.train.pos_weight,
+            background_weight=settings.train.background_weight,
             hard_negative_weight=settings.train.hard_negative_weight,
             tversky_alpha=settings.train.tversky_alpha,
             tversky_beta=settings.train.tversky_beta,

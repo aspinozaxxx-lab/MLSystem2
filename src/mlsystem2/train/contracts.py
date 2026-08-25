@@ -38,6 +38,7 @@ class TrainConfig(BaseModel):
     loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]
     focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     pos_weight: float = Field(default=1.0, gt=0.0)
+    background_weight: float = Field(default=1.0, gt=0.0)
     hard_negative_weight: float = Field(default=1.0, gt=0.0)
     tversky_alpha: float = Field(default=0.4, gt=0.0)
     tversky_beta: float = Field(default=0.6, gt=0.0)
