@@ -79,7 +79,12 @@ from ._models import (
 )
 from ._processes import terminate_job_process
 from ._pseudo_runner import postprocess_profile_name
-from ._queueing import next_queue_position
+from ._queueing import (
+    TEST_SAMPLE_F1_OPERATION,
+    URGENT_PRIORITY_CONFIG_KEY,
+    URGENT_PRIORITY_VALUE,
+    next_queue_position,
+)
 from ._templates import sanitize_inference_template_config
 from .contracts import (
     JobSource,
@@ -116,7 +121,6 @@ from .contracts import (
 
 TEST_SAMPLE_ROOT_NAME = "test-samples"
 TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
-TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 TEST_SAMPLE_EVALUATION_TARGET = "test_sample"
 TRAINING_RESULT_TEST_METRIC_TARGET = "training_result"
@@ -3202,6 +3206,7 @@ def queue_test_sample_evaluation(
         architecture=result.architecture,
         tile_size=sample.tile_width,
         config={
+            URGENT_PRIORITY_CONFIG_KEY: URGENT_PRIORITY_VALUE,
             "operation": TEST_SAMPLE_F1_OPERATION,
             "metric_target": TEST_SAMPLE_EVALUATION_TARGET,
             "class_key": sample.class_key,
@@ -3842,6 +3847,7 @@ def queue_training_result_test_f1(
         architecture=result.architecture,
         tile_size=sample.tile_width,
         config={
+            URGENT_PRIORITY_CONFIG_KEY: URGENT_PRIORITY_VALUE,
             "operation": TEST_SAMPLE_F1_OPERATION,
             "metric_target": TRAINING_RESULT_TEST_METRIC_TARGET,
             "class_key": result.class_key,

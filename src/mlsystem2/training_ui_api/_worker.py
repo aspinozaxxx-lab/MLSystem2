@@ -83,6 +83,7 @@ from ._queueing import (
     dispatch_sort_key,
     ensure_queue_positions,
     is_secondary_job,
+    is_urgent_job,
 )
 from ._templates import normalize_tile_factors
 from ._test_samples import (
@@ -107,7 +108,6 @@ JOB_ERROR_MAX_BYTES = 8 * 1024
 JOB_CONTROL_DIR = "control"
 JOB_PAUSE_REQUEST = "pause.request"
 JOB_PAUSED_MARKER = "paused"
-URGENT_JOB_PRIORITY = "urgent"
 
 
 class _ManagedDatasetNotReady(RuntimeError):
@@ -396,7 +396,7 @@ def _next_urgent_inference_job(session: Session) -> JobRow | None:
 
 
 def _is_urgent_job(row: JobRow) -> bool:
-    return (row.config or {}).get("priority") == URGENT_JOB_PRIORITY
+    return is_urgent_job(row)
 
 
 def _job_control_dir(row: JobRow) -> Path:

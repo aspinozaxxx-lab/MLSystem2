@@ -36,6 +36,7 @@ from mlsystem2.training_ui_api._models import (
     StoredFileRow,
     TestSampleRow as _TestSampleRow,
     TestSampleTileRow as _TestSampleTileRow,
+    TrainingResultTestMetricRow,
     TrainingResultRow,
     TrainingTemplateRow,
 )
@@ -318,6 +319,12 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert effective.id == second.id
         assert class_row.primary_training_result_id is None
         assert all(item.is_primary is False for item in unmarked.results)
+
+        selected_effective = _service.set_primary_training_result(session, second.id, config)
+        assert selected_effective.is_primary is True
+        assert class_row.primary_training_result_id == second.id
+        assert session.scalars(select(JobRow)).all() == []
+        assert session.scalars(select(TrainingResultTestMetricRow)).all() == []
 
         class_row.primary_training_result_id = first.id
         session.flush()
@@ -1507,6 +1514,41 @@ def test_training_worker_preempts_and_resumes_training_for_urgent_inference(
         dispatch_queue_once(session, config)
         assert training.status == JobStatus.RUNNING.value
         assert training.process_pid == 4321
+
+
+def test_legacy_f1_inference_starts_before_queued_manual_training(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", "false")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+
+    monkeypatch.setattr(_worker, "_start_training_job", fake_start)
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start)
+    created_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 20_001, created_at)
+        f1 = _queue_test_job(JobType.INFERENCE, JobSource.AUTOMATION, 30_001, created_at)
+        f1.config = {"operation": "test_sample_f1"}
+        session.add_all([training, f1])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+
+        assert started == [f1.id]
+        assert training.status == JobStatus.QUEUED.value
 
 
 def test_secondary_job_waits_for_regular_job_regardless_of_queue_block(

@@ -120,7 +120,6 @@ from ._test_samples import (
     mark_test_samples_stale_for_pseudo_markup,
     pseudo_markup_covers_dataset,
     primary_test_sample,
-    queue_class_test_f1,
     queue_dataset_test_f1_all,
     reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
@@ -1354,18 +1353,16 @@ def set_primary_training_result(
         class_row = dataset_class_row(session, row.dataset_key or row.class_key)
     if class_row is None:
         raise TrainingUIAPIError(f"Класс результата не найден: {row.class_key}")
+    previous_effective = primary_training_result(session, class_row.key)
     class_row.primary_training_result_id = row.id
     class_row.updated_at = datetime.now(timezone.utc)
     session.flush()
-    reconcile_test_sample_evaluations(
-        session,
-        config,
-        class_keys={class_row.key},
-    )
-    try:
-        queue_class_test_f1(session, row.class_key, config)
-    except TrainingUIAPIError:
-        pass
+    if previous_effective is None or previous_effective.id != row.id:
+        reconcile_test_sample_evaluations(
+            session,
+            config,
+            class_keys={class_row.key},
+        )
     return _training_result_info(session, row, config=config)
 
 
@@ -1385,18 +1382,19 @@ def clear_primary_training_result(
     if class_row.primary_training_result_id != row.id:
         raise TrainingUIAPIError("Эта сеть не отмечена основной для класса.")
 
+    previous_effective = primary_training_result(session, class_row.key)
     class_row.primary_training_result_id = None
     class_row.updated_at = datetime.now(timezone.utc)
     session.flush()
-    reconcile_test_sample_evaluations(
-        session,
-        config,
-        class_keys={class_row.key},
-    )
-    try:
-        queue_class_test_f1(session, row.class_key, config)
-    except TrainingUIAPIError:
-        pass
+    next_effective = primary_training_result(session, class_row.key)
+    if (previous_effective.id if previous_effective is not None else None) != (
+        next_effective.id if next_effective is not None else None
+    ):
+        reconcile_test_sample_evaluations(
+            session,
+            config,
+            class_keys={class_row.key},
+        )
     return _training_result_info(session, row, config=config)
 
 

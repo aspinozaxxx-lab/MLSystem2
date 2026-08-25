@@ -2764,6 +2764,7 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         ]
         assert len(direct_jobs) == 2
         assert all(job.source == "automation" for job in direct_jobs)
+        assert all(job.config["priority"] == "urgent" for job in direct_jobs)
         assert {job.dataset_key for job in direct_jobs} == {
             "Вырубки\\main",
             "Вырубки\\strict",
@@ -3074,6 +3075,7 @@ def test_primary_sample_queues_network_f1_and_stales_it_after_tile_change(
         assert job is not None
         assert job.config["operation"] == "test_sample_f1"
         assert job.config["metric_target"] == "training_result"
+        assert job.config["priority"] == "urgent"
         assert job.config["test_sample_tile_indices"] == [1, 2]
         assert job.config["postprocess_profile"] == "strong"
         assert job.config["test_f1_evaluator_version"] == 3

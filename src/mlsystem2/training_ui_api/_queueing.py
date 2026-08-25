@@ -13,10 +13,13 @@ from .contracts import JobSource, JobStatus, JobType
 
 
 DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
+TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
 SECONDARY_PRIORITY_CONFIG_KEY = "ui.secondary_priority"
 STOP_AND_SAVE_BEST_CONFIG_KEY = "ui.stop_and_save_best_requested"
+URGENT_PRIORITY_CONFIG_KEY = "priority"
+URGENT_PRIORITY_VALUE = "urgent"
 
 
 class _QueueRow(Protocol):
@@ -58,15 +61,32 @@ def is_secondary_job(row: _QueueRow) -> bool:
     return bool((row.config or {}).get(SECONDARY_PRIORITY_CONFIG_KEY, False))
 
 
-def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, int, datetime]:
+def is_urgent_job(row: _QueueRow) -> bool:
+    config = row.config or {}
+    return (
+        config.get(URGENT_PRIORITY_CONFIG_KEY) == URGENT_PRIORITY_VALUE
+        or config.get("operation") == TEST_SAMPLE_F1_OPERATION
+    )
+
+
+def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, int, int, datetime]:
     status_rank = 0 if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value} else 1
+    urgent_rank = 0 if is_urgent_job(row) else 1
     secondary_rank = 1 if is_secondary_job(row) else 0
-    return status_rank, secondary_rank, row.queue_position, -job_priority(row), row.created_at
+    return (
+        status_rank,
+        urgent_rank,
+        secondary_rank,
+        row.queue_position,
+        -job_priority(row),
+        row.created_at,
+    )
 
 
-def dispatch_sort_key(row: _QueueRow) -> tuple[int, int, int, datetime]:
+def dispatch_sort_key(row: _QueueRow) -> tuple[int, int, int, int, datetime]:
+    urgent_rank = 0 if is_urgent_job(row) else 1
     secondary_rank = 1 if is_secondary_job(row) else 0
-    return secondary_rank, row.queue_position, -job_priority(row), row.created_at
+    return urgent_rank, secondary_rank, row.queue_position, -job_priority(row), row.created_at
 
 
 def next_queue_position(session: Session, job_type: JobType, source: JobSource) -> int:
