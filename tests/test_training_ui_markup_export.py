@@ -2252,6 +2252,25 @@ def test_test_sample_batch_accepts_manual_pseudo_markup_of_effective_network_wit
         assert selected_after_markup_change is not None
         assert selected_after_markup_change.id == pseudo.id
 
+        pseudo.dataset_key = "Вырубки\\archive"
+        session.flush()
+        selected_from_other_dataset = _test_samples.latest_pseudo_markup(
+            session,
+            dataset.key,
+            class_key=class_row.key,
+            dataset_version=dataset.version,
+            config=config,
+        )
+        assert selected_from_other_dataset is not None
+        assert selected_from_other_dataset.id == pseudo.id
+        cross_dataset_info = _test_samples.test_sample_pseudo_markup_info(
+            session,
+            sample_row,
+            config,
+        )
+        assert cross_dataset_info.status == "ready"
+        assert cross_dataset_info.result_id == pseudo.id
+
         incomplete_scenes_path = tmp_path / "incomplete-scenes.txt"
         incomplete_scenes_path.write_text("missing-scene.tif\n", encoding="utf-8")
         scenes_file.path = str(incomplete_scenes_path)
@@ -2410,10 +2429,10 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert _test_sample_detail(session, sample_id).evaluation.status == "unavailable"
 
         pseudo = PseudoMarkupResultRow(
-            dataset_key="Вырубки\\main",
+            dataset_key="Вырубки\\archive",
             training_result_id=training.id,
             class_key="Вырубки\\main",
-            source_dataset_name="Вырубки\\main",
+            source_dataset_name="Вырубки\\archive",
             scenes_file_id=scenes_stored.id,
             geojson_file_id=stored.id,
             status="ok",

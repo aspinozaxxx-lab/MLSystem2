@@ -1564,9 +1564,13 @@ def evaluate_test_samples_for_pseudo_markup(
         or not pseudo_result.dataset_key
     ):
         return
+    class_keys = _class_scope_keys(
+        session,
+        pseudo_result.class_key or pseudo_result.dataset_key,
+    )
     rows = session.scalars(
         select(TestSampleRow)
-        .where(TestSampleRow.dataset_key == pseudo_result.dataset_key)
+        .where(TestSampleRow.class_key.in_(class_keys))
         .options(selectinload(TestSampleRow.tiles))
         .order_by(TestSampleRow.created_at)
     ).all()
@@ -2627,6 +2631,8 @@ def latest_pseudo_markup(
 
     Версия обучающей разметки намеренно не участвует в выборе: изменение полигонов
     не делает уже рассчитанный прогноз устаревшим, пока сеть и набор TIFF прежние.
+    Результат того же датасета предпочтителен, но результат другого датасета той же
+    сети тоже пригоден, если его сохранённый список сцен фактически покрывает все TIFF.
     """
 
     primary = current_primary_training_result(session, class_key or dataset_key)
@@ -2636,7 +2642,6 @@ def latest_pseudo_markup(
         select(PseudoMarkupResultRow)
         .where(
             PseudoMarkupResultRow.status == "ok",
-            PseudoMarkupResultRow.dataset_key == dataset_key,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
             PseudoMarkupResultRow.training_result_id == primary.id,
         )
@@ -2651,13 +2656,13 @@ def latest_pseudo_markup(
             PseudoMarkupResultRow.id.desc(),
         )
     ).all()
+    candidates.sort(key=lambda candidate: candidate.dataset_key != dataset_key)
     for candidate in candidates:
-        if config is None or pseudo_markup_covers_dataset(
-            session,
-            candidate,
-            dataset_key,
-            config,
-        ):
+        if config is None:
+            if candidate.dataset_key == dataset_key:
+                return candidate
+            continue
+        if pseudo_markup_covers_dataset(session, candidate, dataset_key, config):
             return candidate
     return None
 
@@ -3965,49 +3970,58 @@ def test_sample_pseudo_markup_info(
                 else common
             ),
         )
-    candidate = session.scalar(
+    candidates = session.scalars(
         select(PseudoMarkupResultRow)
         .where(
-            PseudoMarkupResultRow.dataset_key == row.dataset_key,
             PseudoMarkupResultRow.training_result_id == target.id,
         )
+        .options(selectinload(PseudoMarkupResultRow.scenes_file))
         .order_by(
             PseudoMarkupResultRow.updated_at.desc(),
             PseudoMarkupResultRow.created_at.desc(),
             PseudoMarkupResultRow.id.desc(),
         )
-        .limit(1)
-    )
-    job = (
-        session.get(JobRow, candidate.job_id)
-        if candidate is not None and candidate.job_id is not None
-        else None
-    )
-    coverage_matches = bool(
-        candidate is not None
-        and (
-            config is None
-            or pseudo_markup_covers_dataset(
-                session,
-                candidate,
-                row.dataset_key,
-                config,
+    ).all()
+    candidates.sort(key=lambda candidate: candidate.dataset_key != row.dataset_key)
+    applicable: list[tuple[PseudoMarkupResultRow, JobRow | None]] = []
+    for candidate in candidates:
+        if config is None:
+            if candidate.dataset_key != row.dataset_key:
+                continue
+        elif not pseudo_markup_covers_dataset(
+            session,
+            candidate,
+            row.dataset_key,
+            config,
+        ):
+            continue
+        job = (
+            session.get(JobRow, candidate.job_id)
+            if candidate.job_id is not None
+            else None
+        )
+        applicable.append((candidate, job))
+        if job is not None and job.status in {
+            JobStatus.QUEUED.value,
+            JobStatus.RUNNING.value,
+        }:
+            return TestSamplePseudoMarkupInfo(
+                status=job.status,
+                result_id=candidate.id,
+                job_id=job.id,
+                can_create=False,
+                **common,
             )
-        )
+    failed = next(
+        (
+            (candidate, job)
+            for candidate, job in applicable
+            if candidate.status in {"error", "failed"}
+        ),
+        None,
     )
-    if (
-        job is not None
-        and coverage_matches
-        and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
-    ):
-        return TestSamplePseudoMarkupInfo(
-            status=job.status,
-            result_id=candidate.id if candidate is not None else None,
-            job_id=job.id,
-            can_create=False,
-            **common,
-        )
-    if candidate is not None and candidate.status in {"error", "failed"}:
+    if failed is not None:
+        candidate, job = failed
         return TestSamplePseudoMarkupInfo(
             status="error",
             result_id=candidate.id,

@@ -1784,7 +1784,6 @@ def ensure_test_sample_pseudo_markup_job(
     existing_rows = session.scalars(
         select(PseudoMarkupResultRow)
         .where(
-            PseudoMarkupResultRow.dataset_key == sample.dataset_key,
             PseudoMarkupResultRow.training_result_id == primary.id,
             PseudoMarkupResultRow.status == "running",
         )
@@ -1794,6 +1793,9 @@ def ensure_test_sample_pseudo_markup_job(
             PseudoMarkupResultRow.id.desc(),
         )
     ).all()
+    existing_rows.sort(
+        key=lambda existing: existing.dataset_key != sample.dataset_key
+    )
     for existing in existing_rows:
         if existing.job_id is None:
             continue
