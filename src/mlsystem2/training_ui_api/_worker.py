@@ -1132,6 +1132,14 @@ def _build_test_sample_f1_config(
         )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
+    row.tile_size = inference_tile_size
+    row.config = {
+        **(row.config or {}),
+        "inference_tile_size": inference_tile_size,
+        "inference_context": inference_context,
+        "inference_stride": inference_stride,
+    }
+    session.flush()
     tiles: list[dict[str, Any]] = []
     targets = list(managed_targets) if plan is not None and plan.managed else [None]
     for target in targets:
@@ -1854,6 +1862,7 @@ def _finish_test_sample_f1_job(
     row.finished_at = _now()
     row.process_pid = None
     report = _pseudo_report(row)
+    _record_test_f1_inference_window(row, report)
     report_ok = _test_sample_f1_report_allows_success(report)
     succeeded = succeeded and report_ok
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
@@ -1997,6 +2006,7 @@ def _finish_saved_test_sample_evaluation_job(
     row.finished_at = _now()
     row.process_pid = None
     report = _pseudo_report(row)
+    _record_test_f1_inference_window(row, report)
     succeeded = succeeded and _test_sample_f1_report_allows_success(report)
     row.status = JobStatus.COMPLETED.value if succeeded else JobStatus.FAILED.value
     sample = _saved_test_sample_evaluation(session, row)
@@ -2131,6 +2141,29 @@ def _report_metric_values(
         false_positive,
         false_negative,
     )
+
+
+def _record_test_f1_inference_window(
+    row: JobRow,
+    report: dict[str, Any] | None,
+) -> None:
+    """Зафиксировать фактическое окно runner вместо размера тестового TIFF."""
+
+    if report is None:
+        return
+    values = {
+        "inference_tile_size": _optional_scalar_int(report.get("inference_tile_size")),
+        "inference_context": _optional_scalar_int(report.get("inference_context")),
+        "inference_stride": _optional_scalar_int(report.get("inference_stride")),
+        "inference_core_size": _optional_scalar_int(report.get("inference_core_size")),
+    }
+    if values["inference_tile_size"] is None:
+        return
+    row.tile_size = values["inference_tile_size"]
+    row.config = {
+        **(row.config or {}),
+        **{key: value for key, value in values.items() if value is not None},
+    }
 
 
 def _merge_partial_managed_metrics(

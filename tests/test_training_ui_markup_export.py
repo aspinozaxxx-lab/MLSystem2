@@ -3143,6 +3143,24 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
         )
         session.add(new_dataset)
         session.flush()
+        source_job = JobRow(
+            type="training",
+            source="manual",
+            status="completed",
+            queue_position=0,
+            dataset_key=new_dataset.key,
+            dataset_name="Вырубки\\main_new",
+            model_name="segformer b2",
+            architecture="segformer_b2",
+            tile_size=1024,
+            config={
+                "tile_preparation.tile_size": 1024,
+                "tile_preparation.context": 128,
+                "tile_preparation.stride": 768,
+            },
+        )
+        session.add(source_job)
+        session.flush()
         training = TrainingResultRow(
             source="manual",
             dataset_key=new_dataset.key,
@@ -3152,6 +3170,7 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
             model_name="segformer b2",
             mlflow_run_id="run-main-new",
             status="ok",
+            job_id=source_job.id,
         )
         session.add(training)
         session.flush()
@@ -3163,6 +3182,7 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
         assert job is not None
         assert job.dataset_key == new_dataset.key
         assert job.config["test_sample_id"] == str(sample.id)
+        assert job.tile_size == 1024
 
         monkeypatch.setattr(
             _worker,
@@ -3184,6 +3204,12 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
         )
         assert payload["test_sample_id"] == str(sample.id)
         assert payload["training_result_id"] == str(training.id)
+        assert payload["tile_size"] == 1024
+        assert payload["context"] == 128
+        assert payload["stride"] == 768
+        assert job.config["inference_tile_size"] == 1024
+        assert job.config["inference_context"] == 128
+        assert job.config["inference_stride"] == 768
 
         (run_root / "scratch").mkdir(parents=True)
         (run_root / "scratch" / "report.json").write_text(
@@ -3198,6 +3224,10 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
                     "object_true_positive": 1,
                     "object_false_positive": 0,
                     "object_false_negative": 0,
+                    "inference_tile_size": 768,
+                    "inference_context": 128,
+                    "inference_stride": 512,
+                    "inference_core_size": 512,
                 }
             ),
             encoding="utf-8",
@@ -3215,6 +3245,11 @@ def test_class_primary_sample_evaluates_network_from_another_dataset(
         assert metric.status == "current"
         assert metric.f1 == pytest.approx(8 / 9)
         assert metric.object_f1 == pytest.approx(1.0)
+        assert job.tile_size == 768
+        assert job.config["inference_tile_size"] == 768
+        assert job.config["inference_context"] == 128
+        assert job.config["inference_stride"] == 512
+        assert job.config["inference_core_size"] == 512
 
 
 def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(

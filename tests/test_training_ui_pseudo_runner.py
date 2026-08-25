@@ -346,6 +346,52 @@ def test_pseudo_markup_discards_predictions_from_input_context_frame(
     assert np.count_nonzero(result) == 0
 
 
+def test_test_tile_is_fully_covered_by_checkpoint_sized_windows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "full-area.tif"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=13,
+        height=11,
+        count=4,
+        dtype="uint8",
+        nodata=0,
+        crs="EPSG:3857",
+        transform=from_origin(0, 11, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((4, 11, 13), dtype=np.uint8))
+
+    input_shapes: list[tuple[int, ...]] = []
+
+    def predict_every_pixel(_torch, _model, image, **_kwargs):
+        input_shapes.append(image.shape)
+        prediction = np.ones(image.shape[-2:], dtype=np.uint8)
+        return prediction, prediction.astype(np.float32)
+
+    monkeypatch.setattr(_pseudo_runner, "_predict_tile", predict_every_pixel)
+
+    result = _infer_test_tile_mask(
+        torch=object(),
+        model=object(),
+        input_channels=4,
+        image_path=image_path,
+        tile_size=8,
+        stride=4,
+        context=2,
+        threshold=0.5,
+        device="cpu",
+        postprocess_profile=_select_postprocess_profile(0),
+    )
+
+    assert result.shape == (11, 13)
+    assert np.all(result == 1)
+    assert input_shapes == [(4, 8, 8)] * 12
+
+
 def test_pseudo_runner_accepts_only_rgb_or_rgba_for_three_channel_checkpoint(tmp_path: Path) -> None:
     image_path = tmp_path / "rgb.tif"
     with rasterio.open(
@@ -1279,6 +1325,116 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert report["test_f1_evaluator_version"] == 2
     assert report["preserve_boundary_components"] is True
     assert fake_torch.cuda.empty_cache_calls == 1
+
+
+def test_test_sample_f1_prefers_checkpoint_window_over_test_tile_size(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = tmp_path / "best.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    image_path = tmp_path / "tile.tif"
+    mask_path = tmp_path / "tile_mask.png"
+    with rasterio.open(
+        image_path,
+        "w",
+        driver="GTiff",
+        width=13,
+        height=11,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(0, 11, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((4, 11, 13), dtype=np.uint8))
+    with rasterio.open(
+        mask_path,
+        "w",
+        driver="PNG",
+        width=13,
+        height=11,
+        count=1,
+        dtype="uint8",
+    ) as dataset:
+        dataset.write(np.zeros((11, 13), dtype=np.uint8), 1)
+
+    fake_torch = _FakeTorch()
+    fake_model = _FakeModel()
+    monkeypatch.setattr(_pseudo_runner, "_torch", lambda: fake_torch)
+    monkeypatch.setattr(
+        _pseudo_runner,
+        "load_checkpoint",
+        lambda _request: SimpleNamespace(
+            model=SimpleNamespace(
+                model=fake_model,
+                spec=SimpleNamespace(input_channels=4, output_channels=1),
+            ),
+            artifact=SimpleNamespace(
+                metadata={
+                    "sample_size": 8,
+                    "inference_context": 2,
+                    "inference_core_size": 4,
+                    "confidence_threshold": 0.5,
+                    "task": "binary",
+                }
+            ),
+        ),
+    )
+    received: dict[str, int] = {}
+
+    def infer(**kwargs):
+        received.update(
+            tile_size=int(kwargs["tile_size"]),
+            context=int(kwargs["context"]),
+            stride=int(kwargs["stride"]),
+        )
+        return np.zeros((11, 13), dtype=np.uint8)
+
+    monkeypatch.setattr(_pseudo_runner, "_infer_test_tile_mask", infer)
+
+    report = run_test_sample_f1(
+        {
+            "operation": "test_sample_f1",
+            "run_root": str(tmp_path / "run-checkpoint-window"),
+            "local_checkpoint_path": str(checkpoint_path),
+            "tile_size": 13,
+            "context": 0,
+            "stride": 13,
+            "device": "cuda",
+            "tiles": [
+                {
+                    "index": 1,
+                    "image_path": str(image_path),
+                    "mask_path": str(mask_path),
+                }
+            ],
+        }
+    )
+
+    assert report["status"] == "ok"
+    assert received == {"tile_size": 8, "context": 2, "stride": 4}
+    assert report["inference_tile_size"] == 8
+    assert report["inference_context"] == 2
+    assert report["inference_stride"] == 4
+    assert report["inference_core_size"] == 4
+    assert report["tiles"][0]["image_width"] == 13
+    assert report["tiles"][0]["image_height"] == 11
+    assert report["tiles"][0]["inference_window_count"] == 12
+
+
+def test_checkpoint_window_falls_back_when_legacy_metadata_values_are_empty() -> None:
+    loaded = SimpleNamespace(
+        artifact=SimpleNamespace(
+            metadata={"sample_size": None, "inference_context": None}
+        )
+    )
+
+    assert _pseudo_runner._checkpoint_inference_window(
+        loaded,
+        tile_size=1024,
+        context=0,
+        stride=512,
+    ) == (1024, 0, 512)
 
 
 def test_managed_test_sample_f1_uses_each_class_sample_and_macro_average(

@@ -295,8 +295,13 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     threshold: float | None = None
     inference_tile_size = int(config.get("tile_size") or 768)
     context = int(config.get("context") or 0)
-    core_size = _inference_core_size(inference_tile_size, context)
-    stride = core_size if context else int(config.get("stride") or inference_tile_size)
+    inference_core_size = _inference_core_size(inference_tile_size, context)
+    stride = (
+        inference_core_size
+        if context
+        else int(config.get("stride") or inference_tile_size)
+    )
+    _validate_window_grid(inference_tile_size, stride, context)
     device = str(config.get("device") or "cpu")
     has_external_model = isinstance(config.get("external_model"), dict)
     profile = _postprocess_profile_from_config(
@@ -350,6 +355,12 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             torch = _torch()
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
+            )
+            inference_tile_size, context, stride = _checkpoint_inference_window(
+                loaded,
+                tile_size=inference_tile_size,
+                context=context,
+                stride=stride,
             )
             task, object_types, checkpoint_threshold = _native_model_contract(loaded, config)
             if threshold is None:
@@ -586,6 +597,18 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             reports.append(
                 {
                     "index": int(tile["index"]),
+                    "image_width": int(prediction.shape[1]),
+                    "image_height": int(prediction.shape[0]),
+                    **(
+                        {
+                            "inference_window_count": (
+                                len(range(0, int(prediction.shape[1]), stride))
+                                * len(range(0, int(prediction.shape[0]), stride))
+                            )
+                        }
+                        if not precomputed and external_loaded is None
+                        else {}
+                    ),
                     **(
                         {
                             "test_sample_id": tile.get("test_sample_id"),
@@ -627,6 +650,10 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             **counts,
             **object_counts,
             "threshold": threshold,
+            "inference_tile_size": inference_tile_size,
+            "inference_context": context,
+            "inference_stride": stride,
+            "inference_core_size": _inference_core_size(inference_tile_size, context),
             "error": repr(exc),
             "tiles": reports,
             "elapsed_sec": round(time.time() - started, 3),
@@ -670,6 +697,10 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         **counts,
         **object_counts,
         "threshold": threshold,
+        "inference_tile_size": inference_tile_size,
+        "inference_context": context,
+        "inference_stride": stride,
+        "inference_core_size": _inference_core_size(inference_tile_size, context),
         "test_sample_id": config.get("test_sample_id"),
         "test_sample_revision": config.get("test_sample_revision"),
         "training_result_id": config.get("training_result_id"),
@@ -3680,6 +3711,47 @@ def _inference_core_size(tile_size: int, context: int) -> int:
     if context < 0 or tile_size <= 2 * context:
         raise RuntimeError("Размер тайла должен быть больше удвоенного context.")
     return tile_size - 2 * context
+
+
+def _checkpoint_inference_window(
+    loaded: object,
+    *,
+    tile_size: int,
+    context: int,
+    stride: int,
+) -> tuple[int, int, int]:
+    """Взять геометрию инференса из checkpoint, сохранив fallback старых моделей."""
+
+    artifact = getattr(loaded, "artifact", None)
+    raw_metadata = getattr(artifact, "metadata", None)
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_tile_size = metadata.get("sample_size")
+    raw_context = metadata.get("inference_context")
+    try:
+        checkpoint_tile_size = int(tile_size if raw_tile_size is None else raw_tile_size)
+        checkpoint_context = int(context if raw_context is None else raw_context)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Checkpoint содержит некорректный размер окна инференса.") from exc
+    core_size = _inference_core_size(checkpoint_tile_size, checkpoint_context)
+    raw_core_size = metadata.get("inference_core_size")
+    if raw_core_size is not None:
+        try:
+            saved_core_size = int(raw_core_size)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Checkpoint содержит некорректный полезный центр.") from exc
+        if saved_core_size != core_size:
+            raise RuntimeError(
+                "Размер полезного центра checkpoint не соответствует sample_size и context."
+            )
+    checkpoint_stride = core_size if checkpoint_context else int(stride)
+    if checkpoint_stride <= 0 or checkpoint_stride > core_size:
+        checkpoint_stride = core_size
+    _validate_window_grid(
+        checkpoint_tile_size,
+        checkpoint_stride,
+        checkpoint_context,
+    )
+    return checkpoint_tile_size, checkpoint_context, checkpoint_stride
 
 
 def _safe_dir_name(value: str) -> str:

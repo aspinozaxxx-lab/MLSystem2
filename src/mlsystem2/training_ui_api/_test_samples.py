@@ -3192,6 +3192,7 @@ def queue_test_sample_evaluation(
         sample.updated_at = _utc_now()
         return False
 
+    inference_tile_size = _training_result_inference_tile_size(session, result)
     job = JobRow(
         type=JobType.INFERENCE.value,
         source=source.value,
@@ -3204,7 +3205,7 @@ def queue_test_sample_evaluation(
         inference_dataset_name=sample.name,
         model_name=result.model_name,
         architecture=result.architecture,
-        tile_size=sample.tile_width,
+        tile_size=inference_tile_size,
         config={
             URGENT_PRIORITY_CONFIG_KEY: URGENT_PRIORITY_VALUE,
             "operation": TEST_SAMPLE_F1_OPERATION,
@@ -3242,6 +3243,29 @@ def current_primary_training_result(
     """Вернуть эффективную успешную сеть класса без её неявного назначения."""
 
     return primary_training_result(session, class_key)
+
+
+def _training_result_inference_tile_size(
+    session: Session,
+    result: TrainingResultRow,
+) -> int | None:
+    """Вернуть размер входа сети для очереди, не подменяя его размером тестового TIFF."""
+
+    source_job = session.get(JobRow, result.job_id) if result.job_id is not None else None
+    candidates = (
+        (source_job.config or {}).get("tile_preparation.tile_size")
+        if source_job is not None
+        else None,
+        source_job.tile_size if source_job is not None else None,
+    )
+    for value in candidates:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
 
 
 def test_sample_model_compatibility_error(
@@ -3831,6 +3855,7 @@ def queue_training_result_test_f1(
 
     sample = plan.targets[0].sample
     job_source = source or JobSource(result.source)
+    inference_tile_size = _training_result_inference_tile_size(session, result)
     job = JobRow(
         type=JobType.INFERENCE.value,
         source=job_source.value,
@@ -3845,7 +3870,7 @@ def queue_training_result_test_f1(
         ),
         model_name=result.model_name,
         architecture=result.architecture,
-        tile_size=sample.tile_width,
+        tile_size=inference_tile_size,
         config={
             URGENT_PRIORITY_CONFIG_KEY: URGENT_PRIORITY_VALUE,
             "operation": TEST_SAMPLE_F1_OPERATION,
