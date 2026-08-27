@@ -2956,7 +2956,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "Custom",
         ]
         assert bootstrap["image_folders"][0]["key"] == "kanopus/irkutsk"
-        assert len(bootstrap["training_templates"]) == 7
+        assert len(bootstrap["training_templates"]) == 8
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == [
@@ -2999,6 +2999,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         models = client.get("/api/v1/models").json()["models"]
         assert [item["display_name"] for item in models] == [
             "deeplabV3+",
+            "segformer b1",
             "segformer b2",
             "segformer b3",
             "unet + resnet34",
@@ -3028,7 +3029,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert rule["pseudo_markup_enabled"] is True
 
         templates = client.get("/api/v1/training-templates").json()["templates"]
-        assert len(templates) == 7
+        assert len(templates) == 8
+        segformer_b1_template = client.get("/api/v1/training-templates/smp_segformer_b1").json()
+        assert segformer_b1_template["display_name"] == "segformer b1"
+        assert segformer_b1_template["source"] == "analogy"
+        assert segformer_b1_template["default_config"]["train.batch_size"] == 4
         segformer_template = client.get("/api/v1/training-templates/smp_segformer_b2").json()
         assert segformer_template["source"] == "hpo_best"
         template_keys = {item["key"] for item in segformer_template["config_schema"]["fields"]}
@@ -3113,7 +3118,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
-        assert len(inference_templates) == 10
+        assert len(inference_templates) == 11
+        segformer_b1_inference = client.get("/api/v1/inference-templates/smp_segformer_b1").json()
+        assert segformer_b1_inference["display_name"] == "segformer b1"
+        assert segformer_b1_inference["source"] == "analogy"
         inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
         inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
         assert "postprocess.min_area_m2" in inference_keys

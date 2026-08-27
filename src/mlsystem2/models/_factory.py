@@ -13,6 +13,7 @@ except ImportError:
 _SEGFORMER_B0 = "segformer_b0"
 _SEGFORMER_B2 = "segformer_b2"
 _SMP_SEGFORMER_B0 = "smp_segformer_b0"
+_SMP_SEGFORMER_B1 = "smp_segformer_b1"
 _SMP_SEGFORMER_B2 = "smp_segformer_b2"
 _SMP_SEGFORMER_B3 = "smp_segformer_b3"
 _SMP_DEEPLABV3PLUS_RESNET50 = "smp_deeplabv3plus_resnet50"
@@ -24,6 +25,7 @@ _SUPPORTED_NAMES = {
     _SEGFORMER_B0,
     _SEGFORMER_B2,
     _SMP_SEGFORMER_B0,
+    _SMP_SEGFORMER_B1,
     _SMP_SEGFORMER_B2,
     _SMP_SEGFORMER_B3,
     _SMP_DEEPLABV3PLUS_RESNET50,
@@ -34,6 +36,7 @@ _SUPPORTED_NAMES = {
 }
 _SMP_ENCODERS = {
     _SMP_SEGFORMER_B0: "mit_b0",
+    _SMP_SEGFORMER_B1: "mit_b1",
     _SMP_SEGFORMER_B2: "mit_b2",
     _SMP_SEGFORMER_B3: "mit_b3",
 }
@@ -79,6 +82,13 @@ def list_supported_models() -> list[ModelSpec]:
         ),
         ModelSpec(
             name=_SMP_SEGFORMER_B0,
+            input_channels=4,
+            output_channels=1,
+            pretrained=False,
+            parameters={},
+        ),
+        ModelSpec(
+            name=_SMP_SEGFORMER_B1,
             input_channels=4,
             output_channels=1,
             pretrained=False,
@@ -240,7 +250,9 @@ def _create_segformer(spec: ModelSpec):
             )
             return _SegFormerRawInputWrapper(model)
         except Exception as exc:
-            raise ModelsError(f"Не удалось загрузить pretrained {spec.name} из Hugging Face") from exc
+            raise ModelsError(
+                f"Не удалось загрузить pretrained {spec.name} из Hugging Face"
+            ) from exc
     return _SegFormerRawInputWrapper(SegformerForSemanticSegmentation(config))
 
 

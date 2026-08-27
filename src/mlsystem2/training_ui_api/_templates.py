@@ -630,6 +630,11 @@ def initial_templates() -> list[dict[str, Any]]:
             overrides={"train.batch_size": 4, "train.threshold": 0.65},
         ),
         _template(
+            "smp_segformer_b1",
+            "segformer b1",
+            source="analogy",
+        ),
+        _template(
             "smp_segformer_b2",
             "segformer b2",
             source="hpo_best",
@@ -685,6 +690,11 @@ def initial_inference_templates() -> list[dict[str, Any]]:
         _inference_template(
             "smp_deeplabv3plus_resnet50",
             "deeplabV3+",
+            source="analogy",
+        ),
+        _inference_template(
+            "smp_segformer_b1",
+            "segformer b1",
             source="analogy",
         ),
         _inference_template(

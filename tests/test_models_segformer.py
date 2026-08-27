@@ -13,6 +13,7 @@ def test_list_supported_models_returns_supported_architectures() -> None:
         "segformer_b0",
         "segformer_b2",
         "smp_segformer_b0",
+        "smp_segformer_b1",
         "smp_segformer_b2",
         "smp_segformer_b3",
         "smp_deeplabv3plus_resnet50",
@@ -81,6 +82,56 @@ def test_create_smp_segformer_b0_three_channel_forward() -> None:
 
     outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
     assert outputs.shape == (1, 1, 128, 128)
+
+
+def test_create_smp_segformer_b1_three_channel_forward() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("segmentation_models_pytorch")
+
+    handle = create_model(
+        ModelSpec(
+            name="smp_segformer_b1",
+            input_channels=3,
+            output_channels=1,
+            pretrained=False,
+        )
+    )
+
+    outputs = handle.model(torch.zeros((1, 3, 128, 128), dtype=torch.float32))
+    assert outputs.shape == (1, 1, 128, 128)
+
+
+def test_create_smp_segformer_b1_uses_mit_b1_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mlsystem2.models import _factory
+
+    seen: dict[str, object] = {}
+
+    class FakeSMP:
+        @staticmethod
+        def Segformer(**kwargs):
+            seen.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(_factory, "_import_smp", lambda: FakeSMP())
+    monkeypatch.setattr(_factory, "_ensure_torch_for_smp", lambda: None)
+
+    handle = create_model(
+        ModelSpec(
+            name="smp_segformer_b1",
+            input_channels=4,
+            output_channels=3,
+            pretrained=False,
+        )
+    )
+
+    assert handle.model is not None
+    assert seen == {
+        "encoder_name": "mit_b1",
+        "encoder_weights": None,
+        "in_channels": 4,
+        "classes": 3,
+        "activation": None,
+    }
 
 
 def test_create_smp_deeplabv3plus_resnet50_three_channel_forward() -> None:
