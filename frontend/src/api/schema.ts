@@ -415,6 +415,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy Dataset */
+        post: operations["copy_dataset_api_v1_dataset_editor_datasets__dataset_key__copy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
         parameters: {
             query?: never;
@@ -1914,6 +1931,34 @@ export interface components {
             image_paths?: string[];
             /** Folder Path */
             folder_path?: string | null;
+        };
+        /** DatasetEditorCopyRequest */
+        DatasetEditorCopyRequest: {
+            /** Name */
+            name: string;
+        };
+        /** DatasetEditorCopyResult */
+        DatasetEditorCopyResult: {
+            /** Commit */
+            commit: string;
+            /**
+             * Publication Status
+             * @enum {string}
+             */
+            publication_status: "publishing" | "published";
+            /** Scenes */
+            scenes?: components["schemas"]["DatasetEditorSceneInfo"][];
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Source Path */
+            source_path: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
         };
         /** DatasetEditorDatasetInfo */
         DatasetEditorDatasetInfo: {
@@ -5081,6 +5126,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    copy_dataset_api_v1_dataset_editor_datasets__dataset_key__copy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetEditorCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorCopyResult"];
                 };
             };
             /** @description Validation Error */

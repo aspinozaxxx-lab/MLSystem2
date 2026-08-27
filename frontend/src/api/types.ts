@@ -12,6 +12,7 @@ export type CustomDatasetInfo = components["schemas"]["CustomDatasetInfo"];
 export type DatasetInfo = components["schemas"]["DatasetInfo"];
 export type DatasetCatalogInfo = components["schemas"]["DatasetCatalogInfo"];
 export type DatasetEditorAddScenesRequest = components["schemas"]["DatasetEditorAddScenesRequest"];
+export type DatasetEditorCopyResult = components["schemas"]["DatasetEditorCopyResult"];
 export type DatasetEditorDatasetInfo = components["schemas"]["DatasetEditorDatasetInfo"];
 export type DatasetEditorDatasetListResponse = components["schemas"]["DatasetEditorDatasetListResponse"];
 export type DatasetEditorDeleteSceneRequest = components["schemas"]["DatasetEditorDeleteSceneRequest"];

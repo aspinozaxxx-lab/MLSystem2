@@ -75,6 +75,7 @@ from ._test_samples import current_primary_training_result
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
+    DatasetEditorCopyResult,
     DatasetEditorDiscardDraftsResult,
     DatasetEditorDraftInfo,
     DatasetEditorDraftSummary,
@@ -1074,6 +1075,114 @@ def delete_editor_scene(
     )
 
 
+def copy_editor_dataset(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    name: str,
+    username: str,
+) -> DatasetEditorCopyResult:
+    """Создать новый датасет из опубликованного состояния существующего."""
+
+    copy_name = _dataset_copy_name(name)
+    with _editor_lock(config, restore_ownership=True):
+        _synchronize_editor_clone(config)
+        dataset = _managed_editor_dataset(session, config, dataset_key)
+        row = session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.key == dataset_key,
+                DatasetRow.deleted_at.is_(None),
+            )
+        )
+        if row is None:
+            raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
+        _ensure_dataset_copy_name_available(session, row.class_id, copy_name)
+
+        if row.source_type == SOURCE_MANAGED:
+            copied = _copy_managed_dataset_row(session, row, copy_name)
+            commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+            return DatasetEditorCopyResult(
+                commit=commit,
+                publication_status=_publication_status(config, commit),
+                dataset_key=copied.key,
+                dataset_name=copied.name,
+                source_path=copied.source_path,
+                managed=True,
+            )
+
+        source_dir = _editor_source_dir(config, dataset)
+        source_relative = _repo_relative(config, source_dir)
+        if len(source_relative.parts) < 2:
+            raise TrainingUIAPIError(
+                "Копировать можно только отдельную папку датасета внутри папки класса."
+            )
+        target_relative = source_relative.parent / copy_name
+        target_dir = config.mlmarkup_editor_root.joinpath(*target_relative.parts)
+        _ensure_within(
+            target_dir.resolve(),
+            config.mlmarkup_editor_root.resolve(),
+            "Папка копии выходит за пределы editor-клона",
+        )
+        _ensure_dataset_copy_source_available(session, target_relative, target_dir)
+
+        source_tree_revision = _tree_object_revision(config, "HEAD", source_relative)
+        if source_tree_revision is None or not source_dir.is_dir():
+            raise TrainingUIAPIError(
+                "Исходная папка датасета отсутствует или не зафиксирована в Git editor-клона."
+            )
+
+        try:
+            shutil.copytree(source_dir, target_dir, copy_function=shutil.copy2)
+            _git(config, "add", "--", target_relative.as_posix())
+            commit = _commit(
+                config,
+                f"Создать копию датасета {dataset.name} как {copy_name}",
+                username,
+            )
+            commit = _push_with_retry(
+                config,
+                expected_revisions={},
+                expected_tree_revisions={
+                    source_relative: source_tree_revision,
+                    target_relative: None,
+                },
+            )
+        except Exception:
+            _git_optional(
+                config,
+                "restore",
+                "--staged",
+                "--worktree",
+                "--",
+                target_relative.as_posix(),
+            )
+            if target_dir.is_dir():
+                shutil.rmtree(target_dir)
+            raise
+
+        copied = DatasetRow(
+            key=str(uuid.uuid4()),
+            class_id=row.class_id,
+            name=copy_name,
+            source_type=row.source_type,
+            source_path=target_relative.as_posix(),
+            model_name_stem=row.model_name_stem,
+            config_revision=1,
+            legacy_version=False,
+        )
+        session.add(copied)
+        session.flush()
+        return DatasetEditorCopyResult(
+            commit=commit,
+            publication_status=_publication_status(config, commit),
+            dataset_key=copied.key,
+            dataset_name=copied.name,
+            source_path=copied.source_path,
+            managed=False,
+        )
+
+
 def delete_editor_dataset(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -1205,6 +1314,111 @@ def delete_editor_dataset(
             commit=commit,
             publication_status=_publication_status(config, commit),
         )
+
+
+def _dataset_copy_name(value: str) -> str:
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise TrainingUIAPIError("Название копии не может быть пустым")
+    if normalized in {".", ".."} or any(char in normalized for char in '<>:"/\\|?*'):
+        raise TrainingUIAPIError("Название копии содержит символы, недопустимые в имени папки.")
+    if normalized.endswith((" ", ".")):
+        raise TrainingUIAPIError("Название копии не должно оканчиваться пробелом или точкой.")
+    reserved = {
+        "aux",
+        "clock$",
+        "con",
+        "nul",
+        "prn",
+        *(f"com{index}" for index in range(1, 10)),
+        *(f"lpt{index}" for index in range(1, 10)),
+    }
+    if normalized.split(".", maxsplit=1)[0].casefold() in reserved:
+        raise TrainingUIAPIError("Название копии зарезервировано операционной системой.")
+    return normalized
+
+
+def _ensure_dataset_copy_name_available(
+    session: Session,
+    class_id: uuid.UUID,
+    name: str,
+) -> None:
+    names = session.scalars(select(DatasetRow.name).where(DatasetRow.class_id == class_id)).all()
+    if any(existing.casefold() == name.casefold() for existing in names):
+        raise TrainingUIAPIError(
+            f"Датасет с названием «{name}» уже существует в классе или сохранён в истории."
+        )
+
+
+def _ensure_dataset_copy_source_available(
+    session: Session,
+    target_relative: PurePosixPath,
+    target_dir: Path,
+) -> None:
+    target_key = target_relative.as_posix().casefold()
+    source_paths = session.scalars(select(DatasetRow.source_path)).all()
+    if any(value.casefold() == target_key for value in source_paths):
+        raise TrainingUIAPIError(
+            f"Путь копии уже использовался другим датасетом: {target_relative.as_posix()}"
+        )
+    if target_dir.exists():
+        raise TrainingUIAPIError(
+            f"Папка копии уже существует в MLMarkup: {target_relative.as_posix()}"
+        )
+
+
+def _copy_managed_dataset_row(
+    session: Session,
+    source: DatasetRow,
+    name: str,
+) -> DatasetRow:
+    copied = DatasetRow(
+        key=str(uuid.uuid4()),
+        class_id=source.class_id,
+        name=name,
+        source_type=SOURCE_MANAGED,
+        source_path=f"managed/{uuid.uuid4()}",
+        model_name_stem=source.model_name_stem,
+        config_revision=1,
+        legacy_version=False,
+    )
+    session.add(copied)
+    session.flush()
+
+    relations = session.scalars(
+        select(ManagedDatasetSourceRow).where(
+            ManagedDatasetSourceRow.managed_dataset_id == source.id
+        )
+    ).all()
+    session.add_all(
+        [
+            ManagedDatasetSourceRow(
+                managed_dataset_id=copied.id,
+                source_dataset_id=relation.source_dataset_id,
+                priority=relation.priority,
+                object_type_id=relation.object_type_id,
+                object_type_slug=relation.object_type_slug,
+                object_type_name=relation.object_type_name,
+                color=relation.color,
+            )
+            for relation in relations
+        ]
+    )
+    explicit_scenes = session.scalars(
+        select(ManagedDatasetSceneRow).where(ManagedDatasetSceneRow.managed_dataset_id == source.id)
+    ).all()
+    session.add_all(
+        [
+            ManagedDatasetSceneRow(
+                managed_dataset_id=copied.id,
+                annotation_name=scene.annotation_name,
+                image_relative_path=scene.image_relative_path,
+            )
+            for scene in explicit_scenes
+        ]
+    )
+    session.flush()
+    return copied
 
 
 def editor_publication_info(
@@ -3753,6 +3967,7 @@ __all__ = [
     "DatasetEditorGitError",
     "add_editor_scenes",
     "browse_editor_rasters",
+    "copy_editor_dataset",
     "delete_editor_dataset",
     "delete_editor_scene",
     "editor_publication_info",

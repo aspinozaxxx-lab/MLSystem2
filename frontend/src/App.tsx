@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Database,
   Download,
   ExternalLink,
@@ -48,6 +49,7 @@ import type {
   ConfigSchema,
   CustomDatasetInfo,
   DatasetCatalogInfo,
+  DatasetEditorCopyResult,
   DatasetEditorMutationResult,
   DatasetEditorUserDraftInfo,
   DatasetEditorUserDraftListResponse,
@@ -2886,6 +2888,92 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     });
   };
 
+  const openDatasetCopy = (
+    classInfo: NonNullable<DatasetCatalogInfo["classes"]>[number],
+    dataset: DatasetInfo,
+  ) => {
+    const sourceName = dataset.dataset_name || dataset.name;
+    const existingNames = new Set(
+      (classInfo.datasets || []).map((item) => (
+        item.dataset_name || item.name
+      ).toLocaleLowerCase("ru")),
+    );
+    let suggestedName = `${sourceName} копия`;
+    let suffix = 2;
+    while (existingNames.has(suggestedName.toLocaleLowerCase("ru"))) {
+      suggestedName = `${sourceName} копия ${suffix}`;
+      suffix += 1;
+    }
+    const formId = `dataset-copy-${dataset.key}`;
+    showModal({
+      title: `Создать копию датасета «${sourceName}»`,
+      body: (
+        <form
+          id={formId}
+          className="form-stack"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const name = String(data.get("name") || "").trim();
+            if (!name) return;
+            const result = await run(() => apiJson<DatasetEditorCopyResult>(
+              `/dataset-editor/datasets/${encodeURIComponent(dataset.key)}/copy`,
+              { method: "POST", body: { name } },
+            ));
+            if (!result) return;
+            closeModal();
+            await loadCatalog();
+            await reloadBootstrap();
+            showModal({
+              title: "Копия датасета создана",
+              body: result.managed ? (
+                <p>
+                  Управляемый датасет <strong>{result.dataset_name}</strong> создан с теми же
+                  источниками, приоритетами и добавленными снимками.
+                </p>
+              ) : (
+                <p>
+                  Создан датасет <strong>{result.dataset_name}</strong> и Git-коммит{" "}
+                  <strong>{result.commit.slice(0, 8)}</strong>. Публикация MLMarkup:
+                  {result.publication_status === "published" ? " завершена" : " выполняется"}.
+                </p>
+              ),
+              footer: (
+                <button className="primary" type="button" onClick={closeModal}>Готово</button>
+              ),
+            });
+          }}
+        >
+          <label>
+            Название нового датасета
+            <input name="name" defaultValue={suggestedName} maxLength={240} autoFocus required />
+          </label>
+          <div className="notice">
+            {dataset.managed ? (
+              <>
+                Копируются параметры управляемого датасета. Исходные датасеты остаются общими,
+                задания, результаты обучения и черновики не переносятся.
+              </>
+            ) : (
+              <>
+                Копируются опубликованные файлы разметки в новую независимую папку MLMarkup.
+                Черновики, задания, шаблоны и результаты обучения не переносятся.
+              </>
+            )}
+          </div>
+        </form>
+      ),
+      footer: (
+        <>
+          <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+          <button className="primary" type="submit" form={formId}>
+            <Copy size={15} /> Создать копию
+          </button>
+        </>
+      ),
+    });
+  };
+
   const confirmDatasetDeletion = (dataset: DatasetInfo) => {
     showModal({
       title: `Удалить датасет «${dataset.dataset_name || dataset.name}»?`,
@@ -3103,6 +3191,15 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                           : openDatasetEditor(classInfo.key, dataset)}
                       >
                         Параметры
+                      </button>
+                      <button
+                        className="secondary icon-button"
+                        type="button"
+                        aria-label={`Создать копию датасета ${dataset.dataset_name || dataset.name}`}
+                        title="Создать копию под новым именем"
+                        onClick={() => openDatasetCopy(classInfo, dataset)}
+                      >
+                        <Copy size={15} />
                       </button>
                       <button
                         className="danger icon-button"

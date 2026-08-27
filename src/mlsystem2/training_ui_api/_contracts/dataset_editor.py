@@ -227,12 +227,27 @@ class DatasetEditorDeleteSceneRequest(BaseModel):
     revision: str = Field(min_length=1, max_length=128)
 
 
+class DatasetEditorCopyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=240)
+
+
 class DatasetEditorMutationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     commit: str
     publication_status: Literal["publishing", "published"]
     scenes: list[DatasetEditorSceneInfo] = Field(default_factory=list)
+
+
+class DatasetEditorCopyResult(DatasetEditorMutationResult):
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_key: str
+    dataset_name: str
+    source_path: str
+    managed: bool = False
 
 
 class DatasetEditorPublicationInfo(BaseModel):
@@ -288,6 +303,8 @@ class DatasetEditorRebuildResult(DatasetEditorMutationResult):
 
 __all__ = [
     "DatasetEditorAddScenesRequest",
+    "DatasetEditorCopyRequest",
+    "DatasetEditorCopyResult",
     "DatasetEditorDatasetInfo",
     "DatasetEditorDatasetListResponse",
     "DatasetEditorDeleteSceneRequest",

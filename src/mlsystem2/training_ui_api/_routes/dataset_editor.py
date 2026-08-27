@@ -14,6 +14,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     DatasetEditorGitError,
     add_editor_scenes,
     browse_editor_rasters,
+    copy_editor_dataset,
     delete_editor_dataset,
     delete_editor_scene,
     discard_editor_drafts,
@@ -34,6 +35,8 @@ from mlsystem2.training_ui_api._dataset_editor import (
 )
 from mlsystem2.training_ui_api.contracts import (
     DatasetEditorAddScenesRequest,
+    DatasetEditorCopyRequest,
+    DatasetEditorCopyResult,
     DatasetEditorDatasetListResponse,
     DatasetEditorDeleteSceneRequest,
     DatasetEditorDiscardDraftsResult,
@@ -111,6 +114,25 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             db,
             ctx.config,
             dataset_key,
+            username=username,
+        )
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/copy",
+        response_model=DatasetEditorCopyResult,
+    )
+    def copy_dataset(
+        dataset_key: str,
+        request: DatasetEditorCopyRequest,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorCopyResult:
+        return _git_call(
+            copy_editor_dataset,
+            db,
+            ctx.config,
+            dataset_key,
+            name=request.name,
             username=username,
         )
 
@@ -309,8 +331,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             scenes=[
-                (scene.annotation_name, scene.revision, scene.geojson)
-                for scene in request.scenes
+                (scene.annotation_name, scene.revision, scene.geojson) for scene in request.scenes
             ],
             username=username,
         )

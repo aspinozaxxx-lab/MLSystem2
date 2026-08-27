@@ -33,6 +33,7 @@ from mlsystem2.training_ui_api._models import (
     DatasetRow,
     JobRow,
     ManagedDatasetSceneRow,
+    ManagedDatasetSourceRow,
     PseudoMarkupResultRow,
     StoredFileRow,
     TrainingResultRow,
@@ -723,6 +724,197 @@ def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
             "/api/v1/dataset-editor/datasets/{dataset_key}"
         ]
     )
+
+
+def test_dataset_editor_copies_published_dataset_under_new_name(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    source_files = {
+        path.relative_to(env.editor_dataset): path.read_bytes()
+        for path in env.editor_dataset.rglob("*")
+        if path.is_file()
+    }
+    live_before = env.live_annotation.read_bytes()
+    commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
+
+    response = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy",
+        json={"name": "test копия"},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["dataset_name"] == "test копия"
+    assert result["source_path"] == "Реки/test копия"
+    assert result["managed"] is False
+    assert result["publication_status"] == "publishing"
+    copied_dir = env.editor_dataset.with_name("test копия")
+    assert {
+        path.relative_to(copied_dir): path.read_bytes()
+        for path in copied_dir.rglob("*")
+        if path.is_file()
+    } == source_files
+    assert env.live_annotation.read_bytes() == live_before
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == (commits_before + 1)
+    assert _git(env.editor_root, "show", "-s", "--format=%an", result["commit"]).stdout.strip() == (
+        "editor"
+    )
+
+    catalog = env.client.get("/api/v1/dataset-catalog").json()
+    copied = next(
+        dataset
+        for class_info in catalog["classes"]
+        for dataset in class_info["datasets"]
+        if dataset["key"] == result["dataset_key"]
+    )
+    assert copied["dataset_name"] == "test копия"
+    assert copied["is_primary"] is False
+
+    duplicate = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy",
+        json={"name": "TEST КОПИЯ"},
+    )
+    assert duplicate.status_code == 400
+    assert "уже существует" in duplicate.json()["detail"]
+    invalid = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy",
+        json={"name": "../чужая папка"},
+    )
+    assert invalid.status_code == 400
+    assert "недопустимые" in invalid.json()["detail"]
+
+    openapi = env.client.get("/openapi.json").json()
+    operation = openapi["paths"]["/api/v1/dataset-editor/datasets/{dataset_key}/copy"]["post"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/DatasetEditorCopyRequest"
+    )
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/DatasetEditorCopyResult"
+    )
+
+
+def test_dataset_editor_copies_managed_dataset_parameters_and_explicit_scenes(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    catalog = env.client.get("/api/v1/dataset-catalog").json()
+    river_class = next(item for item in catalog["classes"] if item["name"] == "Реки")
+    river_dataset = next(item for item in river_class["datasets"] if item["key"] == env.dataset_key)
+
+    lake_catalog = env.client.post(
+        "/api/v1/dataset-classes",
+        json={
+            "name": "Тестовые озёра копирования",
+            "technical_name": "copy_test_lakes",
+            "imagery_type": "kanopus",
+        },
+    ).json()
+    lake_class = next(
+        item for item in lake_catalog["classes"] if item["name"] == "Тестовые озёра копирования"
+    )
+    moved_catalog = env.client.post(
+        "/api/v1/managed-datasets",
+        json={
+            "class_key": lake_class["key"],
+            "name": "main",
+            "source_path": "Реки/empty",
+        },
+    ).json()
+    lake_dataset = next(
+        item
+        for item in next(
+            class_info
+            for class_info in moved_catalog["classes"]
+            if class_info["key"] == lake_class["key"]
+        )["datasets"]
+        if item["dataset_name"] == "main"
+    )
+    combined_catalog = env.client.post(
+        "/api/v1/dataset-classes",
+        json={
+            "name": "Тестовые реки и озёра копирования",
+            "technical_name": "copy_test_rivers_lakes",
+            "imagery_type": "kanopus",
+        },
+    ).json()
+    combined_class = next(
+        item
+        for item in combined_catalog["classes"]
+        if item["name"] == "Тестовые реки и озёра копирования"
+    )
+    composed = env.client.post(
+        "/api/v1/managed-datasets/compose",
+        json={
+            "class_key": combined_class["key"],
+            "name": "main",
+            "sources": [
+                {"dataset_key": river_dataset["key"], "priority": 20, "color": "#112233"},
+                {"dataset_key": lake_dataset["key"], "priority": 10, "color": "#445566"},
+            ],
+        },
+    )
+    assert composed.status_code == 200, composed.text
+    managed = next(
+        item
+        for class_info in composed.json()["classes"]
+        if class_info["key"] == combined_class["key"]
+        for item in class_info["datasets"]
+        if item["dataset_name"] == "main"
+    )
+    with create_session_factory(get_config())() as session:
+        managed_row = session.scalar(select(DatasetRow).where(DatasetRow.key == managed["key"]))
+        assert managed_row is not None
+        session.add(
+            ManagedDatasetSceneRow(
+                managed_dataset_id=managed_row.id,
+                annotation_name="extra_SCN01.geojson",
+                image_relative_path="extra/SCN01.tif",
+            )
+        )
+        session.commit()
+
+    commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
+    response = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/copy",
+        json={"name": "main copy"},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["managed"] is True
+    assert result["dataset_name"] == "main copy"
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == commits_before
+    with create_session_factory(get_config())() as session:
+        copied_row = session.scalar(
+            select(DatasetRow).where(DatasetRow.key == result["dataset_key"])
+        )
+        assert copied_row is not None
+        copied_sources = session.scalars(
+            select(ManagedDatasetSourceRow).where(
+                ManagedDatasetSourceRow.managed_dataset_id == copied_row.id
+            )
+        ).all()
+        source_ids = set(
+            session.scalars(
+                select(DatasetRow.id).where(
+                    DatasetRow.key.in_([river_dataset["key"], lake_dataset["key"]])
+                )
+            ).all()
+        )
+        assert {item.source_dataset_id for item in copied_sources} == source_ids
+        assert {(item.priority, item.color) for item in copied_sources} == {
+            (20, "#112233"),
+            (10, "#445566"),
+        }
+        copied_scenes = session.scalars(
+            select(ManagedDatasetSceneRow).where(
+                ManagedDatasetSceneRow.managed_dataset_id == copied_row.id
+            )
+        ).all()
+        assert [(item.annotation_name, item.image_relative_path) for item in copied_scenes] == [
+            ("extra_SCN01.geojson", "extra/SCN01.tif")
+        ]
 
 
 def test_dataset_editor_returns_service_unavailable_for_missing_clone(

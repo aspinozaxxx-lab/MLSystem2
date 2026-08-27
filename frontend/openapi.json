@@ -832,6 +832,55 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/copy": {
+      "post": {
+        "summary": "Copy Dataset",
+        "operationId": "copy_dataset_api_v1_dataset_editor_datasets__dataset_key__copy_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorCopyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorCopyResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}": {
       "get": {
         "summary": "Scene",
@@ -5177,6 +5226,72 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DatasetEditorAddScenesRequest"
+      },
+      "DatasetEditorCopyRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DatasetEditorCopyRequest"
+      },
+      "DatasetEditorCopyResult": {
+        "properties": {
+          "commit": {
+            "type": "string",
+            "title": "Commit"
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "publishing",
+              "published"
+            ],
+            "title": "Publication Status"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorSceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "managed": {
+            "type": "boolean",
+            "title": "Managed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commit",
+          "publication_status",
+          "dataset_key",
+          "dataset_name",
+          "source_path"
+        ],
+        "title": "DatasetEditorCopyResult"
       },
       "DatasetEditorDatasetInfo": {
         "properties": {
