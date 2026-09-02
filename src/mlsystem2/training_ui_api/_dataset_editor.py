@@ -113,6 +113,7 @@ _URGENT_PRIORITY = "urgent"
 _EDITOR_SYNC_TTL_SECONDS = 60.0
 _EDITOR_PSEUDO_ALGORITHM_VERSION = 1
 _MANAGED_OWNER_PROPERTY = "_mlsystem2_managed_dataset_key"
+_EDITOR_RASTER_CRS = PyprojCRS.from_epsg(3857)
 
 
 class DatasetEditorConflict(RuntimeError):
@@ -324,6 +325,10 @@ def editor_scene_detail(
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         annotation_path = _annotation_path(source_dir, annotation_name)
         image_path = _matched_image_path(dataset, source_dir, annotation_name)
+        published_geojson = _reproject_editor_geojson(
+            _read_geojson(annotation_path),
+            image_path,
+        )
         footprint = _valid_data_footprint(image_path)
         draft_row = _editor_draft_row(
             session,
@@ -333,10 +338,20 @@ def editor_scene_detail(
         )
         return DatasetEditorSceneDetail(
             scene=scene,
-            geojson=_clip_geojson_to_footprint(_read_geojson(annotation_path), footprint),
+            geojson=_clip_geojson_to_footprint(published_geojson, footprint),
             valid_data_footprint=dict(mapping(footprint)),
             draft=(
-                _draft_info(draft_row, dataset, scene.revision) if draft_row is not None else None
+                _draft_info(
+                    draft_row,
+                    dataset,
+                    scene.revision,
+                    geojson=_reproject_editor_geojson(
+                        dict(draft_row.geojson),
+                        image_path,
+                    ),
+                )
+                if draft_row is not None
+                else None
             ),
         )
 
@@ -359,8 +374,16 @@ def save_editor_draft(
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         annotation_path = _annotation_path(source_dir, scene.annotation_name)
         image_path = _matched_image_path(dataset, source_dir, scene.annotation_name)
-        previous_payload = _read_geojson(annotation_path)
-        normalized_geojson = _normalize_editor_geojson(geojson, previous_payload, dataset)
+        previous_payload = _reproject_editor_geojson(
+            _read_geojson(annotation_path),
+            image_path,
+        )
+        normalized_geojson = _normalize_editor_geojson(
+            geojson,
+            previous_payload,
+            dataset,
+            image_path=image_path,
+        )
         normalized_geojson = _clip_geojson_to_footprint(
             normalized_geojson,
             _valid_data_footprint(image_path),
@@ -949,13 +972,18 @@ def publish_editor_scenes(
             )
 
         prepared: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
+        footprint_updates: list[tuple[Path, PurePosixPath, str | None, dict[str, Any]]] = []
         for annotation_name, revision, geojson, annotation_path, relative_path in resolved:
             image_path = _matched_image_path(dataset, source_dir, annotation_name)
-            previous_payload = _read_geojson(annotation_path)
+            previous_payload = _reproject_editor_geojson(
+                _read_geojson(annotation_path),
+                image_path,
+            )
             normalized_geojson = _normalize_editor_geojson(
                 geojson,
                 previous_payload,
                 dataset,
+                image_path=image_path,
             )
             _validate_editor_geojson(normalized_geojson, image_path, dataset)
             _validate_preserved_properties(previous_payload, normalized_geojson)
@@ -968,20 +996,39 @@ def publish_editor_scenes(
                     relative_path,
                 )
             )
+            footprint_path = source_dir / footprint_name_for_annotation(annotation_name)
+            footprint_relative = _repo_relative(config, footprint_path)
+            footprint_updates.append(
+                (
+                    footprint_path,
+                    footprint_relative,
+                    _blob_revision(config, "HEAD", footprint_relative),
+                    _footprint_geojson_payload(image_path),
+                )
+            )
 
         relative_paths = [item[4] for item in prepared]
+        footprint_update_paths = [item[1] for item in footprint_updates]
         deletion_paths = [item[3] for item in resolved_deletions]
         footprint_deletion_paths = [item[0] for item in footprint_deletions]
         all_relative_paths = [
             *relative_paths,
+            *footprint_update_paths,
             *deletion_paths,
             *footprint_deletion_paths,
         ]
         try:
             for _name, _revision, geojson, annotation_path, _relative_path in prepared:
                 _write_geojson_atomic(annotation_path, geojson)
-            if relative_paths:
-                _git(config, "add", "--", *(path.as_posix() for path in relative_paths))
+            for footprint_path, _relative, _revision, payload in footprint_updates:
+                _write_geojson_atomic(footprint_path, payload)
+            if relative_paths or footprint_update_paths:
+                _git(
+                    config,
+                    "add",
+                    "--",
+                    *(path.as_posix() for path in [*relative_paths, *footprint_update_paths]),
+                )
             if deletion_paths:
                 _git(
                     config,
@@ -1004,6 +1051,7 @@ def publish_editor_scenes(
                 config,
                 expected_revisions={
                     **{item[4]: item[1] for item in prepared},
+                    **{item[1]: item[2] for item in footprint_updates},
                     **{item[3]: item[1] for item in resolved_deletions},
                     **dict(footprint_deletions),
                 },
@@ -1017,6 +1065,9 @@ def publish_editor_scenes(
                 "--",
                 *(path.as_posix() for path in all_relative_paths),
             )
+            for footprint_path, _relative, revision, _payload in footprint_updates:
+                if revision is None:
+                    footprint_path.unlink(missing_ok=True)
             raise
         updated_scenes = {
             item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
@@ -2590,9 +2641,14 @@ def _publish_managed_editor_scenes(
         if _file_revision(current_path) != revision:
             conflicts.append(safe_name)
             continue
-        previous = _read_geojson(current_path)
         image_path = _matched_image_path(dataset, materialized_dir, safe_name)
-        candidate = _normalize_editor_geojson(geojson, previous, dataset)
+        previous = _reproject_editor_geojson(_read_geojson(current_path), image_path)
+        candidate = _normalize_editor_geojson(
+            geojson,
+            previous,
+            dataset,
+            image_path=image_path,
+        )
         _validate_editor_geojson(candidate, image_path, dataset)
         _validate_preserved_properties(previous, candidate)
         normalized.append((safe_name, previous, candidate))
@@ -3126,10 +3182,12 @@ def _draft_info(
     row: DatasetEditorDraftRow,
     dataset: DatasetInfo,
     current_revision: str,
+    *,
+    geojson: dict[str, Any] | None = None,
 ) -> DatasetEditorDraftInfo:
     return DatasetEditorDraftInfo(
         **_draft_summary(row, dataset, current_revision).model_dump(),
-        geojson=dict(row.geojson),
+        geojson=dict(row.geojson) if geojson is None else geojson,
     )
 
 
@@ -3185,13 +3243,7 @@ def _empty_annotation_payload(
     image_path: Path,
     dataset: DatasetInfo,
 ) -> dict[str, Any]:
-    try:
-        with rasterio.open(image_path) as source:
-            if source.crs is None:
-                raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path.name}")
-            crs_name = source.crs.to_string()
-    except rasterio.errors.RasterioError as exc:
-        raise TrainingUIAPIError(f"Не удалось открыть TIFF {image_path.name}: {exc}") from exc
+    crs_name = _editor_raster_crs(image_path).to_string()
     payload: dict[str, Any] = {
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": crs_name}},
@@ -3211,13 +3263,7 @@ def _empty_annotation_payload(
 
 
 def _footprint_geojson_payload(image_path: Path) -> dict[str, Any]:
-    try:
-        with rasterio.open(image_path) as source:
-            if source.crs is None:
-                raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path.name}")
-            crs_name = source.crs.to_string()
-    except rasterio.errors.RasterioError as exc:
-        raise TrainingUIAPIError(f"Не удалось открыть TIFF {image_path.name}: {exc}") from exc
+    crs_name = _editor_raster_crs(image_path).to_string()
     return {
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": crs_name}},
@@ -3231,6 +3277,57 @@ def _footprint_geojson_payload(image_path: Path) -> dict[str, Any]:
     }
 
 
+def _editor_raster_crs(image_path: Path) -> PyprojCRS:
+    try:
+        with rasterio.open(image_path) as source:
+            if source.crs is None:
+                raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path.name}")
+            raster_crs = PyprojCRS.from_user_input(source.crs)
+    except rasterio.errors.RasterioError as exc:
+        raise TrainingUIAPIError(f"Не удалось открыть TIFF {image_path.name}: {exc}") from exc
+    if raster_crs != _EDITOR_RASTER_CRS:
+        raise TrainingUIAPIError(
+            f"CRS TIFF должен быть EPSG:3857: {image_path.name}; получено {raster_crs.to_string()}"
+        )
+    return raster_crs
+
+
+def _editor_crs_payload(crs: PyprojCRS) -> dict[str, Any]:
+    return {"type": "name", "properties": {"name": crs.to_string()}}
+
+
+def _reproject_editor_geojson(
+    payload: dict[str, Any],
+    image_path: Path,
+) -> dict[str, Any]:
+    features = payload.get("features")
+    if payload.get("type") != "FeatureCollection" or not isinstance(features, list):
+        raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
+    source_crs = _geojson_crs(payload)
+    raster_crs = _editor_raster_crs(image_path)
+    if source_crs == raster_crs:
+        return {**payload, "crs": _editor_crs_payload(raster_crs)}
+
+    transformer = Transformer.from_crs(source_crs, raster_crs, always_xy=True)
+    transformed_features: list[dict[str, Any]] = []
+    for index, feature in enumerate(features, start=1):
+        if not isinstance(feature, dict) or feature.get("type") != "Feature":
+            raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
+        try:
+            geometry = shape(feature.get("geometry"))
+            geometry = transform_geometry(transformer.transform, geometry)
+        except Exception as exc:  # noqa: BLE001
+            raise TrainingUIAPIError(
+                f"Не удалось преобразовать CRS объекта {index}: {exc}"
+            ) from exc
+        transformed_features.append({**feature, "geometry": dict(mapping(geometry))})
+    return {
+        **payload,
+        "crs": _editor_crs_payload(raster_crs),
+        "features": transformed_features,
+    }
+
+
 def _validate_editor_geojson(
     payload: dict[str, Any],
     image_path: Path,
@@ -3239,13 +3336,7 @@ def _validate_editor_geojson(
     if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
     geojson_crs = _geojson_crs(payload)
-    try:
-        with rasterio.open(image_path) as source:
-            if source.crs is None:
-                raise TrainingUIAPIError("У TIFF отсутствует CRS")
-            raster_crs = PyprojCRS.from_user_input(source.crs)
-    except rasterio.errors.RasterioError as exc:
-        raise TrainingUIAPIError(f"Не удалось открыть TIFF: {exc}") from exc
+    raster_crs = _editor_raster_crs(image_path)
     footprint = _valid_data_footprint(image_path)
     if geojson_crs != raster_crs:
         raise TrainingUIAPIError(
@@ -3541,8 +3632,20 @@ def _normalize_editor_geojson(
     payload: dict[str, Any],
     previous: dict[str, Any],
     dataset: DatasetInfo,
+    *,
+    image_path: Path,
 ) -> dict[str, Any]:
-    normalized = {**payload}
+    incoming_crs = _geojson_crs(payload)
+    raster_crs = _editor_raster_crs(image_path)
+    existing_feature_transformer = (
+        Transformer.from_crs(incoming_crs, raster_crs, always_xy=True)
+        if incoming_crs != raster_crs
+        else None
+    )
+    normalized = {
+        **payload,
+        "crs": _editor_crs_payload(raster_crs),
+    }
     if dataset.task == "multiclass":
         normalized["_mlsystem2_schema_version"] = 1
         normalized["_mlsystem2_task"] = "multiclass"
@@ -3565,6 +3668,18 @@ def _normalize_editor_geojson(
             feature_id = str(uuid.uuid4())
             feature["id"] = feature_id
         previous_feature = previous_by_id.get(str(feature_id))
+        if previous_feature is not None and existing_feature_transformer is not None:
+            try:
+                geometry = shape(feature.get("geometry"))
+                geometry = transform_geometry(
+                    existing_feature_transformer.transform,
+                    geometry,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise TrainingUIAPIError(
+                    f"Не удалось преобразовать CRS объекта {feature_id}: {exc}"
+                ) from exc
+            feature["geometry"] = dict(mapping(geometry))
         properties = dict(feature.get("properties") or {})
         if previous_feature is not None:
             previous_properties = previous_feature.get("properties")

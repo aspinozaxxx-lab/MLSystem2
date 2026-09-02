@@ -470,6 +470,78 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
     assert reopened["draft"]["geojson"] == saved_payload
 
 
+def test_dataset_editor_repairs_stale_crs_and_companion_footprint(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    annotation_path = env.editor_dataset / "Olskij_SCN01.part.geojson"
+    stale_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+    to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    stale_payload["crs"] = {
+        "type": "name",
+        "properties": {"name": "EPSG:4326"},
+    }
+    stale_payload["features"] = [
+        {
+            **feature,
+            "geometry": mapping(transform_geometry(to_wgs84.transform, shape(feature["geometry"]))),
+        }
+        for feature in stale_payload["features"]
+    ]
+    annotation_path.write_text(
+        json.dumps(stale_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _git(env.editor_root, "add", "--", str(annotation_path.relative_to(env.editor_root)))
+    _git(env.editor_root, "commit", "-m", "Разметка со старой CRS")
+    _git(env.editor_root, "push", "origin", "main")
+
+    scene = env.client.get(scenes_url).json()["scenes"][0]
+    annotation_name = quote(scene["annotation_name"], safe="")
+    detail_url = f"{scenes_url}/{annotation_name}"
+    detail = env.client.get(detail_url)
+
+    assert detail.status_code == 200
+    normalized = detail.json()["geojson"]
+    assert normalized["crs"]["properties"]["name"] == "EPSG:3857"
+    assert shape(normalized["features"][0]["geometry"]).bounds == pytest.approx((1, 1, 3, 3))
+
+    stale_browser_payload = deepcopy(stale_payload)
+    stale_browser_payload["features"].append(
+        _feature(
+            999,
+            "positive",
+            [[2, 4], [3, 4], [3, 5], [2, 5], [2, 4]],
+        )
+    )
+    draft = env.client.put(
+        f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/{annotation_name}",
+        json={
+            "base_revision": scene["revision"],
+            "geojson": stale_browser_payload,
+        },
+    )
+
+    assert draft.status_code == 200
+    saved_geojson = draft.json()["geojson"]
+    assert saved_geojson["crs"]["properties"]["name"] == "EPSG:3857"
+    saved_by_id = {feature["id"]: feature for feature in saved_geojson["features"]}
+    assert shape(saved_by_id[1]["geometry"]).bounds == pytest.approx((1, 1, 3, 3))
+    assert shape(saved_by_id[999]["geometry"]).bounds == pytest.approx((2, 4, 3, 5))
+    published = env.client.post(f"/api/v1/dataset-editor/datasets/{dataset_path}/drafts/publish")
+    assert published.status_code == 200
+    persisted = json.loads(annotation_path.read_text(encoding="utf-8"))
+    assert persisted["crs"]["properties"]["name"] == "EPSG:3857"
+    footprint_path = env.editor_dataset / "Olskij_SCN01.part_footprint.geojson"
+    footprint = json.loads(footprint_path.read_text(encoding="utf-8"))
+    assert footprint["crs"]["properties"]["name"] == "EPSG:3857"
+    assert shape(footprint["features"][0]["geometry"]).equals(
+        shape(detail.json()["valid_data_footprint"])
+    )
+
+
 def test_dataset_editor_publishes_multiple_scenes_atomically(
     editor_environment: _EditorEnvironment,
 ) -> None:
@@ -675,6 +747,32 @@ def test_dataset_editor_adds_folder_atomically_and_deletes_one_scene(
     }
     assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
     assert not footprint_path.exists()
+
+
+def test_dataset_editor_rejects_raster_outside_training_crs(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    dataset_path = quote(env.dataset_key, safe="")
+    scenes_url = f"/api/v1/dataset-editor/datasets/{dataset_path}/scenes"
+    wrong_folder = env.editor_root.parent / "images" / "kanopus" / "wrong"
+    wrong_folder.mkdir()
+    _write_raster(
+        wrong_folder / "SCN05.tif",
+        value=55,
+        crs="EPSG:4326",
+    )
+    head_before = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+
+    response = env.client.post(
+        scenes_url,
+        json={"image_paths": ["wrong/SCN05.tif"]},
+    )
+
+    assert response.status_code == 400
+    assert "EPSG:3857" in response.json()["detail"]
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head_before
+    assert not (env.editor_dataset / "wrong_SCN05.geojson").exists()
 
 
 def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
@@ -1726,7 +1824,13 @@ def _feature(
     }
 
 
-def _write_raster(path: Path, *, value: int, nodata_corner: bool = False) -> None:
+def _write_raster(
+    path: Path,
+    *,
+    value: int,
+    nodata_corner: bool = False,
+    crs: str = "EPSG:3857",
+) -> None:
     data = np.full((1, 8, 8), value, dtype=np.uint16)
     if nodata_corner:
         data[:, 6:, 6:] = 0
@@ -1738,7 +1842,7 @@ def _write_raster(path: Path, *, value: int, nodata_corner: bool = False) -> Non
         height=8,
         count=1,
         dtype="uint16",
-        crs="EPSG:3857",
+        crs=crs,
         transform=from_origin(0, 8, 1, 1),
         nodata=0,
     ) as dataset:
