@@ -17,10 +17,11 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
+- `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
-- `SystemSettings` — `runtime`, `dataset`, `tile_preparation`, `train`, `inference`, `mlflow`.
+- `SystemSettings` — `runtime`, `dataset`, `tile_preparation`, `train`, `next_gen`, `inference`, `mlflow`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -28,7 +29,7 @@
 
 ## Алгоритм работы и его особенности
 
-`load_settings` проверяет файлы, рекурсивно накладывает `run.yml` на стабильный `settings.yml`, запрещает лишние поля и сохраняет результат. Dataset задаёт ровно один режим: legacy binary (`scenes_file+annotation_file`, optional hard negative), per-image (`annotations_dir`) либо legacy multiclass (`classes`). Наличие `.mlsystem2-dataset.json` внутри `annotations_dir` автоматически определяет per-image multiclass; схема классов берётся из manifest, поэтому дублировать её в YAML не нужно. Binary требует `train.task=binary`, multiclass — `task=multiclass`, `cross_entropy|cross_entropy_dice` и `output_channels=N+1`. Проверяются размеры/stride, sampling factors с суммой `1`, положительные `background_weight`/`pos_weight`/`hard_negative_weight`, диапазоны loss/threshold и лимиты. `prefetch_epochs` относится к train; val использует фиксированный balanced subset. Веса влияют на loss, а `hard_negative_factor` — только на sampler.
+`load_settings` проверяет файлы, рекурсивно накладывает `run.yml` на стабильный `settings.yml`, запрещает лишние поля и сохраняет результат. Отсутствующий `train.pipeline_variant` означает `legacy`; старые YAML остаются совместимыми. `next_gen` v1 разрешён только для binary, четырёх каналов, одного выхода и `segformer_b0|smp_segformer_b0`; ненулевой `max_val_batches_per_epoch` отклоняется. Pretrained разрешён только HF B0. Gaussian A/B дополнительно требует tile `512` и stride `256`. Остальные проверки и поведение `legacy` не изменены.
 
 Пример per-image binary:
 

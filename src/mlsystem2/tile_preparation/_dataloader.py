@@ -60,6 +60,8 @@ def create_tile_dataloader(
             class_balance=tile_settings.class_balance,
             tile_split=request.tile_split,
             include_object_instances=request.include_object_instances,
+            pipeline_variant=request.pipeline_variant,
+            collect_band_histogram=request.collect_band_histogram,
         )
     except TilePreparationError:
         raise
@@ -75,6 +77,7 @@ def create_tile_dataloader(
             seed=tile_settings.seed,
             num_workers=tile_settings.num_workers,
             max_batches_per_epoch=request.max_batches_per_epoch,
+            natural=request.pipeline_variant == "next_gen",
         )
 
     generator = torch.Generator()
@@ -86,7 +89,14 @@ def create_tile_dataloader(
         tile_settings.hard_negative_factor,
         tile_settings.background_factor,
     )
-    if weights is not None:
+    if request.pipeline_variant == "next_gen":
+        sampler = _EpochDrawSampler(
+            torch=torch,
+            weights=weights,
+            num_samples=len(dataset),
+            seed=tile_settings.seed,
+        )
+    elif weights is not None:
         sampler = WeightedRandomSampler(
             weights=weights,
             num_samples=len(dataset),
@@ -181,6 +191,36 @@ class _FixedIndexSampler:
         return len(self._indices)
 
 
+class _EpochDrawSampler:
+    """Выдаёт dataset index вместе с номером эпохи и draw."""
+
+    def __init__(self, *, torch, weights, num_samples: int, seed: int) -> None:
+        self._torch = torch
+        self._weights = None if weights is None else torch.as_tensor(weights, dtype=torch.double)
+        self._num_samples = num_samples
+        self._seed = seed
+        self._epoch = 0
+
+    def __iter__(self):
+        generator = self._torch.Generator()
+        generator.manual_seed(self._seed + self._epoch)
+        if self._weights is None:
+            indices = self._torch.randperm(self._num_samples, generator=generator).tolist()
+        else:
+            indices = self._torch.multinomial(
+                self._weights,
+                self._num_samples,
+                replacement=True,
+                generator=generator,
+            ).tolist()
+        epoch = self._epoch
+        self._epoch += 1
+        return iter((int(index), epoch, draw) for draw, index in enumerate(indices))
+
+    def __len__(self) -> int:
+        return self._num_samples
+
+
 class _LazyValLoader:
     def __init__(
         self,
@@ -242,13 +282,18 @@ def _create_val_loader(
     seed: int,
     num_workers: int,
     max_batches_per_epoch: int | None,
+    natural: bool = False,
 ) -> _CachedValLoader | _LazyValLoader:
     max_tiles = (
         max_batches_per_epoch * batch_size
         if max_batches_per_epoch is not None
         else None
     )
-    indices = _balanced_val_indices(dataset, seed=seed, max_tiles=max_tiles)
+    indices = (
+        list(range(len(dataset)))
+        if natural
+        else _balanced_val_indices(dataset, seed=seed, max_tiles=max_tiles)
+    )
     cache_estimated_bytes = _estimate_val_cache_bytes(dataset, tile_count=len(indices))
     cache_limit_bytes = _val_cache_limit_bytes()
     if cache_limit_bytes is not None and cache_estimated_bytes <= cache_limit_bytes:
@@ -508,6 +553,22 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
         "tile_background": tile_background,
         "tile_category": tile_categories,
     }
+    if any("valid_pixels" in meta for meta in metas):
+        if not all("valid_pixels" in meta for meta in metas):
+            raise TilePreparationError("В batch присутствуют неполные valid pixel masks.")
+        batch_meta["valid_pixels"] = torch.stack(
+            [torch.as_tensor(meta["valid_pixels"], dtype=torch.bool) for meta in metas],
+            dim=0,
+        )
+    if any("scene_id" in meta for meta in metas):
+        if not all(
+            "scene_id" in meta and "window" in meta and "scene_shape" in meta
+            for meta in metas
+        ):
+            raise TilePreparationError("В batch присутствуют неполные scene/window metadata.")
+        batch_meta["scene_ids"] = [str(meta["scene_id"]) for meta in metas]
+        batch_meta["windows"] = [dict(meta["window"]) for meta in metas]
+        batch_meta["scene_shapes"] = [dict(meta["scene_shape"]) for meta in metas]
     if any("object_instances" in meta for meta in metas):
         if not all("object_instances" in meta for meta in metas):
             raise TilePreparationError("В batch присутствуют неполные маски объектов.")

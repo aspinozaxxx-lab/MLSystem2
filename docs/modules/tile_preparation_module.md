@@ -16,9 +16,9 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `HARD_NEGATIVE_LABEL=-1` — служебная метка hard-negative пикселя.
 - `TileClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
-- `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file`.
-- `TileSplitRequest` — `val_fraction`, `seed`.
-- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`. Допустим ровно один режим: общий binary, per-image binary, legacy multiclass либо per-image multiclass.
+- `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file` и `footprint_file`.
+- `TileSplitRequest` — `val_fraction`, `seed`, `strategy=window_random|scene_fold`, `validation_fold`, `spatial_purge`.
+- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional сбор histogram.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -32,6 +32,14 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 Для каждой сцены строится сетка полезных центров `0,stride,...`. Полное входное окно начинается в `-context` и имеет размер `tile_size`; его полезный центр имеет размер `tile_size - 2 × context`. Поэтому первые и последние пиксели TIFF попадают в полезную область, а внешняя рамка читается через `boundless=True` как nodata. `context=0` полностью сохраняет прежнюю сетку. Sampling-категория определяется только по геометрии полезного центра. Настройки обязаны удовлетворять `tile_size > 2 × context`.
 
 Coarse/sparse valid-footprint фильтр заранее удаляет полностью black/nodata окна без полного чтения всех тайлов, а частично невалидные окна остаются. Дескрипторы TIFF открываются лениво и удерживаются ограниченным LRU на worker. Разметка сцены индексируется отдельно; positive перекрывает hard negative. В multiclass слои растеризуются в порядке приоритета и дают `int64` mask `-1/0/1..N`. Для управляемого датасета class-specific hard negative дополнительно растеризуется в синхронный boolean-тензор `[N,H,W]`: канал задаёт только тот тип, для которого область является отрицательной, а hard negative без класса остаётся общим `-1`. Nodata по значению, нулевая `dataset_mask` и boundless-padding объединяются в одну маску: изображение на ней получает исходное значение nodata, а supervision и class-specific masks принудительно получают фон `0`, подрезая разметку по фактическому снимку. Геометрические аугментации преобразуют все маски синхронно с изображением и target, после фотометрических изменений nodata восстанавливается. Split вычисляется хешем `seed+scene_id+x+y`, поэтому не зависит от порядка сцен. Train использует category-aware sampling и аугментации positive/hard-negative; при `class_balance=true` positive-веса выравниваются по типам, а дефицит отражается предупреждением. Val выбирает фиксированный balanced subset и кэширует его в RAM при безопасном лимите, иначе лениво читает те же индексы. Диагностика содержит разрешение и числа candidate/valid/positive/hard-negative/background окон по каждому TIFF. Пересекающиеся TIFF дают независимые тайлы.
+
+В `next_gen` scene-fold упорядочивает сцены по SHA-256 от seed и scene id. Validation получает целые held-out
+сцены и все их окна в естественном отношении. Spatial purge удаляет train-окна, полный вход которых пересекает
+расширенный на один пиксель footprint held-out сцены; split manifest фиксирует fold, сцены и удалённые окна.
+Batch дополнительно содержит `valid_pixels`, `scene_ids`, координаты окон и размеры сцен. Epoch/draw-aware
+sampler передаёт номер эпохи и draw в seed аугментации; все категории получают синхронную геометрию, а level 3 —
+gamma и независимый gain каналов. Для robust preprocessing 256-bin histogram читается потоково один раз только
+по retained train-сценам. Эта ветка не меняет алгоритмы `legacy`.
 
 `prefetch_epochs` задаёт целевой объём готовых batch, а `prefetch_factor` рассчитывается обратно
 пропорционально `num_workers`; уменьшение числа процессов не сокращает заданный префетч. В серверном профиле

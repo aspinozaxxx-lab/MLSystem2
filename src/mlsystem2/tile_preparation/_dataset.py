@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import time
 from collections import OrderedDict
@@ -15,7 +17,7 @@ from rasterio.io import DatasetReader
 from rasterio.windows import Window
 
 from ._annotations import AnnotationIndex, load_annotation_index
-from ._augmentations import apply_augmentations
+from ._augmentations import apply_augmentations, apply_next_gen_augmentations
 from ._mask import (
     HARD_NEGATIVE_LABEL,
     build_supervision_mask,
@@ -69,6 +71,8 @@ class TileDataset:
         class_balance: bool = False,
         tile_split: TileSplitRequest | None = None,
         include_object_instances: bool = False,
+        pipeline_variant: str = "legacy",
+        collect_band_histogram: bool = False,
     ) -> None:
         if not scenes:
             raise TilePreparationError("Не задано ни одного TIFF для нарезки тайлов.")
@@ -104,6 +108,10 @@ class TileDataset:
         self._class_balance = class_balance
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
+        self._pipeline_variant = pipeline_variant
+        self._collect_band_histogram_enabled = collect_band_histogram
+        self._band_histogram: dict[str, object] | None = None
+        self._tile_split_manifest: dict[str, object] = {"strategy": "none"}
         self._tile_split_warnings: list[str] = []
         self._pool_window_count = 0
         self._split_window_count = 0
@@ -208,14 +216,17 @@ class TileDataset:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
         self._record_scene_selected_counts()
+        if self._collect_band_histogram_enabled:
+            self._band_histogram = self._collect_band_histogram()
         self._close_datasets()
 
     def __len__(self) -> int:
         return len(self._windows)
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    def __getitem__(self, index: object) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
         _wait_while_training_paused()
-        scene_window = self._windows[index]
+        sample_index, epoch, draw_index = _decode_sample_index(index)
+        scene_window = self._windows[sample_index]
         dataset = self._open_dataset(scene_window.scene_index)
         tile_window = scene_window.window
         window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
@@ -227,7 +238,7 @@ class TileDataset:
             self._read_invalid_data_pixels(dataset, window),
         )
         image = image_raw.astype(np.float32, copy=False)
-        image[:, nodata_pixels] = nodata
+        image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
             scene_window.scene_index,
             dataset,
@@ -254,25 +265,41 @@ class TileDataset:
         )
         augmented = False
         should_augment = self._mode == "train" and self._augmentation_level > 0
-        if should_augment and category in {
-            TILE_CATEGORY_POSITIVE,
-            TILE_CATEGORY_HARD_NEGATIVE,
-        }:
+        if should_augment and (
+            self._pipeline_variant == "next_gen"
+            or category in {TILE_CATEGORY_POSITIVE, TILE_CATEGORY_HARD_NEGATIVE}
+        ):
             augmentation_mask = mask
             if class_hard_negative_masks is not None:
                 augmentation_mask = np.concatenate(
                     [mask[None, :, :], class_hard_negative_masks.astype(mask.dtype, copy=False)],
                     axis=0,
                 )
-            image, augmentation_mask, augmented = apply_augmentations(
-                image,
-                augmentation_mask,
-                nodata_pixels=nodata_pixels,
-                nodata=nodata,
-                level=self._augmentation_level,
-                seed=self._seed,
-                sample_index=index,
-            )
+            if self._pipeline_variant == "next_gen":
+                image, augmentation_mask, nodata_pixels, augmented = (
+                    apply_next_gen_augmentations(
+                        image,
+                        augmentation_mask,
+                        nodata_pixels=nodata_pixels,
+                        nodata=0.0,
+                        level=self._augmentation_level,
+                        seed=self._seed,
+                        sample_key=(
+                            f"{epoch}\0{draw_index}\0{scene_window.scene_id}\0"
+                            f"{tile_window.x}\0{tile_window.y}"
+                        ),
+                    )
+                )
+            else:
+                image, augmentation_mask, augmented = apply_augmentations(
+                    image,
+                    augmentation_mask,
+                    nodata_pixels=nodata_pixels,
+                    nodata=nodata,
+                    level=self._augmentation_level,
+                    seed=self._seed,
+                    sample_index=sample_index,
+                )
             if class_hard_negative_masks is not None:
                 mask = augmentation_mask[0]
                 class_hard_negative_masks = augmentation_mask[1:] > 0
@@ -294,6 +321,8 @@ class TileDataset:
             augmented,
             object_instances,
             class_hard_negative_masks,
+            valid_pixels=(~nodata_pixels if self._pipeline_variant == "next_gen" else None),
+            scene_window=(scene_window if self._pipeline_variant == "next_gen" else None),
         )
         return np.ascontiguousarray(image), np.ascontiguousarray(mask), meta
 
@@ -385,6 +414,18 @@ class TileDataset:
     @property
     def tile_split_warnings(self) -> list[str]:
         return list(self._tile_split_warnings)
+
+    @property
+    def tile_split_manifest(self) -> dict[str, object]:
+        return dict(self._tile_split_manifest)
+
+    @property
+    def band_histogram(self) -> dict[str, object] | None:
+        return None if self._band_histogram is None else dict(self._band_histogram)
+
+    @property
+    def pipeline_variant(self) -> str:
+        return self._pipeline_variant
 
     @property
     def estimated_positive_tiles(self) -> int | None:
@@ -834,6 +875,16 @@ class TileDataset:
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
             return
+        if tile_split.strategy == "scene_fold":
+            selected_indices, warnings, manifest = self._scene_fold_indices(tile_split)
+            if not any(self._positive_hint_by_index[index] for index in selected_indices):
+                warnings.append(f"scene_fold: subset {self._mode} не содержит positive windows.")
+            if not selected_indices:
+                raise TilePreparationError(f"scene_fold: subset {self._mode} пуст.")
+            self._select_indices(selected_indices)
+            self._tile_split_warnings = warnings
+            self._tile_split_manifest = manifest
+            return
         train_indices, val_indices, warnings = _split_tile_indices(
             self._positive_hint_by_index,
             self._windows,
@@ -847,6 +898,177 @@ class TileDataset:
             warnings.append(f"tile_split: subset {self._mode} пуст.")
         self._select_indices(selected_indices)
         self._tile_split_warnings = warnings
+        self._tile_split_manifest = {
+            "strategy": "window_random",
+            "mode": self._mode,
+            "selected_window_count": len(selected_indices),
+        }
+
+    def _scene_fold_indices(
+        self,
+        tile_split: TileSplitRequest,
+    ) -> tuple[list[int], list[str], dict[str, object]]:
+        scene_ids = [scene.scene_id for scene in self._scenes]
+        if len(set(scene_ids)) != len(scene_ids):
+            raise TilePreparationError("scene_fold требует уникальные scene_id")
+        if len(scene_ids) < 2:
+            raise TilePreparationError("scene_fold требует минимум две сцены")
+        ordered_scene_ids = sorted(
+            scene_ids,
+            key=lambda scene_id: hashlib.sha256(
+                f"{tile_split.seed}{scene_id}".encode("utf-8")
+            ).digest(),
+        )
+        validation_scene_count = min(
+            len(scene_ids) - 1,
+            max(1, math.floor(len(scene_ids) * tile_split.val_fraction + 0.5)),
+        )
+        fold_count = math.ceil(len(scene_ids) / validation_scene_count)
+        if tile_split.validation_fold >= fold_count:
+            raise TilePreparationError(
+                "validation_fold вне диапазона: "
+                f"получено {tile_split.validation_fold}, доступно 0..{fold_count - 1}"
+            )
+        start = tile_split.validation_fold * validation_scene_count
+        validation_scene_ids = set(
+            ordered_scene_ids[start : start + validation_scene_count]
+        )
+        train_indices = [
+            index
+            for index, item in enumerate(self._windows)
+            if item.scene_id not in validation_scene_ids
+        ]
+        val_indices = [
+            index
+            for index, item in enumerate(self._windows)
+            if item.scene_id in validation_scene_ids
+        ]
+        purged_by_scene: dict[str, int] = {}
+        geographic_overlap_after_purge: int | None = None
+        if self._mode == "train" and tile_split.spatial_purge:
+            (
+                train_indices,
+                purged_by_scene,
+                geographic_overlap_after_purge,
+            ) = self._purge_overlapping_windows(train_indices, validation_scene_ids)
+        selected = train_indices if self._mode == "train" else val_indices
+        train_scene_ids = sorted(set(scene_ids) - validation_scene_ids)
+        manifest = {
+            "strategy": "scene_fold",
+            "mode": self._mode,
+            "seed": tile_split.seed,
+            "val_fraction": tile_split.val_fraction,
+            "validation_scene_count": validation_scene_count,
+            "fold_count": fold_count,
+            "validation_fold": tile_split.validation_fold,
+            "scene_ordering": "sha256(str(seed)+scene_id)",
+            "ordered_scene_ids": ordered_scene_ids,
+            "train_scene_ids": train_scene_ids,
+            "validation_scene_ids": sorted(validation_scene_ids),
+            "spatial_purge": tile_split.spatial_purge,
+            "purged_window_count": sum(purged_by_scene.values()),
+            "purged_windows_by_scene": purged_by_scene,
+            "selected_window_count": len(selected),
+            "geographic_overlap_after_purge": geographic_overlap_after_purge,
+        }
+        return selected, [], manifest
+
+    def _purge_overlapping_windows(
+        self,
+        indices: list[int],
+        validation_scene_ids: set[str],
+    ) -> tuple[list[int], dict[str, int], int]:
+        try:
+            from shapely.geometry import box, shape
+            from shapely.ops import unary_union
+        except ImportError as exc:
+            raise TilePreparationError("Для spatial purge требуется shapely") from exc
+
+        footprints = []
+        for scene_index, scene in enumerate(self._scenes):
+            if scene.scene_id not in validation_scene_ids:
+                continue
+            dataset = self._open_dataset(scene_index)
+            pixel_margin = max(abs(float(dataset.res[0])), abs(float(dataset.res[1])))
+            geometry = None
+            if scene.footprint_file is not None and Path(scene.footprint_file).is_file():
+                try:
+                    payload = json.loads(Path(scene.footprint_file).read_text(encoding="utf-8"))
+                    geometries = [
+                        shape(feature["geometry"])
+                        for feature in payload.get("features", [])
+                        if feature.get("geometry")
+                    ]
+                    if geometries:
+                        geometry = unary_union(geometries)
+                except Exception as exc:  # noqa: BLE001
+                    raise TilePreparationError(
+                        f"Не удалось прочитать footprint сцены: {scene.footprint_file}"
+                    ) from exc
+            if geometry is None:
+                geometry = box(*dataset.bounds)
+            footprints.append(geometry.buffer(pixel_margin))
+        heldout = unary_union(footprints)
+        retained: list[int] = []
+        purged: dict[str, int] = {}
+        for index in indices:
+            item = self._windows[index]
+            dataset = self._open_dataset(item.scene_index)
+            window = Window(item.window.x, item.window.y, item.window.width, item.window.height)
+            if box(*dataset.window_bounds(window)).intersects(heldout):
+                purged[item.scene_id] = purged.get(item.scene_id, 0) + 1
+            else:
+                retained.append(index)
+        overlap_after_purge = sum(
+            1
+            for index in retained
+            if box(
+                *self._open_dataset(self._windows[index].scene_index).window_bounds(
+                    Window(
+                        self._windows[index].window.x,
+                        self._windows[index].window.y,
+                        self._windows[index].window.width,
+                        self._windows[index].window.height,
+                    )
+                )
+            ).intersects(heldout)
+        )
+        if overlap_after_purge:
+            raise TilePreparationError(
+                "Spatial purge оставил географически пересекающиеся train windows"
+            )
+        return retained, purged, overlap_after_purge
+
+    def _collect_band_histogram(self) -> dict[str, object]:
+        if self.channel_count <= 0:
+            raise TilePreparationError("Не удалось определить число каналов для histogram")
+        counts = np.zeros((self.channel_count, 256), dtype=np.uint64)
+        valid_pixel_count = 0
+        selected_scene_indices = sorted({item.scene_index for item in self._windows})
+        for scene_index in selected_scene_indices:
+            dataset = self._open_dataset(scene_index)
+            nodata = self._scene_nodata[scene_index]
+            for _, window in dataset.block_windows(1):
+                image = dataset.read(window=window, masked=False)
+                invalid = np.logical_or(
+                    _nodata_pixels(image, nodata),
+                    dataset.dataset_mask(window=window) == 0,
+                )
+                valid = ~invalid
+                valid_pixel_count += int(np.count_nonzero(valid))
+                for channel in range(self.channel_count):
+                    values = image[channel][valid]
+                    if values.size:
+                        counts[channel] += np.bincount(
+                            values.astype(np.uint8, copy=False), minlength=256
+                        ).astype(np.uint64, copy=False)
+        return {
+            "bins": list(range(256)),
+            "counts": counts.tolist(),
+            "valid_pixel_count": valid_pixel_count,
+            "source": "retained_train_scenes",
+            "scene_ids": [self._scenes[index].scene_id for index in selected_scene_indices],
+        }
 
     def _select_indices(self, selected_indices: list[int]) -> None:
         self._windows = [self._windows[index] for index in selected_indices]
@@ -937,6 +1159,8 @@ class TileDataset:
         augmented: bool,
         object_instances: np.ndarray | None = None,
         class_hard_negative_masks: np.ndarray | None = None,
+        valid_pixels: np.ndarray | None = None,
+        scene_window: _SceneTileWindow | None = None,
     ) -> dict[str, object]:
         meta: dict[str, object] = {
             "augmented": augmented,
@@ -951,6 +1175,21 @@ class TileDataset:
             meta["class_hard_negative_masks"] = np.ascontiguousarray(
                 class_hard_negative_masks,
             )
+        if valid_pixels is not None:
+            meta["valid_pixels"] = np.ascontiguousarray(valid_pixels)
+        if scene_window is not None:
+            scene_diagnostics = self._scene_tile_diagnostics[scene_window.scene_index]
+            meta["scene_id"] = scene_window.scene_id
+            meta["window"] = {
+                "x": scene_window.window.x,
+                "y": scene_window.window.y,
+                "width": scene_window.window.width,
+                "height": scene_window.window.height,
+            }
+            meta["scene_shape"] = {
+                "width": int(scene_diagnostics["width"]),
+                "height": int(scene_diagnostics["height"]),
+            }
         return meta
 
 
@@ -982,6 +1221,12 @@ def _split_tile_indices(
         sorted([*val_positive, *val_negative]),
         [*warnings, *negative_warnings],
     )
+
+
+def _decode_sample_index(index: object) -> tuple[int, int, int]:
+    if isinstance(index, tuple) and len(index) == 3:
+        return int(index[0]), int(index[1]), int(index[2])
+    return int(index), 0, int(index)
 
 
 def _split_index_group(

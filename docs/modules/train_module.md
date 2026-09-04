@@ -12,13 +12,13 @@
 
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
-- `TrainConfig` - поля `task`, `quality_metric`, `epochs`, `batch_size`, `seed`, `inference_context`, `device`, `learning_rate`, `weight_decay`, `loss`, `focal_alpha`, `pos_weight`, `background_weight`, `hard_negative_weight`, `tversky_alpha`, `tversky_beta`, `threshold`, `early_stopping_patience`, optional batch/time limits и `class_schema` (`class_slugs` принимается для legacy-совместимости).
-- `EpochMetrics` - поля эпохи, loss, выбранной `quality_metric`, лучшего порога, binary pixel/object метрик либо multiclass per-class, macro, micro и foreground pixel-метрик.
+- `TrainConfig` - поля task/metric, `pipeline_variant`, validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
+- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
-- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`, `sample_size`.
-- `TrainResult` - поля `history`, `epochs_total`, `training_time_sec`, `best_checkpoint_path`, `final_checkpoint_path`, `artifacts`, `task`, `class_schema`, `best_threshold`, `stopped_early`.
+- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
+- `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -29,17 +29,29 @@
 
 ## Алгоритм работы и его особенности
 
-`train_model` переносит модель на `config.device`, создает AdamW и cosine scheduler. На каждой эпохе выполняются train loop, validation loop, scheduler step и формируется `EpochMetrics`. В начале эпохи отправляется `TrainProgressEvent(message="epoch_started")`, после validation и сохранения best checkpoint отправляется `TrainProgressEvent(message="epoch_finished", metrics=metrics)`.
+`train_model` переносит модель на `config.device` и создаёт AdamW. `legacy` побитово сохраняет cosine scheduler и validation каждой эпохи. `next_gen` использует `ReduceLROnPlateau(mode=max,factor=0.5,patience=3,min_lr=1e-7)` по полной scene-macro val F1; validation выполняется на эпохе 1, по интервалу и перед штатным завершением, а early stopping считает только validation-события. Между ними `EpochMetrics` содержит train loss и `validation_performed=false` без выдуманных val-значений.
 
-Input batch от `tile_preparation`: `(images, masks)` или `(images, masks, batch_meta)`. `images: torch.float32 [B,C,H,W]` с raw values без нормализации. В binary режиме `masks: torch.float32 [B,1,H,W]`, в multiclass режиме `masks: torch.long [B,H,W]`; это единая supervision mask со значениями `-1=hard negative`, `0=background`, `1` или `1..N=positive`. Для управляемого multiclass-датасета `batch_meta.class_hard_negative_masks` может дополнительно содержать `bool[B,N,H,W]` с отрицательной разметкой отдельно для каждого semantic-типа. Train loop декодирует общий `-1` в target background `0`; nodata, невалидная raster mask и padding уже приходят как обычный background `0`. Forward берет `.logits`, если поле есть, и resize logits до полного mask size при необходимости. Затем logits, target, обе hard-negative mask и binary instance masks синхронно обрезаются на `inference_context` с четырёх сторон. Loss, validation F1, подбор threshold, best checkpoint и early stopping используют только этот полезный центр; контекстная рамка даёт признаки, но не градиент и не метрики. При `inference_context=0` поведение прежнее.
+Input batch от `tile_preparation`: `(images, masks)` или `(images, masks, batch_meta)`. В `legacy` nodata, raster mask и padding приходят как background `0`. `next_gen` требует `batch_meta.valid_pixels`; эта маска синхронно обрезается с target и полностью исключает невалидные пиксели из loss и метрик. Forward, resize logits и core-crop сохраняют прежний контракт.
 
-Binary loss поддерживает `bce_dice`, `focal_dice`, `focal_tversky`. Все background pixels, включая nodata и padding, входят во все части loss, а ложный foreground на них учитывается как false positive в пиксельных и объектовых метриках. `background_weight` задаёт их базовый вес, `pos_weight` усиливает positive pixels через BCE/focal, а `hard_negative_weight` дополнительно умножает штраф только на pixels, которые в supervision mask были `-1`. BCE/focal применяют weight map к per-pixel loss; Dice масштабирует вклад foreground probability на background pixels; Tversky масштабирует false-positive term. Значения весов `1` сохраняют прежнюю формулу. `focal_tversky` соответствует старому MLSystem: это сумма focal loss и tversky loss, а не квадрат tversky loss. Train loop возвращает только общий `train_loss`. Binary validation проверяет threshold candidates `[0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995]` и считает на каждом пороге пиксельные и объектовые TP/FP/FN. Предсказанные connected components сопоставляются с instance masks один к одному при `IoU ≥ 0,5`; каждый тайл оценивается отдельно. Независимые расчёты объектовой метрики для пар «порог × тайл» выполняются ограниченным пулом не более чем из 8 CPU-потоков, а итоговые счётчики агрегируются последовательно и детерминированно. `quality_metric` выбирает лучший threshold и основную F1, при этом обе группы метрик остаются в `EpochMetrics`.
+Binary loss поддерживает `bce_dice`, `focal_dice`, `focal_tversky`. Формулы и прежняя обработка background/nodata в `legacy` не изменены; в `next_gen` те же веса применяются только к valid pixels и нормируются по их весу. Legacy threshold grid не меняется. Next-gen `fixed` применяет ровно настроенный threshold; `optimize` использует потоковую 4096-bin histogram и tie-break F1 → precision → больший threshold. Per-scene метрики считаются на едином глобальном пороге, primary pixel score — их невзвешенное среднее, а агрегированная pixel-метрика сохраняется как micro. Для object-primary используется заданная расширенная сетка порогов.
+
+`background_weight` задаёт базовый вес фона, `pos_weight` усиливает positive через BCE/focal, а
+`hard_negative_weight` дополнительно умножает штраф supervision `-1`. BCE/focal используют per-pixel weight,
+Dice масштабирует foreground probability на фоне, Tversky — false-positive term; значения `1` сохраняют
+исходную формулу. `focal_tversky` остаётся суммой focal и Tversky. Предсказанные connected components
+сопоставляются с instance masks один к одному при `IoU ≥ 0,5`; расчёты «порог × тайл» выполняются
+детерминированно ограниченным CPU-пулом. Для pixel-primary object F1 считается точным вторым проходом на
+выбранном pixel threshold; приближение ближайшим порогом не используется.
 
 Multiclass режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`. Logits имеют форму `[B,num_classes,H,W]`, mask — `[B,H,W] long`. Перед loss общий hard-negative `-1` заменяется на background class `0`; `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. Nodata и padding уже представлены background class `0` и участвуют в loss и validation. `background_weight` задаёт вес класса `0`, а `hard_negative_weight` дополнительно усиливает общий hard negative для всех foreground-каналов. Class-specific hard negative исключается из базового multiclass loss и добавляет штраф `-log(1-p_class) × background_weight × hard_negative_weight` только выбранному foreground-каналу; другие типы в этой области не считаются ошибкой. В validation такой пиксель участвует как отрицательный только для назначенного класса, исключается из остальных поклассовых и агрегированной foreground-метрики. Validation применяет `softmax → argmax → confidence threshold`, считает precision/recall/F1/IoU отдельно по типам, macro pixel F1/precision/recall/IoU, micro F1 и foreground-vs-background F1. Один threshold выбирается по максимуму macro pixel F1, затем macro precision, затем по большему threshold.
 
 Best checkpoint и early stopping используют `val_quality_f1`; для multiclass это macro pixel F1. Для `quality_metric=objects` требуется binary val batch с `object_instances`; multiclass с объектовой метрикой отклоняется валидацией. Metadata checkpoint сохраняет task, полную class schema, выбранный confidence threshold, структурированные validation-метрики, loss, входной `sample_size`, `inference_context`, `inference_core_size`, `seed` и `train_config`. Старые checkpoint без новых полей остаются совместимыми и при экспорте получают `context=0`, если оператор не задал его вручную.
 
-`max_train_batches_per_epoch` и `max_val_batches_per_epoch` ограничивают число batch в эпохе только для smoke/debug запусков. `max_training_time_sec` проверяется после каждой эпохи и завершает обучение штатно, чтобы сохранить final checkpoint.
+`max_train_batches_per_epoch` ограничивает train для smoke/debug. `legacy` сохраняет optional val-limit; в `next_gen` он запрещён. `max_training_time_sec` инициирует обязательную validation после завершённой train-эпохи и штатное сохранение final checkpoint.
+
+Опциональная next-gen Gaussian A/B диагностика после обучения загружает `best.pt` локально, объединяет полные
+окна 512/stride 256 с `sigma=patch_size/4`, проверяет покрытие и нулевой прогноз на nodata и записывает отдельные
+core-crop/Gaussian метрики. Она не изменяет production metadata, ONNX и Geoalert core-crop.
 
 Если задан `MLSYSTEM2_TRAINING_CONTROL_DIR`, train loop после каждого train/validation batch проверяет
 `pause.request`. При паузе модель и optimizer state переносятся в CPU, CUDA освобождается и атомарно создаётся

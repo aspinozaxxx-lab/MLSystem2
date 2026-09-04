@@ -34,6 +34,7 @@ class DatasetPreparationRequest(BaseModel):
     val_fraction: float = Field(gt=0.0, lt=1.0)
     expected_band_count: int | None = Field(default=None, gt=0)
     expected_dtype: str | None = Field(default=None, min_length=1)
+    expected_band_names: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_dataset_mode(self) -> Self:
@@ -195,6 +196,7 @@ class DatasetPreparationReport(BaseModel):
     scenes: list[DatasetSceneReport]
     missing_files: list[str]
     errors: list[str]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DatasetPreparationResult(BaseModel):

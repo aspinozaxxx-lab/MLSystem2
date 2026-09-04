@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -13,8 +14,8 @@ from typing import Any
 
 from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
-from mlsystem2.models.api import save_checkpoint
-from mlsystem2.models.contracts import SaveCheckpointRequest
+from mlsystem2.models.api import load_checkpoint, save_checkpoint
+from mlsystem2.models.contracts import LoadCheckpointRequest, SaveCheckpointRequest
 from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 
 from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgressEvent
@@ -25,6 +26,9 @@ MAX_NONFINITE_GRADIENT_SKIPS_PER_EPOCH = 1
 OBJECT_METRIC_MAX_WORKERS = 8
 THRESHOLD_CANDIDATES = (0.3, 0.5, 0.7, 0.75, 0.8, 0.9, 0.95, 0.97, 0.99, 0.995)
 MULTICLASS_THRESHOLD_CANDIDATES = (0.0, *THRESHOLD_CANDIDATES)
+NEXT_GEN_OBJECT_THRESHOLD_CANDIDATES = tuple(
+    sorted({*(index / 20.0 for index in range(1, 20)), 0.97, 0.99, 0.995})
+)
 TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
 PAUSE_REQUEST_FILE = "pause.request"
 PAUSED_MARKER_FILE = "paused"
@@ -134,6 +138,8 @@ def train_model(
     model = request.model.model
     config = request.config
     device = torch.device(config.device)
+    if config.pipeline_variant == "next_gen" and str(device).startswith("cuda"):
+        torch.cuda.reset_peak_memory_stats(device)
     model.to(device)
 
     optimizer = torch.optim.AdamW(
@@ -141,12 +147,25 @@ def train_model(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
+    if config.pipeline_variant == "next_gen":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=0.5,
+            patience=3,
+            min_lr=1e-7,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=config.epochs,
+        )
 
     total_started = perf_counter()
     history: list[EpochMetrics] = []
     best_score = -1.0
     best_metrics: EpochMetrics | None = None
+    last_validation_metrics: EpochMetrics | None = None
     patience = 0
     checkpoint_dir = _checkpoint_dir(request.checkpoint_dir)
     best_checkpoint_path = checkpoint_dir / "best.pt"
@@ -177,6 +196,28 @@ def train_model(
                     epoch,
                     pause_controller=pause_controller,
                 )
+                _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
+                validate_now = (
+                    config.pipeline_variant == "legacy"
+                    or epoch == 1
+                    or epoch % config.validation_interval_epochs == 0
+                    or epoch == config.epochs
+                    or _training_time_exceeded(config, total_started)
+                )
+                if not validate_now:
+                    metrics = EpochMetrics(
+                        epoch=epoch,
+                        validation_performed=False,
+                        train_loss=train_epoch["loss"],
+                        val_loss=None,
+                        quality_metric=config.quality_metric,
+                        learning_rate=float(optimizer.param_groups[0]["lr"]),
+                        epoch_time_sec=perf_counter() - epoch_started,
+                    )
+                    history.append(metrics)
+                    _emit(progress_sink, epoch, "epoch_finished", metrics)
+                    continue
+
                 val = _validate_epoch(
                     torch,
                     model,
@@ -186,12 +227,15 @@ def train_model(
                     epoch,
                     pause_controller=pause_controller,
                 )
-                scheduler.step()
+                _ensure_finite_scalar(float(val["loss"]), "val_loss", epoch)
+                if config.pipeline_variant == "next_gen":
+                    scheduler.step(float(val["quality_f1"]))
+                else:
+                    scheduler.step()
 
-                _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
-                _ensure_finite_scalar(val["loss"], "val_loss", epoch)
                 metrics = EpochMetrics(
                     epoch=epoch,
+                    validation_performed=True,
                     train_loss=train_epoch["loss"],
                     val_loss=val["loss"],
                     quality_metric=config.quality_metric,
@@ -215,15 +259,21 @@ def train_model(
                     val_micro_pixel_f1=val.get("micro_pixel_f1"),
                     val_micro_pixel_precision=val.get("micro_pixel_precision"),
                     val_micro_pixel_recall=val.get("micro_pixel_recall"),
+                    val_fixed_0_5_pixel_f1=val.get("fixed_0_5_pixel_f1"),
+                    val_fixed_0_5_pixel_precision=val.get("fixed_0_5_pixel_precision"),
+                    val_fixed_0_5_pixel_recall=val.get("fixed_0_5_pixel_recall"),
                     val_foreground_pixel_f1=val.get("foreground_pixel_f1"),
                     val_foreground_pixel_precision=val.get("foreground_pixel_precision"),
                     val_foreground_pixel_recall=val.get("foreground_pixel_recall"),
                     val_per_class_metrics=val.get("per_class_metrics", []),
                     val_multiclass_threshold_sweep=val.get("threshold_sweep", {}),
                     val_metric_warnings=val.get("metric_warnings", []),
+                    val_per_scene_metrics=val.get("per_scene_metrics", []),
+                    learning_rate=float(optimizer.param_groups[0]["lr"]),
                     epoch_time_sec=perf_counter() - epoch_started,
                 )
                 history.append(metrics)
+                last_validation_metrics = metrics
 
                 score = _checkpoint_score(metrics)
                 if score > best_score:
@@ -257,9 +307,32 @@ def train_model(
         artifacts = [CheckpointArtifact(uri=str(best_checkpoint_path), label="best")]
         final_checkpoint: str | None = None
         if not stopped_early:
-            _save_training_checkpoint(request, str(final_checkpoint_path), history[-1], "final")
+            final_metrics = last_validation_metrics or best_metrics
+            if final_metrics is None:
+                raise TrainError("Не удалось получить validation для final checkpoint.")
+            _save_training_checkpoint(request, str(final_checkpoint_path), final_metrics, "final")
             final_checkpoint = str(final_checkpoint_path)
             artifacts.append(CheckpointArtifact(uri=str(final_checkpoint_path), label="final"))
+        diagnostics: dict[str, Any] = {}
+        if config.pipeline_variant == "next_gen":
+            diagnostics["peak_vram_bytes"] = (
+                int(torch.cuda.max_memory_allocated(device))
+                if str(device).startswith("cuda")
+                else 0
+            )
+        if config.pipeline_variant == "next_gen" and config.evaluate_gaussian_blend:
+            if best_metrics is None:
+                raise TrainError("Gaussian A/B требует сохранённый best checkpoint.")
+            model.to(torch.device("cpu"))
+            _release_training_cuda(torch, device)
+            diagnostics["inference_merge_comparison"] = _evaluate_gaussian_merge(
+                torch,
+                str(best_checkpoint_path),
+                request.val_loader,
+                device,
+                best_metrics,
+                request.sample_size,
+            )
         return TrainResult(
             history=history,
             epochs_total=len(history),
@@ -271,6 +344,7 @@ def train_model(
             class_schema=list(config.class_schema),
             best_threshold=(best_metrics.val_best_threshold if best_metrics is not None else None),
             stopped_early=stopped_early,
+            diagnostics=diagnostics,
         )
     except TrainError:
         raise
@@ -278,6 +352,237 @@ def train_model(
         raise TrainError("Ошибка во время обучения модели") from exc
     finally:
         pause_controller.close()
+
+
+def _evaluate_gaussian_merge(
+    torch,
+    checkpoint_path: str,
+    loader: object,
+    device: object,
+    best_metrics: EpochMetrics,
+    patch_size: int | None,
+) -> dict[str, object]:
+    import numpy as np
+
+    if patch_size != 512:
+        raise TrainError("Gaussian A/B next-gen требует окно 512 px.")
+    loaded = load_checkpoint(
+        LoadCheckpointRequest(
+            checkpoint_uri=checkpoint_path,
+            model_spec=None,
+            map_location="cpu",
+        )
+    )
+    diagnostic_model = loaded.model.model
+    diagnostic_model.to(device)
+    diagnostic_model.eval()
+    sigma = patch_size / 4.0
+    coordinates = np.arange(patch_size, dtype=np.float32) - (patch_size - 1) / 2.0
+    axis = np.exp(-(coordinates**2) / (2.0 * sigma**2)).astype(np.float32)
+    gaussian = np.outer(axis, axis).astype(np.float32)
+    gaussian /= float(gaussian.max())
+    scenes: dict[str, dict[str, object]] = {}
+    with torch.no_grad():
+        for batch_index, batch in enumerate(loader, start=1):
+            images, masks, meta = _split_batch(
+                batch, best_metrics.epoch, batch_index, "gaussian_diagnostic"
+            )
+            if not isinstance(meta, dict):
+                raise TrainError("Gaussian A/B не получила metadata тайлов.")
+            scene_ids = meta.get("scene_ids")
+            windows = meta.get("windows")
+            scene_shapes = meta.get("scene_shapes")
+            valid_pixels = meta.get("valid_pixels")
+            if not (
+                isinstance(scene_ids, list)
+                and isinstance(windows, list)
+                and isinstance(scene_shapes, list)
+                and hasattr(valid_pixels, "shape")
+            ):
+                raise TrainError("Gaussian A/B не получила scene/window/valid metadata.")
+            images = images.to(device=device, dtype=torch.float32)
+            masks = masks.to(device=device, dtype=torch.float32)
+            logits = _forward_logits(torch, diagnostic_model, images, masks)
+            probabilities = torch.sigmoid(logits[:, 0]).detach().cpu().numpy()
+            targets = (masks[:, 0] >= 0.5).detach().cpu().numpy()
+            valid_batch = valid_pixels[:, 0].detach().cpu().numpy().astype(bool)
+            for sample_index, raw_scene_id in enumerate(scene_ids):
+                scene_id = str(raw_scene_id)
+                window = dict(windows[sample_index])
+                shape = dict(scene_shapes[sample_index])
+                width = int(shape["width"])
+                height = int(shape["height"])
+                accumulator = scenes.get(scene_id)
+                if accumulator is None:
+                    accumulator = {
+                        "probability_sum": np.zeros((height, width), dtype=np.float32),
+                        "weight_sum": np.zeros((height, width), dtype=np.float32),
+                        "target": np.zeros((height, width), dtype=bool),
+                        "valid": np.zeros((height, width), dtype=bool),
+                        "window_count": 0,
+                        "padding": {"left": False, "top": False, "right": False, "bottom": False},
+                    }
+                    scenes[scene_id] = accumulator
+                elif accumulator["probability_sum"].shape != (height, width):
+                    raise TrainError(f"Для сцены {scene_id} получены разные размеры raster.")
+                _accumulate_gaussian_window(
+                    accumulator,
+                    gaussian,
+                    probabilities[sample_index],
+                    targets[sample_index],
+                    valid_batch[sample_index],
+                    window,
+                    width,
+                    height,
+                )
+            del images, masks, logits, probabilities, targets, valid_batch
+    diagnostic_model.to(torch.device("cpu"))
+    _release_training_cuda(torch, device)
+    if not scenes:
+        raise TrainError("Gaussian A/B не получила ни одной validation-сцены.")
+
+    threshold = float(best_metrics.val_best_threshold)
+    gaussian_scenes: list[dict[str, object]] = []
+    micro_counts = {"tp": 0, "fp": 0, "fn": 0}
+    fixed_micro_counts = {"tp": 0, "fp": 0, "fn": 0}
+    for scene_id in sorted(scenes):
+        accumulator = scenes[scene_id]
+        probability_sum = accumulator.pop("probability_sum")
+        weight_sum = accumulator.pop("weight_sum")
+        target = accumulator.pop("target")
+        valid = accumulator.pop("valid")
+        merged = np.zeros_like(probability_sum)
+        np.divide(probability_sum, weight_sum, out=merged, where=weight_sum > 0)
+        uncovered_valid = int(np.count_nonzero(valid & (weight_sum <= 0)))
+        if uncovered_valid:
+            raise TrainError(
+                f"Gaussian merge оставил непокрытые valid pixels: {scene_id}={uncovered_valid}"
+            )
+        counts = _numpy_binary_counts(merged, target, valid, threshold)
+        fixed_counts = _numpy_binary_counts(merged, target, valid, 0.5)
+        for key in micro_counts:
+            micro_counts[key] += counts[key]
+            fixed_micro_counts[key] += fixed_counts[key]
+        precision, recall, f1 = _threshold_metrics(counts)
+        fixed_precision, fixed_recall, fixed_f1 = _threshold_metrics(fixed_counts)
+        gaussian_scenes.append(
+            {
+                "scene_id": scene_id,
+                "threshold": threshold,
+                "pixel_precision": precision,
+                "pixel_recall": recall,
+                "pixel_f1": f1,
+                "fixed_0_5_precision": fixed_precision,
+                "fixed_0_5_recall": fixed_recall,
+                "fixed_0_5_f1": fixed_f1,
+                "valid_pixels": int(np.count_nonzero(valid)),
+                "uncovered_valid_pixels": uncovered_valid,
+                "nodata_predicted_pixels": int(
+                    np.count_nonzero(((merged >= threshold) & valid) & ~valid)
+                ),
+                "window_count": int(accumulator["window_count"]),
+                "padding_coverage": dict(accumulator["padding"]),
+            }
+        )
+    micro_precision, micro_recall, micro_f1 = _threshold_metrics(micro_counts)
+    fixed_micro_precision, fixed_micro_recall, fixed_micro_f1 = _threshold_metrics(
+        fixed_micro_counts
+    )
+    macro = _macro_scene_metrics(gaussian_scenes, "pixel")
+    fixed_macro = _macro_scene_metrics(gaussian_scenes, "fixed_0_5")
+    core_scenes = list(best_metrics.val_per_scene_metrics)
+    return {
+        "checkpoint": checkpoint_path,
+        "checkpoint_loaded_without_hub_access": True,
+        "window_size": patch_size,
+        "stride": 256,
+        "sigma": sigma,
+        "threshold": threshold,
+        "core_crop": {
+            "macro_pixel_f1": best_metrics.val_macro_pixel_f1,
+            "micro_pixel_f1": best_metrics.val_micro_pixel_f1,
+            "scenes": core_scenes,
+        },
+        "gaussian": {
+            **macro,
+            "micro_pixel_precision": micro_precision,
+            "micro_pixel_recall": micro_recall,
+            "micro_pixel_f1": micro_f1,
+            **{f"fixed_0_5_{key}": value for key, value in fixed_macro.items()},
+            "fixed_0_5_micro_precision": fixed_micro_precision,
+            "fixed_0_5_micro_recall": fixed_micro_recall,
+            "fixed_0_5_micro_f1": fixed_micro_f1,
+            "scenes": gaussian_scenes,
+        },
+        "production_merge_unchanged": "core_crop",
+    }
+
+
+def _accumulate_gaussian_window(
+    accumulator: dict[str, object],
+    gaussian,
+    probability,
+    target,
+    valid,
+    window: dict[str, object],
+    width: int,
+    height: int,
+) -> None:
+    import numpy as np
+
+    x = int(window["x"])
+    y = int(window["y"])
+    window_width = int(window["width"])
+    window_height = int(window["height"])
+    if probability.shape != (window_height, window_width):
+        raise TrainError("Размер logits не совпадает с Gaussian-окном.")
+    destination_x0 = max(0, x)
+    destination_y0 = max(0, y)
+    destination_x1 = min(width, x + window_width)
+    destination_y1 = min(height, y + window_height)
+    if destination_x0 >= destination_x1 or destination_y0 >= destination_y1:
+        return
+    source_x0 = destination_x0 - x
+    source_y0 = destination_y0 - y
+    source_x1 = source_x0 + destination_x1 - destination_x0
+    source_y1 = source_y0 + destination_y1 - destination_y0
+    destination = np.s_[destination_y0:destination_y1, destination_x0:destination_x1]
+    source = np.s_[source_y0:source_y1, source_x0:source_x1]
+    valid_patch = valid[source]
+    weights = gaussian[source] * valid_patch
+    accumulator["probability_sum"][destination] += probability[source] * weights
+    accumulator["weight_sum"][destination] += weights
+    accumulator["target"][destination] |= target[source] & valid_patch
+    accumulator["valid"][destination] |= valid_patch
+    accumulator["window_count"] = int(accumulator["window_count"]) + 1
+    padding = accumulator["padding"]
+    padding["left"] = bool(padding["left"] or x < 0)
+    padding["top"] = bool(padding["top"] or y < 0)
+    padding["right"] = bool(padding["right"] or x + window_width > width)
+    padding["bottom"] = bool(padding["bottom"] or y + window_height > height)
+
+
+def _numpy_binary_counts(probability, target, valid, threshold: float) -> dict[str, int]:
+    predicted = (probability >= threshold) & valid
+    true = target & valid
+    return {
+        "tp": int((predicted & true).sum()),
+        "fp": int((predicted & ~true & valid).sum()),
+        "fn": int((~predicted & true).sum()),
+    }
+
+
+def _macro_scene_metrics(
+    scenes: list[dict[str, object]], prefix: str
+) -> dict[str, float]:
+    names = ("precision", "recall", "f1")
+    return {
+        f"macro_pixel_{name}": sum(
+            float(scene[f"{prefix}_{name}"]) for scene in scenes
+        )
+        / len(scenes)
+        for name in names
+    }
 
 
 def _train_epoch(
@@ -299,6 +604,7 @@ def _train_epoch(
         images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(device=device, dtype=torch.float32)
         masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
+        valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
         class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
             torch,
             meta,
@@ -318,6 +624,8 @@ def _train_epoch(
             hard_negative_pixels,
             config.inference_context,
         )
+        if valid_pixels is not None:
+            valid_pixels = _crop_spatial(valid_pixels, config.inference_context)
         if class_hard_negative_pixels is not None:
             class_hard_negative_pixels = _crop_spatial(
                 class_hard_negative_pixels,
@@ -332,6 +640,7 @@ def _train_epoch(
             config,
             hard_negative_pixels,
             class_hard_negative_pixels,
+            valid_pixels,
         )
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
         loss.backward()
@@ -355,7 +664,7 @@ def _train_epoch(
                 config.max_train_batches_per_epoch is not None
                 and batch_index >= config.max_train_batches_per_epoch
             )
-            del images, masks, hard_negative_pixels, class_hard_negative_pixels, logits, loss
+            del images, masks, hard_negative_pixels, class_hard_negative_pixels, valid_pixels, logits, loss
             if pause_controller is not None:
                 pause_controller.pause_if_requested()
             if reached_limit:
@@ -371,7 +680,7 @@ def _train_epoch(
             config.max_train_batches_per_epoch is not None
             and batch_index >= config.max_train_batches_per_epoch
         )
-        del images, masks, hard_negative_pixels, class_hard_negative_pixels, logits, loss, grad_norm
+        del images, masks, hard_negative_pixels, class_hard_negative_pixels, valid_pixels, logits, loss, grad_norm
         if pause_controller is not None:
             pause_controller.pause_if_requested()
         if reached_limit:
@@ -407,14 +716,36 @@ def _validate_epoch(
             pause_controller=pause_controller,
         )
 
+    import numpy as np
+
     model.eval()
+    next_gen = config.pipeline_variant == "next_gen"
     total_loss = 0.0
     batches = 0
-    threshold_counts = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES
-    }
+    threshold_counts = (
+        {}
+        if next_gen
+        else {threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES}
+    )
+    positive_histogram = np.zeros(4096, dtype=np.int64)
+    negative_histogram = np.zeros(4096, dtype=np.int64)
+    scene_histograms: dict[str, tuple[object, object]] = {}
+    configured_fixed_counts = {"tp": 0, "fp": 0, "fn": 0}
+    fixed_0_5_counts = {"tp": 0, "fp": 0, "fn": 0}
+    scene_configured_fixed_counts: dict[str, dict[str, int]] = {}
+    scene_fixed_0_5_counts: dict[str, dict[str, int]] = {}
+    if not next_gen:
+        object_candidates = THRESHOLD_CANDIDATES
+    elif config.quality_metric == "objects":
+        object_candidates = tuple(
+            sorted({*NEXT_GEN_OBJECT_THRESHOLD_CANDIDATES, float(config.threshold)})
+        )
+    elif config.threshold_mode == "fixed":
+        object_candidates = (float(config.threshold),)
+    else:
+        object_candidates = ()
     object_threshold_counts = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES
+        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in object_candidates
     }
     object_instances_seen = False
     object_metric_workers = min(OBJECT_METRIC_MAX_WORKERS, max(1, os.cpu_count() or 1))
@@ -426,6 +757,7 @@ def _validate_epoch(
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(device=device, dtype=torch.float32)
             masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
+            valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             _validate_binary_targets(torch, masks, epoch, batch_index, "val")
@@ -437,18 +769,93 @@ def _validate_epoch(
                 hard_negative_pixels,
                 config.inference_context,
             )
-            loss = _loss(torch, logits, masks, config, hard_negative_pixels)
+            if valid_pixels is not None:
+                valid_pixels = _crop_spatial(valid_pixels, config.inference_context)
+            loss = _loss(
+                torch,
+                logits,
+                masks,
+                config,
+                hard_negative_pixels,
+                None,
+                valid_pixels,
+            )
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
             total_loss += float(loss.detach().item())
             batches += 1
 
             probs = torch.sigmoid(logits)
             true = masks >= 0.5
-            for threshold, counts in threshold_counts.items():
-                threshold_pred = probs >= threshold
-                counts["tp"] += int((threshold_pred & true).sum().item())
-                counts["fp"] += int((threshold_pred & ~true).sum().item())
-                counts["fn"] += int((~threshold_pred & true).sum().item())
+            if next_gen:
+                if valid_pixels is None:
+                    raise TrainError("next_gen validation не получила valid_pixels")
+                _accumulate_probability_histogram(
+                    torch,
+                    positive_histogram,
+                    negative_histogram,
+                    probs[:, 0],
+                    true[:, 0],
+                    valid_pixels[:, 0],
+                )
+                _accumulate_exact_threshold_counts(
+                    configured_fixed_counts,
+                    probs[:, 0],
+                    true[:, 0],
+                    valid_pixels[:, 0],
+                    float(config.threshold),
+                )
+                _accumulate_exact_threshold_counts(
+                    fixed_0_5_counts,
+                    probs[:, 0],
+                    true[:, 0],
+                    valid_pixels[:, 0],
+                    0.5,
+                )
+                scene_ids = meta.get("scene_ids") if isinstance(meta, dict) else None
+                if not isinstance(scene_ids, list) or len(scene_ids) != int(probs.shape[0]):
+                    raise TrainError("next_gen validation не получила scene_ids")
+                for sample_index, scene_id in enumerate(scene_ids):
+                    scene_positive, scene_negative = scene_histograms.setdefault(
+                        str(scene_id),
+                        (
+                            np.zeros(4096, dtype=np.int64),
+                            np.zeros(4096, dtype=np.int64),
+                        ),
+                    )
+                    _accumulate_probability_histogram(
+                        torch,
+                        scene_positive,
+                        scene_negative,
+                        probs[sample_index],
+                        true[sample_index],
+                        valid_pixels[sample_index],
+                    )
+                    configured_scene_counts = scene_configured_fixed_counts.setdefault(
+                        str(scene_id), {"tp": 0, "fp": 0, "fn": 0}
+                    )
+                    _accumulate_exact_threshold_counts(
+                        configured_scene_counts,
+                        probs[sample_index],
+                        true[sample_index],
+                        valid_pixels[sample_index],
+                        float(config.threshold),
+                    )
+                    fixed_scene_counts = scene_fixed_0_5_counts.setdefault(
+                        str(scene_id), {"tp": 0, "fp": 0, "fn": 0}
+                    )
+                    _accumulate_exact_threshold_counts(
+                        fixed_scene_counts,
+                        probs[sample_index],
+                        true[sample_index],
+                        valid_pixels[sample_index],
+                        0.5,
+                    )
+            else:
+                for threshold, counts in threshold_counts.items():
+                    threshold_pred = probs >= threshold
+                    counts["tp"] += int((threshold_pred & true).sum().item())
+                    counts["fp"] += int((threshold_pred & ~true).sum().item())
+                    counts["fn"] += int((~threshold_pred & true).sum().item())
             object_instances = meta.get("object_instances") if isinstance(meta, dict) else None
             if object_instances is not None:
                 object_instances_seen = True
@@ -456,17 +863,31 @@ def _validate_epoch(
                     object_instances,
                     config.inference_context,
                 )
-                _accumulate_object_threshold_counts(
-                    object_threshold_counts,
-                    _as_numpy_instances(object_instances),
-                    probs[:, 0, :, :].detach().cpu().numpy(),
-                    object_metric_executor,
-                )
+                object_probs = probs[:, 0, :, :]
+                true_instances = _as_numpy_instances(object_instances)
+                if valid_pixels is not None:
+                    object_probs = torch.where(
+                        valid_pixels[:, 0],
+                        object_probs,
+                        torch.full_like(object_probs, -1.0),
+                    )
+                    true_instances = np.where(
+                        valid_pixels[:, 0].detach().cpu().numpy(),
+                        true_instances,
+                        0,
+                    )
+                if object_threshold_counts:
+                    _accumulate_object_threshold_counts(
+                        object_threshold_counts,
+                        true_instances,
+                        object_probs.detach().cpu().numpy(),
+                        object_metric_executor,
+                    )
             reached_limit = (
                 config.max_val_batches_per_epoch is not None
                 and batch_index >= config.max_val_batches_per_epoch
             )
-            del images, masks, hard_negative_pixels, logits, loss, probs, true, threshold_pred
+            del images, masks, hard_negative_pixels, valid_pixels, logits, loss, probs, true
             if pause_controller is not None:
                 pause_controller.pause_if_requested()
             if reached_limit:
@@ -475,13 +896,126 @@ def _validate_epoch(
     if batches == 0:
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
-    pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = _best_threshold_metrics(
-        threshold_counts
+    per_scene_metrics: list[dict[str, object]] = []
+    metric_warnings: list[str] = []
+    if next_gen:
+        if config.threshold_mode == "fixed":
+            pixel_threshold = float(config.threshold)
+            pixel_precision, pixel_recall, pixel_f1 = _threshold_metrics(
+                configured_fixed_counts
+            )
+        else:
+            pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = (
+                _histogram_threshold_metrics(
+                    positive_histogram,
+                    negative_histogram,
+                    mode="optimize",
+                    fixed_threshold=float(config.threshold),
+                )
+            )
+        for scene_id in sorted(scene_histograms):
+            scene_positive, scene_negative = scene_histograms[scene_id]
+            if config.threshold_mode == "fixed":
+                optimal_threshold = pixel_threshold
+                optimal_precision, optimal_recall, optimal_f1 = _threshold_metrics(
+                    scene_configured_fixed_counts[scene_id]
+                )
+                precision, recall, f1 = optimal_precision, optimal_recall, optimal_f1
+                selected_counts = scene_configured_fixed_counts[scene_id]
+            else:
+                optimal_threshold, optimal_precision, optimal_recall, optimal_f1 = (
+                    _histogram_threshold_metrics(
+                        scene_positive,
+                        scene_negative,
+                        mode="optimize",
+                        fixed_threshold=float(config.threshold),
+                    )
+                )
+                _, precision, recall, f1 = _histogram_threshold_metrics(
+                    scene_positive,
+                    scene_negative,
+                    mode="fixed",
+                    fixed_threshold=pixel_threshold,
+                )
+                selected_counts = _histogram_counts_at_threshold(
+                    scene_positive,
+                    scene_negative,
+                    pixel_threshold,
+                )
+            fixed_precision, fixed_recall, fixed_f1 = _threshold_metrics(
+                scene_fixed_0_5_counts[scene_id]
+            )
+            per_scene_metrics.append(
+                {
+                    "scene_id": scene_id,
+                    "threshold": pixel_threshold,
+                    "pixel_precision": precision,
+                    "pixel_recall": recall,
+                    "pixel_f1": f1,
+                    "scene_optimal_threshold": optimal_threshold,
+                    "scene_optimal_precision": optimal_precision,
+                    "scene_optimal_recall": optimal_recall,
+                    "scene_optimal_f1": optimal_f1,
+                    "fixed_0_5_precision": fixed_precision,
+                    "fixed_0_5_recall": fixed_recall,
+                    "fixed_0_5_f1": fixed_f1,
+                    "true_positive": selected_counts["tp"],
+                    "false_positive": selected_counts["fp"],
+                    "false_negative": selected_counts["fn"],
+                    "valid_pixels": int(scene_positive.sum() + scene_negative.sum()),
+                    "fixed_0_5_true_positive": scene_fixed_0_5_counts[scene_id]["tp"],
+                    "fixed_0_5_false_positive": scene_fixed_0_5_counts[scene_id]["fp"],
+                    "fixed_0_5_false_negative": scene_fixed_0_5_counts[scene_id]["fn"],
+                }
+            )
+    else:
+        pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = _best_threshold_metrics(
+            threshold_counts
+        )
+    macro_pixel_precision = (
+        sum(float(item["pixel_precision"]) for item in per_scene_metrics)
+        / len(per_scene_metrics)
+        if per_scene_metrics
+        else None
+    )
+    macro_pixel_recall = (
+        sum(float(item["pixel_recall"]) for item in per_scene_metrics)
+        / len(per_scene_metrics)
+        if per_scene_metrics
+        else None
+    )
+    macro_pixel_f1 = (
+        sum(float(item["pixel_f1"]) for item in per_scene_metrics) / len(per_scene_metrics)
+        if per_scene_metrics
+        else None
     )
     if object_instances_seen:
-        object_threshold, object_precision, object_recall, object_f1 = _best_threshold_metrics(
-            object_threshold_counts
-        )
+        if not next_gen:
+            object_threshold, object_precision, object_recall, object_f1 = (
+                _best_threshold_metrics(object_threshold_counts)
+            )
+        elif config.quality_metric != "objects":
+            object_threshold = pixel_threshold
+            if object_threshold in object_threshold_counts:
+                exact_object_counts = object_threshold_counts[object_threshold]
+            else:
+                exact_object_counts = _validate_object_threshold(
+                    torch,
+                    model,
+                    loader,
+                    device,
+                    config,
+                    epoch,
+                    object_threshold,
+                    pause_controller,
+                )
+            object_precision, object_recall, object_f1 = _threshold_metrics(
+                exact_object_counts
+            )
+        else:
+            object_threshold, object_precision, object_recall, object_f1 = (
+                _best_threshold_metrics_for_candidates(object_threshold_counts)
+            )
     else:
         object_threshold = object_precision = object_recall = object_f1 = None
     if config.quality_metric == "objects":
@@ -495,9 +1029,14 @@ def _validate_epoch(
         quality_f1 = float(object_f1)
     else:
         quality_threshold = pixel_threshold
-        quality_precision = pixel_precision
-        quality_recall = pixel_recall
-        quality_f1 = pixel_f1
+        quality_precision = (
+            macro_pixel_precision if macro_pixel_precision is not None else pixel_precision
+        )
+        quality_recall = macro_pixel_recall if macro_pixel_recall is not None else pixel_recall
+        quality_f1 = macro_pixel_f1 if macro_pixel_f1 is not None else pixel_f1
+    fixed_0_5_precision, fixed_0_5_recall, fixed_0_5_f1 = _threshold_metrics(
+        fixed_0_5_counts
+    ) if next_gen else (None, None, None)
     return {
         "loss": total_loss / batches,
         "best_threshold": quality_threshold,
@@ -513,7 +1052,170 @@ def _validate_epoch(
         "quality_f1": quality_f1,
         "quality_precision": quality_precision,
         "quality_recall": quality_recall,
+        "macro_pixel_f1": macro_pixel_f1,
+        "macro_pixel_precision": macro_pixel_precision,
+        "macro_pixel_recall": macro_pixel_recall,
+        "micro_pixel_f1": pixel_f1 if next_gen else None,
+        "micro_pixel_precision": pixel_precision if next_gen else None,
+        "micro_pixel_recall": pixel_recall if next_gen else None,
+        "fixed_0_5_pixel_f1": fixed_0_5_f1,
+        "fixed_0_5_pixel_precision": fixed_0_5_precision,
+        "fixed_0_5_pixel_recall": fixed_0_5_recall,
+        "per_scene_metrics": per_scene_metrics,
+        "metric_warnings": metric_warnings,
     }
+
+
+def _accumulate_probability_histogram(
+    torch,
+    positive_histogram,
+    negative_histogram,
+    probabilities,
+    true,
+    valid,
+) -> None:
+    bins = torch.clamp((probabilities * 4095.0).to(dtype=torch.long), 0, 4095)
+    positive = bins[true & valid]
+    negative = bins[(~true) & valid]
+    if int(positive.numel()):
+        positive_histogram += torch.bincount(positive, minlength=4096).cpu().numpy()
+    if int(negative.numel()):
+        negative_histogram += torch.bincount(negative, minlength=4096).cpu().numpy()
+
+
+def _accumulate_exact_threshold_counts(
+    counts: dict[str, int],
+    probabilities,
+    true,
+    valid,
+    threshold: float,
+) -> None:
+    predicted = probabilities >= threshold
+    counts["tp"] += int((predicted & true & valid).sum().item())
+    counts["fp"] += int((predicted & ~true & valid).sum().item())
+    counts["fn"] += int((~predicted & true & valid).sum().item())
+
+
+def _histogram_threshold_metrics(
+    positive_histogram,
+    negative_histogram,
+    *,
+    mode: str,
+    fixed_threshold: float,
+) -> tuple[float, float, float, float]:
+    import numpy as np
+
+    positive = np.asarray(positive_histogram, dtype=np.int64)
+    negative = np.asarray(negative_histogram, dtype=np.int64)
+    tp_by_bin = np.cumsum(positive[::-1], dtype=np.int64)[::-1]
+    fp_by_bin = np.cumsum(negative[::-1], dtype=np.int64)[::-1]
+    positives = int(positive.sum())
+    if mode == "fixed":
+        index = min(4095, max(0, int(math.ceil(fixed_threshold * 4095.0))))
+        precision, recall, f1 = _threshold_metrics(
+            {
+                "tp": int(tp_by_bin[index]),
+                "fp": int(fp_by_bin[index]),
+                "fn": positives - int(tp_by_bin[index]),
+            }
+        )
+        return float(fixed_threshold), precision, recall, f1
+    best = (0.0, 0.0, 0.0, 0.0)
+    best_key = (-1.0, -1.0, -1.0)
+    for index in range(4096):
+        threshold = index / 4095.0
+        precision, recall, f1 = _threshold_metrics(
+            {
+                "tp": int(tp_by_bin[index]),
+                "fp": int(fp_by_bin[index]),
+                "fn": positives - int(tp_by_bin[index]),
+            }
+        )
+        key = (f1, precision, threshold)
+        if key > best_key:
+            best_key = key
+            best = (threshold, precision, recall, f1)
+    return best
+
+
+def _histogram_counts_at_threshold(
+    positive_histogram,
+    negative_histogram,
+    threshold: float,
+) -> dict[str, int]:
+    import numpy as np
+
+    positive = np.asarray(positive_histogram, dtype=np.int64)
+    negative = np.asarray(negative_histogram, dtype=np.int64)
+    index = min(4095, max(0, int(round(threshold * 4095.0))))
+    true_positive = int(positive[index:].sum())
+    return {
+        "tp": true_positive,
+        "fp": int(negative[index:].sum()),
+        "fn": int(positive.sum()) - true_positive,
+    }
+
+
+def _validate_object_threshold(
+    torch,
+    model,
+    loader: object,
+    device: object,
+    config,
+    epoch: int,
+    threshold: float,
+    pause_controller: "_TrainingPauseController | None",
+) -> dict[str, int]:
+    import numpy as np
+
+    threshold_counts = {threshold: {"tp": 0, "fp": 0, "fn": 0}}
+    object_metric_workers = min(OBJECT_METRIC_MAX_WORKERS, max(1, os.cpu_count() or 1))
+    with (
+        ThreadPoolExecutor(max_workers=object_metric_workers) as executor,
+        torch.no_grad(),
+    ):
+        for batch_index, batch in enumerate(loader, start=1):
+            images, masks, meta = _split_batch(
+                batch,
+                epoch,
+                batch_index,
+                "val_object_threshold",
+            )
+            if not isinstance(meta, dict) or meta.get("object_instances") is None:
+                continue
+            images = images.to(device=device, dtype=torch.float32)
+            masks, _ = _prepare_supervision_masks(torch, masks, config, device)
+            valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
+            logits = _forward_logits(torch, model, images, masks)
+            logits = _crop_spatial(logits, config.inference_context)
+            object_instances = _crop_spatial(
+                meta["object_instances"],
+                config.inference_context,
+            )
+            if valid_pixels is not None:
+                valid_pixels = _crop_spatial(valid_pixels, config.inference_context)
+            probabilities = torch.sigmoid(logits[:, 0])
+            true_instances = _as_numpy_instances(object_instances)
+            if valid_pixels is not None:
+                probabilities = torch.where(
+                    valid_pixels[:, 0],
+                    probabilities,
+                    torch.full_like(probabilities, -1.0),
+                )
+                true_instances = np.where(
+                    valid_pixels[:, 0].detach().cpu().numpy(),
+                    true_instances,
+                    0,
+                )
+            _accumulate_object_threshold_counts(
+                threshold_counts,
+                true_instances,
+                probabilities.detach().cpu().numpy(),
+                executor,
+            )
+            if pause_controller is not None:
+                pause_controller.pause_if_requested()
+    return threshold_counts[threshold]
 
 
 def _accumulate_object_threshold_counts(
@@ -920,6 +1622,19 @@ def _prepare_class_hard_negative_pixels(torch, meta, config, device):
     return value
 
 
+def _prepare_valid_pixels(torch, meta, config, device, masks):
+    if config.pipeline_variant != "next_gen":
+        return None
+    if not isinstance(meta, dict) or meta.get("valid_pixels") is None:
+        raise TrainError("next_gen batch не содержит valid_pixels")
+    value = meta["valid_pixels"].to(device=device, dtype=torch.bool)
+    if value.ndim == 3:
+        value = value.unsqueeze(1)
+    if value.ndim != masks.ndim or value.shape[-2:] != masks.shape[-2:]:
+        raise TrainError("valid_pixels не совпадает с формой supervision mask")
+    return value
+
+
 def _loss(
     torch,
     logits,
@@ -927,6 +1642,7 @@ def _loss(
     config,
     hard_negative_pixels=None,
     class_hard_negative_pixels=None,
+    valid_pixels=None,
 ):
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
@@ -967,23 +1683,32 @@ def _loss(
         return cross_entropy + class_hard_negative_loss
     if config.loss == "bce_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
+        weights = _pixel_loss_weights(
+            torch, logits, masks, hard_negative_pixels, config, valid_pixels
+        )
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
             pos_weight=pos_weight,
             reduction="none",
         )
-        return _weighted_mean(bce, weights) + _dice_loss(
+        return _weighted_mean(
+            bce,
+            weights,
+            normalize_by_weights=config.pipeline_variant == "next_gen",
+        ) + _dice_loss(
             torch,
             logits,
             masks,
             hard_negative_pixels,
             config,
+            valid_pixels,
         )
     if config.loss == "focal_dice":
         pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
-        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
+        weights = _pixel_loss_weights(
+            torch, logits, masks, hard_negative_pixels, config, valid_pixels
+        )
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits,
             masks,
@@ -992,22 +1717,37 @@ def _loss(
         )
         pt = torch.exp(-bce)
         focal = config.focal_alpha * torch.pow(1.0 - pt, 2.0) * bce
-        return _weighted_mean(focal, weights) + _dice_loss(
+        return _weighted_mean(
+            focal,
+            weights,
+            normalize_by_weights=config.pipeline_variant == "next_gen",
+        ) + _dice_loss(
             torch,
             logits,
             masks,
             hard_negative_pixels,
             config,
+            valid_pixels,
         )
     if config.loss == "focal_tversky":
-        weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
-        focal, _bce = _focal_loss_with_bce(torch, logits, masks, config, weights)
+        weights = _pixel_loss_weights(
+            torch, logits, masks, hard_negative_pixels, config, valid_pixels
+        )
+        focal, _bce = _focal_loss_with_bce(
+            torch,
+            logits,
+            masks,
+            config,
+            weights,
+            normalize_by_weights=config.pipeline_variant == "next_gen",
+        )
         return focal + _tversky_loss(
             torch,
             logits,
             masks,
             config,
             hard_negative_pixels,
+            valid_pixels,
         )
     raise TrainError(f"Неподдерживаемый loss: {config.loss}")
 
@@ -1032,12 +1772,34 @@ def _best_threshold_metrics(
     return best_threshold, best_precision, best_recall, max(best_f1, 0.0)
 
 
+def _best_threshold_metrics_for_candidates(
+    threshold_counts: dict[float, dict[str, int]],
+) -> tuple[float, float, float, float]:
+    best = (0.0, 0.0, 0.0, 0.0)
+    best_key = (-1.0, -1.0, -1.0)
+    for threshold in sorted(threshold_counts):
+        precision, recall, f1 = _threshold_metrics(threshold_counts[threshold])
+        key = (f1, precision, threshold)
+        if key > best_key:
+            best_key = key
+            best = (threshold, precision, recall, f1)
+    return best
+
+
+def _threshold_metrics(counts: dict[str, int]) -> tuple[float, float, float]:
+    precision = _safe_div(counts["tp"], counts["tp"] + counts["fp"])
+    recall = _safe_div(counts["tp"], counts["tp"] + counts["fn"])
+    f1 = _safe_div(2.0 * precision * recall, precision + recall)
+    return precision, recall, f1
+
+
 def _pixel_loss_weights(
     torch,
     logits,
     masks,
     hard_negative_pixels,
     config,
+    valid_pixels=None,
 ):
     background_weight = float(getattr(config, "background_weight", 1.0))
     hard_negative_weight = float(getattr(config, "hard_negative_weight", 1.0))
@@ -1046,7 +1808,11 @@ def _pixel_loss_weights(
         and hard_negative_pixels is not None
         and hasattr(hard_negative_pixels, "to")
     )
-    if background_weight == 1.0 and not has_hard_negative_weights:
+    if (
+        background_weight == 1.0
+        and not has_hard_negative_weights
+        and valid_pixels is None
+    ):
         return None
     weights = torch.ones_like(
         masks,
@@ -1073,12 +1839,19 @@ def _pixel_loss_weights(
                 dtype=logits.dtype,
             )
         )
+    if valid_pixels is not None:
+        weights = weights * valid_pixels.to(
+            device=logits.device,
+            dtype=logits.dtype,
+        )
     return weights
 
 
-def _weighted_mean(values, weights):
+def _weighted_mean(values, weights, *, normalize_by_weights: bool = False):
     if weights is None:
         return values.mean()
+    if normalize_by_weights:
+        return (values * weights).sum() / weights.sum().clamp_min(1.0)
     return (values * weights).mean()
 
 
@@ -1130,6 +1903,7 @@ def _focal_loss_with_bce(
     masks,
     config,
     weights=None,
+    normalize_by_weights: bool = False,
 ):
     pos_weight = torch.tensor([config.pos_weight], device=logits.device, dtype=logits.dtype)
     bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -1151,8 +1925,8 @@ def _focal_loss_with_bce(
         )
         focal = alpha_factor * focal
     return (
-        _weighted_mean(focal, weights),
-        _weighted_mean(bce, weights),
+        _weighted_mean(focal, weights, normalize_by_weights=normalize_by_weights),
+        _weighted_mean(bce, weights, normalize_by_weights=normalize_by_weights),
     )
 
 
@@ -1162,14 +1936,18 @@ def _dice_loss(
     masks,
     hard_negative_pixels=None,
     config=None,
+    valid_pixels=None,
 ):
     probs = torch.sigmoid(logits)
+    if valid_pixels is not None:
+        masks = masks * valid_pixels.to(device=logits.device, dtype=logits.dtype)
     probability_weights = _pixel_loss_weights(
         torch,
         logits,
         masks,
         hard_negative_pixels,
         config,
+        valid_pixels,
     )
     if probability_weights is not None:
         probs = probs * probability_weights
@@ -1232,12 +2010,24 @@ def _tversky_loss(
     masks,
     config,
     hard_negative_pixels=None,
+    valid_pixels=None,
 ):
     probs = torch.sigmoid(logits)
+    if valid_pixels is not None:
+        valid = valid_pixels.to(device=logits.device, dtype=logits.dtype)
+        probs = probs * valid
+        masks = masks * valid
     smooth = 1.0
     true_positive = torch.sum(probs * masks)
     false_positive_pixels = probs * (1.0 - masks)
-    weights = _pixel_loss_weights(torch, logits, masks, hard_negative_pixels, config)
+    weights = _pixel_loss_weights(
+        torch,
+        logits,
+        masks,
+        hard_negative_pixels,
+        config,
+        valid_pixels,
+    )
     if weights is not None:
         false_positive_pixels = false_positive_pixels * weights
     false_positive = torch.sum(false_positive_pixels)
@@ -1285,58 +2075,84 @@ def _save_training_checkpoint(
     metrics: EpochMetrics,
     label: str,
 ) -> None:
+    metadata = {
+        "label": label,
+        "epoch": metrics.epoch,
+        "quality_metric": metrics.quality_metric,
+        "val_quality_f1": metrics.val_quality_f1,
+        "val_quality_precision": metrics.val_quality_precision,
+        "val_quality_recall": metrics.val_quality_recall,
+        "val_best_threshold": metrics.val_best_threshold,
+        "val_best_pixel_threshold": metrics.val_best_pixel_threshold,
+        "val_best_threshold_pixel_f1": metrics.val_best_threshold_pixel_f1,
+        "val_best_threshold_pixel_precision": metrics.val_best_threshold_pixel_precision,
+        "val_best_threshold_pixel_recall": metrics.val_best_threshold_pixel_recall,
+        "val_best_threshold_precision": metrics.val_best_threshold_precision,
+        "val_best_threshold_recall": metrics.val_best_threshold_recall,
+        "val_best_threshold_object_f1": metrics.val_best_threshold_object_f1,
+        "val_best_threshold_object_precision": metrics.val_best_threshold_object_precision,
+        "val_best_threshold_object_recall": metrics.val_best_threshold_object_recall,
+        "task": request.config.task,
+        "class_schema": [
+            item.model_dump(mode="json") for item in request.config.class_schema
+        ],
+        "confidence_threshold": metrics.val_best_threshold,
+        "val_macro_pixel_f1": metrics.val_macro_pixel_f1,
+        "val_macro_pixel_precision": metrics.val_macro_pixel_precision,
+        "val_macro_pixel_recall": metrics.val_macro_pixel_recall,
+        "val_macro_pixel_iou": metrics.val_macro_pixel_iou,
+        "val_micro_pixel_f1": metrics.val_micro_pixel_f1,
+        "val_foreground_pixel_f1": metrics.val_foreground_pixel_f1,
+        "val_per_class_metrics": metrics.val_per_class_metrics,
+        "val_multiclass_threshold_sweep": metrics.val_multiclass_threshold_sweep,
+        "val_metric_warnings": metrics.val_metric_warnings,
+        "val_loss": metrics.val_loss,
+        "train_loss": metrics.train_loss,
+        "sample_size": request.sample_size,
+        "inference_context": request.config.inference_context,
+        "inference_core_size": (
+            request.sample_size - 2 * request.config.inference_context
+            if request.sample_size is not None
+            else None
+        ),
+        "seed": request.config.seed,
+        "train_config": _checkpoint_train_config(request.config),
+    }
+    if request.config.pipeline_variant == "next_gen":
+        metadata.update(
+            {
+                "pipeline_variant": "next_gen",
+                "run_metadata": dict(request.run_metadata),
+                "validation_performed": metrics.validation_performed,
+                "val_per_scene_metrics": metrics.val_per_scene_metrics,
+                "val_fixed_0_5_pixel_f1": metrics.val_fixed_0_5_pixel_f1,
+                "val_fixed_0_5_pixel_precision": metrics.val_fixed_0_5_pixel_precision,
+                "val_fixed_0_5_pixel_recall": metrics.val_fixed_0_5_pixel_recall,
+                "learning_rate": metrics.learning_rate,
+                "model_parameters": request.model.spec.parameters,
+            }
+        )
     save_checkpoint(
         SaveCheckpointRequest(
             model=request.model,
             checkpoint_uri=checkpoint_uri,
-            metadata={
-                "label": label,
-                "epoch": metrics.epoch,
-                "quality_metric": metrics.quality_metric,
-                "val_quality_f1": metrics.val_quality_f1,
-                "val_quality_precision": metrics.val_quality_precision,
-                "val_quality_recall": metrics.val_quality_recall,
-                "val_best_threshold": metrics.val_best_threshold,
-                "val_best_pixel_threshold": metrics.val_best_pixel_threshold,
-                "val_best_threshold_pixel_f1": metrics.val_best_threshold_pixel_f1,
-                "val_best_threshold_pixel_precision": metrics.val_best_threshold_pixel_precision,
-                "val_best_threshold_pixel_recall": metrics.val_best_threshold_pixel_recall,
-                "val_best_threshold_precision": metrics.val_best_threshold_precision,
-                "val_best_threshold_recall": metrics.val_best_threshold_recall,
-                "val_best_threshold_object_f1": metrics.val_best_threshold_object_f1,
-                "val_best_threshold_object_precision": metrics.val_best_threshold_object_precision,
-                "val_best_threshold_object_recall": metrics.val_best_threshold_object_recall,
-                "task": request.config.task,
-                "class_schema": [
-                    item.model_dump(mode="json") for item in request.config.class_schema
-                ],
-                "confidence_threshold": metrics.val_best_threshold,
-                "val_macro_pixel_f1": metrics.val_macro_pixel_f1,
-                "val_macro_pixel_precision": metrics.val_macro_pixel_precision,
-                "val_macro_pixel_recall": metrics.val_macro_pixel_recall,
-                "val_macro_pixel_iou": metrics.val_macro_pixel_iou,
-                "val_micro_pixel_f1": metrics.val_micro_pixel_f1,
-                "val_foreground_pixel_f1": metrics.val_foreground_pixel_f1,
-                "val_per_class_metrics": metrics.val_per_class_metrics,
-                "val_multiclass_threshold_sweep": metrics.val_multiclass_threshold_sweep,
-                "val_metric_warnings": metrics.val_metric_warnings,
-                "val_loss": metrics.val_loss,
-                "train_loss": metrics.train_loss,
-                "sample_size": request.sample_size,
-                "inference_context": request.config.inference_context,
-                "inference_core_size": (
-                    request.sample_size - 2 * request.config.inference_context
-                    if request.sample_size is not None
-                    else None
-                ),
-                "seed": request.config.seed,
-                "train_config": request.config.model_dump(mode="json"),
-            },
+            metadata=metadata,
         )
     )
 
 
+def _checkpoint_train_config(config) -> dict[str, object]:
+    excluded = (
+        {"pipeline_variant", "validation_interval_epochs", "threshold_mode", "evaluate_gaussian_blend"}
+        if config.pipeline_variant == "legacy"
+        else set()
+    )
+    return config.model_dump(mode="json", exclude=excluded)
+
+
 def _checkpoint_score(metrics: EpochMetrics) -> float:
+    if metrics.quality_metric == "objects":
+        return metrics.val_quality_f1
     if metrics.val_macro_pixel_f1 is not None:
         return metrics.val_macro_pixel_f1
     return metrics.val_quality_f1

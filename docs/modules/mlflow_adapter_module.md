@@ -73,6 +73,10 @@
 - `val/object_precision` — только при наличии object validation
 - `val/object_recall` — только при наличии object validation
 - `train/epoch_time_sec`
+- `train/learning_rate` — для next-gen
+- `val/performed` — `0/1` для разреженной next-gen validation
+- `val/scene/{scene_id}/{pixel_f1|pixel_precision|pixel_recall|fixed_0_5_*}` — для next-gen
+- `val/fixed_0_5_pixel_f1`, `val/fixed_0_5_pixel_precision`, `val/fixed_0_5_pixel_recall` — для next-gen
 
 `log_training_metrics` пишет только итоговые run-level метрики без `step`:
 
@@ -80,6 +84,7 @@
 - `train/training_time_sec`
 - `train/best_quality_f1`
 - `train/best_threshold_pixel_f1`
+- `train/peak_vram_bytes` — для next-gen
 
 ## Алгоритм работы и его особенности
 
@@ -89,7 +94,14 @@
 
 `log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует только метрики, перечисленные в разделе "Публикуемые MLflow-метрики". Это обеспечивает появление HPO-сигналов в MLflow во время долгого обучения без диагностического шума.
 
-`log_training_metrics` не дублирует per-epoch метрики. `train/best_quality_f1` равна максимуму выбранной метрики, а совместимая `train/best_threshold_pixel_f1` — максимуму pixel F1. `log_training_artifacts` пишет полную историю обучения в JSON и сохраняет существующие best/final checkpoint-файлы.
+`log_training_metrics` не дублирует per-epoch метрики и игнорирует эпохи без validation при выборе best.
+`log_training_epoch` для таких эпох пишет train loss/time/LR и `val/performed=0`; для next-gen validation
+дополнительно пишет macro/micro и per-scene метрики. Legacy-набор и порядок прежних epoch-метрик сохранены.
+`log_training_artifacts` пишет полную историю и best/final checkpoint. Для next-gen из diagnostics также
+сохраняются `config/resolved_train_config.json`, `reports/split_manifest.json`, `preprocessing.json`,
+`runtime_environment.json`, `validation_by_scene.json`, optional `inference_merge_comparison.json` и
+`checkpoint_hashes.json`; runtime содержит commit, Python/packages, CUDA/GPU, peak VRAM и dataset revision;
+безопасные scalar/JSON параметры flatten-ятся, строки ограничиваются по длине.
 
 `get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` читает `val/quality_f1`, потому что `best.pt` сохраняется train-модулем по этой же метрике. Запуск без tag считается старым и читается по `val/best_threshold_pixel_f1`; если новый metric history отсутствует, также применяется pixel fallback. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается вместе с checkpoint summary.
 

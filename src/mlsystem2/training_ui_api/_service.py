@@ -979,6 +979,7 @@ def create_training_job(
     job_config[POST_TRAINING_INFERENCE_CONFIG_KEY] = request.run_inference_after_training
     job_config[SECONDARY_PRIORITY_CONFIG_KEY] = request.secondary_priority
     _validate_tile_factor_config(job_config)
+    _validate_training_pipeline_variant(job_config, request.architecture)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
     row = JobRow(
         type=JobType.TRAINING.value,
@@ -1018,6 +1019,36 @@ def create_training_job(
     )
     session.flush()
     return _job_detail(session, row)
+
+
+def _validate_training_pipeline_variant(
+    job_config: dict[str, Any], architecture: str
+) -> None:
+    variant = str(job_config.get("train.pipeline_variant") or "legacy")
+    if variant not in {"legacy", "next_gen"}:
+        raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
+    if architecture == "segformer_b0" and variant != "next_gen":
+        raise TrainingUIAPIError("SegFormer B0 HF доступен только в конвейере next-gen.")
+    if variant == "legacy":
+        return
+    if job_config.get("dataset.task") != "binary":
+        raise TrainingUIAPIError("next-gen v1 поддерживает только binary-датасеты.")
+    if job_config.get("dataset.imagery_type") != "kanopus":
+        raise TrainingUIAPIError("next-gen v1 поддерживает только снимки Kanopus.")
+    if architecture not in {"smp_segformer_b0", "segformer_b0"}:
+        raise TrainingUIAPIError(
+            "next-gen v1 поддерживает только smp_segformer_b0 и SegFormer B0 HF."
+        )
+    if int(job_config.get("train.input_channels") or 0) != 4:
+        raise TrainingUIAPIError("next-gen v1 требует четыре входных канала.")
+    if job_config.get("train.max_val_batches_per_epoch") is not None:
+        raise TrainingUIAPIError(
+            "next-gen всегда выполняет полную validation: max_val_batches_per_epoch должен быть пустым."
+        )
+    if bool(job_config.get("train.pretrained")) and architecture != "segformer_b0":
+        raise TrainingUIAPIError(
+            "Предобученные веса next-gen доступны только для SegFormer B0 HF."
+        )
 
 
 def queues(session: Session) -> QueueSnapshot:
@@ -2602,6 +2633,8 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
         inference_dataset_name=row.inference_dataset_name,
         model_name=row.model_name,
         architecture=row.architecture,
+        pipeline_variant=_job_pipeline_variant(row),
+        validation_fold=_job_validation_fold(row),
         tile_size=row.tile_size,
         created_at=row.created_at,
         started_at=row.started_at,
@@ -2624,6 +2657,19 @@ def _job_input_channels(job: JobRow | None) -> int:
     return parsed if parsed > 0 else 4
 
 
+def _job_pipeline_variant(job: JobRow | None) -> str:
+    value = (job.config or {}).get("train.pipeline_variant") if job is not None else None
+    return "next_gen" if value == "next_gen" else "legacy"
+
+
+def _job_validation_fold(job: JobRow | None) -> int:
+    value = (job.config or {}).get("next_gen.validation_fold") if job is not None else None
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _job_detail(session: Session, row: JobRow) -> JobDetail:
     return JobDetail(
         id=row.id,
@@ -2639,6 +2685,8 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         inference_dataset_name=row.inference_dataset_name,
         model_name=row.model_name,
         architecture=row.architecture,
+        pipeline_variant=_job_pipeline_variant(row),
+        validation_fold=_job_validation_fold(row),
         tile_size=row.tile_size,
         mlflow_experiment_name=row.mlflow_experiment_name,
         mlflow_run_name=row.mlflow_run_name,
@@ -2868,6 +2916,8 @@ def _training_result_info(
         dataset_version=row.dataset_version,
         model_name=row.model_name,
         architecture=row.architecture,
+        pipeline_variant=_job_pipeline_variant(job),
+        validation_fold=_job_validation_fold(job),
         is_primary=is_primary,
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,

@@ -7340,6 +7340,21 @@
             "type": "string",
             "title": "Architecture"
           },
+          "pipeline_variant": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "next_gen"
+            ],
+            "title": "Pipeline Variant",
+            "default": "legacy"
+          },
+          "validation_fold": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Validation Fold",
+            "default": 0
+          },
           "tile_size": {
             "anyOf": [
               {
@@ -7599,6 +7614,21 @@
           "architecture": {
             "type": "string",
             "title": "Architecture"
+          },
+          "pipeline_variant": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "next_gen"
+            ],
+            "title": "Pipeline Variant",
+            "default": "legacy"
+          },
+          "validation_fold": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Validation Fold",
+            "default": 0
           },
           "tile_size": {
             "anyOf": [
@@ -11444,6 +11474,21 @@
           "architecture": {
             "type": "string",
             "title": "Architecture"
+          },
+          "pipeline_variant": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "next_gen"
+            ],
+            "title": "Pipeline Variant",
+            "default": "legacy"
+          },
+          "validation_fold": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Validation Fold",
+            "default": 0
           },
           "is_primary": {
             "type": "boolean",

@@ -29,10 +29,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `ConfigField`, `ConfigSchema`, `TrainingTemplate`, `TrainingTemplateListResponse`, `TrainingTemplateCreate`, `TrainingTemplateUpdate`, `TrainingTemplateApplyField`, `InferenceTemplate`, `InferenceTemplateListResponse`, `InferenceTemplateCreate`, `InferenceTemplateUpdate`, `InferenceTemplateApplyField` - шаблоны обучения и инференса; `ConfigField` содержит `tooltip`, допустимые границы и optional `recommended_range` для UI-подсказок.
 - Встроенный датасетный inference-шаблон хранит человекочитаемую цель, но при инициализации привязывается к ключу действующей строки каталога по паре `класс/имя`; это сохраняет специальные настройки после смены ключа или миграции legacy-датасета.
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
-- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; ручной training request может включить `run_inference_after_training` и `secondary_priority`.
+- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; Job DTO вычисляет `pipeline_variant` и `validation_fold` из JSON config без миграции БД.
 - `PseudolabelJobCreate`, `PseudolabelClassInfo`, `PseudolabelClassListResponse`, `PseudolabelJobInfo`, `PseudolabelErrorInfo` - AOI, доступная зафиксированная модель, состояние и структурированная ошибка QGIS-контракта.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
-- `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `DatasetResultsResponse`, `ResultClassInfo`, `ResultDatasetInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, task/class schema, структурированные per-class метрики, отдельный test F1, основная разметка и карточки классов; multiclass pseudo result дополнительно содержит ZIP-download по типам.
+- `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `DatasetResultsResponse`, `ResultClassInfo`, `ResultDatasetInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, включая вычисляемые `pipeline_variant`/`validation_fold`, task/class schema, метрики, test F1 и псевдоразметку.
 - `TrainingResultExportItem`, `TrainingResultBatchExportRequest` - JSON-запрос массового экспорта выбранных успешных training results.
 - `MarkupExportRequest`, `MarkupExportTileInfo`, `MarkupExportInfo` - запрос и описание временного набора тестовой разметки с тайлами, превью, сводкой цель/факт, режимом исключения граничных объектов и сроком хранения.
 - `TestSampleCreate`, `TestSampleUpdate`, `TestSampleTileUpdate`, `TestSampleOptimizeRequest`, `TestSamplePrimaryUpdate`, `TestSampleEvaluationPreviewRequest`, `TestSampleDownloadRequest`, `TestSampleBulkDownloadRequest` - создание и атомарное сохранение постоянной разметки, совместимые точечные изменения, ограничения оптимизации, запросы оценки, одиночного и группового скачивания.
@@ -95,6 +95,12 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `POST /api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup` - идемпотентно ставит полную псевдоразметку выбранного датасета его выбранной сетью.
 - `POST /api/v1/test-sample-batches`, `GET /api/v1/test-sample-batches/latest` и `GET /api/v1/test-sample-batches/{batch_id}` - запуск и прогресс последовательного группового создания для готовых датасетов старого и поснимочного формата; строка запуска фиксирует идентификаторы сети и псевдоразметки.
 - `POST /api/v1/training-jobs` - поставить ручное обучение; при `run_inference_after_training=true` успешное завершение идемпотентно ставит штатную полную псевдоразметку того же датасета полученной сетью.
+- Схема шаблонов содержит безопасный default `train.pipeline_variant=legacy` и секцию `next_gen.*`. Отдельная
+  UI-архитектура `segformer_b0` называется «SegFormer B0 HF (next-gen)» и имеет базовый pretrained-шаблон;
+  прежний ID `smp_segformer_b0` не меняется. Pretrained показывается только для HF B0 next-gen, а
+  `max_val_batches_per_epoch` очищается и блокируется. API до создания job отклоняет multiclass/ortho,
+  неподдерживаемую архитектуру, pretrained SMP и ненулевой val-limit. Новое правило автоматического обучения
+  не включается, а успешный trial не назначается основной сетью автоматически.
 - `POST /api/v1/jobs/{job_id}/stop-and-save-best` - кооперативно остановить выполняющееся ручное обучение и выдать `best.pt` максимальной валидационной F1 как успешный результат; до появления первого лучшего чекпойнта операция недоступна.
 - `GET /api/v1/queues/count` - лёгкое число active jobs (`queued|running|paused`) для счётчика меню; `GET /api/v1/queues` остаётся полным снимком очереди.
 - `PUT /api/v1/test-samples/{sample_id}/primary` - совместимо назначает, заменяет или снимает единственную основную разметку класса.

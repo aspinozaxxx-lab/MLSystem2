@@ -2704,6 +2704,17 @@ export interface components {
             model_name: string;
             /** Architecture */
             architecture: string;
+            /**
+             * Pipeline Variant
+             * @default legacy
+             * @enum {string}
+             */
+            pipeline_variant: "legacy" | "next_gen";
+            /**
+             * Validation Fold
+             * @default 0
+             */
+            validation_fold: number;
             /** Tile Size */
             tile_size?: number | null;
             /** Mlflow Experiment Name */
@@ -2811,6 +2822,17 @@ export interface components {
             model_name: string;
             /** Architecture */
             architecture: string;
+            /**
+             * Pipeline Variant
+             * @default legacy
+             * @enum {string}
+             */
+            pipeline_variant: "legacy" | "next_gen";
+            /**
+             * Validation Fold
+             * @default 0
+             */
+            validation_fold: number;
             /** Tile Size */
             tile_size?: number | null;
             /**
@@ -4191,6 +4213,17 @@ export interface components {
             model_name: string;
             /** Architecture */
             architecture: string;
+            /**
+             * Pipeline Variant
+             * @default legacy
+             * @enum {string}
+             */
+            pipeline_variant: "legacy" | "next_gen";
+            /**
+             * Validation Fold
+             * @default 0
+             */
+            validation_fold: number;
             /**
              * Is Primary
              * @default false

@@ -689,6 +689,7 @@ def _build_training_config(
     run_dir: Path,
 ) -> dict[str, Any]:
     flat = dict(row.config or {})
+    pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
     positive_factor = _float_value(flat, "tile_preparation.positive_factor", 0.5)
     hard_negative_factor = _float_value(flat, "tile_preparation.hard_negative_factor", 0.0)
     background_factor = _float_value(
@@ -739,6 +740,21 @@ def _build_training_config(
             "background_factor": tile_factors["tile_preparation.background_factor"],
             "class_balance": task == "multiclass",
         },
+        "next_gen": {
+            "validation_fold": _int_value(flat, "next_gen.validation_fold", 0),
+            "normalization": str(
+                _flat_value(flat, "next_gen.normalization", "scale_255")
+            ),
+            "validation_interval_epochs": _int_value(
+                flat, "next_gen.validation_interval_epochs", 5
+            ),
+            "threshold_mode": str(
+                _flat_value(flat, "next_gen.threshold_mode", "optimize")
+            ),
+            "evaluate_gaussian_blend": _bool_value(
+                flat, "next_gen.evaluate_gaussian_blend", False
+            ),
+        },
         "train": {
             "task": task,
             "quality_metric": (
@@ -747,6 +763,8 @@ def _build_training_config(
                 else str(_flat_value(flat, "train.quality_metric", "pixel"))
             ),
             "model_name": row.architecture,
+            "pipeline_variant": pipeline_variant,
+            "pretrained": _bool_value(flat, "train.pretrained", False),
             "input_channels": _int_value(flat, "train.input_channels", 4),
             "output_channels": len(manifest.classes) + 1 if manifest is not None else 1,
             "initial_checkpoint_uri": _blank_to_none(
@@ -766,7 +784,11 @@ def _build_training_config(
             "threshold": _float_value(flat, "train.threshold", 0.5),
             "early_stopping_patience": _int_value(flat, "train.early_stopping_patience", 10),
             "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
-            "max_val_batches_per_epoch": _optional_int(flat, "train.max_val_batches_per_epoch"),
+            "max_val_batches_per_epoch": (
+                None
+                if pipeline_variant == "next_gen"
+                else _optional_int(flat, "train.max_val_batches_per_epoch")
+            ),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
         },
         "mlflow": {
@@ -2785,6 +2807,13 @@ def _optional_int(flat: dict[str, Any], key: str) -> int | None:
 def _float_value(flat: dict[str, Any], key: str, default: float) -> float:
     value = _flat_value(flat, key, default)
     return float(value)
+
+
+def _bool_value(flat: dict[str, Any], key: str, default: bool) -> bool:
+    value = _flat_value(flat, key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _optional_float(flat: dict[str, Any], key: str) -> float | None:

@@ -14,6 +14,13 @@ COMPACT_FILTER_MODES = (COMPACT_FILTER_REMOVE, COMPACT_FILTER_KEEP)
 CONFIG_SCHEMA: dict[str, Any] = {
     "fields": [
         {
+            "key": "train.pipeline_variant",
+            "label": "Вариант конвейера",
+            "value_type": "select",
+            "tooltip": "legacy полностью воспроизводит прежнее обучение; next_gen включает scene-fold validation и новый preprocessing.",
+            "options": ["legacy", "next_gen"],
+        },
+        {
             "key": "dataset.val_fraction",
             "label": "Доля валидации",
             "value_type": "number",
@@ -87,6 +94,12 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "value_type": "integer",
             "tooltip": "Количество тайлов в одном optimizer step.",
             "min_value": 1,
+        },
+        {
+            "key": "train.pretrained",
+            "label": "Предобученные веса",
+            "value_type": "boolean",
+            "tooltip": "Загружает закреплённые pretrained-веса HF B0; доступно только для SegFormer B0 HF в next-gen.",
         },
         {
             "key": "train.learning_rate",
@@ -194,10 +207,45 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "tooltip": "Wall-clock лимит train loop. Пустое значение означает обучение без лимита; проверяется после завершения эпохи.",
             "min_value": 1,
         },
+        {
+            "key": "next_gen.validation_fold",
+            "label": "Validation fold",
+            "value_type": "integer",
+            "tooltip": "Номер scene-fold для next-gen, начиная с нуля.",
+            "min_value": 0,
+        },
+        {
+            "key": "next_gen.normalization",
+            "label": "Нормализация next-gen",
+            "value_type": "select",
+            "tooltip": "Воспроизводимый профиль нормализации четырёх каналов.",
+            "options": ["scale_255", "imagenet_rgb_red_nir", "robust_percentile"],
+        },
+        {
+            "key": "next_gen.validation_interval_epochs",
+            "label": "Интервал validation",
+            "value_type": "integer",
+            "tooltip": "Полная validation выполняется на первой эпохе, затем с этим интервалом и перед штатным завершением.",
+            "min_value": 1,
+        },
+        {
+            "key": "next_gen.threshold_mode",
+            "label": "Политика порога",
+            "value_type": "select",
+            "tooltip": "fixed использует заданный train.threshold; optimize выбирает порог по полной validation.",
+            "options": ["fixed", "optimize"],
+        },
+        {
+            "key": "next_gen.evaluate_gaussian_blend",
+            "label": "Диагностика Gaussian A/B",
+            "value_type": "boolean",
+            "tooltip": "После обучения сравнивает core-crop с Gaussian merge на лучшем checkpoint.",
+        },
     ]
 }
 
 BASE_DEFAULT_CONFIG: dict[str, Any] = {
+    "train.pipeline_variant": "legacy",
     "dataset.val_fraction": 0.2,
     "tile_preparation.tile_size": 512,
     "tile_preparation.stride": 256,
@@ -208,6 +256,7 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "tile_preparation.background_factor": 0.2,
     "train.epochs": 80,
     "train.batch_size": 4,
+    "train.pretrained": False,
     "train.learning_rate": 0.00001,
     "train.weight_decay": 0.0001,
     "train.loss": "focal_tversky",
@@ -222,6 +271,11 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.max_train_batches_per_epoch": 72,
     "train.max_val_batches_per_epoch": 1000,
     "train.max_training_time_sec": None,
+    "next_gen.validation_fold": 0,
+    "next_gen.normalization": "scale_255",
+    "next_gen.validation_interval_epochs": 5,
+    "next_gen.threshold_mode": "optimize",
+    "next_gen.evaluate_gaussian_blend": False,
 }
 
 
@@ -633,6 +687,37 @@ def initial_templates() -> list[dict[str, Any]]:
             "smp_segformer_b0",
             "segformer b0",
             source="analogy",
+        ),
+        _template(
+            "segformer_b0",
+            "SegFormer B0 HF (next-gen)",
+            source="manual",
+            overrides={
+                "train.pipeline_variant": "next_gen",
+                "tile_preparation.tile_size": 512,
+                "tile_preparation.context": 128,
+                "tile_preparation.stride": 256,
+                "tile_preparation.augmentation_level": 2,
+                "tile_preparation.positive_factor": 0.5,
+                "tile_preparation.hard_negative_factor": 0.0,
+                "tile_preparation.background_factor": 0.5,
+                "train.pretrained": True,
+                "train.epochs": 60,
+                "train.batch_size": 8,
+                "train.learning_rate": 0.00006,
+                "train.weight_decay": 0.01,
+                "train.loss": "bce_dice",
+                "train.threshold": 0.5,
+                "train.early_stopping_patience": 4,
+                "train.max_train_batches_per_epoch": 72,
+                "train.max_val_batches_per_epoch": None,
+                "train.max_training_time_sec": 3300,
+                "next_gen.validation_fold": 0,
+                "next_gen.normalization": "imagenet_rgb_red_nir",
+                "next_gen.validation_interval_epochs": 5,
+                "next_gen.threshold_mode": "optimize",
+                "next_gen.evaluate_gaussian_blend": False,
+            },
         ),
         _template(
             "smp_segformer_b1",

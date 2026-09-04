@@ -41,7 +41,7 @@ from mlsystem2.training_ui_api._models import (
     TrainingTemplateRow,
 )
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
-from mlsystem2.training_ui_api._templates import sanitize_template_config
+from mlsystem2.training_ui_api._templates import initial_templates, sanitize_template_config
 from mlsystem2.training_ui_api._worker import (
     dispatch_inference_queue_once,
     dispatch_queue_once,
@@ -85,6 +85,48 @@ def test_app_links_use_prepared_images_browser(monkeypatch) -> None:
     assert links["images"].title == "Снимки"
     assert links["images"].url == "/prepared-images/"
     assert "minio" not in links
+
+
+def test_next_gen_hf_template_and_legacy_defaults_are_explicit() -> None:
+    templates = {item["architecture"]: item for item in initial_templates()}
+
+    assert templates["smp_segformer_b0"]["default_config"]["train.pipeline_variant"] == (
+        "legacy"
+    )
+    hf = templates["segformer_b0"]["default_config"]
+    assert hf["train.pipeline_variant"] == "next_gen"
+    assert hf["train.pretrained"] is True
+    assert hf["train.max_val_batches_per_epoch"] is None
+    assert hf["next_gen.normalization"] == "imagenet_rgb_red_nir"
+    assert hf["tile_preparation.context"] == 128
+
+
+def test_next_gen_job_validation_rejects_unsupported_combinations() -> None:
+    base = {
+        "train.pipeline_variant": "next_gen",
+        "train.input_channels": 4,
+        "train.pretrained": False,
+        "train.max_val_batches_per_epoch": None,
+        "dataset.task": "binary",
+        "dataset.imagery_type": "kanopus",
+    }
+
+    _service._validate_training_pipeline_variant(dict(base), "smp_segformer_b0")
+    with pytest.raises(TrainingUIAPIError, match="полную validation"):
+        _service._validate_training_pipeline_variant(
+            {**base, "train.max_val_batches_per_epoch": 1},
+            "smp_segformer_b0",
+        )
+    with pytest.raises(TrainingUIAPIError, match="только binary"):
+        _service._validate_training_pipeline_variant(
+            {**base, "dataset.task": "multiclass"},
+            "smp_segformer_b0",
+        )
+    with pytest.raises(TrainingUIAPIError, match="доступны только"):
+        _service._validate_training_pipeline_variant(
+            {**base, "train.pretrained": True},
+            "smp_segformer_b0",
+        )
 
 
 def test_frontend_credentials_support_canonical_users_roles_and_aliases(
@@ -2967,7 +3009,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "Custom",
         ]
         assert bootstrap["image_folders"][0]["key"] == "kanopus/irkutsk"
-        assert len(bootstrap["training_templates"]) == 9
+        assert len(bootstrap["training_templates"]) == 10
 
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == [
@@ -3009,9 +3051,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
 
         models = client.get("/api/v1/models").json()["models"]
         assert [item["display_name"] for item in models] == [
-            "deeplabV3+",
-            "segformer b0",
-            "segformer b1",
+                "deeplabV3+",
+                "segformer b0",
+                "SegFormer B0 HF (next-gen)",
+                "segformer b1",
             "segformer b2",
             "segformer b3",
             "unet + resnet34",
@@ -3041,7 +3084,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert rule["pseudo_markup_enabled"] is True
 
         templates = client.get("/api/v1/training-templates").json()["templates"]
-        assert len(templates) == 9
+        assert len(templates) == 10
         segformer_b0_template = client.get("/api/v1/training-templates/smp_segformer_b0").json()
         assert segformer_b0_template["display_name"] == "segformer b0"
         assert segformer_b0_template["source"] == "analogy"

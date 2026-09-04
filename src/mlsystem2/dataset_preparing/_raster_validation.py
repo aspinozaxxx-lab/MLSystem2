@@ -27,12 +27,14 @@ class RasterInfo:
     crs: CRS
     transform: Affine
     bounds: BoundingBox
+    band_descriptions: tuple[str | None, ...]
 
 
 @dataclass(frozen=True)
 class RasterValidationResult:
     rasters: list[RasterInfo]
     errors: list[str]
+    warnings: list[str]
 
 
 def validate_rasters(
@@ -40,8 +42,10 @@ def validate_rasters(
     *,
     expected_band_count: int | None = None,
     expected_dtype: str | None = None,
+    expected_band_names: list[str] | None = None,
 ) -> RasterValidationResult:
     errors: list[str] = []
+    warnings: list[str] = []
     rasters: list[RasterInfo] = []
     baseline_band_count: int | None = None
     baseline_dtypes: tuple[str, ...] | None = None
@@ -75,6 +79,7 @@ def validate_rasters(
                     crs=crs,
                     transform=transform,
                     bounds=dataset.bounds,
+                    band_descriptions=tuple(dataset.descriptions),
                 )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Снимок не открывается через rasterio: {path}: {exc}")
@@ -100,9 +105,26 @@ def validate_rasters(
                 f"Каналы снимка должны иметь dtype {expected_dtype}, "
                 f"получено {', '.join(info.dtypes)}: {path}"
             )
+        if expected_band_names:
+            actual = [
+                str(value).strip().upper() if value is not None else ""
+                for value in info.band_descriptions
+            ]
+            expected = [str(value).strip().upper() for value in expected_band_names]
+            if not any(actual):
+                warnings.append(
+                    "У снимка отсутствуют описания каналов; принят контракт "
+                    f"{', '.join(expected_band_names)}: {path}"
+                )
+            elif actual != expected:
+                errors.append(
+                    "Порядок описанных каналов снимка должен быть "
+                    f"{', '.join(expected_band_names)}, получено "
+                    f"{', '.join(value or '<пусто>' for value in actual)}: {path}"
+                )
         rasters.append(info)
 
-    return RasterValidationResult(rasters=rasters, errors=errors)
+    return RasterValidationResult(rasters=rasters, errors=errors, warnings=warnings)
 
 
 def _is_valid_geotransform(transform: Affine) -> bool:

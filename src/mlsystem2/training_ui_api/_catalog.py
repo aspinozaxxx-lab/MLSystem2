@@ -10,6 +10,7 @@ from .contracts import ModelInfo
 MODEL_DISPLAY_NAMES = {
     "smp_deeplabv3plus_resnet50": "deeplabV3+",
     "smp_segformer_b0": "segformer b0",
+    "segformer_b0": "SegFormer B0 HF (next-gen)",
     "smp_segformer_b1": "segformer b1",
     "smp_segformer_b2": "segformer b2",
     "smp_segformer_b3": "segformer b3",

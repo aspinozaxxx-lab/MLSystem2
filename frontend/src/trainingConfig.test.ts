@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { trainingConfigSchema } from "./App";
+import {
+  configWithField,
+  trainingConfigFieldVisible,
+  trainingConfigSchema,
+} from "./App";
 import type { ConfigSchema } from "./api/types";
 
 const schema: ConfigSchema = {
@@ -36,5 +40,24 @@ describe("trainingConfigSchema", () => {
       "focal_dice",
       "focal_tversky",
     ]);
+  });
+
+  it("clears the validation limit when next-gen is selected", () => {
+    expect(
+      configWithField(
+        { "train.max_val_batches_per_epoch": 1000 },
+        "train.pipeline_variant",
+        "next_gen",
+      ),
+    ).toEqual({
+      "train.pipeline_variant": "next_gen",
+      "train.max_val_batches_per_epoch": null,
+    });
+  });
+
+  it("shows pretrained only for HF B0 next-gen", () => {
+    expect(trainingConfigFieldVisible("train.pretrained", "next_gen", "segformer_b0")).toBe(true);
+    expect(trainingConfigFieldVisible("train.pretrained", "legacy", "segformer_b0")).toBe(false);
+    expect(trainingConfigFieldVisible("train.pretrained", "next_gen", "smp_segformer_b0")).toBe(false);
   });
 });

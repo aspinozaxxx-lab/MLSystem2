@@ -42,6 +42,7 @@ class TileSceneSource(BaseModel):
     scene_id: str
     image_path: str | Path
     annotation_file: str | Path | None = None
+    footprint_file: str | Path | None = None
 
 
 class TileSplitRequest(BaseModel):
@@ -49,6 +50,9 @@ class TileSplitRequest(BaseModel):
 
     val_fraction: float = Field(gt=0.0, lt=1.0)
     seed: int = 42
+    strategy: Literal["window_random", "scene_fold"] = "window_random"
+    validation_fold: int = Field(default=0, ge=0)
+    spatial_purge: bool = False
 
 
 class TileDataloaderRequest(BaseModel):
@@ -64,6 +68,8 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
+    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    collect_band_histogram: bool = False
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
@@ -99,6 +105,11 @@ class TileDataloaderRequest(BaseModel):
             raise ValueError(
                 "include_object_instances поддерживается только для binary val loader"
             )
+        if self.pipeline_variant == "next_gen":
+            if self.tile_split is None or self.tile_split.strategy != "scene_fold":
+                raise ValueError("next_gen loader требует tile_split strategy=scene_fold")
+            if self.mode == "val" and self.max_batches_per_epoch is not None:
+                raise ValueError("next_gen val loader не допускает ограничение числа batch")
         return self
 
 

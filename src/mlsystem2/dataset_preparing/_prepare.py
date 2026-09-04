@@ -142,6 +142,7 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
             selected_scene_to_image,
             expected_band_count=request.expected_band_count,
             expected_dtype=request.expected_dtype,
+            expected_band_names=request.expected_band_names,
         )
         if selected_scene_to_image
         else None
@@ -267,6 +268,7 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
             scene_to_image,
             expected_band_count=request.expected_band_count,
             expected_dtype=request.expected_dtype,
+            expected_band_names=request.expected_band_names,
         )
         if scene_to_image
         else None
@@ -456,6 +458,7 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
             selected_scene_to_image,
             expected_band_count=request.expected_band_count,
             expected_dtype=request.expected_dtype,
+            expected_band_names=request.expected_band_names,
         )
         if selected_scene_to_image
         else None
@@ -754,6 +757,7 @@ def _build_report(
         scenes=scene_reports,
         missing_files=missing_files,
         errors=errors,
+        warnings=(validation.warnings if validation is not None else []),
     )
 
 

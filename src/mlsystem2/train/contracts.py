@@ -28,6 +28,10 @@ class TrainConfig(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
+    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    validation_interval_epochs: int = Field(default=1, gt=0)
+    threshold_mode: Literal["fixed", "optimize"] = "optimize"
+    evaluate_gaussian_blend: bool = False
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     seed: int = 42
@@ -82,6 +86,11 @@ class TrainConfig(BaseModel):
             ]
         elif self.class_schema or self.class_slugs:
             raise ValueError("binary train не должен содержать class_schema")
+        if self.pipeline_variant == "next_gen":
+            if self.task != "binary":
+                raise ValueError("next_gen v1 поддерживает только binary train")
+            if self.max_val_batches_per_epoch is not None:
+                raise ValueError("next_gen требует полную validation без max_val_batches")
         return self
 
 
@@ -94,6 +103,8 @@ class EpochMetrics(BaseModel):
         if not isinstance(data, dict):
             return data
         resolved = dict(data)
+        if resolved.get("validation_performed", True) is False:
+            return resolved
         resolved.setdefault(
             "val_quality_f1",
             resolved.get("val_best_threshold_pixel_f1", 0.0),
@@ -118,22 +129,30 @@ class EpochMetrics(BaseModel):
             "val_best_threshold_pixel_recall",
             resolved.get("val_best_threshold_recall", 0.0),
         )
+        for key in (
+            "val_best_threshold",
+            "val_best_threshold_pixel_f1",
+            "val_best_threshold_precision",
+            "val_best_threshold_recall",
+        ):
+            resolved.setdefault(key, 0.0)
         return resolved
 
     epoch: int = Field(ge=0)
+    validation_performed: bool = True
     train_loss: float = Field(ge=0.0)
-    val_loss: float = Field(ge=0.0)
+    val_loss: float | None = Field(default=None, ge=0.0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    val_quality_f1: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_quality_precision: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_quality_recall: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_pixel_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold_pixel_f1: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold_pixel_precision: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold_pixel_recall: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold_precision: float = Field(default=0.0, ge=0.0, le=1.0)
-    val_best_threshold_recall: float = Field(default=0.0, ge=0.0, le=1.0)
+    val_quality_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_quality_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_quality_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_pixel_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_best_threshold_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     val_best_threshold_object_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     val_best_threshold_object_precision: float | None = Field(default=None, ge=0.0, le=1.0)
     val_best_threshold_object_recall: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -144,12 +163,17 @@ class EpochMetrics(BaseModel):
     val_micro_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     val_micro_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
     val_micro_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_fixed_0_5_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_fixed_0_5_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    val_fixed_0_5_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     val_foreground_pixel_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     val_foreground_pixel_precision: float | None = Field(default=None, ge=0.0, le=1.0)
     val_foreground_pixel_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     val_per_class_metrics: list[dict[str, Any]] = Field(default_factory=list)
     val_multiclass_threshold_sweep: dict[str, dict[str, Any]] = Field(default_factory=dict)
     val_metric_warnings: list[str] = Field(default_factory=list)
+    val_per_scene_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    learning_rate: float | None = Field(default=None, ge=0.0)
     epoch_time_sec: float = Field(ge=0.0)
 
 
@@ -182,6 +206,7 @@ class TrainRequest(BaseModel):
     config: TrainConfig
     checkpoint_dir: str
     sample_size: int | None = Field(default=None, gt=0)
+    run_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_inference_window(self) -> Self:
@@ -206,6 +231,7 @@ class TrainResult(BaseModel):
     class_schema: list[TrainClassDefinition] = Field(default_factory=list)
     best_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     stopped_early: bool = False
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [

@@ -126,6 +126,7 @@ class TrainSettings(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
+    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
     model_name: str
     input_channels: int = Field(default=4, gt=0)
     output_channels: int = Field(default=1, gt=0)
@@ -161,6 +162,22 @@ class TrainSettings(BaseModel):
         return self
 
 
+class NextGenSettings(BaseModel):
+    """Параметры альтернативного конвейера обучения."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    validation_fold: int = Field(default=0, ge=0)
+    normalization: Literal[
+        "scale_255",
+        "imagenet_rgb_red_nir",
+        "robust_percentile",
+    ] = "scale_255"
+    validation_interval_epochs: int = Field(default=5, gt=0)
+    threshold_mode: Literal["fixed", "optimize"] = "optimize"
+    evaluate_gaussian_blend: bool = False
+
+
 class InferenceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -185,6 +202,7 @@ class SystemSettings(BaseModel):
     dataset: DatasetSettings
     tile_preparation: TilePreparationSettings
     train: TrainSettings
+    next_gen: NextGenSettings = Field(default_factory=NextGenSettings)
     inference: InferenceSettings = Field(default_factory=InferenceSettings)
     mlflow: MLflowSettings
 
@@ -206,6 +224,30 @@ class SystemSettings(BaseModel):
                 raise ValueError("multiclass per-image dataset требует минимум 3 output_channels")
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
+        if self.train.pipeline_variant == "next_gen":
+            if self.train.task != "binary":
+                raise ValueError("next_gen v1 поддерживает только binary train")
+            if self.train.model_name not in {"segformer_b0", "smp_segformer_b0"}:
+                raise ValueError(
+                    "next_gen v1 поддерживает только segformer_b0 и smp_segformer_b0"
+                )
+            if self.train.input_channels != 4 or self.train.output_channels != 1:
+                raise ValueError(
+                    "next_gen v1 требует четыре входных канала и один выходной канал"
+                )
+            if self.train.pretrained and self.train.model_name != "segformer_b0":
+                raise ValueError(
+                    "pretrained-веса next_gen поддерживаются только для HF segformer_b0"
+                )
+            if self.train.max_val_batches_per_epoch is not None:
+                raise ValueError(
+                    "next_gen требует полную validation: max_val_batches_per_epoch должен быть null"
+                )
+            if self.next_gen.evaluate_gaussian_blend and (
+                self.tile_preparation.tile_size != 512
+                or self.tile_preparation.stride != 256
+            ):
+                raise ValueError("Gaussian A/B требует tile_size=512 и stride=256")
         return self
 
 
@@ -226,6 +268,7 @@ __all__ = [
     "DatasetSettings",
     "InferenceSettings",
     "MLflowSettings",
+    "NextGenSettings",
     "RuntimeSettings",
     "SettingsError",
     "SystemSettings",

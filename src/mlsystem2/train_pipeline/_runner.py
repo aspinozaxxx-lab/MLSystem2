@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
+from importlib import metadata as importlib_metadata
 import os
+import platform
 import random
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +56,7 @@ from mlsystem2.train.contracts import (
 )
 
 from ._timing import elapsed_since, now, timed_call
+from ._next_gen import preprocessing_parameters
 from .contracts import (
     ModuleTiming,
     PipelineReport,
@@ -181,6 +187,10 @@ def run_train_pipeline(
                         _tile_split_request(settings),
                         max_batches_per_epoch=settings.train.max_train_batches_per_epoch,
                         include_object_instances=False,
+                        collect_band_histogram=(
+                            settings.train.pipeline_variant == "next_gen"
+                            and settings.next_gen.normalization == "robust_percentile"
+                        ),
                     )
                 ),
                 deps.create_tile_dataloader(
@@ -237,7 +247,7 @@ def run_train_pipeline(
         )
 
         _seed_training(settings.tile_preparation.seed)
-        model = _load_or_create_model(settings, deps)
+        model = _load_or_create_model(settings, deps, train_loader)
 
         def progress_sink(event: TrainProgressEvent) -> None:
             if event.metrics is not None:
@@ -259,9 +269,19 @@ def run_train_pipeline(
         timings.append(timing)
         train_result = _expect_train_result(train_result)
 
+        tile_report = _tile_preparation_report(settings, train_loader, val_loader)
+        if settings.train.pipeline_variant == "next_gen":
+            _attach_next_gen_diagnostics(
+                train_result,
+                settings,
+                model,
+                dataset_result,
+                train_loader,
+                val_loader,
+                tile_report,
+            )
         measure_mlflow(lambda: deps.log_training_metrics(run, train_result))
         measure_mlflow(lambda: deps.log_training_artifacts(run, train_result))
-        tile_report = _tile_preparation_report(settings, train_loader, val_loader)
         measure_mlflow(lambda: deps.log_tile_preparation(run, tile_report))
 
         report = PipelineReport(
@@ -274,9 +294,10 @@ def run_train_pipeline(
             dataset_status=dataset_result.report.status,
             errors=[],
             warnings=(
-                ["Незавершённая эпоха отброшена; файл final.pt не создавался."]
+                list(dataset_result.report.warnings)
+                + (["Незавершённая эпоха отброшена; файл final.pt не создавался."]
                 if train_result.stopped_early
-                else []
+                else [])
             ),
             artifacts={
                 "best_checkpoint_path": train_result.best_checkpoint_path,
@@ -337,6 +358,7 @@ def _mlflow_start_request(
         run_name=request.run_name,
         tags={
             "pipeline": "train",
+            "pipeline_variant": settings.train.pipeline_variant,
             "class": _mlflow_class_tag(settings),
             "task": settings.train.task,
             "seed": str(settings.tile_preparation.seed),
@@ -345,6 +367,11 @@ def _mlflow_start_request(
 
 
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
+    expected_band_names = (
+        ["RED", "GRN", "BLU", "NIR"]
+        if settings.train.pipeline_variant == "next_gen"
+        else []
+    )
     if settings.dataset.classes:
         return DatasetPreparationRequest(
             images_dir=settings.dataset.images_dir,
@@ -362,6 +389,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
             val_fraction=settings.dataset.val_fraction,
             expected_band_count=settings.train.input_channels,
             expected_dtype="uint8",
+            expected_band_names=expected_band_names,
         )
     return DatasetPreparationRequest(
         images_dir=settings.dataset.images_dir,
@@ -372,6 +400,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         val_fraction=settings.dataset.val_fraction,
         expected_band_count=settings.train.input_channels,
         expected_dtype="uint8",
+        expected_band_names=expected_band_names,
     )
 
 
@@ -418,6 +447,13 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
         seed=settings.tile_preparation.seed,
+        strategy=(
+            "scene_fold"
+            if settings.train.pipeline_variant == "next_gen"
+            else "window_random"
+        ),
+        validation_fold=settings.next_gen.validation_fold,
+        spatial_purge=settings.train.pipeline_variant == "next_gen",
     )
 
 
@@ -428,12 +464,14 @@ def _tile_request(
     tile_split: TileSplitRequest | None = None,
     max_batches_per_epoch: int | None = None,
     include_object_instances: bool = False,
+    collect_band_histogram: bool = False,
 ) -> TileDataloaderRequest:
     scenes = [
         TileSceneSource(
             scene_id=item.scene_id,
             image_path=item.image_path,
             annotation_file=item.annotation_file,
+            footprint_file=item.footprint_file,
         )
         for item in dataset.scenes
     ]
@@ -456,6 +494,10 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
+            pipeline_variant=(
+                "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
+            ),
+            collect_band_histogram=collect_band_histogram,
         )
     if dataset.classes:
         return TileDataloaderRequest(
@@ -475,6 +517,10 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
+            pipeline_variant=(
+                "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
+            ),
+            collect_band_histogram=collect_band_histogram,
         )
     if dataset.annotation_file is None and not all(
         item.annotation_file is not None for item in dataset.scenes
@@ -489,30 +535,306 @@ def _tile_request(
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
         include_object_instances=include_object_instances,
+        pipeline_variant=(
+            "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
+        ),
+        collect_band_histogram=collect_band_histogram,
     )
 
 
-def _model_spec(settings: SystemSettings) -> ModelSpec:
+def _model_spec(settings: SystemSettings, train_loader: object | None = None) -> ModelSpec:
+    parameters: dict[str, object] = {}
+    if settings.train.pipeline_variant == "next_gen":
+        dataset = getattr(train_loader, "dataset", None)
+        histogram = getattr(dataset, "band_histogram", None)
+        preprocessing = preprocessing_parameters(settings.next_gen.normalization, histogram)
+        split_manifest = getattr(dataset, "tile_split_manifest", {})
+        parameters = {
+            "pipeline_variant": "next_gen",
+            "preprocessing": preprocessing,
+            "band_contract": ["RED", "GRN", "BLU", "NIR"],
+            "split": split_manifest,
+            "scheduler": {
+                "name": "reduce_lr_on_plateau",
+                "mode": "max",
+                "factor": 0.5,
+                "patience": 3,
+                "min_lr": 1e-7,
+            },
+            "threshold_mode": settings.next_gen.threshold_mode,
+            "threshold_policy": {
+                "mode": settings.next_gen.threshold_mode,
+                "configured_threshold": settings.train.threshold,
+                "pixel_histogram_bins": 4096,
+            },
+            "pretrained_provenance": {
+                "enabled": settings.train.pretrained,
+                "source": (
+                    "nvidia/segformer-b0-finetuned-ade-512-512"
+                    if settings.train.pretrained
+                    else None
+                ),
+                "revision": (
+                    "489d5cd81a0b59fab9b7ea758d3548ebe99677da"
+                    if settings.train.pretrained
+                    else None
+                ),
+            },
+        }
     return ModelSpec(
         name=settings.train.model_name,
         input_channels=settings.train.input_channels,
         output_channels=settings.train.output_channels,
         pretrained=settings.train.pretrained,
+        parameters=parameters,
     )
 
 
-def _load_or_create_model(settings: SystemSettings, deps: _PipelineDependencies):
-    spec = _model_spec(settings)
+def _load_or_create_model(
+    settings: SystemSettings,
+    deps: _PipelineDependencies,
+    train_loader: object | None = None,
+):
+    spec = _model_spec(settings, train_loader)
     if settings.train.initial_checkpoint_uri:
         loaded = deps.load_checkpoint(
             LoadCheckpointRequest(
                 checkpoint_uri=settings.train.initial_checkpoint_uri,
-                model_spec=spec,
+                model_spec=(spec if settings.train.pipeline_variant == "legacy" else None),
                 map_location=settings.train.device,
             )
         )
+        if settings.train.pipeline_variant == "next_gen":
+            loaded_spec = loaded.model.spec
+            if (
+                loaded_spec.name != spec.name
+                or loaded_spec.input_channels != spec.input_channels
+                or loaded_spec.output_channels != spec.output_channels
+                or loaded_spec.parameters.get("preprocessing")
+                != spec.parameters.get("preprocessing")
+            ):
+                raise TrainPipelineError(
+                    "Параметры next_gen checkpoint не совпадают с текущей архитектурой/preprocessing"
+                )
         return loaded.model
     return deps.create_model(spec)
+
+
+def _attach_next_gen_diagnostics(
+    result: TrainResult,
+    settings: SystemSettings,
+    model: object,
+    dataset_result: DatasetPreparationResult,
+    train_loader: object,
+    val_loader: object,
+    tile_report: dict[str, object],
+) -> None:
+    model_spec = getattr(model, "spec", None)
+    model_parameters = dict(getattr(model_spec, "parameters", {}) or {})
+    train_dataset = getattr(train_loader, "dataset", None)
+    val_dataset = getattr(val_loader, "dataset", None)
+    split_manifest = {
+        "train": getattr(train_dataset, "tile_split_manifest", {}),
+        "validation": getattr(val_dataset, "tile_split_manifest", {}),
+    }
+    validation_events = [
+        item for item in result.history if item.validation_performed
+    ]
+    validation_by_scene = {
+        "validation_fold": settings.next_gen.validation_fold,
+        "events": [
+            {
+                "epoch": item.epoch,
+                "threshold": item.val_best_threshold,
+                "macro_pixel_f1": item.val_macro_pixel_f1,
+                "micro_pixel_f1": item.val_micro_pixel_f1,
+                "fixed_0_5_pixel_f1": item.val_fixed_0_5_pixel_f1,
+                "fixed_0_5_pixel_precision": item.val_fixed_0_5_pixel_precision,
+                "fixed_0_5_pixel_recall": item.val_fixed_0_5_pixel_recall,
+                "object_f1": item.val_best_threshold_object_f1,
+                "object_precision": item.val_best_threshold_object_precision,
+                "object_recall": item.val_best_threshold_object_recall,
+                "scenes": item.val_per_scene_metrics,
+            }
+            for item in validation_events
+        ],
+    }
+    dataset_revision = _dataset_revision(dataset_result.dataset)
+    runtime_environment = _runtime_environment(
+        settings.runtime.project_root,
+        dataset_revision,
+    )
+    runtime_environment["peak_vram_bytes"] = int(
+        result.diagnostics.get("peak_vram_bytes") or 0
+    )
+    parameter_source = {
+        "train": settings.train.model_dump(mode="json"),
+        "next_gen": settings.next_gen.model_dump(mode="json"),
+        "tile_preparation": settings.tile_preparation.model_dump(mode="json"),
+        "dataset_revision": dataset_revision,
+        "model": {
+            key: value
+            for key, value in model_parameters.items()
+            if key != "hf_config"
+        },
+    }
+    result.diagnostics.update(
+        {
+            "pipeline_variant": "next_gen",
+            "validation_fold": settings.next_gen.validation_fold,
+            "resolved_train_config": settings.model_dump(mode="json"),
+            "split_manifest": split_manifest,
+            "preprocessing": model_parameters.get("preprocessing", {}),
+            "runtime_environment": runtime_environment,
+            "validation_by_scene": validation_by_scene,
+            "flattened_params": _flatten_mlflow_params(parameter_source),
+            "tile_preparation": tile_report,
+        }
+    )
+
+
+def _flatten_mlflow_params(
+    source: dict[str, object],
+    *,
+    prefix: str = "",
+    limit: int = 200,
+) -> dict[str, object]:
+    import json
+
+    flattened: dict[str, object] = {}
+
+    def visit(value: object, path: str) -> None:
+        if len(flattened) >= limit:
+            return
+        if isinstance(value, dict):
+            for key in sorted(value):
+                visit(value[key], f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, (list, tuple)):
+            flattened[path] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            return
+        flattened[path] = value if value is not None else "null"
+
+    visit(source, prefix)
+    return flattened
+
+
+def _dataset_revision(dataset: PreparedDataset | None) -> dict[str, object]:
+    if dataset is None:
+        return {"sha256": None, "scenes": []}
+    digest = sha256()
+    scenes: list[dict[str, object]] = []
+    for scene in sorted(dataset.scenes, key=lambda item: item.scene_id):
+        image_path = Path(scene.image_path)
+        try:
+            image_stat = image_path.stat()
+            image_identity = {
+                "size_bytes": image_stat.st_size,
+                "mtime_ns": image_stat.st_mtime_ns,
+            }
+        except OSError:
+            image_identity = {"size_bytes": None, "mtime_ns": None}
+        annotation_hash = _optional_file_hash(scene.annotation_file)
+        footprint_hash = _optional_file_hash(scene.footprint_file)
+        payload = {
+            "scene_id": scene.scene_id,
+            "image_path": str(image_path),
+            **image_identity,
+            "annotation_sha256": annotation_hash,
+            "footprint_sha256": footprint_hash,
+        }
+        digest.update(repr(sorted(payload.items())).encode("utf-8"))
+        scenes.append(payload)
+    for path in (
+        dataset.annotation_file,
+        dataset.hard_negative_annotation_file,
+        dataset.manifest_file,
+    ):
+        digest.update(str(path).encode("utf-8"))
+        digest.update(str(_optional_file_hash(path)).encode("ascii"))
+    return {"sha256": digest.hexdigest(), "scenes": scenes}
+
+
+def _optional_file_hash(value: str | None) -> str | None:
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_file():
+        return None
+    digest = sha256()
+    try:
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _runtime_environment(
+    project_root: str,
+    dataset_revision: dict[str, object],
+) -> dict[str, object]:
+    commit = _git_output(project_root, "rev-parse", "HEAD")
+    dirty = bool(_git_output(project_root, "status", "--porcelain"))
+    package_names = (
+        "torch",
+        "transformers",
+        "segmentation-models-pytorch",
+        "numpy",
+        "rasterio",
+        "onnx",
+        "onnxruntime",
+        "mlflow",
+    )
+    packages: dict[str, str | None] = {}
+    for package_name in package_names:
+        try:
+            packages[package_name] = importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            packages[package_name] = None
+    cuda: dict[str, object] = {"available": False, "version": None, "devices": []}
+    try:
+        import torch
+
+        cuda = {
+            "available": bool(torch.cuda.is_available()),
+            "version": torch.version.cuda,
+            "devices": [
+                {
+                    "index": index,
+                    "name": torch.cuda.get_device_name(index),
+                    "total_memory_bytes": torch.cuda.get_device_properties(index).total_memory,
+                }
+                for index in range(torch.cuda.device_count())
+            ],
+        }
+    except Exception:
+        pass
+    return {
+        "commit": commit,
+        "working_tree_dirty": dirty,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "packages": packages,
+        "cuda": cuda,
+        "dataset_revision": dataset_revision,
+    }
+
+
+def _git_output(project_root: str, *arguments: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=project_root,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip() if completed.returncode == 0 else None
 
 
 def _seed_training(seed: int) -> None:
@@ -664,6 +986,7 @@ class _CountingLoader:
             background_ratio_abs_error,
         )
         scene_tile_diagnostics = _dataset_attr(self.dataset, "scene_tile_diagnostics")
+        tile_split_manifest = _dataset_attr(self.dataset, "tile_split_manifest")
         return {
             "tile_count": _safe_len(self.dataset),
             "batch_count": _safe_len(self),
@@ -693,6 +1016,12 @@ class _CountingLoader:
             ),
             "pool_window_count": _dataset_attr(self.dataset, "pool_window_count"),
             "split_window_count": _dataset_attr(self.dataset, "split_window_count"),
+            **(
+                {"tile_split_manifest": tile_split_manifest}
+                if isinstance(tile_split_manifest, dict)
+                and tile_split_manifest.get("strategy") == "scene_fold"
+                else {}
+            ),
             "estimated_positive_tiles": _dataset_attr(self.dataset, "estimated_positive_tiles"),
             "estimated_hard_negative_tiles": _dataset_attr(
                 self.dataset,
@@ -761,6 +1090,8 @@ def _tile_preparation_report(
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
+    if settings.train.pipeline_variant == "next_gen" and _loader_attr(loader, "cache_mode"):
+        return "full_natural_validation"
     cache_mode = _loader_attr(loader, "cache_mode")
     if cache_mode == "memory":
         return "cached_balanced"
@@ -776,7 +1107,10 @@ def _sampling_mode(settings: SystemSettings, loader: object) -> str:
 
 def _uses_weighted_sampler(loader: object) -> bool:
     sampler = getattr(loader, "sampler", None)
-    return sampler is not None and sampler.__class__.__name__ == "WeightedRandomSampler"
+    return sampler is not None and sampler.__class__.__name__ in {
+        "WeightedRandomSampler",
+        "_EpochDrawSampler",
+    }
 
 
 def _weighted_factor_used(loader: object, attr: str, default: float) -> float:
@@ -845,6 +1179,22 @@ def _train_request(
             epochs=settings.train.epochs,
             task=settings.train.task,
             quality_metric=settings.train.quality_metric,
+            pipeline_variant=settings.train.pipeline_variant,
+            validation_interval_epochs=(
+                settings.next_gen.validation_interval_epochs
+                if settings.train.pipeline_variant == "next_gen"
+                else 1
+            ),
+            threshold_mode=(
+                settings.next_gen.threshold_mode
+                if settings.train.pipeline_variant == "next_gen"
+                else "optimize"
+            ),
+            evaluate_gaussian_blend=(
+                settings.next_gen.evaluate_gaussian_blend
+                if settings.train.pipeline_variant == "next_gen"
+                else False
+            ),
             batch_size=settings.train.batch_size,
             seed=settings.tile_preparation.seed,
             inference_context=settings.tile_preparation.context,
@@ -896,6 +1246,16 @@ def _train_request(
         ),
         checkpoint_dir=f"{settings.runtime.scratch_root.rstrip('/')}/checkpoints",
         sample_size=settings.tile_preparation.tile_size,
+        run_metadata=(
+            {
+                "dataset_revision": _dataset_revision(dataset),
+                "code_revision": _git_output(
+                    settings.runtime.project_root, "rev-parse", "HEAD"
+                ),
+            }
+            if settings.train.pipeline_variant == "next_gen"
+            else {}
+        ),
     )
 
 

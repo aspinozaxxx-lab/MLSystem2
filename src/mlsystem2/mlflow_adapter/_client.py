@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from hashlib import sha1
+from hashlib import sha1, sha256
+import json
 import os
 from pathlib import Path
 import shutil
@@ -387,6 +388,16 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        if hasattr(mlflow, "set_tag"):
+            mlflow.set_tag("quality_metric", metrics.quality_metric)
+        if not metrics.validation_performed:
+            mlflow.log_metric("val/performed", 0, step=metrics.epoch)
+            if metrics.learning_rate is not None:
+                mlflow.log_metric(
+                    "train/learning_rate", metrics.learning_rate, step=metrics.epoch
+                )
+            mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
+            return
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
         mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
         mlflow.log_metric(
@@ -397,8 +408,6 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
             "val/quality_precision", metrics.val_quality_precision, step=metrics.epoch
         )
         mlflow.log_metric("val/quality_recall", metrics.val_quality_recall, step=metrics.epoch)
-        if hasattr(mlflow, "set_tag"):
-            mlflow.set_tag("quality_metric", metrics.quality_metric)
         mlflow.log_metric(
             "val/best_threshold_pixel_f1",
             metrics.val_best_threshold_pixel_f1,
@@ -439,6 +448,9 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
             "val/micro_pixel_f1": metrics.val_micro_pixel_f1,
             "val/micro_pixel_precision": metrics.val_micro_pixel_precision,
             "val/micro_pixel_recall": metrics.val_micro_pixel_recall,
+            "val/fixed_0_5_pixel_f1": metrics.val_fixed_0_5_pixel_f1,
+            "val/fixed_0_5_pixel_precision": metrics.val_fixed_0_5_pixel_precision,
+            "val/fixed_0_5_pixel_recall": metrics.val_fixed_0_5_pixel_recall,
             "val/foreground_pixel_f1": metrics.val_foreground_pixel_f1,
             "val/foreground_pixel_precision": metrics.val_foreground_pixel_precision,
             "val/foreground_pixel_recall": metrics.val_foreground_pixel_recall,
@@ -456,6 +468,29 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                         float(value),
                         step=metrics.epoch,
                     )
+        for item in metrics.val_per_scene_metrics:
+            scene_id = _safe_metric_component(str(item.get("scene_id", "unknown")))
+            for field in (
+                "pixel_f1",
+                "pixel_precision",
+                "pixel_recall",
+                "fixed_0_5_f1",
+                "fixed_0_5_precision",
+                "fixed_0_5_recall",
+            ):
+                value = item.get(field)
+                if value is not None:
+                    mlflow.log_metric(
+                        f"val/scene/{scene_id}/{field}",
+                        float(value),
+                        step=metrics.epoch,
+                    )
+        if metrics.val_per_scene_metrics:
+            mlflow.log_metric("val/performed", 1, step=metrics.epoch)
+            if metrics.learning_rate is not None:
+                mlflow.log_metric(
+                    "train/learning_rate", metrics.learning_rate, step=metrics.epoch
+                )
         object_scalars = {
             "val/best_threshold_object_precision": (metrics.val_best_threshold_object_precision),
             "val/best_threshold_object_recall": metrics.val_best_threshold_object_recall,
@@ -479,24 +514,28 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/epochs_total", result.epochs_total)
         mlflow.log_metric("train/training_time_sec", result.training_time_sec)
         mlflow.log_metric("train/stopped_early", int(result.stopped_early))
-        if result.history:
+        validation_history = [item for item in result.history if item.validation_performed]
+        if validation_history:
             mlflow.log_metric(
                 "train/best_quality_f1",
-                max(item.val_quality_f1 for item in result.history),
+                max(item.val_quality_f1 for item in validation_history),
             )
             mlflow.log_metric(
                 "train/best_threshold_pixel_f1",
-                max(item.val_best_threshold_pixel_f1 for item in result.history),
+                max(item.val_best_threshold_pixel_f1 for item in validation_history),
             )
             macro_values = [
                 item.val_macro_pixel_f1
-                for item in result.history
+                for item in validation_history
                 if item.val_macro_pixel_f1 is not None
             ]
             if macro_values:
                 mlflow.log_metric("train/best_macro_pixel_f1", max(macro_values))
         if result.best_threshold is not None:
             mlflow.log_metric("train/best_confidence_threshold", result.best_threshold)
+        peak_vram_bytes = result.diagnostics.get("peak_vram_bytes")
+        if peak_vram_bytes is not None:
+            mlflow.log_metric("train/peak_vram_bytes", float(peak_vram_bytes))
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
 
@@ -517,9 +556,85 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         },
         "reports/model_schema.json",
     )
+    diagnostics = dict(result.diagnostics or {})
+    diagnostic_artifacts = {
+        "resolved_train_config": "config/resolved_train_config.json",
+        "split_manifest": "reports/split_manifest.json",
+        "preprocessing": "reports/preprocessing.json",
+        "runtime_environment": "reports/runtime_environment.json",
+        "validation_by_scene": "reports/validation_by_scene.json",
+        "inference_merge_comparison": "reports/inference_merge_comparison.json",
+    }
+    for key, artifact_path in diagnostic_artifacts.items():
+        value = diagnostics.get(key)
+        if value is not None:
+            _log_dict(value, artifact_path)
+    mlflow = _ensure_run_active(run)
+    flattened_params = diagnostics.get("flattened_params")
+    if isinstance(flattened_params, dict) and flattened_params:
+        try:
+            mlflow.log_params(_safe_mlflow_params(flattened_params))
+        except Exception as exc:
+            raise MLflowAdapterError("Не удалось записать параметры next-gen в MLflow") from exc
+    if hasattr(mlflow, "set_tag"):
+        pipeline_variant = diagnostics.get("pipeline_variant")
+        validation_fold = diagnostics.get("validation_fold")
+        if pipeline_variant is not None:
+            mlflow.set_tag("pipeline_variant", str(pipeline_variant))
+        if validation_fold is not None:
+            mlflow.set_tag("validation_fold", str(validation_fold))
+        runtime_environment = diagnostics.get("runtime_environment")
+        if isinstance(runtime_environment, dict):
+            commit = runtime_environment.get("commit")
+            dataset_revision = runtime_environment.get("dataset_revision")
+            if commit:
+                mlflow.set_tag("code_commit", str(commit))
+            if isinstance(dataset_revision, dict) and dataset_revision.get("sha256"):
+                mlflow.set_tag("dataset_revision", str(dataset_revision["sha256"]))
+        preprocessing = diagnostics.get("preprocessing")
+        if isinstance(preprocessing, dict) and preprocessing.get("mode"):
+            mlflow.set_tag("preprocessing", str(preprocessing["mode"]))
+    checkpoint_hashes: dict[str, dict[str, object]] = {}
     for path in (result.best_checkpoint_path, result.final_checkpoint_path):
         if path is not None and Path(path).exists():
             _log_artifact(path, "checkpoints")
+            if diagnostics:
+                checkpoint_hashes[Path(path).name] = {
+                    "path": str(path),
+                    "size_bytes": Path(path).stat().st_size,
+                    "sha256": _file_sha256(Path(path)),
+                }
+    if checkpoint_hashes:
+        _log_dict(checkpoint_hashes, "reports/checkpoint_hashes.json")
+
+
+def _safe_metric_component(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() or character in "-_." else "_" for character in value)
+    return cleaned[:120] or "unknown"
+
+
+def _safe_mlflow_params(values: dict[object, object]) -> dict[str, str | int | float | bool]:
+    result: dict[str, str | int | float | bool] = {}
+    for raw_key, raw_value in values.items():
+        key = str(raw_key)[:240]
+        if not key:
+            continue
+        if isinstance(raw_value, (str, int, float, bool)):
+            value: str | int | float | bool = raw_value
+        else:
+            value = json.dumps(raw_value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, str):
+            value = value[:500]
+        result[key] = value
+    return result
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def log_timing_report(run: MLflowRunRef, report: TimingReport) -> None:

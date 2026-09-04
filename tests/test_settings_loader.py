@@ -420,6 +420,64 @@ def test_load_settings_accepts_segformer_train_settings(tmp_path: Path) -> None:
     assert settings.tile_preparation.val_positive_factor == 0.5
     assert settings.tile_preparation.class_balance is False
     assert settings.tile_preparation.prefetch_epochs == 2.0
+    assert settings.train.pipeline_variant == "legacy"
+    assert settings.next_gen.validation_fold == 0
+    assert settings.next_gen.normalization == "scale_255"
+
+
+def test_load_settings_accepts_next_gen_segformer_b0(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    config = _minimal_config().replace(
+        "  model_name: segformer_b2",
+        "  model_name: segformer_b0\n  pipeline_variant: next_gen\n  pretrained: true",
+    )
+    config = config.replace(
+        "inference:",
+        "next_gen:\n"
+        "  validation_fold: 3\n"
+        "  normalization: imagenet_rgb_red_nir\n"
+        "  validation_interval_epochs: 5\n"
+        "  threshold_mode: optimize\n"
+        "  evaluate_gaussian_blend: false\n\n"
+        "inference:",
+    )
+    settings_path.write_text(config, encoding="utf-8")
+
+    settings = api.load_settings(settings_path)
+
+    assert settings.train.pipeline_variant == "next_gen"
+    assert settings.train.pretrained is True
+    assert settings.next_gen.validation_fold == 3
+    assert settings.next_gen.normalization == "imagenet_rgb_red_nir"
+
+
+def test_load_settings_rejects_next_gen_validation_limit(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    config = _minimal_config().replace(
+        "  model_name: segformer_b2",
+        "  model_name: smp_segformer_b0\n"
+        "  pipeline_variant: next_gen\n"
+        "  max_val_batches_per_epoch: 10",
+    )
+    settings_path.write_text(config, encoding="utf-8")
+
+    with pytest.raises(SettingsError, match="полную validation"):
+        api.load_settings(settings_path)
+
+
+def test_load_settings_rejects_next_gen_unsupported_architecture(tmp_path: Path) -> None:
+    api = importlib.reload(settings_api)
+    settings_path = tmp_path / "config.yaml"
+    config = _minimal_config().replace(
+        "  model_name: segformer_b2",
+        "  model_name: segformer_b2\n  pipeline_variant: next_gen",
+    )
+    settings_path.write_text(config, encoding="utf-8")
+
+    with pytest.raises(SettingsError, match="поддерживает только"):
+        api.load_settings(settings_path)
 
 
 def test_load_settings_accepts_background_weight(tmp_path: Path) -> None:

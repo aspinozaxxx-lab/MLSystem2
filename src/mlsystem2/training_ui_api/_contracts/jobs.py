@@ -61,6 +61,8 @@ class JobSummary(BaseModel):
     inference_dataset_name: str | None = None
     model_name: str
     architecture: str
+    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    validation_fold: int = Field(default=0, ge=0)
     tile_size: int | None = None
     created_at: datetime
     started_at: datetime | None = None
@@ -97,6 +99,8 @@ class JobDetail(BaseModel):
     inference_dataset_name: str | None = None
     model_name: str
     architecture: str
+    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    validation_fold: int = Field(default=0, ge=0)
     tile_size: int | None = None
     mlflow_experiment_name: str | None = None
     mlflow_run_name: str | None = None

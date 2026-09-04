@@ -767,7 +767,12 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
             aside={template ? <span className="badge neutral">version={template.version}</span> : null}
           />
           {template && trainingSchema ? (
-            <ConfigEditor schema={trainingSchema} value={config} onChange={setConfig} />
+            <ConfigEditor
+              schema={trainingSchema}
+              value={config}
+              onChange={setConfig}
+              architecture={architecture}
+            />
           ) : (
             <div className="error-box">Нет шаблона для выбранной модели.</div>
           )}
@@ -3953,23 +3958,34 @@ function ConfigEditor({
   schema,
   value,
   onChange,
+  architecture,
   readonly = false,
   onApplyField,
 }: {
   schema: ConfigSchema;
   value: JsonRecord;
   onChange: (next: JsonRecord) => void;
+  architecture?: string;
   readonly?: boolean;
   onApplyField?: (key: string, value: unknown) => void;
 }) {
   const setField = (field: ConfigField, raw: unknown) => {
     const nextValue = coerceConfigValue(field, raw);
-    onChange({ ...value, [field.key]: nextValue });
+    onChange(configWithField(value, field.key, nextValue));
   };
+  const pipelineVariant = String(value["train.pipeline_variant"] || "legacy");
   return (
     <div className="config-grid">
-      {(schema.fields || []).map((field) => {
+      {(schema.fields || []).filter((field) =>
+        trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
+      ).map((field) => {
         const current = value[field.key] ?? "";
+        const nextGenValLimit =
+          field.key === "train.max_val_batches_per_epoch" && pipelineVariant === "next_gen";
+        const fixedPipelineVariant =
+          field.key === "train.pipeline_variant" &&
+          Boolean(architecture) &&
+          architecture !== "smp_segformer_b0";
         const tooltip = configFieldTooltip(field);
         const label = (
           <span title={tooltip || field.label}>
@@ -3982,7 +3998,7 @@ function ConfigEditor({
               <input
                 type="checkbox"
                 checked={Boolean(current)}
-                disabled={readonly}
+                disabled={readonly || nextGenValLimit || fixedPipelineVariant}
                 onChange={(event) => setField(field, event.target.checked)}
               />
               <span>{field.label}</span>
@@ -4001,7 +4017,7 @@ function ConfigEditor({
               {field.options?.length ? (
                 <select
                   value={String(current)}
-                  disabled={readonly}
+                  disabled={readonly || nextGenValLimit || fixedPipelineVariant}
                   title={tooltip || field.label}
                   onChange={(event) => setField(field, event.target.value)}
                 >
@@ -4016,7 +4032,7 @@ function ConfigEditor({
                   type={field.value_type.startsWith("integer") || field.value_type.startsWith("number") ? "number" : "text"}
                   step={field.value_type.startsWith("number") ? "any" : "1"}
                   value={String(current)}
-                  disabled={readonly}
+                  disabled={readonly || nextGenValLimit || fixedPipelineVariant}
                   required={field.required}
                   onChange={(event) => setField(field, event.target.value)}
                   title={tooltip || field.label}
@@ -4111,7 +4127,13 @@ function TemplateEditor({
         subtitle={template.dataset_key ? "Шаблон датасета" : "Базовый шаблон сети"}
         aside={<span className="badge neutral">version={template.version}</span>}
       />
-      <ConfigEditor schema={template.config_schema} value={config} onChange={onConfig} onApplyField={onApplyField} />
+      <ConfigEditor
+        schema={template.config_schema}
+        value={config}
+        onChange={onConfig}
+        onApplyField={onApplyField}
+        architecture={mode === "training" ? template.architecture : undefined}
+      />
       <div className="button-row">
         <button className="primary" type="button" onClick={onSave}>
           Сохранить
@@ -4974,6 +4996,30 @@ function queuePriority(job: JobSummary): number {
   if (job.status === "paused") return 1;
   if (job.status === "queued") return 2;
   return 3;
+}
+
+export function configWithField(
+  value: JsonRecord,
+  key: string,
+  nextValue: unknown,
+): JsonRecord {
+  const next = { ...value, [key]: nextValue };
+  if (key === "train.pipeline_variant" && nextValue === "next_gen") {
+    next["train.max_val_batches_per_epoch"] = null;
+  }
+  return next;
+}
+
+export function trainingConfigFieldVisible(
+  key: string,
+  pipelineVariant: string,
+  architecture?: string,
+): boolean {
+  if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
+  if (key === "train.pretrained") {
+    return pipelineVariant === "next_gen" && architecture === "segformer_b0";
+  }
+  return true;
 }
 
 type ManagedDatasetDraftSource = {

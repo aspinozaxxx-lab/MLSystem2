@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .contracts import CheckpointArtifact, LoadCheckpointRequest, LoadedCheckpoint, SaveCheckpointRequest
 from .contracts import ModelsError
-from ._factory import create_model
+from ._factory import create_model_for_checkpoint
 
 
 def load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint:
@@ -53,7 +53,7 @@ def load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint:
     if spec is None:
         raise ModelsError("Не удалось определить model_spec checkpoint.")
 
-    model = create_model(spec)
+    model = create_model_for_checkpoint(spec)
     try:
         model.model.load_state_dict(payload["model_state_dict"])
     except Exception as exc:

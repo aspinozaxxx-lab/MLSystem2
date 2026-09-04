@@ -31,6 +31,16 @@
 
 Конвейер передаёт в подготовку ожидаемые каналы и `uint8`, затем преобразует каждый `PreparedScene` в `TileSceneSource`. Оба loader получают один `TileSplitRequest`; split выполняется по окнам независимых TIFF. Legacy binary передаёт общие positive/hard-negative GeoJSON, per-image — локальный GeoJSON каждой сцены, legacy multiclass — `class_annotations`, а manifest-backed per-image multiclass — единую schema `classes`; binary val также получает instance masks. Перед созданием модели task и число выходов строго сверяются с подготовленным датасетом, а Python, NumPy, Torch и CUDA инициализируются единым `tile_preparation.seed`. В MLflow seed сохраняется в тегах и конфигурации, каталог `dataset/` получает TXT/GeoJSON legacy либо все GeoJSON и manifest из `annotations_dir`; class schema и структурированные метрики пишутся отдельно. Счётчики loader фиксируют сцены, разрешение и числа окон по каждому TIFF, valid-footprint, sampling и cache. Затем создаётся/загружается модель, `train_model` получает размер полного входа, context, seed и progress sink, а конвейер пишет epoch metrics, checkpoints, tile/timing/pipeline reports и корректно завершает MLflow run.
 
+Поле `train.pipeline_variant` является единственным переключателем. Для `legacy` запросы, model spec и отчёты
+сохраняют прежние значения. Для `next_gen` конвейер требует band contract `RED,GRN,BLU,NIR`, создаёт scene-fold
+с spatial purge, передаёт valid-mask и при robust profile собирает histogram до создания модели. `ModelSpec`
+получает variant, preprocessing, band contract, split/fold, scheduler, threshold policy и pretrained provenance.
+Checkpoint resume сверяет архитектуру, каналы и preprocessing, но HF-модель строится из сохранённой config.
+
+После next-gen run конвейер дополняет `TrainResult.diagnostics`: resolved settings JSON, split manifest,
+preprocessing, runtime/commit/CUDA/packages, зафиксированную dataset revision и validation по сценам. Эти данные
+передаются существующему публичному фасаду `mlflow_adapter`; нового верхнеуровневого модуля нет.
+
 До создания модели конвейер ограничивает внутренние Torch CPU pools значениями
 `MLSYSTEM2_TORCH_NUM_THREADS` и `MLSYSTEM2_TORCH_NUM_INTEROP_THREADS`; серверный worker передаёт `4` и `2`.
 Это ограничение не меняет число DataLoader workers или объём `prefetch_epochs`.

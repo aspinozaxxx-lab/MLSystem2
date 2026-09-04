@@ -252,7 +252,7 @@ process и помечает известный MLflow run как `KILLED`; по�
 сменился при миграции, каталог однозначно восстанавливает связь по каноническому имени `класс\датасет`;
 только при отсутствии такого шаблона используется базовый `(architecture, null)`. Одинаковый выбор применяется
 ручным запуском и автоматизацией, поэтому frontend не дублирует эту бизнес-логику.
-Обучение и нативный инференс используют единый контракт окна: `tile_preparation.tile_size` задаёт полный вход сети, `tile_preparation.context` — исключаемую рамку, полезный центр равен `tile_size - 2 × context`. Для действующих шаблонов с входом `768` используется context `128` и центр `512`; `context=0` сохраняет старое поведение. Подготовка строит окна с отрицательным начальным смещением, а loss, validation и выбор checkpoint считаются только по центру. Nodata, raster mask и padding внутри центра остаются обучающим фоном. Seed подготовки задаёт Python, NumPy, Torch и CUDA до создания модели и сохраняется в MLflow/checkpoint.
+Обучение и нативный инференс используют единый контракт окна: `tile_preparation.tile_size` задаёт полный вход сети, `tile_preparation.context` — исключаемую рамку, полезный центр равен `tile_size - 2 × context`. Для действующих шаблонов с входом `768` используется context `128` и центр `512`; `context=0` сохраняет старое поведение. Подготовка строит окна с отрицательным начальным смещением, а loss, validation и выбор checkpoint считаются только по центру. В `legacy` nodata, raster mask и padding внутри центра остаются обучающим фоном. В `next_gen` они передаются отдельной valid-mask и исключаются из loss и TP/FP/FN; после встроенного в модель preprocessing невалидные значения равны нулю. Seed подготовки задаёт Python, NumPy, Torch и CUDA до создания модели и сохраняется в MLflow/checkpoint.
 
 Псевдоразметка Training UI запускается отдельным процессом, а backend определяется типом снимков модели.
 Модели Канопуса сохраняют совместимый `pytorch_one_off`: runner загружает нативный checkpoint через
@@ -497,18 +497,44 @@ best checkpoint с threshold либо внешний ZIP без вымышлен
 
 ## Конвейер Обучения
 
+`train.pipeline_variant` выбирает `legacy|next_gen`, default — `legacy`. Конфигурация и checkpoint без
+этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
+positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
+отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
+`dataset_preparing`, `tile_preparation`, `models`, `train`, `train_pipeline`, `mlflow_adapter` и
+`training_ui_api`. Первая версия допускает только binary Kanopus с четырьмя каналами
+`RED, GRN, BLU, NIR` и архитектурами `smp_segformer_b0` или HF `segformer_b0`.
+
+`next_gen` делит целые сцены на детерминированные fold по SHA-256 `seed+scene_id`; число validation-сцен
+равно `max(1, floor(scene_count × val_fraction + 0.5))`. Пространственный purge исключает train-окно,
+если полный вход пересекает valid footprint held-out сцены, расширенный на пиксель исходного TIFF.
+Validation содержит все оставшиеся окна held-out сцен в естественном соотношении. Valid-mask исключает
+nodata, raster mask и padding из loss и метрик. Preprocessing (`scale_255`,
+`imagenet_rgb_red_nir`, `robust_percentile`) находится внутри model wrapper; robust p2/p98 рассчитывается
+потоковой 256-bin histogram только по train-сценам.
+
+HF B0 с `train.pretrained=true` загружается из
+`nvidia/segformer-b0-finetuned-ade-512-512` на закреплённой revision
+`489d5cd81a0b59fab9b7ea758d3548ebe99677da`: RGB-ядра первого convolution копируются, NIR получает RED,
+а head заменяется на один logit. Полная HF-конфигурация сохраняется в `ModelSpec`; локальная загрузка
+checkpoint строит модель из неё без Hugging Face Hub. В `next_gen` AdamW сочетается с
+`ReduceLROnPlateau` по scene-macro pixel F1. Полная validation выполняется на эпохе 1, затем по заданному
+интервалу и перед штатным завершением; patience измеряется validation-событиями. Порог либо фиксирован,
+либо выбирается по 4096-bin histogram с tie-break по precision и большему threshold. Опциональный Gaussian
+A/B выполняется только после обучения на лучшем checkpoint и не меняет production core-crop, ONNX или
+Geoalert metadata.
+
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
 3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. Поддерживаются legacy binary/multiclass и per-image binary/multiclass через `dataset.annotations_dir`; multiclass-схема читается из manifest. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
 5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON вместе с manifest в `dataset/`.
-6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. Окна строятся отдельно внутри каждого TIFF, включая nodata-padding края; split детерминирован по `scene_id+x+y`. Train читает raster/rasterize лениво, использует LRU дескрипторов, category-aware sampling и prefetch. Val выбирает фиксированный balanced subset и кэширует его при безопасном лимите RAM, иначе лениво читает те же индексы. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; nodata по значению, невалидная `dataset_mask` и padding за границей TIFF объединяются и принудительно получают target background `0`, а `-1` декодируется в background target с повышенным pixel weight. Полностью невалидные тайлы отфильтровываются, частично невалидные остаются в обучении. Аугментации геометрически преобразуют маску невалидности вместе с изображением и target и восстанавливают исходное значение nodata после фотометрических изменений.
-7. `train_pipeline` создаёт одну из девяти UI-архитектур (`smp_deeplabv3plus_resnet50`, `smp_segformer_b0`, `smp_segformer_b1`, `smp_segformer_b2`, `smp_segformer_b3`, `smp_unet_resnet34/50/101/152`) через `models.create_model` с `train.input_channels` или загружает checkpoint через `models.load_checkpoint`, если `train.initial_checkpoint_uri` задан. Спецификация checkpoint обязана совпадать с запросом, поэтому трёх- и четырёхканальные модели нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
-8. `train` выполняет PyTorch обучение segmentation-модели: AdamW, cosine scheduler, binary BCE/Dice-family loss или multiclass cross entropy/CE+Dice, validation metrics, early stopping и best/final checkpoints. Для binary рассчитываются пиксельная и объектовая F1 по порогам; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`, каждый тайл оценивается независимо; независимые пары «порог × тайл» обрабатываются ограниченным пулом не более чем из 8 CPU-потоков с последовательной агрегацией счётчиков. Для multiclass основной score — macro pixel F1 по типам; дополнительно сохраняются per-class precision/recall/F1/IoU, micro и foreground F1. Единый confidence threshold выбирается по macro F1, затем macro precision и большему threshold. Nodata уже представлен target background `0`, поэтому ложный прогноз класса на нём входит в loss и TP/FP/FN как обычный false positive. `background_weight` задаёт базовый вес всех background-пикселей, `pos_weight` усиливает positive pixels в binary loss, а `hard_negative_weight` дополнительно умножает штраф на общих hard-negative пикселях supervision mask `-1`; значения `1` сохраняют прежнее поведение. Управляемый multiclass-набор дополнительно передаёт отдельную маску отрицательных пикселей каждого типа: обычные CE/Dice и метрики остальных типов там не считаются, а `-log(1-p_class)` и false positive применяются только к указанному каналу с произведением `background_weight × hard_negative_weight`. Поэтому negative одного исходного датасета не объявляет остальные semantic-типы фоном. Binary checkpoint остаются совместимыми; multiclass metadata дополнительно содержит task, полную class schema, threshold и структурированные метрики.
-9. `train_pipeline` передает в `train` progress sink, который пишет метрики каждой завершенной эпохи в MLflow сразу через `mlflow_adapter.log_training_epoch`.
-10. `mlflow_adapter` записывает итоговые train/val метрики, артефакты, модель или чекпойнт, отчет tile preparation, отчет времени и итоговый
-   отчет.
+6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. В `legacy` split детерминирован по `scene_id+x+y`, train использует прежний category-aware sampling, а val — фиксированный balanced subset. В `next_gen` split выполняется по сценам со spatial purge, train sampler зависит от epoch/draw, а val всегда полный и несбалансированный. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; геометрические аугментации синхронно преобразуют image, target и valid-mask.
+7. `train_pipeline` создаёт одну из десяти UI-архитектур: прежние девять SMP-вариантов и отдельный `segformer_b0` «SegFormer B0 HF (next-gen)». Спецификация checkpoint обязана совпадать с запросом, поэтому варианты, preprocessing и число каналов нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
+8. `train` выполняет PyTorch обучение segmentation-модели, validation, early stopping и best/final checkpoints. `legacy` сохраняет AdamW с cosine scheduler и прежние binary/multiclass loss и пороги; `next_gen` использует AdamW с `ReduceLROnPlateau`, полную validation и scene-macro pixel F1. Для binary рассчитываются пиксельная и объектовая F1; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`. Для multiclass основной score — macro pixel F1 по типам. В `legacy` nodata представлен target background `0` и входит в loss и TP/FP/FN; в `next_gen` valid-mask полностью исключает его из этих расчётов. `background_weight`, `pos_weight` и `hard_negative_weight` сохраняют прежнюю семантику на valid pixels. Binary checkpoint остаются совместимыми; next-gen metadata дополнительно содержит variant, preprocessing, band contract, split/fold, scheduler, threshold policy, pretrained provenance и dataset/code revision.
+9. `train_pipeline` передает в `train` progress sink. Train-loss пишется для каждой завершённой эпохи; val-метрики `next_gen` существуют только для эпох с полной validation.
+10. `mlflow_adapter` записывает итоговые метрики, checkpoint, SHA-256, resolved JSON, split manifest, preprocessing, runtime/CUDA/packages/dataset revision, per-scene validation, optional Gaussian comparison, tile/timing и итоговый отчёты.
 
 ## Конвейер Инференса
 
