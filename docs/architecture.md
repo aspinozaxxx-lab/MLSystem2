@@ -346,8 +346,10 @@ MLMarkup и по умолчанию выбирает основные датас
 экспорт, отдаёт его пользователю и не пишет данные в Postgres, MLflow, S3 или рабочий каталог сервиса инференса.
 Одиночный и пакетный экспорт результата разрешают актуальный effective inference-шаблон по
 `architecture + class_key`, а `export_metadata.json` фиксирует нормализованный postprocess-конфиг и его SHA-256;
-низкоуровневый экспорт загруженного `.pt` не подбирает классовые настройки. ONNX получает полный вход, а
-Geoalert YAML получает `bounds=context` и `sample_size=полезный центр`. Для старого checkpoint без metadata
+низкоуровневый экспорт загруженного `.pt` не подбирает классовые настройки. ONNX получает полный вход;
+его выходной semantic channel фиксируется в метаданных графа, чтобы strict model config Triton не отвергал
+HF-граф с символически выведенным числом каналов. Geoalert YAML получает `bounds=context` и
+`sample_size=полезный центр`. Для старого checkpoint без metadata
 context экспорт использует `bounds=0`; оператор может явно задать context. Binary ABI остаётся прежним.
 Multiclass ONNX возвращает `uint8 [B,N,H,W]` one-hot foreground-каналов после threshold; pipeline содержит
 semantic `output_labels` и отдельный GeoJSON каждого типа, а export metadata — task, полную schema, threshold,

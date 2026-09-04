@@ -2114,6 +2114,47 @@ def test_model_export_normalizes_onnx_ir_for_old_triton(tmp_path: Path) -> None:
     onnx.checker.check_model(str(onnx_path))
 
 
+def test_model_export_pins_dynamic_output_channel_for_triton(tmp_path: Path) -> None:
+    onnx = pytest.importorskip("onnx")
+    from onnx import TensorProto, helper
+
+    graph = helper.make_graph(
+        [helper.make_node("Identity", ["input"], ["output"])],
+        "dynamic-channel",
+        [
+            helper.make_tensor_value_info(
+                "input",
+                TensorProto.UINT8,
+                [1, 1, "height", "width"],
+            )
+        ],
+        [
+            helper.make_tensor_value_info(
+                "output",
+                TensorProto.UINT8,
+                [1, "channels", "height", "width"],
+            )
+        ],
+    )
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_operatorsetid("", 17)],
+    )
+    onnx_path = tmp_path / "dynamic-channel.onnx"
+    onnx.save_model(model, onnx_path)
+
+    _model_export._normalize_onnx_for_triton(
+        onnx_path,
+        foreground_channels=1,
+    )
+
+    normalized = onnx.load_model(onnx_path)
+    channel_dimension = normalized.graph.output[0].type.tensor_type.shape.dim[1]
+    assert channel_dimension.dim_value == 1
+    assert channel_dimension.dim_param == ""
+    onnx.checker.check_model(str(onnx_path))
+
+
 def test_model_export_rejects_too_new_onnx_opset(tmp_path: Path) -> None:
     pytest.importorskip("onnx")
     onnx_path = _minimal_onnx_path(tmp_path, opset=18, ir_version=10)

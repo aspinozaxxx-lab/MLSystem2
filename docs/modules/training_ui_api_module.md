@@ -69,6 +69,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
   нативных и импортированных результатов; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД. В metadata каждой нативной модели сохраняются нормализованный
   postprocess-конфиг и его SHA-256; низкоуровневый экспорт произвольного `.pt` не выбирает классовый шаблон.
+  После экспорта фактическое число semantic channels фиксируется в описании выхода ONNX: прежний ABI маски
+  сохраняется, а strict model config Triton принимает HF-граф с изначально символической размерностью каналов.
 - Одиночная и групповая формы экспорта предлагают редактируемое имя `<class.technical_name>_kanopus` либо
   исторически совместимое `<class.technical_name>_orto`; `model_name_stem` остаётся только fallback старого API.
 - `POST /api/v1/scene-list-export` - multipart endpoint с `imagery_type=kanopus|ortho`, optional

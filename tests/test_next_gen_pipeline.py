@@ -29,6 +29,7 @@ from mlsystem2.train import _trainer
 from mlsystem2.train.api import train_model
 from mlsystem2.train.contracts import TrainConfig, TrainRequest, TrainResult
 from mlsystem2.train_pipeline._next_gen import preprocessing_parameters
+from mlsystem2.training_ui_api import _model_export
 
 
 def test_scene_fold_assigns_each_of_six_scenes_to_validation_once(tmp_path: Path) -> None:
@@ -355,6 +356,20 @@ def test_real_hf_b0_checkpoint_round_trip_is_offline(
     assert expected.shape == (1, 1, 32, 32)
     assert torch.all(expected[:, :, :2, :] == -1000)
     assert torch.equal(expected, actual)
+
+    onnx = pytest.importorskip("onnx")
+    onnx_path = tmp_path / "real-hf-b0.onnx"
+    _model_export._export_binary_mask_onnx(
+        model=loaded.model.model,
+        input_channels=4,
+        sample_size=32,
+        threshold=0.5,
+        onnx_path=onnx_path,
+    )
+    exported = onnx.load_model(onnx_path)
+    channel_dimension = exported.graph.output[0].type.tensor_type.shape.dim[1]
+    assert channel_dimension.dim_value == 1
+    assert channel_dimension.dim_param == ""
 
 
 def test_next_gen_loss_ignores_invalid_pixels() -> None:

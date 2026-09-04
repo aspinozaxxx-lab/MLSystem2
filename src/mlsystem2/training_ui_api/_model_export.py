@@ -835,7 +835,11 @@ def _export_segmentation_mask_onnx(
         raise TrainingUIAPIError("Не удалось экспортировать checkpoint в ONNX.") from exc
     if not onnx_path.is_file():
         raise TrainingUIAPIError("ONNX exporter не создал model.onnx.")
-    _normalize_onnx_for_triton(onnx_path)
+    foreground_channels = 1 if output_channels == 1 else output_channels - 1
+    _normalize_onnx_for_triton(
+        onnx_path,
+        foreground_channels=foreground_channels,
+    )
 
 
 def _export_binary_mask_onnx(
@@ -856,7 +860,11 @@ def _export_binary_mask_onnx(
     )
 
 
-def _normalize_onnx_for_triton(onnx_path: Path) -> None:
+def _normalize_onnx_for_triton(
+    onnx_path: Path,
+    *,
+    foreground_channels: int | None = None,
+) -> None:
     try:
         import onnx
     except ImportError as exc:
@@ -878,6 +886,17 @@ def _normalize_onnx_for_triton(onnx_path: Path) -> None:
         )
 
     model.ir_version = ONNX_IR_VERSION
+    if foreground_channels is not None:
+        if foreground_channels <= 0:
+            raise TrainingUIAPIError("Число выходных каналов ONNX должно быть положительным.")
+        if len(model.graph.output) != 1:
+            raise TrainingUIAPIError("ONNX-экспорт должен содержать ровно один выход маски.")
+        output_shape = model.graph.output[0].type.tensor_type.shape
+        if len(output_shape.dim) != 4:
+            raise TrainingUIAPIError("Выход маски ONNX должен иметь размерность NCHW.")
+        channel_dimension = output_shape.dim[1]
+        channel_dimension.ClearField("dim_param")
+        channel_dimension.dim_value = foreground_channels
     try:
         onnx.save_model(model, onnx_path, save_as_external_data=False)
         onnx.checker.check_model(str(onnx_path))
