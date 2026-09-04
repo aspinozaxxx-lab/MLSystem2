@@ -539,7 +539,7 @@ function HomePage({ bootstrap, run, showJobLog }: RoutedPageProps) {
       <section className="content-grid">
         <ToolCard link={links.grafana} fallbackTitle="Grafana" icon={<BarChart3 size={20} />} />
         <ToolCard link={links.mlflow} fallbackTitle="MLflow" icon={<Activity size={20} />} />
-        <ToolCard link={links.minio} fallbackTitle="MinIO" icon={<Database size={20} />} />
+        <ToolCard link={links.images} fallbackTitle="Снимки" icon={<Database size={20} />} />
         <a className="tool-card" href="/projects">
           <div>
             <div className="card-title">

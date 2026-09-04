@@ -19,7 +19,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 
 - `TrainingUIAPIError` - ошибка сервиса.
 - `TemplateSource`, `JobType`, `JobSource`, `JobStatus`, `ResultStatus`, `StoredFileKind` - enum-значения API.
-- `AppLink`, `AppLinksResponse` - ссылки Grafana/MLflow/MinIO.
+- `AppLink`, `AppLinksResponse` - ссылки Grafana, MLflow и авторизованного браузера подготовленных снимков.
 - `BootstrapInfo` - стартовый DTO для React frontend: links, datasets, image folders, classes, models и оба набора templates одним ответом.
 - `MLflowExperimentInfo`, `MLflowExperimentCreate` - experiments MLflow.
 - `ImageryType`, `ImageryTypeInfo`, `DatasetFormat`, `DatasetInfo`, `DatasetObjectType`, `DatasetListResponse`, `ClassInfo`, `ClassListResponse` - управляемый каталог; `ClassInfo.technical_name` задаёт редактируемую каноническую основу имени модели и semantic slug типа, а `DatasetInfo` содержит `format=legacy|per_image|per_image_multiclass`, `task`, `object_types`, `combined`, source status/changes, class counts, состояние фоновой материализации, совместимый исторический `model_name_stem`, legacy-файлы либо `annotations_dir` готовой текущей версии.

@@ -205,7 +205,7 @@ def app_links(config: TrainingUIAPIConfig) -> AppLinksResponse:
         links=[
             AppLink(key="grafana", title="Grafana", url=config.grafana_url),
             AppLink(key="mlflow", title="MLflow", url=config.mlflow_ui_url),
-            AppLink(key="minio", title="MinIO", url=config.minio_ui_url),
+            AppLink(key="images", title="Снимки", url=config.images_ui_url),
             AppLink(key="open_webui", title="Open WebUI", url=config.open_webui_url),
         ]
     )

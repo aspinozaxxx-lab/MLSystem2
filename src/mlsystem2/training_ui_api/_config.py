@@ -73,7 +73,7 @@ class TrainingUIAPIConfig:
     secure_cookies: bool
     grafana_url: str
     mlflow_ui_url: str
-    minio_ui_url: str
+    images_ui_url: str
     open_webui_url: str
     journal_unit: str
     cors_origin: str | None
@@ -182,10 +182,7 @@ def get_config() -> TrainingUIAPIConfig:
             "MLSYSTEM2_MLFLOW_UI_URL",
             os.getenv("FRONTEND_MLFLOW_UI_URL", "/mlflow/"),
         ),
-        minio_ui_url=os.getenv(
-            "MLSYSTEM2_MINIO_UI_URL",
-            os.getenv("FRONTEND_MINIO_UI_URL", "/minio/browser/mlsystems/images/"),
-        ),
+        images_ui_url=os.getenv("MLSYSTEM2_IMAGES_UI_URL", "/prepared-images/"),
         open_webui_url=os.getenv(
             "MLSYSTEM2_OPEN_WEBUI_URL", os.getenv("FRONTEND_OPEN_WEBUI_URL", "/open-webui/")
         ),

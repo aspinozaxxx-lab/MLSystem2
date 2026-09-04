@@ -48,7 +48,7 @@ MLSYSTEM2_TRAINING_SETTINGS_PATH=/opt/mlsystem2/repo/configs/settings.server.yam
 MLSYSTEM2_MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 MLSYSTEM2_MLFLOW_UI_URL=/mlflow/
 MLSYSTEM2_GRAFANA_URL=/grafana/
-MLSYSTEM2_MINIO_UI_URL=/minio/browser/mlsystems/images/
+MLSYSTEM2_IMAGES_UI_URL=/prepared-images/
 MLSYSTEM2_TRAINING_UI_USERS_JSON='[{"username":"<администратор>","password":"<пароль>","role":"admin","aliases":["mlsystem"]},{"username":"<пользователь>","password":"<пароль>","role":"user"}]'
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
 MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=false
@@ -166,7 +166,29 @@ CI/CD копирует `frontend/dist` в путь из `MLSYSTEM2_FRONTEND_DIST
 Reverse proxy должен:
 
 - проксировать `/` и `/api/v1/` на `http://127.0.0.1:8091`;
-- проксировать `/mlflow/`, `/grafana/`, `/minio/` как в старом gateway.
+- проксировать `/mlflow/` и `/grafana/` как в старом gateway;
+- публиковать `/data/mlsystem2/prepared_images` через подключение только для чтения и защищённый путь
+  `/prepared-images/`; MinIO используется только для артефактов MLflow и не хранит вторую копию снимков.
+
+Для контейнера обратного прокси добавить подключение:
+
+```yaml
+volumes:
+  - /data/mlsystem2/prepared_images:/srv/prepared-images:ro
+```
+
+В HTTPS-сервер добавить путь с той же проверкой сессии, что используется остальным сайтом:
+
+```nginx
+location /prepared-images/ {
+    auth_request /auth/proxy-check;
+    alias /srv/prepared-images/;
+    autoindex on;
+    autoindex_exact_size off;
+    autoindex_localtime on;
+    charset utf-8;
+}
+```
 
 ## 7. Отключение старого сайта
 

@@ -76,6 +76,17 @@ def test_frontend_credentials_accept_configured_username_and_legacy_alias(monkey
     assert _auth.verify_credentials("mluser", "wrong", config) is False
 
 
+def test_app_links_use_prepared_images_browser(monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_IMAGES_UI_URL", "/prepared-images/")
+
+    config = get_config()
+    links = {item.key: item for item in _service.app_links(config).links}
+
+    assert links["images"].title == "Снимки"
+    assert links["images"].url == "/prepared-images/"
+    assert "minio" not in links
+
+
 def test_frontend_credentials_support_canonical_users_roles_and_aliases(
     monkeypatch,
 ) -> None:
