@@ -57,6 +57,30 @@ def test_seed_training_without_torch_still_seeds_python_and_numpy(monkeypatch) -
     assert (random.random(), float(np.random.random())) == first
 
 
+def test_code_revision_falls_back_to_valid_deployment_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "76ac787a6bfe7cca9d9e7a42bf31185cceb54c1e"
+    (tmp_path / "DEPLOYED_COMMIT").write_text(f"{revision}\n", encoding="utf-8")
+    monkeypatch.setattr(_runner, "_git_output", lambda *_args: None)
+
+    assert _runner._code_revision(str(tmp_path)) == revision
+    runtime = _runner._runtime_environment(str(tmp_path), {"sha256": "dataset"})
+    assert runtime["commit"] == revision
+    assert runtime["commit_source"] == "DEPLOYED_COMMIT"
+
+
+def test_code_revision_rejects_invalid_deployment_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "DEPLOYED_COMMIT").write_text("main\n", encoding="utf-8")
+    monkeypatch.setattr(_runner, "_git_output", lambda *_args: None)
+
+    assert _runner._code_revision(str(tmp_path)) is None
+
+
 def test_run_train_pipeline_signature_uses_request_contract() -> None:
     signature = inspect.signature(run_train_pipeline)
     parameters = list(signature.parameters.values())

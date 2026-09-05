@@ -38,7 +38,8 @@
 Checkpoint resume сверяет архитектуру, каналы и preprocessing, но HF-модель строится из сохранённой config.
 
 После next-gen run конвейер дополняет `TrainResult.diagnostics`: resolved settings JSON, split manifest,
-preprocessing, runtime/commit/CUDA/packages, зафиксированную dataset revision и validation по сценам. Эти данные
+preprocessing, runtime/commit/CUDA/packages, зафиксированную dataset revision и validation по сценам. Commit
+берётся из Git checkout, а в production-копии без `.git` — из проверенного 40-символьного `DEPLOYED_COMMIT`. Эти данные
 передаются существующему публичному фасаду `mlflow_adapter`; нового верхнеуровневого модуля нет.
 
 До создания модели конвейер ограничивает внутренние Torch CPU pools значениями

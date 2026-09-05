@@ -775,7 +775,8 @@ def _runtime_environment(
     project_root: str,
     dataset_revision: dict[str, object],
 ) -> dict[str, object]:
-    commit = _git_output(project_root, "rev-parse", "HEAD")
+    git_commit = _git_output(project_root, "rev-parse", "HEAD")
+    commit = git_commit or _deployed_commit(project_root)
     dirty = bool(_git_output(project_root, "status", "--porcelain"))
     package_names = (
         "torch",
@@ -813,6 +814,9 @@ def _runtime_environment(
         pass
     return {
         "commit": commit,
+        "commit_source": (
+            "git" if git_commit else "DEPLOYED_COMMIT" if commit else None
+        ),
         "working_tree_dirty": dirty,
         "python": sys.version,
         "platform": platform.platform(),
@@ -820,6 +824,23 @@ def _runtime_environment(
         "cuda": cuda,
         "dataset_revision": dataset_revision,
     }
+
+
+def _code_revision(project_root: str) -> str | None:
+    return _git_output(project_root, "rev-parse", "HEAD") or _deployed_commit(
+        project_root
+    )
+
+
+def _deployed_commit(project_root: str) -> str | None:
+    marker = Path(project_root) / "DEPLOYED_COMMIT"
+    try:
+        value = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if re.fullmatch(r"[0-9a-fA-F]{40}", value) is None:
+        return None
+    return value.lower()
 
 
 def _git_output(project_root: str, *arguments: str) -> str | None:
@@ -1249,9 +1270,7 @@ def _train_request(
         run_metadata=(
             {
                 "dataset_revision": _dataset_revision(dataset),
-                "code_revision": _git_output(
-                    settings.runtime.project_root, "rev-parse", "HEAD"
-                ),
+                "code_revision": _code_revision(settings.runtime.project_root),
             }
             if settings.train.pipeline_variant == "next_gen"
             else {}
