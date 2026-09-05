@@ -27,7 +27,7 @@ from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation.contracts import TileSceneSource, TileSplitRequest
 from mlsystem2.train import _trainer
 from mlsystem2.train.api import train_model
-from mlsystem2.train.contracts import TrainConfig, TrainRequest, TrainResult
+from mlsystem2.train.contracts import EpochMetrics, TrainConfig, TrainRequest, TrainResult
 from mlsystem2.train_pipeline._next_gen import preprocessing_parameters
 from mlsystem2.training_ui_api import _model_export
 
@@ -391,6 +391,74 @@ def test_next_gen_loss_ignores_invalid_pixels() -> None:
 
     assert torch.equal(first, second)
     assert torch.equal(first, third)
+
+
+def test_gaussian_merge_accepts_collated_three_dimensional_valid_mask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+
+    class Tiny(torch.nn.Module):
+        def forward(self, images):
+            return torch.zeros(
+                (images.shape[0], 1, images.shape[2], images.shape[3]),
+                dtype=images.dtype,
+                device=images.device,
+            )
+
+    monkeypatch.setattr(
+        _trainer,
+        "load_checkpoint",
+        lambda _request: SimpleNamespace(model=SimpleNamespace(model=Tiny())),
+    )
+    patch_size = 512
+    images = torch.ones((1, 4, patch_size, patch_size), dtype=torch.float32)
+    masks = torch.zeros((1, 1, patch_size, patch_size), dtype=torch.float32)
+    loader = [
+        (
+            images,
+            masks,
+            {
+                "scene_ids": ["scene-a"],
+                "windows": [
+                    {"x": -106, "y": -106, "width": patch_size, "height": patch_size}
+                ],
+                "scene_shapes": [{"width": 300, "height": 300}],
+                "valid_pixels": torch.ones(
+                    (1, patch_size, patch_size), dtype=torch.bool
+                ),
+            },
+        )
+    ]
+    best_metrics = EpochMetrics(
+        epoch=1,
+        train_loss=0.0,
+        val_loss=0.0,
+        val_best_threshold=0.5,
+        val_macro_pixel_f1=0.0,
+        val_micro_pixel_f1=0.0,
+        epoch_time_sec=0.0,
+    )
+
+    report = _trainer._evaluate_gaussian_merge(
+        torch,
+        str(tmp_path / "best.pt"),
+        loader,
+        torch.device("cpu"),
+        best_metrics,
+        patch_size,
+    )
+
+    scene = report["gaussian"]["scenes"][0]
+    assert scene["uncovered_valid_pixels"] == 0
+    assert scene["padding_coverage"] == {
+        "left": True,
+        "top": True,
+        "right": True,
+        "bottom": True,
+    }
+    assert report["production_merge_unchanged"] == "core_crop"
 
 
 def test_next_gen_fixed_threshold_is_applied_exactly() -> None:

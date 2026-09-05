@@ -405,7 +405,21 @@ def _evaluate_gaussian_merge(
             logits = _forward_logits(torch, diagnostic_model, images, masks)
             probabilities = torch.sigmoid(logits[:, 0]).detach().cpu().numpy()
             targets = (masks[:, 0] >= 0.5).detach().cpu().numpy()
-            valid_batch = valid_pixels[:, 0].detach().cpu().numpy().astype(bool)
+            batch_size, height, width = probabilities.shape
+            if not (
+                len(scene_ids) == batch_size
+                and len(windows) == batch_size
+                and len(scene_shapes) == batch_size
+            ):
+                raise TrainError(
+                    "Gaussian A/B получила metadata, не совпадающие с размером batch."
+                )
+            valid_batch = _gaussian_valid_batch(
+                valid_pixels,
+                batch_size=batch_size,
+                height=height,
+                width=width,
+            )
             for sample_index, raw_scene_id in enumerate(scene_ids):
                 scene_id = str(raw_scene_id)
                 window = dict(windows[sample_index])
@@ -516,6 +530,25 @@ def _evaluate_gaussian_merge(
         },
         "production_merge_unchanged": "core_crop",
     }
+
+
+def _gaussian_valid_batch(
+    valid_pixels,
+    *,
+    batch_size: int,
+    height: int,
+    width: int,
+):
+    valid_batch = _as_numpy_instances(valid_pixels).astype(bool, copy=False)
+    if valid_batch.ndim == 4 and valid_batch.shape[1] == 1:
+        valid_batch = valid_batch[:, 0]
+    expected_shape = (batch_size, height, width)
+    if valid_batch.ndim != 3 or valid_batch.shape != expected_shape:
+        raise TrainError(
+            "Gaussian A/B ожидает valid_pixels формы "
+            f"[B,H,W] или [B,1,H,W], получено {tuple(valid_batch.shape)}."
+        )
+    return valid_batch
 
 
 def _accumulate_gaussian_window(

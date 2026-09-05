@@ -51,7 +51,9 @@ Best checkpoint и early stopping используют `val_quality_f1`; для 
 
 Опциональная next-gen Gaussian A/B диагностика после обучения загружает `best.pt` локально, объединяет полные
 окна 512/stride 256 с `sigma=patch_size/4`, проверяет покрытие и нулевой прогноз на nodata и записывает отдельные
-core-crop/Gaussian метрики. Она не изменяет production metadata, ONNX и Geoalert core-crop.
+core-crop/Gaussian метрики. Collated valid mask принимается в формах `[B,H,W]` и `[B,1,H,W]`; размерность и
+соответствие batch проверяются до накопления сцены. Диагностика не изменяет production metadata, ONNX и
+Geoalert core-crop.
 
 Если задан `MLSYSTEM2_TRAINING_CONTROL_DIR`, train loop после каждого train/validation batch проверяет
 `pause.request`. При паузе модель и optimizer state переносятся в CPU, CUDA освобождается и атомарно создаётся
