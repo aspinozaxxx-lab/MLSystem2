@@ -23,8 +23,8 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
     "tile_preparation.background_factor": 0.5,
     "train.pretrained": True,
     "train.initial_checkpoint_uri": None,
-    "train.epochs": 50,
-    "train.batch_size": 8,
+    "train.epochs": 100,
+    "train.batch_size": 32,
     "train.learning_rate": 1e-4,
     "train.weight_decay": 0.01,
     "train.loss": "cross_entropy",
@@ -32,10 +32,10 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
     "train.background_weight": 1.0,
     "train.hard_negative_weight": 1.0,
     "train.threshold": 0.5,
-    "train.early_stopping_patience": 9,
+    "train.early_stopping_patience": 20,
     "train.max_train_batches_per_epoch": None,
     "train.max_val_batches_per_epoch": None,
-    "train.max_training_time_sec": None,
+    "train.max_training_time_sec": 3600,
 }
 
 

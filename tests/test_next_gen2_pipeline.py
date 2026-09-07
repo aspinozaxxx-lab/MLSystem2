@@ -113,7 +113,7 @@ def _spec():
     )
 
 
-def test_source_notebook_is_fixed_and_defaults_match_its_settings():
+def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     assert hashlib.sha256(SOURCE.read_bytes()).hexdigest() == (
         "165157276ae777ef9e7538b7daead9d27cb8dc42c8bdf8225278b40defd5a5f4"
     )
