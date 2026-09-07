@@ -17,7 +17,7 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
 - `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
@@ -28,6 +28,10 @@
 Публичные API других модулей не используются. YAML читает `PyYAML`, DTO валидирует Pydantic.
 
 ## Алгоритм работы и его особенности
+
+`next_gen2` требует binary, предобученную HF B0, четыре входа, один внешний выход, `cross_entropy`,
+контекст и аугментации 0, долю валидации 0.2 и порог 0.5; ограничения числа пакетов запрещены.
+Размер/шаг окна, batch, эпохи, LR, weight decay и patience остаются настраиваемыми.
 
 `load_settings` проверяет файлы, рекурсивно накладывает `run.yml` на стабильный `settings.yml`, запрещает лишние поля и сохраняет результат. Отсутствующий `train.pipeline_variant` означает `legacy`; старые YAML остаются совместимыми. `next_gen` v1 разрешён только для binary, четырёх каналов, одного выхода и `segformer_b0|smp_segformer_b0`; ненулевой `max_val_batches_per_epoch` отклоняется. Pretrained разрешён только HF B0. Gaussian A/B дополнительно требует tile `512` и stride `256`. Остальные проверки и поведение `legacy` не изменены.
 

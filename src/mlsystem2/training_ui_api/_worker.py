@@ -711,7 +711,9 @@ def _build_training_config(
     )
     task = "multiclass" if manifest is not None else "binary"
     raw_loss = str(_flat_value(flat, "train.loss", "bce_dice"))
-    if task == "multiclass":
+    if pipeline_variant == "next_gen2":
+        loss = raw_loss
+    elif task == "multiclass":
         loss = (
             raw_loss
             if raw_loss in {"cross_entropy", "cross_entropy_dice"}
@@ -731,6 +733,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
+            **({"num_workers": 0, "seed": 42} if pipeline_variant == "next_gen2" else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),
@@ -786,7 +789,7 @@ def _build_training_config(
             "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
             "max_val_batches_per_epoch": (
                 None
-                if pipeline_variant == "next_gen"
+                if pipeline_variant in {"next_gen", "next_gen2"}
                 else _optional_int(flat, "train.max_val_batches_per_epoch")
             ),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),

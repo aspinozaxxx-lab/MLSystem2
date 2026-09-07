@@ -3681,9 +3681,11 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
+@pytest.mark.parametrize("pipeline_variant", ["legacy", "next_gen2"])
 def test_training_ui_worker_snapshots_per_image_annotations(
     tmp_path: Path,
     monkeypatch,
+    pipeline_variant: str,
 ) -> None:
     dataset_root = tmp_path / "MLMarkup" / "Реки" / "test"
     dataset_root.mkdir(parents=True)
@@ -3724,8 +3726,9 @@ def test_training_ui_worker_snapshots_per_image_annotations(
                 mlflow_experiment_id="1",
                 mlflow_experiment_name="per-image-test",
                 dataset_key="Реки\\test",
-                architecture="smp_segformer_b2",
-                config=_short_training_config(),
+                architecture="segformer_b0" if pipeline_variant == "next_gen2" else "smp_segformer_b2",
+                config=({"train.pipeline_variant": "next_gen2"}
+                        if pipeline_variant == "next_gen2" else _short_training_config()),
             ),
             config,
         )
@@ -3733,6 +3736,13 @@ def test_training_ui_worker_snapshots_per_image_annotations(
         assert row is not None
 
         payload = _worker._build_training_config(session, row, config, run_dir)
+        if pipeline_variant == "next_gen2":
+            assert job.pipeline_variant == "next_gen2"
+            assert payload["train"]["loss"] == "cross_entropy"
+            assert payload["train"]["pretrained"] is True
+            assert payload["tile_preparation"]["context"] == 0
+            assert payload["tile_preparation"]["stride"] == 256
+            assert payload["tile_preparation"]["num_workers"] == 0
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Реки\\test",

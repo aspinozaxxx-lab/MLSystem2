@@ -28,7 +28,8 @@ class TrainConfig(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
+    class_weights: list[float] = Field(default_factory=list)
     validation_interval_epochs: int = Field(default=1, gt=0)
     threshold_mode: Literal["fixed", "optimize"] = "optimize"
     evaluate_gaussian_blend: bool = False
@@ -59,7 +60,22 @@ class TrainConfig(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.task == "binary" and self.loss in multiclass_losses:
+        if self.pipeline_variant == "next_gen2":
+            if self.task != "binary" or self.loss != "cross_entropy":
+                raise ValueError("next-gen2 требует бинарную задачу и cross_entropy")
+            if len(self.class_weights) != 2 or any(
+                not (0 < value < float("inf")) for value in self.class_weights
+            ):
+                raise ValueError("next-gen2 требует два положительных конечных веса классов")
+            if (
+                self.max_train_batches_per_epoch is not None
+                or self.max_val_batches_per_epoch is not None
+                or self.inference_context != 0
+                or self.threshold != 0.5
+                or self.validation_interval_epochs != 1
+            ):
+                raise ValueError("next-gen2 требует полные эпохи, порог 0.5 и контекст 0")
+        elif self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
         if self.task != "binary" and self.quality_metric == "objects":
             raise ValueError("Объектовая метрика качества поддерживается только для binary train")

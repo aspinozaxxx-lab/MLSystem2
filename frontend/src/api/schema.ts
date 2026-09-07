@@ -1786,8 +1786,8 @@ export interface components {
         };
         /** Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post */
         Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post: {
-            /** Source Dataset Key */
-            source_dataset_key?: string | null;
+            /** Dataset Key */
+            dataset_key?: string | null;
             /** Image Folder Key */
             image_folder_key?: string | null;
             /** Training Result Id */
@@ -1803,10 +1803,7 @@ export interface components {
              * @default false
              */
             include_footprints: boolean;
-            /**
-             * Geojson
-             * Format: binary
-             */
+            /** Geojson */
             geojson: string;
         };
         /** Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post */
@@ -1898,6 +1895,12 @@ export interface components {
         ConfigSchema: {
             /** Fields */
             fields: components["schemas"]["ConfigField"][];
+            /** Pipeline Defaults */
+            pipeline_defaults?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
         };
         /** CustomDatasetInfo */
         CustomDatasetInfo: {
@@ -2726,7 +2729,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
             /**
              * Validation Fold
              * @default 0
@@ -2846,7 +2849,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
             /**
              * Validation Fold
              * @default 0
@@ -4237,7 +4240,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
             /**
              * Validation Fold
              * @default 0
@@ -4458,6 +4461,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;

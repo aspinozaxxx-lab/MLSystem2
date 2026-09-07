@@ -50,7 +50,7 @@ class TileSplitRequest(BaseModel):
 
     val_fraction: float = Field(gt=0.0, lt=1.0)
     seed: int = 42
-    strategy: Literal["window_random", "scene_fold"] = "window_random"
+    strategy: Literal["window_random", "scene_fold", "notebook_random"] = "window_random"
     validation_fold: int = Field(default=0, ge=0)
     spatial_purge: bool = False
 
@@ -68,7 +68,7 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
-    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
     collect_band_histogram: bool = False
 
     @model_validator(mode="after")
@@ -110,6 +110,17 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("next_gen loader требует tile_split strategy=scene_fold")
             if self.mode == "val" and self.max_batches_per_epoch is not None:
                 raise ValueError("next_gen val loader не допускает ограничение числа batch")
+        if self.pipeline_variant == "next_gen2":
+            if self.tile_split is None or self.tile_split.strategy != "notebook_random":
+                raise ValueError("next-gen2 требует разбиение notebook_random")
+            if self.tile_split.val_fraction != 0.2 or self.tile_split.spatial_purge:
+                raise ValueError("next-gen2 требует разбиение 60/20/20 без пространственного исключения")
+            if has_legacy_multiclass or has_per_image_multiclass:
+                raise ValueError("next-gen2 поддерживает только бинарную разметку")
+            if self.max_batches_per_epoch is not None:
+                raise ValueError("next-gen2 не допускает ограничение числа пакетов")
+        elif self.tile_split is not None and self.tile_split.strategy == "notebook_random":
+            raise ValueError("Разбиение notebook_random доступно только для next-gen2")
         return self
 
 

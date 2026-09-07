@@ -11,14 +11,43 @@ COMPACT_FILTER_KEEP = "keep_compact"
 COMPACT_FILTER_MODES = (COMPACT_FILTER_REMOVE, COMPACT_FILTER_KEEP)
 
 
+NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
+    "train.pipeline_variant": "next_gen2",
+    "dataset.val_fraction": 0.2,
+    "tile_preparation.tile_size": 512,
+    "tile_preparation.stride": 256,
+    "tile_preparation.context": 0,
+    "tile_preparation.augmentation_level": 0,
+    "tile_preparation.positive_factor": 0.5,
+    "tile_preparation.hard_negative_factor": 0.0,
+    "tile_preparation.background_factor": 0.5,
+    "train.pretrained": True,
+    "train.initial_checkpoint_uri": None,
+    "train.epochs": 50,
+    "train.batch_size": 8,
+    "train.learning_rate": 1e-4,
+    "train.weight_decay": 0.01,
+    "train.loss": "cross_entropy",
+    "train.pos_weight": 1.0,
+    "train.background_weight": 1.0,
+    "train.hard_negative_weight": 1.0,
+    "train.threshold": 0.5,
+    "train.early_stopping_patience": 9,
+    "train.max_train_batches_per_epoch": None,
+    "train.max_val_batches_per_epoch": None,
+    "train.max_training_time_sec": None,
+}
+
+
 CONFIG_SCHEMA: dict[str, Any] = {
+    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "legacy полностью воспроизводит прежнее обучение; next_gen включает scene-fold validation и новый preprocessing.",
-            "options": ["legacy", "next_gen"],
+            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — обучение и нарезка тайлов из исходного ноутбука, выбор весов по минимальной ошибке валидации.",
+            "options": ["legacy", "next_gen", "next_gen2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -601,6 +630,11 @@ def sanitize_template_config(
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
+    if (
+        (config or {}).get("train.pipeline_variant") == "next_gen2"
+        and result.get("train.pipeline_variant") != "next_gen2"
+    ):
+        result.update(NEXT_GEN2_DEFAULT_CONFIG)
     for key, value in (config or {}).items():
         if key in CONFIG_KEYS:
             options = CONFIG_FIELDS[key].get("options")

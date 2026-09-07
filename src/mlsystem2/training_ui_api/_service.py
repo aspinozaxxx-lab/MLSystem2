@@ -102,6 +102,7 @@ from ._queueing import (
     queue_sort_key,
 )
 from ._templates import (
+    NEXT_GEN2_DEFAULT_CONFIG,
     initial_inference_templates,
     initial_templates,
     sanitize_inference_template_config,
@@ -743,6 +744,10 @@ def apply_training_template_field_to_all(
         raise TrainingUIAPIError(f"Параметр шаблона не найден: {request.key}")
     for template in session.scalars(select(TrainingTemplateRow)).all():
         current = dict(template.default_config)
+        if request.key == "train.pipeline_variant" and request.value == "next_gen2":
+            if template.architecture != "segformer_b0":
+                continue
+            current.update(NEXT_GEN2_DEFAULT_CONFIG)
         current[request.key] = request.value
         template.default_config = sanitize_template_config(
             current, fallback=template.default_config
@@ -1025,11 +1030,26 @@ def _validate_training_pipeline_variant(
     job_config: dict[str, Any], architecture: str
 ) -> None:
     variant = str(job_config.get("train.pipeline_variant") or "legacy")
-    if variant not in {"legacy", "next_gen"}:
+    if variant not in {"legacy", "next_gen", "next_gen2"}:
         raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
-    if architecture == "segformer_b0" and variant != "next_gen":
-        raise TrainingUIAPIError("SegFormer B0 HF доступен только в конвейере next-gen.")
+    if architecture == "segformer_b0" and variant == "legacy":
+        raise TrainingUIAPIError("SegFormer B0 HF доступен в конвейерах next-gen и next-gen2.")
     if variant == "legacy":
+        return
+    if variant == "next_gen2":
+        if architecture != "segformer_b0":
+            raise TrainingUIAPIError("next-gen2 поддерживает только SegFormer B0 HF.")
+        required = {
+            "dataset.task": "binary", "dataset.imagery_type": "kanopus",
+            "dataset.val_fraction": 0.2, "train.input_channels": 4,
+            "train.loss": "cross_entropy", "train.pretrained": True,
+            "tile_preparation.context": 0, "tile_preparation.augmentation_level": 0,
+            "train.threshold": 0.5, "train.max_train_batches_per_epoch": None,
+            "train.max_val_batches_per_epoch": None,
+        }
+        for key, expected in required.items():
+            if job_config.get(key) != expected:
+                raise TrainingUIAPIError(f"next-gen2: параметр {key} должен быть {expected}.")
         return
     if job_config.get("dataset.task") != "binary":
         raise TrainingUIAPIError("next-gen v1 поддерживает только binary-датасеты.")
@@ -2659,7 +2679,7 @@ def _job_input_channels(job: JobRow | None) -> int:
 
 def _job_pipeline_variant(job: JobRow | None) -> str:
     value = (job.config or {}).get("train.pipeline_variant") if job is not None else None
-    return "next_gen" if value == "next_gen" else "legacy"
+    return str(value) if value in {"next_gen", "next_gen2"} else "legacy"
 
 
 def _job_validation_fold(job: JobRow | None) -> int:

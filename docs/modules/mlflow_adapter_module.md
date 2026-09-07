@@ -88,6 +88,11 @@
 
 ## Алгоритм работы и его особенности
 
+Для `pipeline_variant=next_gen2` лучшая эпоха определяется минимумом `val/loss`, при равенстве выбирается
+ранняя. `get_best_training_checkpoint` возвращает F1 и порог именно этой эпохи. Итоговые
+`train/best_quality_f1` и `train/best_threshold_pixel_f1` относятся к сохранённым весам; решение дополнительно
+записывается в `reports/checkpoint_selection.json`. Новые имена метрик не вводятся.
+
 `start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.dataset` задан, адаптер сначала проверяет наличие одноименного MLflow dataset в experiment и создает его при отсутствии, затем добавляет MLflow tag `dataset` и логирует MLflow input dataset через `mlflow.log_input`; имя, source и tag dataset равны переданному значению. Адаптер не вычисляет имя датасета и не ходит в папки датасета; вызывающий модуль должен передать готовое имя без расширения `.geojson`. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
 
 `log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_dataset_artifacts` сохраняет исходные файлы разметки в `dataset/`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.

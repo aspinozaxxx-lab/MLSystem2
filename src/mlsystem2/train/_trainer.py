@@ -147,7 +147,11 @@ def train_model(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
-    if config.pipeline_variant == "next_gen":
+    if config.pipeline_variant == "next_gen2":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", patience=3, factor=0.5,
+        )
+    elif config.pipeline_variant == "next_gen":
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="max",
@@ -163,7 +167,7 @@ def train_model(
 
     total_started = perf_counter()
     history: list[EpochMetrics] = []
-    best_score = -1.0
+    best_score = -float("inf") if config.pipeline_variant == "next_gen2" else -1.0
     best_metrics: EpochMetrics | None = None
     last_validation_metrics: EpochMetrics | None = None
     patience = 0
@@ -228,7 +232,9 @@ def train_model(
                     pause_controller=pause_controller,
                 )
                 _ensure_finite_scalar(float(val["loss"]), "val_loss", epoch)
-                if config.pipeline_variant == "next_gen":
+                if config.pipeline_variant == "next_gen2":
+                    scheduler.step(float(val["loss"]))
+                elif config.pipeline_variant == "next_gen":
                     scheduler.step(float(val["quality_f1"]))
                 else:
                     scheduler.step()
@@ -275,7 +281,11 @@ def train_model(
                 history.append(metrics)
                 last_validation_metrics = metrics
 
-                score = _checkpoint_score(metrics)
+                score = (
+                    -float(metrics.val_loss)
+                    if config.pipeline_variant == "next_gen2"
+                    else _checkpoint_score(metrics)
+                )
                 if score > best_score:
                     best_score = score
                     best_metrics = metrics
@@ -314,6 +324,13 @@ def train_model(
             final_checkpoint = str(final_checkpoint_path)
             artifacts.append(CheckpointArtifact(uri=str(final_checkpoint_path), label="final"))
         diagnostics: dict[str, Any] = {}
+        if config.pipeline_variant == "next_gen2" and best_metrics is not None:
+            diagnostics["checkpoint_selection"] = {
+                "metric": "val_loss", "mode": "min", "epoch": best_metrics.epoch,
+                "val_loss": best_metrics.val_loss,
+                "quality_f1": best_metrics.val_quality_f1,
+                "pixel_f1": best_metrics.val_best_threshold_pixel_f1,
+            }
         if config.pipeline_variant == "next_gen":
             diagnostics["peak_vram_bytes"] = (
                 int(torch.cuda.max_memory_allocated(device))
@@ -630,6 +647,7 @@ def _train_epoch(
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
+    loss_denominator = 0
     batches = 0
     has_optimizer_step = False
     nonfinite_gradient_skips = 0
@@ -649,7 +667,9 @@ def _train_epoch(
         if config.task == "binary":
             _validate_binary_targets(torch, masks, epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
-        logits = _forward_logits(torch, model, images, masks)
+        logits = _forward_logits(
+            torch, model, images, masks, binary_two_logits=config.pipeline_variant == "next_gen2"
+        )
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         logits, masks, hard_negative_pixels = _crop_supervision_tensors(
             logits,
@@ -676,6 +696,7 @@ def _train_epoch(
             valid_pixels,
         )
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
+        loss_weight = int(images.shape[0]) if config.pipeline_variant == "next_gen2" else 1
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(torch, model)
         if bad_gradient is not None:
@@ -691,7 +712,10 @@ def _train_epoch(
                     "Слишком много non-finite gradients за эпоху: "
                     f"epoch={epoch}, nonfinite_gradient_skips={nonfinite_gradient_skips}"
                 )
-            total_loss += float(loss.detach().item())
+            if config.pipeline_variant == "next_gen2":
+                raise TrainError("next-gen2: обнаружен неконечный градиент")
+            total_loss += float(loss.detach().item()) * loss_weight
+            loss_denominator += loss_weight
             batches += 1
             reached_limit = (
                 config.max_train_batches_per_epoch is not None
@@ -703,11 +727,14 @@ def _train_epoch(
             if reached_limit:
                 break
             continue
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index, "train")
+        grad_norm = None
+        if config.pipeline_variant != "next_gen2":
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index, "train")
         optimizer.step()
         has_optimizer_step = True
-        total_loss += float(loss.detach().item())
+        total_loss += float(loss.detach().item()) * loss_weight
+        loss_denominator += loss_weight
         batches += 1
         reached_limit = (
             config.max_train_batches_per_epoch is not None
@@ -723,7 +750,7 @@ def _train_epoch(
     if not has_optimizer_step:
         raise TrainError(f"За эпоху {epoch} не выполнено ни одного optimizer step.")
     return {
-        "loss": total_loss / batches,
+        "loss": total_loss / loss_denominator,
     }
 
 
@@ -753,13 +780,17 @@ def _validate_epoch(
 
     model.eval()
     next_gen = config.pipeline_variant == "next_gen"
+    next_gen2 = config.pipeline_variant == "next_gen2"
     total_loss = 0.0
+    loss_denominator = 0
     batches = 0
     threshold_counts = (
         {}
         if next_gen
         else {threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in THRESHOLD_CANDIDATES}
     )
+    if next_gen2:
+        threshold_counts = {0.5: {"tp": 0, "fp": 0, "fn": 0}}
     positive_histogram = np.zeros(4096, dtype=np.int64)
     negative_histogram = np.zeros(4096, dtype=np.int64)
     scene_histograms: dict[str, tuple[object, object]] = {}
@@ -767,7 +798,9 @@ def _validate_epoch(
     fixed_0_5_counts = {"tp": 0, "fp": 0, "fn": 0}
     scene_configured_fixed_counts: dict[str, dict[str, int]] = {}
     scene_fixed_0_5_counts: dict[str, dict[str, int]] = {}
-    if not next_gen:
+    if next_gen2:
+        object_candidates = (0.5,)
+    elif not next_gen:
         object_candidates = THRESHOLD_CANDIDATES
     elif config.quality_metric == "objects":
         object_candidates = tuple(
@@ -794,7 +827,7 @@ def _validate_epoch(
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
             _ensure_finite_tensor(torch, masks, "masks", epoch, batch_index, "val")
             _validate_binary_targets(torch, masks, epoch, batch_index, "val")
-            logits = _forward_logits(torch, model, images, masks)
+            logits = _forward_logits(torch, model, images, masks, binary_two_logits=next_gen2)
             _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "val")
             logits, masks, hard_negative_pixels = _crop_supervision_tensors(
                 logits,
@@ -814,10 +847,12 @@ def _validate_epoch(
                 valid_pixels,
             )
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
-            total_loss += float(loss.detach().item())
+            loss_weight = int(images.shape[0]) if next_gen2 else 1
+            total_loss += float(loss.detach().item()) * loss_weight
+            loss_denominator += loss_weight
             batches += 1
 
-            probs = torch.sigmoid(logits)
+            probs = torch.softmax(logits, dim=1)[:, 1:2] if next_gen2 else torch.sigmoid(logits)
             true = masks >= 0.5
             if next_gen:
                 if valid_pixels is None:
@@ -1002,9 +1037,9 @@ def _validate_epoch(
                 }
             )
     else:
-        pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = _best_threshold_metrics(
+        pixel_threshold, pixel_precision, pixel_recall, pixel_f1 = _best_threshold_metrics_for_candidates(
             threshold_counts
-        )
+        ) if next_gen2 else _best_threshold_metrics(threshold_counts)
     macro_pixel_precision = (
         sum(float(item["pixel_precision"]) for item in per_scene_metrics)
         / len(per_scene_metrics)
@@ -1023,7 +1058,10 @@ def _validate_epoch(
         else None
     )
     if object_instances_seen:
-        if not next_gen:
+        if next_gen2:
+            object_threshold = 0.5
+            object_precision, object_recall, object_f1 = _threshold_metrics(object_threshold_counts[0.5])
+        elif not next_gen:
             object_threshold, object_precision, object_recall, object_f1 = (
                 _best_threshold_metrics(object_threshold_counts)
             )
@@ -1071,7 +1109,7 @@ def _validate_epoch(
         fixed_0_5_counts
     ) if next_gen else (None, None, None)
     return {
-        "loss": total_loss / batches,
+        "loss": total_loss / loss_denominator,
         "best_threshold": quality_threshold,
         "best_pixel_threshold": pixel_threshold,
         "best_threshold_pixel_f1": pixel_f1,
@@ -1592,8 +1630,8 @@ def _split_batch(batch: object, epoch: int, batch_index: int, stage: str):
     )
 
 
-def _forward_logits(torch, model, images, masks):
-    outputs = model(images)
+def _forward_logits(torch, model, images, masks, *, binary_two_logits: bool = False):
+    outputs = model(images, return_two_class_logits=True) if binary_two_logits else model(images)
     logits = outputs.logits if hasattr(outputs, "logits") else outputs
     if logits.shape[-2:] != masks.shape[-2:]:
         logits = torch.nn.functional.interpolate(
@@ -1677,6 +1715,11 @@ def _loss(
     class_hard_negative_pixels=None,
     valid_pixels=None,
 ):
+    if config.pipeline_variant == "next_gen2":
+        return torch.nn.functional.cross_entropy(
+            logits, masks[:, 0].long(),
+            weight=torch.as_tensor(config.class_weights, dtype=logits.dtype, device=logits.device),
+        )
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(
@@ -2151,10 +2194,13 @@ def _save_training_checkpoint(
         "seed": request.config.seed,
         "train_config": _checkpoint_train_config(request.config),
     }
-    if request.config.pipeline_variant == "next_gen":
+    if request.config.pipeline_variant in {"next_gen", "next_gen2"}:
         metadata.update(
             {
-                "pipeline_variant": "next_gen",
+                "pipeline_variant": request.config.pipeline_variant,
+                "checkpoint_selection_metric": (
+                    "val_loss" if request.config.pipeline_variant == "next_gen2" else "quality_f1"
+                ),
                 "run_metadata": dict(request.run_metadata),
                 "validation_performed": metrics.validation_performed,
                 "val_per_scene_metrics": metrics.val_per_scene_metrics,
@@ -2180,6 +2226,8 @@ def _checkpoint_train_config(config) -> dict[str, object]:
         if config.pipeline_variant == "legacy"
         else set()
     )
+    if config.pipeline_variant != "next_gen2":
+        excluded.add("class_weights")
     return config.model_dump(mode="json", exclude=excluded)
 
 

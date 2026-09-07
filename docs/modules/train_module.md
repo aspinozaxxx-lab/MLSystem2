@@ -12,7 +12,7 @@
 
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
-- `TrainConfig` - поля task/metric, `pipeline_variant`, validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
+- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два вычисленных веса для next-gen2, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
 - `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
@@ -28,6 +28,13 @@
 - `torch` - выполнить обучение, optimizer, scheduler, losses и tensor operations; импортируется лениво.
 
 ## Алгоритм работы и его особенности
+
+В `next_gen2` используется двухклассовая CrossEntropy с весами обучающей части, AdamW без ограничения
+нормы градиента и `ReduceLROnPlateau(mode=min,patience=3,factor=0.5)` по validation loss. Полная validation
+выполняется каждую эпоху; средние loss взвешиваются по размеру пакета. Best и early stopping следуют
+минимальной ошибке валидации, F1 вычисляется на фиксированном пороге 0.5. Существующие пауза и остановка
+с сохранением действуют на границе пакетов. `diagnostics.checkpoint_selection` хранит эпоху, loss и F1
+выбранных весов. Обычный бинарный выход применяется только для инференса; обучение запрашивает оба logits.
 
 `train_model` переносит модель на `config.device` и создаёт AdamW. `legacy` побитово сохраняет cosine scheduler и validation каждой эпохи. `next_gen` использует `ReduceLROnPlateau(mode=max,factor=0.5,patience=3,min_lr=1e-7)` по полной scene-macro val F1; validation выполняется на эпохе 1, по интервалу и перед штатным завершением, а early stopping считает только validation-события. Между ними `EpochMetrics` содержит train loss и `validation_performed=false` без выдуманных val-значений.
 

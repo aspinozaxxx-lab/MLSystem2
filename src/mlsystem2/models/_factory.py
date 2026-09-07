@@ -160,6 +160,11 @@ def create_model_for_checkpoint(spec: ModelSpec) -> ModelHandle:
 def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandle:
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
+    if spec.parameters.get("pipeline_variant") == "next_gen2" and (
+        spec.name != _SEGFORMER_B0
+        or spec.parameters.get("preprocessing") != {"mode": "window_minmax", "epsilon": 1e-6}
+    ):
+        raise ModelsError("next-gen2 требует HF SegFormer B0 и оконную min-max нормализацию")
     if spec.name in _SMP_ENCODERS:
         model = _create_smp_segformer(spec)
         return _wrap_next_gen(spec, model)
@@ -249,6 +254,44 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
+    is_next_gen2 = spec.parameters.get("pipeline_variant") == "next_gen2"
+    if is_next_gen2:
+        if spec.name != _SEGFORMER_B0 or spec.input_channels != 4 or spec.output_channels != 1:
+            raise ModelsError("next-gen2 требует HF SegFormer B0 с входом 4 и выходом 1")
+        if not initialize_pretrained:
+            raw_config = spec.parameters.get("hf_config")
+            if not isinstance(raw_config, dict) or raw_config.get("num_channels") != 4:
+                raise ModelsError("Checkpoint next-gen2 не содержит корректную HF-конфигурацию")
+            config = SegformerConfig(**raw_config)
+            if config.num_labels != 2:
+                raise ModelsError("Checkpoint next-gen2 должен содержать двухклассовую голову")
+            return _wrap_next_gen(spec, SegformerForSemanticSegmentation(config))
+        if spec.pretrained:
+            model = SegformerForSemanticSegmentation.from_pretrained(
+                _PRETRAINED_B0,
+                revision=_PRETRAINED_B0_REVISION,
+                num_labels=2,
+                ignore_mismatched_sizes=True,
+                use_safetensors=True,
+            )
+            _adapt_pretrained_segformer(model, 4, 2, notebook=True)
+        else:
+            model = SegformerForSemanticSegmentation(SegformerConfig(
+                num_channels=4, num_labels=2,
+                **{key: value for key, value in model_config.items() if key != "pretrained"},
+            ))
+        parameters = dict(spec.parameters)
+        parameters.update({
+            "hf_config": model.config.to_dict(),
+            "input_adapter": "rgb_copy_plus_red_to_nir_random_bias",
+            "binary_output": "foreground_logit_minus_background_logit",
+        })
+        if spec.pretrained:
+            parameters.update({
+                "pretrained_source": _PRETRAINED_B0,
+                "pretrained_revision": _PRETRAINED_B0_REVISION,
+            })
+        return _wrap_next_gen(spec.model_copy(update={"parameters": parameters}), model)
     if is_next_gen and spec.name != _SEGFORMER_B0:
         raise ModelsError("next_gen pretrained-путь реализован только для segformer_b0")
     if is_next_gen and spec.pretrained and initialize_pretrained:
@@ -303,8 +346,10 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
     return ModelHandle(spec=spec, model=_SegFormerRawInputWrapper(model))
 
 
-def _adapt_pretrained_segformer(model, input_channels: int, output_channels: int) -> None:
-    if input_channels != 4 or output_channels != 1:
+def _adapt_pretrained_segformer(
+    model, input_channels: int, output_channels: int, *, notebook: bool = False
+) -> None:
+    if input_channels != 4 or output_channels != (2 if notebook else 1):
         raise ModelsError("Pinned pretrained SegFormer next_gen требует вход 4 и выход 1")
     projection = _first_patch_projection(model)
     replacement = torch.nn.Conv2d(
@@ -321,9 +366,13 @@ def _adapt_pretrained_segformer(model, input_channels: int, output_channels: int
     with torch.no_grad():
         replacement.weight[:, :3].copy_(projection.weight[:, :3])
         replacement.weight[:, 3].copy_(projection.weight[:, 0])
-        if projection.bias is not None:
+        if projection.bias is not None and not notebook:
             replacement.bias.copy_(projection.bias)
     _set_first_patch_projection(model, replacement)
+    if notebook:
+        # В ноутбуке смещение новой свёртки остаётся случайным, голова уже создана HF.
+        model.config.num_channels = input_channels
+        return
     classifier = model.decode_head.classifier
     model.decode_head.classifier = torch.nn.Conv2d(
         classifier.in_channels,
@@ -355,7 +404,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") != "next_gen":
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
@@ -383,17 +432,24 @@ if torch is not None:
             self.register_buffer("preprocess_low", torch.tensor(low).view(1, -1, 1, 1))
             self.register_buffer("preprocess_high", torch.tensor(high).view(1, -1, 1, 1))
 
-        def forward(self, x):
+        def forward(self, x, *, return_two_class_logits: bool = False):
             raw = x.float()
             valid = torch.any(raw != self.nodata, dim=1, keepdim=True)
-            if self.mode == "robust_percentile":
+            if self.mode == "window_minmax":
+                low = raw.amin(dim=(-2, -1), keepdim=True)
+                span = raw.amax(dim=(-2, -1), keepdim=True) - low
+                normalized = torch.where(
+                    span > 1e-6, (raw - low) / span.clamp_min(1e-6), torch.zeros_like(raw)
+                )
+            elif self.mode == "robust_percentile":
                 denominator = (self.preprocess_high - self.preprocess_low).clamp_min(1.0)
                 normalized = ((raw - self.preprocess_low) / denominator).clamp(0.0, 1.0)
             else:
                 normalized = raw / 255.0
                 if self.mode == "imagenet_rgb_red_nir":
                     normalized = (normalized - self.preprocess_mean) / self.preprocess_std
-            normalized = torch.where(valid, normalized, torch.zeros_like(normalized))
+            if self.mode != "window_minmax":
+                normalized = torch.where(valid, normalized, torch.zeros_like(normalized))
             output = self.model(normalized)
             logits = output.logits if hasattr(output, "logits") else output
             if isinstance(logits, (tuple, list)):
@@ -405,6 +461,11 @@ if torch is not None:
                     mode="bilinear",
                     align_corners=False,
                 )
+            if self.mode == "window_minmax":
+                if return_two_class_logits:
+                    return logits
+                # sigmoid(z1-z0) равен softmax([z0,z1])[:,1]; обе головы обучаются.
+                return logits[:, 1:2] - logits[:, 0:1]
             return torch.where(valid, logits, torch.full_like(logits, -1000.0))
 
     class _SegFormerRawInputWrapper(torch.nn.Module):

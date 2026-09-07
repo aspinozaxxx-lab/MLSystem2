@@ -1,0 +1,40 @@
+# Исходные параметры train_full_pipeline_заболачивание.ipynb.
+# Выберите опубликованную бинарную разметку Канопуса.
+runtime:
+  scratch_root: /data/mlsystem2/runtime/train/next-gen2/scratch
+  logs_root: /data/mlsystem2/runtime/train/next-gen2/logs
+
+dataset:
+  images_dir: /data/mlsystem2/prepared_images/kanopus
+  annotations_dir: /data/MLMarkup/Заболачивание/main
+  val_fraction: 0.2
+
+tile_preparation:
+  tile_size: 512
+  stride: 256
+  context: 0
+  augmentation_level: 0
+  num_workers: 0
+  seed: 42
+
+train:
+  pipeline_variant: next_gen2
+  model_name: segformer_b0
+  task: binary
+  input_channels: 4
+  output_channels: 1
+  pretrained: true
+  initial_checkpoint_uri: null
+  epochs: 50
+  batch_size: 8
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  loss: cross_entropy
+  threshold: 0.5
+  early_stopping_patience: 9
+  max_train_batches_per_epoch: null
+  max_val_batches_per_epoch: null
+  max_training_time_sec: null
+
+mlflow:
+  experiment_name: MLSystem2

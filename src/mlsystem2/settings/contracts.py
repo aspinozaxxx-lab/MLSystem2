@@ -126,7 +126,7 @@ class TrainSettings(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
     model_name: str
     input_channels: int = Field(default=4, gt=0)
     output_channels: int = Field(default=1, gt=0)
@@ -155,7 +155,10 @@ class TrainSettings(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.task == "binary" and self.loss in multiclass_losses:
+        if self.pipeline_variant == "next_gen2":
+            if self.task != "binary" or self.loss != "cross_entropy":
+                raise ValueError("next-gen2 требует бинарную задачу и cross_entropy")
+        elif self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
         if self.task != "binary" and self.quality_metric == "objects":
             raise ValueError("Объектовая метрика качества поддерживается только для binary train")
@@ -224,6 +227,25 @@ class SystemSettings(BaseModel):
                 raise ValueError("multiclass per-image dataset требует минимум 3 output_channels")
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
+        if self.train.pipeline_variant == "next_gen2":
+            if (
+                self.train.model_name != "segformer_b0"
+                or self.train.input_channels != 4
+                or self.train.output_channels != 1
+                or not self.train.pretrained
+            ):
+                raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 4 и выходом 1")
+            if self.tile_preparation.context != 0 or self.tile_preparation.augmentation_level != 0:
+                raise ValueError("next-gen2 использует окна без контекста и без аугментаций")
+            if self.dataset.val_fraction != 0.2:
+                raise ValueError("next-gen2 делит тайлы на обучение/валидацию/тест в пропорции 60/20/20")
+            if self.train.threshold != 0.5:
+                raise ValueError("next-gen2 использует порог 0.5 двухклассовой модели")
+            if (
+                self.train.max_train_batches_per_epoch is not None
+                or self.train.max_val_batches_per_epoch is not None
+            ):
+                raise ValueError("next-gen2 требует полные обучающие и валидационные эпохи")
         if self.train.pipeline_variant == "next_gen":
             if self.train.task != "binary":
                 raise ValueError("next_gen v1 поддерживает только binary train")

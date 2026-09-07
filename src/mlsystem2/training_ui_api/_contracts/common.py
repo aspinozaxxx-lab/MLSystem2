@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TrainingUIAPIError(RuntimeError):
@@ -91,6 +91,7 @@ class ConfigSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fields: list[ConfigField]
+    pipeline_defaults: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 JsonDict = dict[str, Any]

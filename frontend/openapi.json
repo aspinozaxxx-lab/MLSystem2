@@ -4658,7 +4658,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -4670,7 +4670,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -4715,7 +4715,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -4729,7 +4729,7 @@
       },
       "Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post": {
         "properties": {
-          "source_dataset_key": {
+          "dataset_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -4738,7 +4738,7 @@
                 "type": "null"
               }
             ],
-            "title": "Source Dataset Key"
+            "title": "Dataset Key"
           },
           "image_folder_key": {
             "anyOf": [
@@ -4766,7 +4766,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "binary"
+                "contentMediaType": "application/octet-stream"
               },
               {
                 "type": "null"
@@ -4790,7 +4790,7 @@
           },
           "geojson": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "Geojson"
           }
         },
@@ -5083,6 +5083,14 @@
             },
             "type": "array",
             "title": "Fields"
+          },
+          "pipeline_defaults": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Pipeline Defaults"
           }
         },
         "additionalProperties": false,
@@ -7384,7 +7392,8 @@
             "type": "string",
             "enum": [
               "legacy",
-              "next_gen"
+              "next_gen",
+              "next_gen2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"
@@ -7670,7 +7679,8 @@
             "type": "string",
             "enum": [
               "legacy",
-              "next_gen"
+              "next_gen",
+              "next_gen2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"
@@ -11530,7 +11540,8 @@
             "type": "string",
             "enum": [
               "legacy",
-              "next_gen"
+              "next_gen",
+              "next_gen2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"
@@ -12293,6 +12304,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

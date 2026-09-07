@@ -94,13 +94,27 @@ def get_best_training_checkpoint(
             history = client.get_metric_history(run_id, BEST_CHECKPOINT_METRIC)
             metric_name = BEST_CHECKPOINT_METRIC
         thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
+        notebook_losses = (
+            client.get_metric_history(run_id, "val/loss")
+            if getattr(getattr(run, "data", None), "tags", {}).get("pipeline_variant") == "next_gen2"
+            else None
+        )
     except Exception as exc:
         raise MLflowAdapterError(
             "Не удалось прочитать лучшую метрику training run из MLflow"
         ) from exc
     if not history:
         return None
-    best = max(history, key=lambda item: (float(item.value), -int(item.step)))
+    if notebook_losses is not None:
+        if not notebook_losses:
+            return None
+        selected = min(notebook_losses, key=lambda item: (float(item.value), int(item.step)))
+        selected_history = [item for item in history if int(item.step) == int(selected.step)]
+        if not selected_history:
+            return None
+        best = selected_history[-1]
+    else:
+        best = max(history, key=lambda item: (float(item.value), -int(item.step)))
     threshold = _metric_value_at_step(thresholds, int(best.step))
     artifact_root = getattr(run.info, "artifact_uri", None)
     artifact_uri = (
@@ -516,13 +530,14 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         mlflow.log_metric("train/stopped_early", int(result.stopped_early))
         validation_history = [item for item in result.history if item.validation_performed]
         if validation_history:
+            selected = result.diagnostics.get("checkpoint_selection", {})
             mlflow.log_metric(
                 "train/best_quality_f1",
-                max(item.val_quality_f1 for item in validation_history),
+                selected.get("quality_f1", max(item.val_quality_f1 for item in validation_history)),
             )
             mlflow.log_metric(
                 "train/best_threshold_pixel_f1",
-                max(item.val_best_threshold_pixel_f1 for item in validation_history),
+                selected.get("pixel_f1", max(item.val_best_threshold_pixel_f1 for item in validation_history)),
             )
             macro_values = [
                 item.val_macro_pixel_f1
@@ -564,6 +579,7 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         "runtime_environment": "reports/runtime_environment.json",
         "validation_by_scene": "reports/validation_by_scene.json",
         "inference_merge_comparison": "reports/inference_merge_comparison.json",
+        "checkpoint_selection": "reports/checkpoint_selection.json",
     }
     for key, artifact_path in diagnostic_artifacts.items():
         value = diagnostics.get(key)

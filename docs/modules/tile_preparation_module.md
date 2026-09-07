@@ -17,7 +17,7 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `TileClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
 - `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file` и `footprint_file`.
-- `TileSplitRequest` — `val_fraction`, `seed`, `strategy=window_random|scene_fold`, `validation_fold`, `spatial_purge`.
+- `TileSplitRequest` — `val_fraction`, `seed`, `strategy=window_random|scene_fold|notebook_random`, `validation_fold`, `spatial_purge`.
 - `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional сбор histogram.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -28,6 +28,13 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `torch.utils.data` — sampler, DataLoader и фиксированный val subset.
 
 ## Алгоритм работы и его особенности
+
+Отдельная ветка `next_gen2` строит полные окна без контекста и фильтрации nodata, повторяет два
+случайных разбиения ноутбука 60/20/20 и записывает порядок сцен, координаты и индексы всех частей.
+Тестовая часть только резервируется. По обучающим маскам рассчитываются обратные частоты классов
+со средним весом 1 и веса sampler 15/1 при доле объекта >0.001. Validation полная, без балансировки
+и кэша. Нормализация выполняется моделью. Геометрия положительной разметки на nodata сохраняется;
+системная hard-negative разметка остаётся фоном. Прежние ветки не меняются.
 
 Для каждой сцены строится сетка полезных центров `0,stride,...`. Полное входное окно начинается в `-context` и имеет размер `tile_size`; его полезный центр имеет размер `tile_size - 2 × context`. Поэтому первые и последние пиксели TIFF попадают в полезную область, а внешняя рамка читается через `boundless=True` как nodata. `context=0` полностью сохраняет прежнюю сетку. Sampling-категория определяется только по геометрии полезного центра. Настройки обязаны удовлетворять `tile_size > 2 × context`.
 

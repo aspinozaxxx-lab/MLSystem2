@@ -600,8 +600,8 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
     [bootstrap.datasets, datasetKey],
   );
   const trainingSchema = useMemo(
-    () => trainingConfigSchema(template?.config_schema, selectedDataset?.task || "binary"),
-    [selectedDataset?.task, template?.config_schema],
+    () => trainingConfigSchema(template?.config_schema, selectedDataset?.task || "binary", String(config["train.pipeline_variant"] || "legacy")),
+    [selectedDataset?.task, template?.config_schema, config["train.pipeline_variant"]],
   );
 
   useEffect(() => {
@@ -1065,7 +1065,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                       <td>
                         {row.result ? (
                           <span className="source-lines">
-                            <strong>{row.result.model_name}</strong>
+                            <strong>{trainingModelLabel(row.result.model_name, row.result.pipeline_variant)}</strong>
                             <small className="muted">{row.result.architecture}</small>
                           </span>
                         ) : (
@@ -3534,7 +3534,9 @@ function openTrainingStopModal(
       <div className="form-stack">
         <p>
           Можно завершить обучение штатно и сохранить как успешный результат <strong>best.pt</strong> —
-          чекпойнт эпохи с максимальной валидационной F1 по метрике этого обучения.
+          {job.pipeline_variant === "next_gen2"
+            ? " чекпойнт эпохи с минимальной ошибкой валидации."
+            : " чекпойнт эпохи с максимальной валидационной F1 по метрике этого обучения."}
         </p>
         <p>Текущая незавершённая эпоха будет отброшена. Файл final.pt вместо лучшего не используется.</p>
         {!checkpointAvailable ? (
@@ -3552,7 +3554,7 @@ function openTrainingStopModal(
           className="primary"
           type="button"
           disabled={!checkpointAvailable}
-          title={checkpointAvailable ? "Сохранить чекпойнт с лучшей F1" : "Первая эпоха ещё не завершена"}
+          title={checkpointAvailable ? (job.pipeline_variant === "next_gen2" ? "Сохранить чекпойнт с минимальной ошибкой валидации" : "Сохранить чекпойнт с лучшей F1") : "Первая эпоха ещё не завершена"}
           onClick={async () => {
             const updated = await run(() => apiJson<JobDetail>(`/jobs/${job.id}/stop-and-save-best`, { method: "POST" }));
             if (!updated) return;
@@ -3673,7 +3675,7 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
     <>
       <PageHeader
         title={`Job ${job.id}`}
-        subtitle={`${job.dataset_name} · ${job.model_name}`}
+        subtitle={`${job.dataset_name} · ${trainingModelLabel(job.model_name, job.pipeline_variant)}`}
         actions={
           <div className="inline-row">
             {job.type === "training" && job.dataset_key ? (
@@ -3715,7 +3717,7 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
           <Metric
             label="Статус"
             value={job.stop_and_save_best_requested && isActiveStatus(job.status)
-              ? <span className="badge warning">сохраняется лучший чекпойнт по F1</span>
+              ? <span className="badge warning">{job.pipeline_variant === "next_gen2" ? "сохраняется минимум ошибки валидации" : "сохраняется лучший чекпойнт по F1"}</span>
               : statusBadge(job.status, job.type, job.progress)}
           />
           <Metric label="Тип" value={job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение"} />
@@ -3990,11 +3992,14 @@ function ConfigEditor({
 }) {
   const setField = (field: ConfigField, raw: unknown) => {
     const nextValue = coerceConfigValue(field, raw);
-    onChange(configWithField(value, field.key, nextValue));
+    onChange(configWithField(value, field.key, nextValue, schema.pipeline_defaults));
   };
   const pipelineVariant = String(value["train.pipeline_variant"] || "legacy");
   return (
     <div className="config-grid">
+      {pipelineVariant === "next_gen2" ? (
+        <p className="muted">next-gen2: полные окна без дополнения краёв; разбиение тайлов 60/20/20; нормализация каждого окна; положительные тайлы получают вес 15. Лучшие веса выбираются по минимальной ошибке валидации. Пересекающиеся тайлы могут попасть в разные части, как в исходном ноутбуке.</p>
+      ) : null}
       {(schema.fields || []).filter((field) =>
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
       ).map((field) => {
@@ -4004,8 +4009,12 @@ function ConfigEditor({
         const fixedPipelineVariant =
           field.key === "train.pipeline_variant" &&
           Boolean(architecture) &&
-          architecture !== "smp_segformer_b0";
-        const tooltip = configFieldTooltip(field);
+          !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
+        const tooltip = pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
+          ? "Число полных эпох без уменьшения ошибки валидации. В исходном ноутбуке — 9."
+          : pipelineVariant === "next_gen2" && field.key === "train.weight_decay"
+            ? "Регуляризация AdamW. Исходный ноутбук использует значение по умолчанию 0.01."
+            : configFieldTooltip(field);
         const label = (
           <span title={tooltip || field.label}>
             <span>{field.label}</span>
@@ -4040,9 +4049,11 @@ function ConfigEditor({
                   title={tooltip || field.label}
                   onChange={(event) => setField(field, event.target.value)}
                 >
-                  {field.options.map((option) => (
+                  {field.options.filter((option) => field.key !== "train.pipeline_variant" ||
+                    (architecture === "segformer_b0" ? option !== "legacy" : option !== "next_gen2")
+                  ).map((option) => (
                     <option value={option} key={option}>
-                      {option}
+                      {field.key === "train.pipeline_variant" ? option.replace("_", "-") : option}
                     </option>
                   ))}
                 </select>
@@ -4268,7 +4279,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
               <td className="technical-value">{job.queue_position}</td>
               <td>
                 {job.stop_and_save_best_requested && isActiveStatus(job.status)
-                  ? <span className="badge warning">сохраняется лучший F1</span>
+                  ? <span className="badge warning">{job.pipeline_variant === "next_gen2" ? "сохраняется минимум ошибки валидации" : "сохраняется лучший F1"}</span>
                   : statusBadge(job.status, job.type, job.progress)}
               </td>
               <td>
@@ -4472,7 +4483,7 @@ function ResultsTable({
                             <Star className={result.is_primary ? "primary-star" : undefined} size={17} fill={result.is_primary ? "currentColor" : "none"} />
                           </button>
                         ) : null}
-                        {result.model_name}
+                        {trainingModelLabel(result.model_name, result.pipeline_variant)}
                       </strong>
                       <small className="muted">{result.architecture}</small>
                     </span>
@@ -4751,10 +4762,13 @@ function parseExportContext(value: string): number | null | undefined {
 export function trainingConfigSchema(
   schema: ConfigSchema | undefined,
   task: DatasetInfo["task"],
+  pipelineVariant = "legacy",
 ): ConfigSchema | undefined {
   if (!schema) return undefined;
   const allowedLosses =
-    task === "multiclass"
+    pipelineVariant === "next_gen2"
+      ? ["cross_entropy"]
+      : task === "multiclass"
       ? ["cross_entropy", "cross_entropy_dice"]
       : ["bce_dice", "focal_dice", "focal_tversky"];
   return {
@@ -4997,10 +5011,14 @@ function queueDatasetCell(job: JobSummary): ReactNode {
 function queueModelCell(job: JobSummary): ReactNode {
   return (
     <span className="source-lines">
-      <span>{job.model_name}</span>
+      <span>{trainingModelLabel(job.model_name, job.pipeline_variant)}</span>
       {job.tile_size ? <small className="muted">tile={job.tile_size}</small> : null}
     </span>
   );
+}
+
+function trainingModelLabel(name: string, variant: string): string {
+  return variant === "next_gen2" ? `${name.replace(" (next-gen)", "")} (next-gen2)` : name;
 }
 
 function mergedQueueJobs(snapshot: QueueSnapshot): JobSummary[] {
@@ -5021,10 +5039,13 @@ export function configWithField(
   value: JsonRecord,
   key: string,
   nextValue: unknown,
+  pipelineDefaults?: Record<string, JsonRecord>,
 ): JsonRecord {
-  const next = { ...value, [key]: nextValue };
+  const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
+  const next = { ...value, ...preset, [key]: nextValue };
   if (key === "train.pipeline_variant" && nextValue === "next_gen") {
     next["train.max_val_batches_per_epoch"] = null;
+    if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
   }
   return next;
 }
@@ -5035,6 +5056,14 @@ export function trainingConfigFieldVisible(
   architecture?: string,
 ): boolean {
   if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
+  if (pipelineVariant === "next_gen2" && [
+    "dataset.val_fraction", "tile_preparation.context", "tile_preparation.augmentation_level",
+    "tile_preparation.positive_factor", "tile_preparation.hard_negative_factor",
+    "tile_preparation.background_factor", "train.pretrained", "train.loss",
+    "train.focal_alpha", "train.pos_weight", "train.background_weight",
+    "train.hard_negative_weight", "train.tversky_alpha", "train.tversky_beta",
+    "train.threshold", "train.max_train_batches_per_epoch", "train.max_val_batches_per_epoch",
+  ].includes(key)) return false;
   if (key === "train.pretrained") {
     return pipelineVariant === "next_gen" && architecture === "segformer_b0";
   }

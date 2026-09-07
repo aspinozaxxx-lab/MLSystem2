@@ -68,6 +68,24 @@ def create_tile_dataloader(
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
+    if request.pipeline_variant == "next_gen2":
+        # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
+        sampler = (
+            WeightedRandomSampler(dataset.sampling_weights(), num_samples=len(dataset), replacement=True)
+            if request.mode == "train" else None
+        )
+        kwargs = {
+            "dataset": dataset, "batch_size": request.batch_size, "sampler": sampler,
+            "shuffle": False, "num_workers": tile_settings.num_workers,
+            "collate_fn": _collate_tile_batch, "worker_init_fn": _seed_tile_worker,
+        }
+        if tile_settings.num_workers > 0:
+            kwargs["prefetch_factor"] = _effective_prefetch_factor(
+                prefetch_epochs=tile_settings.prefetch_epochs, dataset_size=len(dataset),
+                batch_size=request.batch_size, num_workers=tile_settings.num_workers,
+            )
+        return DataLoader(**kwargs)
+
     if request.mode == "val":
         return _create_val_loader(
             torch=torch,

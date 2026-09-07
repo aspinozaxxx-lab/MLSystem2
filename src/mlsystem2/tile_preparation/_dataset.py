@@ -24,7 +24,7 @@ from ._mask import (
     rasterize_instance_mask,
     rasterize_window_mask,
 )
-from ._valid_footprint import filter_valid_windows
+from ._valid_footprint import ValidFootprintDiagnostics, filter_valid_windows
 from ._windows import TileWindow, build_tile_windows, core_tile_window
 from .contracts import (
     TileClassAnnotation,
@@ -110,6 +110,10 @@ class TileDataset:
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
         self._pipeline_variant = pipeline_variant
+        if pipeline_variant == "next_gen2" and (context or augmentation_level):
+            raise TilePreparationError("next-gen2 использует окна без контекста и аугментаций")
+        self._notebook_positive_ratios: np.ndarray | None = None
+        self._notebook_class_weights: list[float] = []
         self._collect_band_histogram_enabled = collect_band_histogram
         self._band_histogram: dict[str, object] | None = None
         self._tile_split_manifest: dict[str, object] = {"strategy": "none"}
@@ -158,12 +162,19 @@ class TileDataset:
                         tile_size,
                         stride,
                         context,
+                        full_windows_only=pipeline_variant == "next_gen2",
                     )
-                    valid_windows, diagnostics = filter_valid_windows(
-                        dataset,
-                        candidate_windows,
-                        nodata=nodata,
-                    )
+                    if pipeline_variant == "next_gen2":
+                        valid_windows = candidate_windows
+                        diagnostics = ValidFootprintDiagnostics(
+                            len(candidate_windows), len(candidate_windows), 0, 0, 0, 0
+                        )
+                    else:
+                        valid_windows, diagnostics = filter_valid_windows(
+                            dataset,
+                            candidate_windows,
+                            nodata=nodata,
+                        )
                     self._scene_tile_diagnostics.append(
                         {
                             "scene_id": scene.scene_id,
@@ -217,6 +228,8 @@ class TileDataset:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
         self._record_scene_selected_counts()
+        if self._pipeline_variant == "next_gen2" and self._mode == "train":
+            self._compute_notebook_statistics()
         if self._collect_band_histogram_enabled:
             self._band_histogram = self._collect_band_histogram()
         self._close_datasets()
@@ -238,6 +251,9 @@ class TileDataset:
             _nodata_pixels(image_raw, nodata),
             self._read_invalid_data_pixels(dataset, window),
         )
+        if self._pipeline_variant == "next_gen2":
+            # Ноутбук обучается на всех пикселях окна, включая nodata и raster mask.
+            nodata_pixels = np.zeros(image_raw.shape[-2:], dtype=bool)
         image = image_raw.astype(np.float32, copy=False)
         image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
@@ -429,6 +445,26 @@ class TileDataset:
         return self._pipeline_variant
 
     @property
+    def notebook_class_weights(self) -> list[float]:
+        return list(self._notebook_class_weights)
+
+    def _compute_notebook_statistics(self) -> None:
+        ratios = []
+        for item in self._windows:
+            dataset = self._open_dataset(item.scene_index)
+            window = Window(item.window.x, item.window.y, self._tile_size, self._tile_size)
+            mask = self._read_supervision_mask(
+                item.scene_index, dataset, window,
+                np.zeros((self._tile_size, self._tile_size), dtype=bool),
+            )
+            ratios.append(float(np.mean(mask == 1, dtype=np.float32)))
+        self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
+        positive = self._notebook_positive_ratios.sum()
+        negative = (1 - self._notebook_positive_ratios).sum()
+        weights = 1.0 / (np.asarray([negative, positive]) + 1e-6)
+        self._notebook_class_weights = (weights / weights.mean()).astype(np.float32).tolist()
+
+    @property
     def estimated_positive_tiles(self) -> int | None:
         if self._positive_hint_by_index is None:
             return None
@@ -491,6 +527,11 @@ class TileDataset:
         hard_negative_factor: float | None = None,
         background_factor: float | None = None,
     ) -> list[float] | None:
+        if getattr(self, "_pipeline_variant", "legacy") == "next_gen2":
+            if self._notebook_positive_ratios is None:
+                return None
+            weights = np.where(self._notebook_positive_ratios > 0.001, 15.0, 1.0)
+            return (weights / weights.sum()).tolist()
         categories = self._category_hints()
         if categories is None:
             return None
@@ -875,6 +916,35 @@ class TileDataset:
 
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
+            return
+        if tile_split.strategy == "notebook_random":
+            # Два ShuffleSplit из train_test_split, каждый с новым RandomState(seed).
+            count = len(self._windows)
+            temporary_count = math.ceil(count * 0.4)
+            test_count = math.ceil(temporary_count * 0.5)
+            if count - temporary_count < 1 or temporary_count - test_count < 1:
+                raise TilePreparationError("next-gen2: недостаточно полных окон для разбиения 60/20/20")
+            order = np.random.RandomState(tile_split.seed).permutation(count)
+            temporary = order[:temporary_count]
+            second_order = np.random.RandomState(tile_split.seed).permutation(temporary_count)
+            subsets = {
+                "train": order[temporary_count:].tolist(),
+                "val": temporary[second_order[test_count:]].tolist(),
+                "test": temporary[second_order[:test_count]].tolist(),
+            }
+            self._tile_split_manifest = {
+                "strategy": "notebook_random",
+                "seed": tile_split.seed,
+                "fractions": {"train": 0.6, "val": 0.2, "test": 0.2},
+                "scene_order": [scene.scene_id for scene in self._scenes],
+                "windows": [
+                    [item.scene_id, item.window.x, item.window.y] for item in self._windows
+                ],
+                "indices": subsets,
+                "mode": self._mode,
+                "selected_window_count": len(subsets[self._mode]),
+            }
+            self._select_indices(subsets[self._mode])
             return
         if tile_split.strategy == "scene_fold":
             selected_indices, warnings, manifest = self._scene_fold_indices(tile_split)

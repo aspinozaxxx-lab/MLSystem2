@@ -27,6 +27,14 @@
 
 ## Алгоритм работы и его особенности
 
+`next_gen2` использует HF B0 с двумя внутренними logits и одним внешним выходом. Веса загружаются
+из того же закреплённого источника с `num_labels=2`, `ignore_mismatched_sizes=True`, `use_safetensors=True`.
+Новая входная свёртка копирует RGB и RED→NIR, но сохраняет случайное смещение исходного ноутбука.
+Внутри модели каждый канал окна нормализуется min-max; диапазон ≤1e-6 даёт нули, nodata не исключается.
+Вызов `model(raw, return_two_class_logits=True)` возвращает два logits для точной CrossEntropy обучения;
+обычный `model(raw)` — разность foreground/background после билинейного увеличения, совместимую с
+бинарным sigmoid и экспортом. HF-конфигурация с обеими головами сохраняется; загрузка checkpoint автономна.
+
 `ModelSpec.output_channels` задает число каналов logits. Для binary segmentation это `1`; для multiclass segmentation это `len(dataset.classes)+1`, где нулевой канал соответствует background.
 
 В `legacy` поддерживаются две ветки SegFormer. `segformer_b0` и `segformer_b2` строятся через Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачиваются приватным wrapper. Legacy-wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer.

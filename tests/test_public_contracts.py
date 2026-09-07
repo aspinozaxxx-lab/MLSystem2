@@ -52,3 +52,18 @@ def test_public_api_all_is_exact() -> None:
     for module_name, expected in EXPECTED_API.items():
         module = importlib.import_module(f"mlsystem2.{module_name}")
         assert list(module.__all__) == expected
+
+
+def test_next_gen2_uses_existing_public_contracts() -> None:
+    from mlsystem2.settings.contracts import TrainSettings
+    from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSplitRequest
+    from mlsystem2.train.contracts import TrainConfig
+    from mlsystem2.training_ui_api.contracts import ConfigSchema, JobDetail, JobSummary, TrainingResultInfo
+
+    for dto in (TrainSettings, TrainConfig, TileDataloaderRequest, JobDetail, JobSummary, TrainingResultInfo):
+        assert dto.model_json_schema()["properties"]["pipeline_variant"]["enum"] == [
+            "legacy", "next_gen", "next_gen2",
+        ]
+    assert "notebook_random" in TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"]
+    assert ConfigSchema(fields=[]).pipeline_defaults == {}
+    assert TrainConfig.model_fields["class_weights"].default_factory() == []

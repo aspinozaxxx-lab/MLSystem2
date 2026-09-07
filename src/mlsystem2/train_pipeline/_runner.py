@@ -217,7 +217,7 @@ def run_train_pipeline(
                     "positive_factor_used",
                     settings.tile_preparation.positive_factor,
                 )
-                if _uses_weighted_sampler(train_loader)
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
                 else None
             ),
             hard_negative_factor_used=(
@@ -226,7 +226,7 @@ def run_train_pipeline(
                     "hard_negative_factor_used",
                     settings.tile_preparation.hard_negative_factor,
                 )
-                if _uses_weighted_sampler(train_loader)
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
                 else None
             ),
             background_factor_used=(
@@ -235,7 +235,7 @@ def run_train_pipeline(
                     "background_factor_used",
                     settings.tile_preparation.background_factor,
                 )
-                if _uses_weighted_sampler(train_loader)
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
                 else None
             ),
         )
@@ -270,7 +270,7 @@ def run_train_pipeline(
         train_result = _expect_train_result(train_result)
 
         tile_report = _tile_preparation_report(settings, train_loader, val_loader)
-        if settings.train.pipeline_variant == "next_gen":
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}:
             _attach_next_gen_diagnostics(
                 train_result,
                 settings,
@@ -287,7 +287,9 @@ def run_train_pipeline(
         report = PipelineReport(
             status=PipelineStatus.SUCCEEDED,
             message=(
-                "Обучение остановлено пользователем; сохранён чекпойнт с лучшей F1."
+                ("Обучение остановлено пользователем; сохранён чекпойнт с минимальной ошибкой валидации."
+                 if settings.train.pipeline_variant == "next_gen2"
+                 else "Обучение остановлено пользователем; сохранён чекпойнт с лучшей F1.")
                 if train_result.stopped_early
                 else "Конвейер обучения завершен."
             ),
@@ -369,7 +371,7 @@ def _mlflow_start_request(
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     expected_band_names = (
         ["RED", "GRN", "BLU", "NIR"]
-        if settings.train.pipeline_variant == "next_gen"
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
         else []
     )
     if settings.dataset.classes:
@@ -448,7 +450,9 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
         val_fraction=settings.dataset.val_fraction,
         seed=settings.tile_preparation.seed,
         strategy=(
-            "scene_fold"
+            "notebook_random"
+            if settings.train.pipeline_variant == "next_gen2"
+            else "scene_fold"
             if settings.train.pipeline_variant == "next_gen"
             else "window_random"
         ),
@@ -466,6 +470,9 @@ def _tile_request(
     include_object_instances: bool = False,
     collect_band_histogram: bool = False,
 ) -> TileDataloaderRequest:
+    pipeline_variant = {
+        "scene_fold": "next_gen", "notebook_random": "next_gen2",
+    }.get(tile_split.strategy if tile_split else "", "legacy")
     scenes = [
         TileSceneSource(
             scene_id=item.scene_id,
@@ -494,9 +501,7 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
-            pipeline_variant=(
-                "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
-            ),
+            pipeline_variant=pipeline_variant,
             collect_band_histogram=collect_band_histogram,
         )
     if dataset.classes:
@@ -517,9 +522,7 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
-            pipeline_variant=(
-                "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
-            ),
+            pipeline_variant=pipeline_variant,
             collect_band_histogram=collect_band_histogram,
         )
     if dataset.annotation_file is None and not all(
@@ -535,15 +538,32 @@ def _tile_request(
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
         include_object_instances=include_object_instances,
-        pipeline_variant=(
-            "next_gen" if tile_split and tile_split.strategy == "scene_fold" else "legacy"
-        ),
+        pipeline_variant=pipeline_variant,
         collect_band_histogram=collect_band_histogram,
     )
 
 
 def _model_spec(settings: SystemSettings, train_loader: object | None = None) -> ModelSpec:
     parameters: dict[str, object] = {}
+    if settings.train.pipeline_variant == "next_gen2":
+        dataset = getattr(train_loader, "dataset", None)
+        parameters = {
+            "pipeline_variant": "next_gen2",
+            "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6},
+            "band_contract": ["RED", "GRN", "BLU", "NIR"],
+            "split": getattr(dataset, "tile_split_manifest", {}),
+            "class_weights": getattr(dataset, "notebook_class_weights", []),
+            "sampler": {"positive_ratio_threshold": 0.001, "positive_weight": 15.0,
+                        "background_weight": 1.0, "replacement": True},
+            "scheduler": {"name": "reduce_lr_on_plateau", "mode": "min",
+                          "factor": 0.5, "patience": 3, "min_lr": 0.0},
+            "checkpoint_selection_metric": "val_loss",
+            "threshold_policy": {"mode": "fixed", "configured_threshold": 0.5},
+            "source_notebook": {
+                "name": "train_full_pipeline_заболачивание.ipynb",
+                "sha256": "165157276ae777ef9e7538b7daead9d27cb8dc42c8bdf8225278b40defd5a5f4",
+            },
+        }
     if settings.train.pipeline_variant == "next_gen":
         dataset = getattr(train_loader, "dataset", None)
         histogram = getattr(dataset, "band_histogram", None)
@@ -604,18 +624,23 @@ def _load_or_create_model(
                 map_location=settings.train.device,
             )
         )
-        if settings.train.pipeline_variant == "next_gen":
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}:
             loaded_spec = loaded.model.spec
             if (
                 loaded_spec.name != spec.name
                 or loaded_spec.input_channels != spec.input_channels
                 or loaded_spec.output_channels != spec.output_channels
+                or loaded_spec.parameters.get("pipeline_variant") != settings.train.pipeline_variant
                 or loaded_spec.parameters.get("preprocessing")
                 != spec.parameters.get("preprocessing")
             ):
                 raise TrainPipelineError(
-                    "Параметры next_gen checkpoint не совпадают с текущей архитектурой/preprocessing"
+                    "Вариант конвейера, архитектура или нормализация чекпойнта не совпадают с запросом"
                 )
+            # Новый запуск сохраняет текущее разбиение и веса классов, HF-конфигурация — из checkpoint.
+            loaded.model.spec = loaded_spec.model_copy(update={
+                "parameters": {**loaded_spec.parameters, **spec.parameters},
+            })
         return loaded.model
     return deps.create_model(spec)
 
@@ -680,7 +705,7 @@ def _attach_next_gen_diagnostics(
     }
     result.diagnostics.update(
         {
-            "pipeline_variant": "next_gen",
+            "pipeline_variant": settings.train.pipeline_variant,
             "validation_fold": settings.next_gen.validation_fold,
             "resolved_train_config": settings.model_dump(mode="json"),
             "split_manifest": split_manifest,
@@ -691,6 +716,10 @@ def _attach_next_gen_diagnostics(
             "tile_preparation": tile_report,
         }
     )
+
+    if settings.train.pipeline_variant == "next_gen2":
+        result.diagnostics.pop("validation_fold", None)
+        result.diagnostics.pop("validation_by_scene", None)
 
 
 def _flatten_mlflow_params(
@@ -1111,8 +1140,10 @@ def _tile_preparation_report(
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
-    if settings.train.pipeline_variant == "next_gen" and _loader_attr(loader, "cache_mode"):
+    if settings.train.pipeline_variant in {"next_gen", "next_gen2"} and _loader_attr(loader, "cache_mode"):
         return "full_natural_validation"
+    if settings.train.pipeline_variant == "next_gen2":
+        return "weighted_positive_15" if _uses_weighted_sampler(loader) else "full_natural_validation"
     cache_mode = _loader_attr(loader, "cache_mode")
     if cache_mode == "memory":
         return "cached_balanced"
@@ -1201,6 +1232,10 @@ def _train_request(
             task=settings.train.task,
             quality_metric=settings.train.quality_metric,
             pipeline_variant=settings.train.pipeline_variant,
+            class_weights=(
+                list(getattr(getattr(train_loader, "dataset", None), "notebook_class_weights", []))
+                if settings.train.pipeline_variant == "next_gen2" else []
+            ),
             validation_interval_epochs=(
                 settings.next_gen.validation_interval_epochs
                 if settings.train.pipeline_variant == "next_gen"
@@ -1209,7 +1244,7 @@ def _train_request(
             threshold_mode=(
                 settings.next_gen.threshold_mode
                 if settings.train.pipeline_variant == "next_gen"
-                else "optimize"
+                else "fixed" if settings.train.pipeline_variant == "next_gen2" else "optimize"
             ),
             evaluate_gaussian_blend=(
                 settings.next_gen.evaluate_gaussian_blend
@@ -1272,7 +1307,7 @@ def _train_request(
                 "dataset_revision": _dataset_revision(dataset),
                 "code_revision": _code_revision(settings.runtime.project_root),
             }
-            if settings.train.pipeline_variant == "next_gen"
+            if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
             else {}
         ),
     )

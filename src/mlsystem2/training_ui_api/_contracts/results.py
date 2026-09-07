@@ -103,7 +103,7 @@ class TrainingResultInfo(BaseModel):
     dataset_version: str | None = None
     model_name: str
     architecture: str
-    pipeline_variant: Literal["legacy", "next_gen"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
     validation_fold: int = Field(default=0, ge=0)
     is_primary: bool = False
     input_channels: int = Field(default=4, gt=0)

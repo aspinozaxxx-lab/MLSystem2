@@ -17,6 +17,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 
 ## Публичные контракты
 
+`ConfigSchema.pipeline_defaults` содержит серверные наборы параметров при переключении конвейера;
+по умолчанию это пустой словарь. `JobSummary`, `JobDetail` и `TrainingResultInfo.pipeline_variant`
+принимают `legacy|next_gen|next_gen2`. Новая таблица БД не требуется.
+
 - `TrainingUIAPIError` - ошибка сервиса.
 - `TemplateSource`, `JobType`, `JobSource`, `JobStatus`, `ResultStatus`, `StoredFileKind` - enum-значения API.
 - `AppLink`, `AppLinksResponse` - ссылки Grafana, MLflow и авторизованного браузера подготовленных снимков.
@@ -210,6 +214,11 @@ auto jobs: queued rows уходят из очередей, running process по�
 создает новые jobs по текущим правилам и версиям датасетов, а не восстанавливает старую очередь.
 
 ## Алгоритм работы и его особенности
+
+HF SegFormer B0 допускает выбор `next-gen2`. UI применяет исходный профиль ноутбука из
+`ConfigSchema.pipeline_defaults`, скрывает несовместимые параметры и сохраняет выбор в обычном шаблоне/job.
+API отклоняет несовместимые архитектуру, тип снимков/задачи и настройки; worker сохраняет CrossEntropy,
+полную нарезку, seed 42 и workers 0. Результаты и остановка с сохранением учитывают выбор best по loss.
 
 Служебное восстановление исторических combined→managed наборов читает последний полный Git-снимок удалённой
 папки и дополняет текущие binary-источники только непокрытой положительной геометрией. Hard negative из снимка и
