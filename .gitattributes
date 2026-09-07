@@ -1,2 +1,3 @@
 # Сохранять исходные байты эталонного ноутбука на всех платформах.
 tests/fixtures/next_gen2_train.ipynb -text
+tests/fixtures/next_gen2_eval.ipynb -text

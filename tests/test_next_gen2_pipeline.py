@@ -44,6 +44,7 @@ EVAL_SOURCE = SOURCE.with_name("next_gen2_eval.ipynb")
 
 def _eval_notebook_functions():
     torch = pytest.importorskip("torch")
+    # .gitattributes сохраняет байты эталона также при checkout на Windows.
     assert hashlib.sha256(EVAL_SOURCE.read_bytes()).hexdigest() == (
         "0e9e2abac0a2390737419da01c7a274ed2f1eea8ccf204e6d26a272b07b0507b"
     )
