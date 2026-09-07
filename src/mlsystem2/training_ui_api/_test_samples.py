@@ -3150,6 +3150,7 @@ def queue_test_sample_evaluation(
         result.architecture,
         result.class_key,
         postprocess_profile,
+        training_result=result,
     )
     active_job = (
         session.get(JobRow, sample.evaluation_job_id)
@@ -3745,6 +3746,7 @@ def _test_metric_needs_reconciliation(
         result.class_key,
         postprocess_profile,
         evaluation_scope=(_training_result_test_scope(plan) if plan.managed else None),
+        training_result=result,
     )
     if not _training_metric_matches(metric, plan, template, config_hash):
         return True
@@ -3817,6 +3819,7 @@ def queue_training_result_test_f1(
         result.class_key,
         postprocess_profile,
         evaluation_scope=evaluation_scope if plan.managed else None,
+        training_result=result,
     )
     if metric is not None and _training_metric_matches(
         metric,
@@ -3985,6 +3988,7 @@ def training_result_test_f1_info(
         result.class_key,
         postprocess_profile,
         evaluation_scope=(_training_result_test_scope(plan) if plan.managed else None),
+        training_result=result,
     )
     status = metric.status
     if not _training_metric_matches(metric, plan, template, config_hash):
@@ -4104,6 +4108,7 @@ def _effective_inference_template(
     postprocess_profile: str,
     *,
     evaluation_scope: list[dict[str, Any]] | None = None,
+    training_result: TrainingResultRow | None = None,
 ) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
     template = session.scalar(
         select(InferenceTemplateRow).where(
@@ -4126,6 +4131,12 @@ def _effective_inference_template(
         "postprocess_profile": postprocess_profile,
         "template_config": template_config,
     }
+    source_job = (
+        session.get(JobRow, training_result.job_id)
+        if training_result is not None and training_result.job_id is not None else None
+    )
+    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "next_gen2":
+        hash_payload["inference_profile"] = "next_gen2_eval_v1"
     if evaluation_scope is not None:
         hash_payload["evaluation_scope"] = evaluation_scope
         hash_payload["f1_aggregation"] = "macro"

@@ -32,13 +32,164 @@ from mlsystem2.train import _trainer
 from mlsystem2.train.contracts import TrainConfig, TrainRequest
 from mlsystem2.train_pipeline import _runner
 from mlsystem2.train_pipeline.contracts import TrainPipelineRequest
-from mlsystem2.training_ui_api import _service
+from mlsystem2.training_ui_api import _pseudo_runner, _service, _test_samples
 from mlsystem2.training_ui_api._templates import (
     CONFIG_SCHEMA, NEXT_GEN2_DEFAULT_CONFIG, initial_templates, sanitize_template_config,
 )
 
 
 SOURCE = Path(__file__).parent / "fixtures" / "next_gen2_train.ipynb"
+EVAL_SOURCE = SOURCE.with_name("next_gen2_eval.ipynb")
+
+
+def _eval_notebook_functions():
+    torch = pytest.importorskip("torch")
+    assert hashlib.sha256(EVAL_SOURCE.read_bytes()).hexdigest() == (
+        "0e9e2abac0a2390737419da01c7a274ed2f1eea8ccf204e6d26a272b07b0507b"
+    )
+    notebook = json.loads(EVAL_SOURCE.read_text(encoding="utf-8"))
+    tree = ast.parse("\n".join("".join(cell["source"]) for cell in notebook["cells"]
+                               if cell["cell_type"] == "code"))
+    definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    threshold = next(ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign) and any(
+                         isinstance(target, ast.Name) and target.id == "theshold" for target in node.targets))
+    namespace = {"np": np, "rasterio": rasterio, "torch": torch,
+                 "Window": rasterio.windows.Window, "F": torch.nn.functional,
+                 "DEVICE": "cpu", "theshold": threshold,
+                 "tqdm": lambda values, **kwargs: values}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(EVAL_SOURCE), "exec"), namespace)
+    return namespace
+
+
+def _eval_model():
+    torch = pytest.importorskip("torch")
+
+    class LocalLogits(torch.nn.Module):
+        def forward(self, images):
+            local = torch.nn.functional.avg_pool2d(images[:, :1], 4)
+            axis = torch.linspace(-1, 1, local.shape[-1]).reshape(1, 1, 1, -1)
+            foreground = 4 - 6 * local + 4 * axis
+            return SimpleNamespace(logits=torch.cat((torch.zeros_like(foreground), foreground), dim=1))
+
+    return LocalLogits().eval()
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 32])
+def test_inference_probabilities_and_mask_match_eval_notebook(tmp_path, batch_size):
+    torch = pytest.importorskip("torch")
+    torch.set_num_threads(2)
+    reference = _eval_notebook_functions()
+    image, _ = _scene(tmp_path)
+    # Маска TIFF не должна скрывать исходные пиксели от нормализации ноутбука.
+    with rasterio.open(image, "r+") as dataset:
+        valid = np.full((100, 100), 255, dtype=np.uint8)
+        valid[32:64, 32:64] = 0
+        dataset.write_mask(valid)
+    model = _eval_model()
+    expected_mask, expected_probabilities = reference["sliding_window_inference"](
+        model, image, 32, 16, batch_size,
+    )
+    wrapped = _factory._wrap_next_gen(_spec(), model).model
+    metrics = {}
+    with rasterio.open(image) as dataset:
+        actual_mask, actual_probabilities = _pseudo_runner._infer_notebook_scene_mask(
+            dataset=dataset, input_indexes=(1, 2, 3, 4), input_channels=4,
+            torch=torch, model=wrapped, tile_size=32, stride=16,
+            batch_size=batch_size, threshold=reference["theshold"], device="cpu", metrics=metrics,
+        )
+    np.testing.assert_array_equal(actual_probabilities, expected_probabilities)
+    np.testing.assert_array_equal(actual_mask, expected_mask)
+    assert metrics["tile_count"] == 25
+    assert np.any(actual_mask[:32, :32])  # Нулевой тайл тоже проходит модель.
+    assert not np.any(actual_mask[96:]) and not np.any(actual_mask[:, 96:])
+    assert reference["theshold"] == 0.9
+    legacy = _pseudo_runner._infer_test_tile_mask(
+        torch=torch, model=wrapped, image_path=image, tile_size=32, stride=16,
+        threshold=0.9, device="cpu", postprocess_profile=_pseudo_runner._POSTPROCESS_NONE,
+    )
+    assert np.any(actual_mask != legacy)  # Усреднение до порога существенно для результата.
+
+
+def test_notebook_inference_handles_image_smaller_than_window(tmp_path):
+    image, _ = _scene(tmp_path)
+    reference = _eval_notebook_functions()
+    expected_mask, expected_probabilities = reference["sliding_window_inference"](
+        _eval_model(), image, 128, 64, 8,
+    )
+    with rasterio.open(image) as dataset:
+        actual_mask, actual_probabilities = _pseudo_runner._infer_notebook_scene_mask(
+            dataset=dataset, input_indexes=(1, 2, 3, 4), input_channels=4,
+            torch=pytest.importorskip("torch"), model=None, tile_size=128, stride=64,
+            batch_size=8, threshold=0.9, device="cpu",
+        )
+    np.testing.assert_array_equal(actual_probabilities, expected_probabilities)
+    np.testing.assert_array_equal(actual_mask, expected_mask)
+
+
+def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metrics(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    image, _ = _scene(tmp_path)
+    model = _eval_model()
+    reference = _eval_notebook_functions()
+    expected_mask, _ = reference["sliding_window_inference"](model, image, 32, 16, 8)
+    checkpoint_metadata = {"pipeline_variant": "next_gen2", "confidence_threshold": 0.5,
+                           "val_best_threshold": 0.5, "sample_size": 32, "inference_context": 0}
+    loaded = SimpleNamespace(model=_factory._wrap_next_gen(_spec(), model),
+                             artifact=SimpleNamespace(metadata=checkpoint_metadata))
+    monkeypatch.setattr(_pseudo_runner, "load_checkpoint", lambda request: loaded)
+    monkeypatch.setattr(_pseudo_runner, "_select_postprocess_profile", lambda count: _pseudo_runner._POSTPROCESS_DETAIL_V2)
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    scenes = tmp_path / "scenes.txt"
+    scenes.write_text(image.name, encoding="utf-8")
+    config = {"run_root": str(tmp_path / "pseudo"), "checkpoint_uri": str(checkpoint),
+              "images_root": str(tmp_path), "scenes_file": str(scenes),
+              "output_geojson": str(tmp_path / "prediction.geojson"), "threshold": 0.5,
+              "tile_size": 32, "stride": 16, "batch_size": 8, "device": "cpu",
+              "class_key": "test", "class_name": "Проверка", "input_channels": 4}
+    report = _pseudo_runner.run_pseudo_markup(config)
+    assert report["status"] == "ok", report
+    assert report["source"]["threshold"] == 0.9
+    assert report["source"]["inference_merge"] == "gaussian_probabilities"
+    assert report["source"]["batch_size"] == 32
+    assert report["postprocess_profile"] == "none"
+    features = json.loads(Path(config["output_geojson"]).read_text(encoding="utf-8"))["features"]
+    with rasterio.open(image) as dataset:
+        geometries = [(rasterio.warp.transform_geom("EPSG:4326", dataset.crs, item["geometry"]), 1)
+                      for item in features]
+        actual_mask = rasterize(geometries, out_shape=(100, 100), transform=dataset.transform, dtype="uint8")
+        truth = tmp_path / "truth.tif"
+        with rasterio.open(truth, "w", driver="GTiff", width=100, height=100, count=1,
+                           dtype="uint8", crs=dataset.crs, transform=dataset.transform) as output:
+            output.write(expected_mask, 1)
+    np.testing.assert_array_equal(actual_mask, expected_mask)
+    report = _pseudo_runner.run_test_sample_f1({
+        **config, "run_root": str(tmp_path / "test-f1"), "postprocess_profile": "detail_v2",
+        "tiles": [{"index": 0, "image_path": str(image), "mask_path": str(truth)}],
+    })
+    assert report["status"] == "ok", report
+    assert report["threshold"] == 0.9
+    assert report["true_positive"] == int(expected_mask.sum())
+    assert report["false_positive"] == report["false_negative"] == 0
+    assert checkpoint_metadata["confidence_threshold"] == 0.5
+    assert config["threshold"] == 0.5
+
+
+def test_inference_revision_invalidates_only_next_gen2_test_metrics():
+    source_job = SimpleNamespace(config={"train.pipeline_variant": "legacy"})
+    session = SimpleNamespace(scalar=lambda query: None, get=lambda kind, key: source_job)
+    result = SimpleNamespace(job_id="test-job")
+    previous = _test_samples._effective_inference_template(session, "segformer_b0", "test", "none")[2]
+    legacy = _test_samples._effective_inference_template(
+        session, "segformer_b0", "test", "none", training_result=result,
+    )[2]
+    assert previous == legacy
+    source_job.config["train.pipeline_variant"] = "next_gen2"
+    updated = _test_samples._effective_inference_template(
+        session, "segformer_b0", "test", "none", training_result=result,
+    )[2]
+    assert updated != previous
 
 
 def _notebook_functions():

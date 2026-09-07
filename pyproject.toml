@@ -63,3 +63,5 @@ line-length = 100
 [tool.ruff.lint.per-file-ignores]
 # Неизменяемый исходный ноутбук служит эталонными данными тестов.
 "tests/fixtures/next_gen2_train.ipynb" = ["F401"]
+# Исходный eval-ноутбук сохранён побитово, включая отсутствующий импорт shapes.
+"tests/fixtures/next_gen2_eval.ipynb" = ["F401", "F821"]

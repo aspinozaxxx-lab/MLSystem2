@@ -85,7 +85,11 @@ from ._queueing import (
     is_secondary_job,
     is_urgent_job,
 )
-from ._templates import normalize_tile_factors
+from ._templates import (
+    NEXT_GEN2_INFERENCE_BATCH_SIZE,
+    NEXT_GEN2_INFERENCE_THRESHOLD,
+    normalize_tile_factors,
+)
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     TEST_SAMPLE_EVALUATION_TARGET,
@@ -896,6 +900,8 @@ def _build_pseudo_markup_config(
         )
     if threshold is None:
         threshold = _float_value(flat, "train.threshold", 0.5)
+    if flat.get("train.pipeline_variant") == "next_gen2":
+        threshold = NEXT_GEN2_INFERENCE_THRESHOLD
     class_row = dataset_class_row(session, class_key)
     imagery_type = str(
         snapshot.get("imagery_type")
@@ -939,7 +945,10 @@ def _build_pseudo_markup_config(
             else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
         ),
         "batch_size": (
-            1 if external_manifest is not None else _int_value(flat, "train.batch_size", 1)
+            1 if external_manifest is not None else (
+                NEXT_GEN2_INFERENCE_BATCH_SIZE if flat.get("train.pipeline_variant") == "next_gen2"
+                else _int_value(flat, "train.batch_size", 1)
+            )
         ),
         "device": "cuda",
         **_geoalert_runtime_config(config, inference_backend),
@@ -1145,6 +1154,8 @@ def _build_test_sample_f1_config(
         checkpoint_f1_score = checkpoint.f1_score
         checkpoint_epoch = checkpoint.epoch
         checkpoint_threshold = checkpoint.threshold
+        if flat.get("train.pipeline_variant") == "next_gen2":
+            checkpoint_threshold = NEXT_GEN2_INFERENCE_THRESHOLD
         inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
         inference_context = _int_value(flat, "tile_preparation.context", 0)
         inference_core_size = inference_tile_size - 2 * inference_context
@@ -1157,6 +1168,8 @@ def _build_test_sample_f1_config(
         )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
+        if flat.get("train.pipeline_variant") == "next_gen2":
+            batch_size = NEXT_GEN2_INFERENCE_BATCH_SIZE
     row.tile_size = inference_tile_size
     row.config = {
         **(row.config or {}),

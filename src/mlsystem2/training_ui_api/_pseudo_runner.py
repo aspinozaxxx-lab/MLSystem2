@@ -62,6 +62,8 @@ from ._templates import (
     COMPACT_FILTER_KEEP,
     COMPACT_FILTER_MODES,
     COMPACT_FILTER_REMOVE,
+    NEXT_GEN2_INFERENCE_BATCH_SIZE,
+    NEXT_GEN2_INFERENCE_THRESHOLD,
 )
 
 
@@ -356,6 +358,12 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
+            config = _native_inference_config(loaded, config)
+            if config.get("pipeline_variant") == "next_gen2":
+                threshold = float(config["threshold"])
+                profile = _postprocess_profile_from_config(
+                    _POSTPROCESS_NONE, config.get("postprocess_config")
+                )
             inference_tile_size, context, stride = _checkpoint_inference_window(
                 loaded,
                 tile_size=inference_tile_size,
@@ -418,6 +426,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
+                    **({"notebook": True} if config.get("pipeline_variant") == "next_gen2" else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1156,6 +1165,16 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             loaded = load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
+            config = _native_inference_config(loaded, config)
+            if config.get("pipeline_variant") == "next_gen2":
+                threshold = float(config["threshold"])
+                postprocess_profile = _postprocess_profile_from_config(
+                    _POSTPROCESS_NONE, config.get("postprocess_config")
+                )
+                batch_size = int(config["batch_size"])
+                tile_size, context, stride = _checkpoint_inference_window(
+                    loaded, tile_size=tile_size, context=context, stride=stride
+                )
             task, object_types, checkpoint_threshold = _native_model_contract(loaded, config)
             if threshold is None:
                 threshold = checkpoint_threshold
@@ -1471,6 +1490,24 @@ def _loaded_input_channels(loaded: object, config: dict[str, Any]) -> int:
     return parsed
 
 
+def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str, Any]:
+    """Отделить порог диагностики обучения от профиля eval-ноутбука."""
+    metadata = getattr(getattr(loaded, "artifact", None), "metadata", None) or {}
+    spec = getattr(getattr(loaded, "model", None), "spec", None)
+    parameters = getattr(spec, "parameters", None) or {}
+    variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
+    if variant != "next_gen2":
+        return config
+    return {
+        **config,
+        "pipeline_variant": "next_gen2",
+        "threshold": NEXT_GEN2_INFERENCE_THRESHOLD,
+        "batch_size": NEXT_GEN2_INFERENCE_BATCH_SIZE,
+        "threshold_source": "next_gen2_eval_notebook",
+        "inference_merge": "gaussian_probabilities",
+    }
+
+
 def _native_model_contract(
     loaded: object,
     config: dict[str, Any],
@@ -1764,7 +1801,14 @@ def _infer_scene(
             channel_mapping=channel_mapping,
         )
         nodata = _resolve_nodata(dataset)
-        if aoi_wgs84 is not None:
+        if config.get("pipeline_variant") == "next_gen2":
+            mask_window = Window(0, 0, dataset.width, dataset.height)
+            mask, confidence_map = _infer_notebook_scene_mask(
+                dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
+                torch=torch, model=model, tile_size=tile_size, stride=stride,
+                batch_size=batch_size, threshold=threshold, device=device, metrics=performance,
+            )
+        elif aoi_wgs84 is not None:
             if dataset.crs is None:
                 raise RuntimeError("У исходного снимка отсутствует CRS.")
             to_raster = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
@@ -1838,6 +1882,50 @@ def _infer_scene(
             performance.get("postprocessing_sec", 0.0)
         ) + (time.perf_counter() - postprocess_started)
         return features
+
+
+def _infer_notebook_scene_mask(
+    *, dataset, input_indexes: tuple[int, ...], input_channels: int,
+    torch, model, tile_size: int, stride: int, batch_size: int,
+    threshold: float, device: str, metrics: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Полные окна и порог после гауссова усреднения, как в eval-ноутбуке."""
+    _validate_window_grid(tile_size, stride)
+    performance = metrics if metrics is not None else {}
+    performance.setdefault("configured_batch_size", max(1, batch_size))
+    performance.setdefault("effective_batch_size", max(1, batch_size))
+    probability_sum = np.zeros((dataset.height, dataset.width), dtype=np.float32)
+    weight_sum = np.zeros_like(probability_sum)
+    axis = np.arange(tile_size)
+    gaussian = np.exp(-((axis - tile_size / 2) ** 2) / (2 * (tile_size / 4) ** 2))
+    weight = np.outer(gaussian, gaussian).astype(np.float32)
+    windows = [Window(x, y, tile_size, tile_size)
+               for y in range(0, dataset.height - tile_size + 1, stride)
+               for x in range(0, dataset.width - tile_size + 1, stride)]
+    index = 0
+    while index < len(windows):
+        pending = windows[index:index + int(performance["effective_batch_size"])]
+        read_started = time.perf_counter()
+        images = np.stack([dataset.read(indexes=input_indexes, window=window,
+                                       out_dtype="float32", masked=False) for window in pending])
+        if images.shape[1] == 3 and input_channels == 4:
+            images = np.concatenate((images, np.zeros_like(images[:, :1])), axis=1)
+        performance["reading_sec"] = (
+            float(performance.get("reading_sec", 0.0)) + time.perf_counter() - read_started
+        )
+        _, probabilities = _predict_tiles(
+            torch, model, images, threshold=threshold, device=device,
+            metrics=performance, notebook=True,
+        )
+        for window, probability in zip(pending, probabilities, strict=True):
+            x, y = int(window.col_off), int(window.row_off)
+            probability_sum[y:y + tile_size, x:x + tile_size] += probability * weight
+            weight_sum[y:y + tile_size, x:x + tile_size] += weight
+        index += len(pending)
+        performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
+    np.maximum(weight_sum, 1e-6, out=weight_sum)
+    probability_sum /= weight_sum
+    return (probability_sum > threshold).astype(np.uint8), probability_sum
 
 
 def _infer_aoi_scene_mask(
@@ -2349,13 +2437,21 @@ def _infer_test_tile_mask(
     postprocess_profile: _PostprocessProfile,
     object_types: list[dict[str, Any]] | None = None,
     context: int = 0,
+    notebook: bool = False,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
         nodata = _resolve_nodata(dataset)
         mask = np.zeros((dataset.height, dataset.width), dtype=np.uint8)
         confidence_map = np.zeros(mask.shape, dtype=np.float32)
-        for window in _windows(dataset.width, dataset.height, tile_size, stride, context):
+        if notebook:
+            mask, confidence_map = _infer_notebook_scene_mask(
+                dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
+                torch=torch, model=model, tile_size=tile_size, stride=stride,
+                batch_size=NEXT_GEN2_INFERENCE_BATCH_SIZE, threshold=threshold, device=device,
+            )
+        windows = [] if notebook else _windows(dataset.width, dataset.height, tile_size, stride, context)
+        for window in windows:
             image = dataset.read(
                 indexes=input_indexes,
                 window=window,
@@ -2461,13 +2557,14 @@ def _predict_tiles(
     threshold: float,
     device: str,
     metrics: dict[str, Any] | None = None,
+    notebook: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     performance = metrics if metrics is not None else {}
     started = time.perf_counter()
     tensor = torch.as_tensor(images, dtype=torch.float32, device=torch.device(device))
     with torch.no_grad():
         try:
-            output = model(tensor)
+            output = model(tensor, return_two_class_logits=True) if notebook else model(tensor)
             logits = output.logits if hasattr(output, "logits") else output
             if logits.shape[-2:] != tensor.shape[-2:]:
                 logits = torch.nn.functional.interpolate(
@@ -2476,8 +2573,11 @@ def _predict_tiles(
                     mode="bilinear",
                     align_corners=False,
                 )
-            if int(logits.shape[1]) == 1:
-                probabilities_tensor = torch.sigmoid(logits[:, :1, :, :])
+            if notebook or int(logits.shape[1]) == 1:
+                probabilities_tensor = (
+                    torch.softmax(logits, dim=1)[:, 1:2]
+                    if notebook else torch.sigmoid(logits[:, :1, :, :])
+                )
                 probabilities = (
                     probabilities_tensor[:, 0]
                     .detach()
@@ -2485,7 +2585,9 @@ def _predict_tiles(
                     .numpy()
                     .astype(np.float32, copy=False)
                 )
-                labels = (probabilities >= threshold).astype(np.uint8)
+                labels = (
+                    probabilities > threshold if notebook else probabilities >= threshold
+                ).astype(np.uint8)
             else:
                 probabilities_tensor = torch.softmax(logits, dim=1)
                 confidence_tensor, labels_tensor = torch.max(probabilities_tensor, dim=1)
@@ -2518,6 +2620,7 @@ def _predict_tiles(
                 threshold=threshold,
                 device=device,
                 metrics=performance,
+                notebook=notebook,
             )
             right_mask, right_confidence = _predict_tiles(
                 torch,
@@ -2526,6 +2629,7 @@ def _predict_tiles(
                 threshold=threshold,
                 device=device,
                 metrics=performance,
+                notebook=notebook,
             )
             return (
                 np.concatenate((left_mask, right_mask), axis=0),
@@ -3922,6 +4026,11 @@ def _summary(
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),
             "threshold": config.get("threshold"),
+            **({
+                "threshold_source": config.get("threshold_source"),
+                "inference_merge": config.get("inference_merge"),
+                "batch_size": config.get("batch_size"),
+            } if config.get("pipeline_variant") == "next_gen2" else {}),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
         },
