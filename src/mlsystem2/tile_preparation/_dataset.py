@@ -922,6 +922,15 @@ class TileDataset:
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
             return
+        if self._pipeline_variant == "next_gen2":
+            selected_indices, manifest = self._spatial_tile_split_indices(tile_split)
+            if not selected_indices:
+                raise TilePreparationError(f"После разделения по тайлам выборка {self._mode} пуста.")
+            if not any(self._positive_hint_by_index[index] for index in selected_indices):
+                self._tile_split_warnings = [f"В выборке {self._mode} нет тайлов с объектами."]
+            self._select_indices(selected_indices)
+            self._tile_split_manifest = manifest
+            return
         if tile_split.strategy == "scene_fold":
             selected_indices, warnings, manifest = self._scene_fold_indices(tile_split)
             if not any(self._positive_hint_by_index[index] for index in selected_indices):
@@ -949,6 +958,69 @@ class TileDataset:
             "strategy": "window_random",
             "mode": self._mode,
             "selected_window_count": len(selected_indices),
+        }
+
+    def _spatial_tile_split_indices(
+        self,
+        tile_split: TileSplitRequest,
+    ) -> tuple[list[int], dict[str, object]]:
+        from shapely.geometry import Polygon
+        from shapely.strtree import STRtree
+
+        if tile_split.strategy != "window_random" or not tile_split.spatial_purge:
+            raise TilePreparationError("next-gen2 требует разделение по тайлам с исключением пересечений.")
+        if len(self._windows) < 2:
+            raise TilePreparationError("Для разделения нужны минимум два полных тайла.")
+        if len(set(self._scene_crs)) != 1 or self._scene_crs[0] is None:
+            raise TilePreparationError("Для исключения пересечений TIFF должны иметь одну известную CRS.")
+        # Выбор зависит только от seed и координат, а не от разметки или порядка файлов.
+        candidate_train, validation, _ = _split_index_group(
+            list(range(len(self._windows))), self._windows,
+            val_fraction=tile_split.val_fraction, seed=tile_split.seed, group_name="tiles",
+        )
+        geometries = []
+        for item in self._windows:
+            dataset = self._open_dataset(item.scene_index)
+            window = item.window
+            transform = dataset.window_transform(Window(window.x, window.y, window.width, window.height))
+            geometries.append(Polygon([
+                transform * corner for corner in (
+                    (0, 0), (window.width, 0), (window.width, window.height), (0, window.height),
+                )
+            ]))
+        heldout = [geometries[index] for index in validation]
+        tree = STRtree(heldout)
+
+        def overlaps_validation(index: int) -> bool:
+            geometry = geometries[index]
+            # Общая граница без площади не содержит общих пикселей и допустима.
+            return any(geometry.intersection(heldout[int(other)]).area > 0 for other in tree.query(geometry))
+
+        train, purged = [], []
+        for index in candidate_train:
+            (purged if overlaps_validation(index) else train).append(index)
+        overlap_after_purge = sum(overlaps_validation(index) for index in train)
+        if overlap_after_purge:
+            raise TilePreparationError("Обучающие тайлы пересекают области валидационных тайлов.")
+        purged_by_scene: dict[str, int] = {}
+        for index in purged:
+            scene_id = self._windows[index].scene_id
+            purged_by_scene[scene_id] = purged_by_scene.get(scene_id, 0) + 1
+        selected = train if self._mode == "train" else validation
+        return selected, {
+            "strategy": "window_random", "mode": self._mode,
+            "seed": tile_split.seed, "val_fraction": tile_split.val_fraction,
+            "selection": "sha256(seed,scene_id,x,y)", "spatial_purge": True,
+            "overlap_rule": "positive_area_across_all_scenes",
+            "tile_size": self._tile_size,
+            "windows": [[item.scene_id, item.window.x, item.window.y] for item in self._windows],
+            "indices": {"train": train, "val": validation, "purged": purged},
+            "train_scene_ids": sorted({self._windows[index].scene_id for index in train}),
+            "validation_scene_ids": sorted({self._windows[index].scene_id for index in validation}),
+            "candidate_train_window_count": len(candidate_train),
+            "purged_window_count": len(purged), "purged_windows_by_scene": purged_by_scene,
+            "selected_window_count": len(selected),
+            "geographic_overlap_after_purge": overlap_after_purge,
         }
 
     def _scene_fold_indices(
@@ -1038,12 +1110,7 @@ class TileDataset:
             dataset = self._open_dataset(scene_index)
             pixel_margin = max(abs(float(dataset.res[0])), abs(float(dataset.res[1])))
             geometry = None
-            # next-gen2 оценивает также nodata, поэтому исключает всю площадь held-out TIFF.
-            if (
-                self._pipeline_variant != "next_gen2"
-                and scene.footprint_file is not None
-                and Path(scene.footprint_file).is_file()
-            ):
+            if scene.footprint_file is not None and Path(scene.footprint_file).is_file():
                 try:
                     payload = json.loads(Path(scene.footprint_file).read_text(encoding="utf-8"))
                     geometries = [

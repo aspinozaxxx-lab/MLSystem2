@@ -17,6 +17,7 @@ import yaml
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
+from shapely.ops import unary_union
 
 from mlsystem2.mlflow_adapter import _client
 from mlsystem2.models import _factory
@@ -361,42 +362,68 @@ def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monk
     dataset.close()
 
 
-def test_scene_split_excludes_validation_pixels_and_labels_from_training(tmp_path):
+def test_tile_split_excludes_validation_areas_across_scenes_and_ignores_their_labels(tmp_path):
     torch = pytest.importorskip("torch")
     identifiers = ["SCN01", "SCN02", "SCN03"]
-    ordered = sorted(identifiers, key=lambda name: hashlib.sha256(f"42{name}".encode()).digest())
     scenes = []
-    for name, offset in zip(ordered, (0, 40, 300), strict=True):
+    for name, offset in zip(identifiers, (0, 40, 300), strict=True):
         image, annotation = _scene(tmp_path, name, offset)
         footprint = tmp_path / f"{name}_footprint.geojson"
         footprint.write_text(json.dumps({"type": "FeatureCollection", "features": [
             {"type": "Feature", "properties": {}, "geometry": mapping(box(offset, 0, offset + 20, 100))},
         ]}), encoding="utf-8")
         scenes.append(TileSceneSource(scene_id=name, image_path=image, annotation_file=annotation, footprint_file=footprint))
-    split = TileSplitRequest(strategy="scene_fold", val_fraction=0.2, spatial_purge=True, seed=42)
+    split = TileSplitRequest(strategy="window_random", val_fraction=0.2, spatial_purge=True, seed=42)
     def build(mode, sources=scenes):
         return TileDataset(scenes=sources, tile_size=32, stride=16, mode=mode, seed=42,
                            augmentation_level=0, pipeline_variant="next_gen2", tile_split=split)
     train, val = build("train"), build("val")
     try:
-        assert train.tile_split_manifest["validation_scene_ids"] == [ordered[0]]
-        assert {item.scene_id for item in train._windows}.isdisjoint({item.scene_id for item in val._windows})
-        with rasterio.open(scenes[0].image_path) as source:
-            validation_area = box(*source.bounds).buffer(1)
+        manifest = train.tile_split_manifest
+        assert manifest["indices"] == val.tile_split_manifest["indices"]
+        subsets = [set(manifest["indices"][key]) for key in ("train", "val", "purged")]
+        assert all(subsets[left].isdisjoint(subsets[right]) for left, right in ((0, 1), (0, 2), (1, 2)))
+        assert set.union(*subsets) == set(range(75))
+        assert set(manifest["train_scene_ids"]) & set(manifest["validation_scene_ids"])
+        validation_areas = []
+        for item in val._windows:
+            with rasterio.open(scenes[item.scene_index].image_path) as source:
+                validation_areas.append(box(*source.window_bounds(rasterio.windows.Window(item.window.x, item.window.y, 32, 32))))
+        validation_area = unary_union(validation_areas)
         for item in train._windows:
             with rasterio.open(scenes[item.scene_index].image_path) as source:
                 rectangle = rasterio.windows.Window(item.window.x, item.window.y, 32, 32)
-                assert not box(*source.window_bounds(rectangle)).intersects(validation_area)
-        assert train.tile_split_manifest["purged_windows_by_scene"] == {ordered[1]: 20}
-        assert train.tile_split_manifest["geographic_overlap_after_purge"] == 0
-        assert len(val) == 25
+                assert box(*source.window_bounds(rectangle)).intersection(validation_area).area == 0
+        cross_scene_purge = 0
+        for index in manifest["indices"]["purged"]:
+            scene_id, x, y = manifest["windows"][index]
+            scene = next(scene for scene in scenes if scene.scene_id == scene_id)
+            with rasterio.open(scene.image_path) as source:
+                area = box(*source.window_bounds(rasterio.windows.Window(x, y, 32, 32)))
+            assert area.intersection(validation_area).area > 0
+            cross_scene_purge += any(area.intersection(other).area > 0 and item.scene_id != scene_id
+                                     for other, item in zip(validation_areas, val._windows, strict=True))
+        assert cross_scene_purge > 0
+        assert manifest["geographic_overlap_after_purge"] == 0
+        assert len(val) == 15
+        assert sum(val[index][1].sum() for index in range(len(val))) > 0
         draws = torch.utils.data.WeightedRandomSampler(train.sampling_weights(), 1000, replacement=True)
-        assert all(train._windows[index].scene_id != ordered[0] for index in draws)
+        validation_keys = {(item.scene_id, item.window.x, item.window.y) for item in val._windows}
+        assert all((train._windows[index].scene_id, train._windows[index].window.x, train._windows[index].window.y)
+                   not in validation_keys for index in draws)
         weights, sampling = train.notebook_class_weights, train.sampling_weights()
-        Path(scenes[0].annotation_file).write_text(json.dumps({"type": "FeatureCollection", "features": []}), encoding="utf-8")
+        for scene in scenes:
+            path = Path(scene.annotation_file)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            kept = []
+            for feature in payload["features"]:
+                geometry = shape(feature["geometry"]).difference(validation_area)
+                if not geometry.is_empty:
+                    kept.append({**feature, "geometry": mapping(geometry)})
+            path.write_text(json.dumps({**payload, "features": kept}), encoding="utf-8")
         modified_val = build("val")
         try:
-            assert not any(modified_val._positive_hint_by_index)
+            assert sum(modified_val[index][1].sum() for index in range(len(modified_val))) == 0
         finally:
             modified_val.close()
         modified = build("train", list(reversed(scenes)))
@@ -413,7 +440,24 @@ def test_scene_split_excludes_validation_pixels_and_labels_from_training(tmp_pat
         val.close()
 
 
-@pytest.mark.parametrize("strategy,purge", [("window_random", False), ("scene_fold", False)])
+def test_tile_split_accepts_one_scene_and_keeps_touching_nonoverlapping_tiles(tmp_path):
+    image, annotation = _scene(tmp_path)
+    split = TileSplitRequest(strategy="window_random", val_fraction=0.2, spatial_purge=True)
+    datasets = [TileDataset(scenes=[TileSceneSource(scene_id="SCN01", image_path=image)],
+                           annotation_file=annotation, tile_size=32, stride=32, mode=mode,
+                           pipeline_variant="next_gen2", tile_split=split, seed=42, augmentation_level=0)
+                for mode in ("train", "val")]
+    try:
+        train, val = datasets
+        assert len(train) == 7 and len(val) == 2
+        assert train.tile_split_manifest["purged_window_count"] == 0
+        assert train.tile_split_manifest["train_scene_ids"] == val.tile_split_manifest["validation_scene_ids"] == ["SCN01"]
+    finally:
+        for dataset in datasets:
+            dataset.close()
+
+
+@pytest.mark.parametrize("strategy,purge", [("window_random", False), ("scene_fold", True)])
 def test_next_gen2_api_rejects_split_without_spatial_isolation(strategy, purge):
     with pytest.raises(ValueError, match="next-gen2"):
         TileDataloaderRequest(
@@ -554,15 +598,15 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
     assert result.status.value == "succeeded", result.report.errors
     assert [r.pipeline_variant for r in requests] == ["next_gen2", "next_gen2"]
-    assert all(r.tile_split.strategy == "scene_fold" and r.tile_split.spatial_purge for r in requests)
+    assert all(r.tile_split.strategy == "window_random" and r.tile_split.spatial_purge for r in requests)
     assert _runner._mlflow_start_request(settings, TrainPipelineRequest()).tags["checkpoint_selection_metric"] == "quality_f1"
     assert pretrained_calls[0][1]["num_labels"] == 2
     assert pretrained_calls[0][1]["use_safetensors"] is True
     trained = logged[0]
     assert trained.diagnostics["pipeline_variant"] == "next_gen2"
     split = trained.diagnostics["split_manifest"]["train"]
-    assert len(split["validation_scene_ids"]) == 1
-    assert len(split["train_scene_ids"]) == 4
+    assert len(split["indices"]["val"]) == 25
+    assert set(split["train_scene_ids"]) & set(split["validation_scene_ids"])
     assert split["geographic_overlap_after_purge"] == 0
     payload = torch.load(trained.best_checkpoint_path, map_location="cpu", weights_only=False)
     assert payload["metadata"]["pipeline_variant"] == "next_gen2"

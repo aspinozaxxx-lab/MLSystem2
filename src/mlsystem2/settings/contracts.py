@@ -238,7 +238,7 @@ class SystemSettings(BaseModel):
             if self.tile_preparation.context != 0 or self.tile_preparation.augmentation_level != 0:
                 raise ValueError("next-gen2 использует окна без контекста и без аугментаций")
             if self.dataset.val_fraction != 0.2:
-                raise ValueError("next-gen2 выделяет 20% сцен для независимой валидации")
+                raise ValueError("next-gen2 выделяет 20% тайлов для валидации с исключением пересечений")
             if self.train.threshold != 0.5:
                 raise ValueError("next-gen2 использует порог 0.5 двухклассовой модели")
             if (

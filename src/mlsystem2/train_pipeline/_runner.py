@@ -453,7 +453,7 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
         seed=settings.tile_preparation.seed,
         strategy=(
             "scene_fold"
-            if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
+            if settings.train.pipeline_variant == "next_gen"
             else "window_random"
         ),
         validation_fold=settings.next_gen.validation_fold,
@@ -716,6 +716,7 @@ def _attach_next_gen_diagnostics(
     )
 
     if settings.train.pipeline_variant == "next_gen2":
+        result.diagnostics.pop("validation_fold", None)
         result.diagnostics.pop("validation_by_scene", None)
 
 

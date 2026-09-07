@@ -48,7 +48,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — обучение и нарезка из ноутбука с независимой валидацией по снимкам и выбором весов по F1.",
+            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — обучение и нарезка из ноутбука с разделением по тайлам, исключением пересечений train/validation и выбором весов по F1.",
             "options": ["legacy", "next_gen", "next_gen2"],
         },
         {
