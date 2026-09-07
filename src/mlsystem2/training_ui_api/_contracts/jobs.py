@@ -104,6 +104,7 @@ class JobDetail(BaseModel):
     tile_size: int | None = None
     mlflow_experiment_name: str | None = None
     mlflow_run_name: str | None = None
+    mlflow_run_url: str | None = None
     config: dict[str, Any]
     run_inference_after_training: bool = False
     secondary_priority: bool = False

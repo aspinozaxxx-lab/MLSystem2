@@ -70,7 +70,9 @@ def test_tile_worker_waits_for_training_resume(
     control_dir.mkdir()
     pause_request = control_dir / "pause.request"
     pause_request.write_text("token\n", encoding="utf-8")
+    (control_dir / "paused").write_text("token\n", encoding="utf-8")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_CONTROL_DIR", str(control_dir))
+    monkeypatch.delenv("MLSYSTEM2_TILE_WORKER", raising=False)
 
     dataset_impl._wait_while_training_paused()
     assert pause_request.is_file()
@@ -79,6 +81,28 @@ def test_tile_worker_waits_for_training_resume(
     monkeypatch.setattr(dataset_impl.time, "sleep", lambda _seconds: pause_request.unlink())
     dataset_impl._wait_while_training_paused()
     assert not pause_request.exists()
+
+
+@pytest.mark.parametrize("confirmed_token", [None, "previous-token", ""])
+def test_tile_worker_keeps_loading_until_training_confirms_pause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confirmed_token: str | None,
+) -> None:
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    (control_dir / "pause.request").write_text("current-token\n", encoding="utf-8")
+    if confirmed_token is not None:
+        (control_dir / "paused").write_text(f"{confirmed_token}\n", encoding="utf-8")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_CONTROL_DIR", str(control_dir))
+    monkeypatch.setenv("MLSYSTEM2_TILE_WORKER", "1")
+
+    def unexpected_wait(_seconds: float) -> None:
+        pytest.fail("Загрузчик не должен ждать, пока обучение ещё не подтвердило паузу.")
+
+    monkeypatch.setattr(dataset_impl.time, "sleep", unexpected_wait)
+
+    dataset_impl._wait_while_training_paused()
 
 
 def test_available_memory_bytes_prefers_linux_memavailable(

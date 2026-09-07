@@ -2721,6 +2721,8 @@ export interface components {
             mlflow_experiment_name?: string | null;
             /** Mlflow Run Name */
             mlflow_run_name?: string | null;
+            /** Mlflow Run Url */
+            mlflow_run_url?: string | null;
             /** Config */
             config: {
                 [key: string]: unknown;

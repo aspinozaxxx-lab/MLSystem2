@@ -3676,6 +3676,25 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
         subtitle={`${job.dataset_name} · ${job.model_name}`}
         actions={
           <div className="inline-row">
+            {job.type === "training" && job.dataset_key ? (
+              <a className="secondary" href={`#/results/${encodeURIComponent(job.dataset_key)}`}>
+                <BarChart3 size={16} />
+                Результаты обучения
+              </a>
+            ) : null}
+            {job.type === "training" ? (
+              job.mlflow_run_url ? (
+                <a className="secondary" href={job.mlflow_run_url} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} />
+                  Открыть MLflow
+                </a>
+              ) : (
+                <button className="secondary" type="button" disabled title="Запуск MLflow ещё не создан">
+                  <ExternalLink size={16} />
+                  Открыть MLflow
+                </button>
+              )
+            ) : null}
             {job.type === "training" && job.source === "manual" && isActiveStatus(job.status) ? (
               <button
                 className="danger"

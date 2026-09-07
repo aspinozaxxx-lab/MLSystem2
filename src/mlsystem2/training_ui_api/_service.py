@@ -2690,6 +2690,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         tile_size=row.tile_size,
         mlflow_experiment_name=row.mlflow_experiment_name,
         mlflow_run_name=row.mlflow_run_name,
+        mlflow_run_url=_job_mlflow_run_url(session, row),
         config={
             key: value
             for key, value in (row.config or {}).items()

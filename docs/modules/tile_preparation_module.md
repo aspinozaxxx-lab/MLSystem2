@@ -44,5 +44,7 @@ gamma и независимый gain каналов. Для robust preprocessing
 `prefetch_epochs` задаёт целевой объём готовых batch, а `prefetch_factor` рассчитывается обратно
 пропорционально `num_workers`; уменьшение числа процессов не сокращает заданный префетч. В серверном профиле
 используется восемь workers и один epoch префетча. Worker-процессы получают признак
-`MLSYSTEM2_TILE_WORKER=1`; при наличии `pause.request` в `MLSYSTEM2_TRAINING_CONTROL_DIR` они ждут
-возобновления до открытия TIFF и подготовки следующего тайла, не очищая уже готовую очередь.
+`MLSYSTEM2_TILE_WORKER=1`; они ждут возобновления до открытия TIFF и подготовки следующего тайла
+только после появления `paused` с тем же token, что у `pause.request` в `MLSYSTEM2_TRAINING_CONTROL_DIR`.
+До подтверждения паузы чтение продолжается, чтобы train loop мог получить batch или сбросить итератор
+DataLoader и освободить GPU. Уже готовая очередь не очищается.

@@ -29,7 +29,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `ConfigField`, `ConfigSchema`, `TrainingTemplate`, `TrainingTemplateListResponse`, `TrainingTemplateCreate`, `TrainingTemplateUpdate`, `TrainingTemplateApplyField`, `InferenceTemplate`, `InferenceTemplateListResponse`, `InferenceTemplateCreate`, `InferenceTemplateUpdate`, `InferenceTemplateApplyField` - шаблоны обучения и инференса; `ConfigField` содержит `tooltip`, допустимые границы и optional `recommended_range` для UI-подсказок.
 - Встроенный датасетный inference-шаблон хранит человекочитаемую цель, но при инициализации привязывается к ключу действующей строки каталога по паре `класс/имя`; это сохраняет специальные настройки после смены ключа или миграции legacy-датасета.
 - `StoredFileInfo`, `CustomDatasetInfo` - загруженные файлы и custom datasets.
-- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; Job DTO вычисляет `pipeline_variant` и `validation_fold` из JSON config без миграции БД.
+- `TrainingJobCreate`, `QueueEnabledUpdate`, `QueueControlInfo`, `QueueCountInfo`, `JobSummary`, `QueueSnapshot`, `JobDetail` - задания и очереди; Job DTO вычисляет `pipeline_variant` и `validation_fold` из JSON config без миграции БД. `JobDetail.mlflow_run_url` возвращает сохранённую ссылку связанного результата обучения либо `null`, пока запуск не создан.
 - `PseudolabelJobCreate`, `PseudolabelClassInfo`, `PseudolabelClassListResponse`, `PseudolabelJobInfo`, `PseudolabelErrorInfo` - AOI, доступная зафиксированная модель, состояние и структурированная ошибка QGIS-контракта.
 - `AutomationEnabledUpdate`, `AutomationRuleUpdate`, `AutomationRuleInfo`, `AutomationSnapshot` - глобальный выключатель и матрица автоматизации `датасет × модель`.
 - `TrainingResultInfo`, `TrainingResultTestF1Info`, `PrimaryTestSampleInfo`, `PseudoMarkupResultInfo`, `DatasetResultsResponse`, `ResultClassInfo`, `ResultDatasetInfo`, `ResultClassListResponse`, `ResultChangeInfo`, `ResultChangesResponse` - результаты обучения, включая вычисляемые `pipeline_variant`/`validation_fold`, task/class schema, метрики, test F1 и псевдоразметку.
@@ -186,7 +186,8 @@ pause-request: на границе batch модель и optimizer state пер�
 worker идемпотентно ставит обычный full pseudo-markup job через общий builder; ошибка постановки инференса не
 меняет успешный статус уже завершённого обучения. Счётчик рядом с пунктом «Очередь» читает отдельный лёгкий
 endpoint и показывает сумму `queued`, `running` и `paused`, а строка задания ведёт в тот же экран Job, что и
-кнопка из результатов обучения.
+кнопка из результатов обучения. На экране задания обучения доступны переход к результатам его датасета
+и открытие связанного запуска MLflow в новой вкладке; до появления ссылки кнопка MLflow недоступна.
 Флаг `secondary_priority` также хранится только в служебной части задания и наследуется этой full-псевдоразметкой.
 Второстепенный job запускается только при отсутствии разрешённых обычных jobs. При их появлении training
 освобождает CUDA штатным batch-boundary pause, PyTorch inference сохраняет завершённые поснимочные результаты и

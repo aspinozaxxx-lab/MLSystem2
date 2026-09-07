@@ -3327,6 +3327,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert job["status"] == "queued"
         assert job["dataset_name"] == "Custom"
         assert job["mlflow_run_name"] is None
+        assert job["mlflow_run_url"] is None
         assert "train.device" not in job["config"]
         assert "dataset.split_granularity" not in job["config"]
         assert job["run_inference_after_training"] is True
@@ -3342,6 +3343,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
 
         detail = client.get(f"/api/v1/jobs/{job['id']}").json()
         assert detail["readonly"] is True
+        assert detail["mlflow_run_url"] is None
         assert detail["run_inference_after_training"] is True
         assert detail["secondary_priority"] is True
 
@@ -4599,8 +4601,14 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert tracking_uri == config.mlflow_tracking_uri
         return [MLflowExperiment(experiment_id="1", name="ui-test", lifecycle_stage="active")]
 
+    def fake_epoch_progress(tracking_uri: str, run_id: str) -> MLflowTrainingProgress:
+        assert tracking_uri == config.mlflow_tracking_uri
+        assert run_id == "run-123"
+        return MLflowTrainingProgress(completed_epochs=0)
+
     monkeypatch.setattr(_worker, "get_best_training_checkpoint", fake_best_checkpoint)
     monkeypatch.setattr(_worker, "list_experiments", fake_list_experiments)
+    monkeypatch.setattr(_service, "get_training_epoch_progress", fake_epoch_progress)
 
     with session_factory() as session:
         ensure_seed_templates(session)
@@ -4653,6 +4661,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
             running_result.mlflow_run_url
             == f"{config.mlflow_ui_url.rstrip('/')}/#/experiments/1/runs/run-123"
         )
+        assert _service.job_detail(session, job.id).mlflow_run_url == running_result.mlflow_run_url
 
         (run_dir / "train.log").write_text(
             "status=succeeded\nmlflow_run=run-123\n", encoding="utf-8"
@@ -4671,6 +4680,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert result.mlflow_run_id == "run-123"
         assert result.f1_score == 0.8123
         assert result.epoch == 7
+        assert _service.job_detail(session, job.id).mlflow_run_url == result.mlflow_run_url
 
         monkeypatch.setattr(_service, "get_best_training_checkpoint", fake_best_checkpoint)
         pseudo_job = _service.create_pseudo_markup_job(
@@ -4685,6 +4695,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
             config=config,
         )
         assert pseudo_job.config["mlflow_run_id"] == "run-123"
+        assert pseudo_job.mlflow_run_url is None
         assert pseudo_job.config["checkpoint_artifact_path"] == "checkpoints/best.pt"
         assert (
             pseudo_job.config["checkpoint_uri"]

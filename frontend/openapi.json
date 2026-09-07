@@ -7388,6 +7388,17 @@
             ],
             "title": "Mlflow Run Name"
           },
+          "mlflow_run_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Run Url"
+          },
           "config": {
             "additionalProperties": true,
             "type": "object",

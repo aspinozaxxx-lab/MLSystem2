@@ -41,6 +41,7 @@ TILE_CATEGORY_BACKGROUND = "background"
 _MAX_OPEN_RASTERS = 8
 _TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
 _PAUSE_REQUEST_FILE = "pause.request"
+_PAUSED_MARKER_FILE = "paused"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1289,7 +1290,16 @@ def _wait_while_training_paused() -> None:
     if not control_dir or os.getenv("MLSYSTEM2_TILE_WORKER") != "1":
         return
     request_path = Path(control_dir) / _PAUSE_REQUEST_FILE
+    marker_path = Path(control_dir) / _PAUSED_MARKER_FILE
     while request_path.is_file():
+        try:
+            pause_token = request_path.read_text(encoding="utf-8").strip()
+            confirmed_token = marker_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return
+        # До подтверждения train loop может ждать batch или сброса итератора DataLoader.
+        if not pause_token or confirmed_token != pause_token:
+            return
         time.sleep(0.1)
 
 
