@@ -922,35 +922,6 @@ class TileDataset:
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
             return
-        if tile_split.strategy == "notebook_random":
-            # Два ShuffleSplit из train_test_split, каждый с новым RandomState(seed).
-            count = len(self._windows)
-            temporary_count = math.ceil(count * 0.4)
-            test_count = math.ceil(temporary_count * 0.5)
-            if count - temporary_count < 1 or temporary_count - test_count < 1:
-                raise TilePreparationError("next-gen2: недостаточно полных окон для разбиения 60/20/20")
-            order = np.random.RandomState(tile_split.seed).permutation(count)
-            temporary = order[:temporary_count]
-            second_order = np.random.RandomState(tile_split.seed).permutation(temporary_count)
-            subsets = {
-                "train": order[temporary_count:].tolist(),
-                "val": temporary[second_order[test_count:]].tolist(),
-                "test": temporary[second_order[:test_count]].tolist(),
-            }
-            self._tile_split_manifest = {
-                "strategy": "notebook_random",
-                "seed": tile_split.seed,
-                "fractions": {"train": 0.6, "val": 0.2, "test": 0.2},
-                "scene_order": [scene.scene_id for scene in self._scenes],
-                "windows": [
-                    [item.scene_id, item.window.x, item.window.y] for item in self._windows
-                ],
-                "indices": subsets,
-                "mode": self._mode,
-                "selected_window_count": len(subsets[self._mode]),
-            }
-            self._select_indices(subsets[self._mode])
-            return
         if tile_split.strategy == "scene_fold":
             selected_indices, warnings, manifest = self._scene_fold_indices(tile_split)
             if not any(self._positive_hint_by_index[index] for index in selected_indices):
@@ -1067,7 +1038,12 @@ class TileDataset:
             dataset = self._open_dataset(scene_index)
             pixel_margin = max(abs(float(dataset.res[0])), abs(float(dataset.res[1])))
             geometry = None
-            if scene.footprint_file is not None and Path(scene.footprint_file).is_file():
+            # next-gen2 оценивает также nodata, поэтому исключает всю площадь held-out TIFF.
+            if (
+                self._pipeline_variant != "next_gen2"
+                and scene.footprint_file is not None
+                and Path(scene.footprint_file).is_file()
+            ):
                 try:
                     payload = json.loads(Path(scene.footprint_file).read_text(encoding="utf-8"))
                     geometries = [

@@ -64,6 +64,8 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
         assert dto.model_json_schema()["properties"]["pipeline_variant"]["enum"] == [
             "legacy", "next_gen", "next_gen2",
         ]
-    assert "notebook_random" in TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"]
+    assert TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"] == [
+        "window_random", "scene_fold",
+    ]
     assert ConfigSchema(fields=[]).pipeline_defaults == {}
     assert TrainConfig.model_fields["class_weights"].default_factory() == []

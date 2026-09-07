@@ -81,9 +81,8 @@ def get_best_training_checkpoint(
         mlflow.set_tracking_uri(tracking_uri)
         client = mlflow.tracking.MlflowClient()
         run = client.get_run(run_id)
-        quality_metric = str(
-            getattr(getattr(run, "data", None), "tags", {}).get("quality_metric") or ""
-        )
+        tags = getattr(getattr(run, "data", None), "tags", {})
+        quality_metric = str(tags.get("quality_metric") or "")
         metric_name = (
             QUALITY_CHECKPOINT_METRIC
             if quality_metric in {"pixel", "objects"}
@@ -96,7 +95,9 @@ def get_best_training_checkpoint(
         thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
-            if getattr(getattr(run, "data", None), "tags", {}).get("pipeline_variant") == "next_gen2"
+            # Старые запуски действительно сохраняли best по loss; их веса не переписываем.
+            if tags.get("pipeline_variant") == "next_gen2"
+            and tags.get("checkpoint_selection_metric", "val_loss") == "val_loss"
             else None
         )
     except Exception as exc:

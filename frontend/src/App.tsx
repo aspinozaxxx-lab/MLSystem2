@@ -3534,9 +3534,7 @@ function openTrainingStopModal(
       <div className="form-stack">
         <p>
           Можно завершить обучение штатно и сохранить как успешный результат <strong>best.pt</strong> —
-          {job.pipeline_variant === "next_gen2"
-            ? " чекпойнт эпохи с минимальной ошибкой валидации."
-            : " чекпойнт эпохи с максимальной валидационной F1 по метрике этого обучения."}
+          {" чекпойнт эпохи с максимальной валидационной F1 по метрике этого обучения."}
         </p>
         <p>Текущая незавершённая эпоха будет отброшена. Файл final.pt вместо лучшего не используется.</p>
         {!checkpointAvailable ? (
@@ -3554,7 +3552,7 @@ function openTrainingStopModal(
           className="primary"
           type="button"
           disabled={!checkpointAvailable}
-          title={checkpointAvailable ? (job.pipeline_variant === "next_gen2" ? "Сохранить чекпойнт с минимальной ошибкой валидации" : "Сохранить чекпойнт с лучшей F1") : "Первая эпоха ещё не завершена"}
+          title={checkpointAvailable ? "Сохранить чекпойнт с лучшей F1" : "Первая эпоха ещё не завершена"}
           onClick={async () => {
             const updated = await run(() => apiJson<JobDetail>(`/jobs/${job.id}/stop-and-save-best`, { method: "POST" }));
             if (!updated) return;
@@ -3717,7 +3715,7 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
           <Metric
             label="Статус"
             value={job.stop_and_save_best_requested && isActiveStatus(job.status)
-              ? <span className="badge warning">{job.pipeline_variant === "next_gen2" ? "сохраняется минимум ошибки валидации" : "сохраняется лучший чекпойнт по F1"}</span>
+              ? <span className="badge warning">сохраняется лучший чекпойнт по F1</span>
               : statusBadge(job.status, job.type, job.progress)}
           />
           <Metric label="Тип" value={job.purpose === "test_sample_f1" ? "тестовый F1" : job.purpose === "pseudo_markup" ? "разметка" : "обучение"} />
@@ -3998,7 +3996,7 @@ function ConfigEditor({
   return (
     <div className="config-grid">
       {pipelineVariant === "next_gen2" ? (
-        <p className="muted">next-gen2: полные окна без дополнения краёв; разбиение тайлов 60/20/20; нормализация каждого окна; положительные тайлы получают вес 15. Лучшие веса выбираются по минимальной ошибке валидации. Пересекающиеся тайлы могут попасть в разные части, как в исходном ноутбуке.</p>
+        <p className="muted">next-gen2: полные окна без дополнения краёв; 20% снимков для валидации; нормализация каждого окна; положительные тайлы получают вес 15. Обучающие окна, пересекающие территорию валидации, исключаются. Лучшие веса и ранняя остановка определяются по F1.</p>
       ) : null}
       {(schema.fields || []).filter((field) =>
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
@@ -4011,7 +4009,7 @@ function ConfigEditor({
           Boolean(architecture) &&
           !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
         const tooltip = pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
-          ? "Число полных эпох без уменьшения ошибки валидации. В исходном ноутбуке — 9."
+          ? "Число полных эпох без улучшения валидационной F1 при пороге 0.5."
           : pipelineVariant === "next_gen2" && field.key === "train.weight_decay"
             ? "Регуляризация AdamW. Исходный ноутбук использует значение по умолчанию 0.01."
             : configFieldTooltip(field);
@@ -4279,7 +4277,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
               <td className="technical-value">{job.queue_position}</td>
               <td>
                 {job.stop_and_save_best_requested && isActiveStatus(job.status)
-                  ? <span className="badge warning">{job.pipeline_variant === "next_gen2" ? "сохраняется минимум ошибки валидации" : "сохраняется лучший F1"}</span>
+                  ? <span className="badge warning">сохраняется лучший F1</span>
                   : statusBadge(job.status, job.type, job.progress)}
               </td>
               <td>

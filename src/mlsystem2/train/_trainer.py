@@ -167,7 +167,7 @@ def train_model(
 
     total_started = perf_counter()
     history: list[EpochMetrics] = []
-    best_score = -float("inf") if config.pipeline_variant == "next_gen2" else -1.0
+    best_score = -1.0
     best_metrics: EpochMetrics | None = None
     last_validation_metrics: EpochMetrics | None = None
     patience = 0
@@ -281,11 +281,7 @@ def train_model(
                 history.append(metrics)
                 last_validation_metrics = metrics
 
-                score = (
-                    -float(metrics.val_loss)
-                    if config.pipeline_variant == "next_gen2"
-                    else _checkpoint_score(metrics)
-                )
+                score = _checkpoint_score(metrics)
                 if score > best_score:
                     best_score = score
                     best_metrics = metrics
@@ -326,7 +322,7 @@ def train_model(
         diagnostics: dict[str, Any] = {}
         if config.pipeline_variant == "next_gen2" and best_metrics is not None:
             diagnostics["checkpoint_selection"] = {
-                "metric": "val_loss", "mode": "min", "epoch": best_metrics.epoch,
+                "metric": "quality_f1", "mode": "max", "epoch": best_metrics.epoch,
                 "val_loss": best_metrics.val_loss,
                 "quality_f1": best_metrics.val_quality_f1,
                 "pixel_f1": best_metrics.val_best_threshold_pixel_f1,
@@ -2215,9 +2211,7 @@ def _save_training_checkpoint(
         metadata.update(
             {
                 "pipeline_variant": request.config.pipeline_variant,
-                "checkpoint_selection_metric": (
-                    "val_loss" if request.config.pipeline_variant == "next_gen2" else "quality_f1"
-                ),
+                "checkpoint_selection_metric": "quality_f1",
                 "run_metadata": dict(request.run_metadata),
                 "validation_performed": metrics.validation_performed,
                 "val_per_scene_metrics": metrics.val_per_scene_metrics,

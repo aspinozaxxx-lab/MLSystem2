@@ -88,8 +88,10 @@
 
 ## Алгоритм работы и его особенности
 
-Для `pipeline_variant=next_gen2` лучшая эпоха определяется минимумом `val/loss`, при равенстве выбирается
-ранняя. `get_best_training_checkpoint` возвращает F1 и порог именно этой эпохи. Итоговые
+Для новых `pipeline_variant=next_gen2` runs tag `checkpoint_selection_metric=quality_f1` задаёт выбор
+по максимуму `val/quality_f1`; при равенстве выбирается ранняя эпоха. Исторические runs без tag либо
+с `val_loss` сохраняют выбор по минимуму `val/loss`, чтобы возвращаемая эпоха соответствовала весам.
+`get_best_training_checkpoint` возвращает F1 и порог выбранной эпохи. Итоговые
 `train/best_quality_f1` и `train/best_threshold_pixel_f1` относятся к сохранённым весам; решение дополнительно
 записывается в `reports/checkpoint_selection.json`. Новые имена метрик не вводятся.
 

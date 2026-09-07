@@ -29,12 +29,13 @@
 
 ## Алгоритм работы и его особенности
 
-Для `next_gen2` оркестратор использует штатную подготовку снимков/разметки, разбиение `notebook_random`,
+Для `next_gen2` оркестратор использует штатную подготовку снимков/разметки, разбиение `scene_fold` с spatial purge,
 полные train/val loaders и двухклассовую HF B0 с внешним бинарным выходом. Вычисленные по train маскам
 веса передаются через `TrainConfig.class_weights`. В checkpoint и MLflow сохраняются вариант, исходный
-SHA-256 ноутбука, нормализация, разбиение с резервом test, sampler, scheduler и выбранная эпоха.
+SHA-256 ноутбука, нормализация, разбиение по сценам, sampler, scheduler и выбранная эпоха.
 Начальные веса принимаются только из совпадающего варианта, архитектуры, каналов и нормализации;
-новый запуск записывает текущее разбиение и статистику датасета. F1 не подменяет выбор best по loss.
+новый запуск записывает текущее разбиение и статистику датасета. Best и early stopping используют F1;
+tag `checkpoint_selection_metric=quality_f1` задаётся при открытии run, до первой эпохи.
 
 Конвейер передаёт в подготовку ожидаемые каналы и `uint8`, затем преобразует каждый `PreparedScene` в `TileSceneSource`. Оба loader получают один `TileSplitRequest`; split выполняется по окнам независимых TIFF. Legacy binary передаёт общие positive/hard-negative GeoJSON, per-image — локальный GeoJSON каждой сцены, legacy multiclass — `class_annotations`, а manifest-backed per-image multiclass — единую schema `classes`; binary val также получает instance masks. Перед созданием модели task и число выходов строго сверяются с подготовленным датасетом, а Python, NumPy, Torch и CUDA инициализируются единым `tile_preparation.seed`. В MLflow seed сохраняется в тегах и конфигурации, каталог `dataset/` получает TXT/GeoJSON legacy либо все GeoJSON и manifest из `annotations_dir`; class schema и структурированные метрики пишутся отдельно. Счётчики loader фиксируют сцены, разрешение и числа окон по каждому TIFF, valid-footprint, sampling и cache. Затем создаётся/загружается модель, `train_model` получает размер полного входа, context, seed и progress sink, а конвейер пишет epoch metrics, checkpoints, tile/timing/pipeline reports и корректно завершает MLflow run.
 

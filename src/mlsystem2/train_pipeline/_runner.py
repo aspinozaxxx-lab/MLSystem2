@@ -187,6 +187,7 @@ def run_train_pipeline(
                         _tile_split_request(settings),
                         max_batches_per_epoch=settings.train.max_train_batches_per_epoch,
                         include_object_instances=False,
+                        pipeline_variant=settings.train.pipeline_variant,
                         collect_band_histogram=(
                             settings.train.pipeline_variant == "next_gen"
                             and settings.next_gen.normalization == "robust_percentile"
@@ -201,6 +202,7 @@ def run_train_pipeline(
                         _tile_split_request(settings),
                         max_batches_per_epoch=settings.train.max_val_batches_per_epoch,
                         include_object_instances=settings.train.task == "binary",
+                        pipeline_variant=settings.train.pipeline_variant,
                     )
                 ),
             ),
@@ -287,9 +289,7 @@ def run_train_pipeline(
         report = PipelineReport(
             status=PipelineStatus.SUCCEEDED,
             message=(
-                ("Обучение остановлено пользователем; сохранён чекпойнт с минимальной ошибкой валидации."
-                 if settings.train.pipeline_variant == "next_gen2"
-                 else "Обучение остановлено пользователем; сохранён чекпойнт с лучшей F1.")
+                "Обучение остановлено пользователем; сохранён чекпойнт с лучшей F1."
                 if train_result.stopped_early
                 else "Конвейер обучения завершен."
             ),
@@ -364,6 +364,8 @@ def _mlflow_start_request(
             "class": _mlflow_class_tag(settings),
             "task": settings.train.task,
             "seed": str(settings.tile_preparation.seed),
+            **({"checkpoint_selection_metric": "quality_f1"}
+               if settings.train.pipeline_variant == "next_gen2" else {}),
         },
     )
 
@@ -450,14 +452,12 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
         val_fraction=settings.dataset.val_fraction,
         seed=settings.tile_preparation.seed,
         strategy=(
-            "notebook_random"
-            if settings.train.pipeline_variant == "next_gen2"
-            else "scene_fold"
-            if settings.train.pipeline_variant == "next_gen"
+            "scene_fold"
+            if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
             else "window_random"
         ),
         validation_fold=settings.next_gen.validation_fold,
-        spatial_purge=settings.train.pipeline_variant == "next_gen",
+        spatial_purge=settings.train.pipeline_variant in {"next_gen", "next_gen2"},
     )
 
 
@@ -469,10 +469,8 @@ def _tile_request(
     max_batches_per_epoch: int | None = None,
     include_object_instances: bool = False,
     collect_band_histogram: bool = False,
+    pipeline_variant: str = "legacy",
 ) -> TileDataloaderRequest:
-    pipeline_variant = {
-        "scene_fold": "next_gen", "notebook_random": "next_gen2",
-    }.get(tile_split.strategy if tile_split else "", "legacy")
     scenes = [
         TileSceneSource(
             scene_id=item.scene_id,
@@ -557,7 +555,7 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
                         "background_weight": 1.0, "replacement": True},
             "scheduler": {"name": "reduce_lr_on_plateau", "mode": "min",
                           "factor": 0.5, "patience": 3, "min_lr": 0.0},
-            "checkpoint_selection_metric": "val_loss",
+            "checkpoint_selection_metric": "quality_f1",
             "threshold_policy": {"mode": "fixed", "configured_threshold": 0.5},
             "source_notebook": {
                 "name": "train_full_pipeline_заболачивание.ipynb",
@@ -718,7 +716,6 @@ def _attach_next_gen_diagnostics(
     )
 
     if settings.train.pipeline_variant == "next_gen2":
-        result.diagnostics.pop("validation_fold", None)
         result.diagnostics.pop("validation_by_scene", None)
 
 
