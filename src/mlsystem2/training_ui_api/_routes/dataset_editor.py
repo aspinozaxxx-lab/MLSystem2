@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._dataset_editor import (
     DatasetEditorConflict,
@@ -18,6 +20,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     delete_editor_dataset,
     delete_editor_scene,
     discard_editor_drafts,
+    download_editor_dataset,
     editor_pseudo_job_info,
     editor_publication_info,
     editor_scene_detail,
@@ -82,6 +85,30 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> DatasetEditorDatasetListResponse:
         return _git_call(list_editor_datasets, db, ctx.config)
+
+    @app.get(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/download",
+        summary="Скачать датасет",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": "ZIP опубликованной разметки и структуры датасета без TIFF и черновиков.",
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+            }
+        },
+    )
+    def download_dataset(
+        dataset_key: str,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> StreamingResponse:
+        stream, filename = _git_call(download_editor_dataset, db, ctx.config, dataset_key)
+        return StreamingResponse(
+            iter(lambda: stream.read(_STREAM_CHUNK_SIZE), b""),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}"},
+            background=BackgroundTask(stream.close),
+        )
 
     @app.get(
         "/api/v1/dataset-editor/datasets/{dataset_key}/scenes",

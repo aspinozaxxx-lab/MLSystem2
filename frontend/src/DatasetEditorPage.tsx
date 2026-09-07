@@ -3,6 +3,7 @@ import {
   ArrowUpNarrowWide,
   Blend,
   CloudUpload,
+  Download,
   Eye,
   EyeOff,
   Folder,
@@ -40,7 +41,7 @@ import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
-import { apiJson } from "./api/client";
+import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import {
   appendHistory,
   cloneSnapshot,
@@ -292,6 +293,7 @@ export function DatasetEditorPage({
   const [drawInProgress, setDrawInProgress] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -1718,6 +1720,19 @@ export function DatasetEditorPage({
     setBandMenuOpen(false);
   };
 
+  const downloadDataset = async () => {
+    if (!datasetKey || downloading) return;
+    setDownloading(true);
+    try {
+      const result = await run(() =>
+        apiDownloadGet(`/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/download`),
+      );
+      if (result) downloadBlob(result.blob, result.filename || "датасет.zip");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const discardAllDrafts = async () => {
     if (!datasetKey || !hasDirtyDrafts) return;
     if (!window.confirm(
@@ -1874,6 +1889,15 @@ export function DatasetEditorPage({
           onClick={() => void loadBrowser("")}
         >
           <Plus size={16} /> Добавить снимки
+        </button>
+        <button
+          className="secondary"
+          type="button"
+          disabled={busy || downloading || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          title="Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"
+          onClick={() => void downloadDataset()}
+        >
+          <Download size={16} /> {downloading ? "Скачивание…" : "Скачать датасет"}
         </button>
         {selectedDataset?.combined ? (
           <button

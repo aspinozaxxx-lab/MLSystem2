@@ -14,8 +14,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from tempfile import SpooledTemporaryFile
+from typing import Any, BinaryIO, Iterator
 from urllib.parse import quote
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import rasterio
 from affine import Affine
@@ -122,6 +124,42 @@ class DatasetEditorConflict(RuntimeError):
 
 class DatasetEditorGitError(RuntimeError):
     """Git-клон редактора недоступен или операция Git завершилась ошибкой."""
+
+
+def download_editor_dataset(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+) -> tuple[BinaryIO, str]:
+    """Упаковать опубликованную разметку, сохранив папки класса и датасета."""
+
+    stream = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    try:
+        with _editor_lock(config):
+            dataset, source_dir = _editor_dataset_context(
+                session, config, dataset_key, allow_missing=True,
+            )
+            parts = (dataset.class_name, dataset.dataset_name)
+            if any(not part or part in {".", ".."} or "/" in part or "\\" in part for part in parts):
+                raise TrainingUIAPIError("Некорректное имя класса или датасета для архива")
+            archive_dir = PurePosixPath(*parts)
+            files = _direct_files(source_dir, ".geojson")
+            manifest = source_dir / ".mlsystem2-dataset.json"
+            if manifest.is_file():
+                files.append(manifest)
+            with ZipFile(stream, "w", compression=ZIP_DEFLATED) as archive:
+                archive.writestr(f"{archive_dir.as_posix()}/", b"")
+                for path in files:
+                    _ensure_within(
+                        path.resolve(), source_dir.resolve(),
+                        "Файл разметки выходит за пределы датасета",
+                    )
+                    archive.write(path, (archive_dir / path.name).as_posix())
+        stream.seek(0)
+        return stream, f"{dataset.class_name}_{dataset.dataset_name}.zip"
+    except BaseException:
+        stream.close()
+        raise
 
 
 def list_editor_datasets(

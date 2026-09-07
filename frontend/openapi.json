@@ -660,6 +660,46 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/download": {
+      "get": {
+        "summary": "Скачать датасет",
+        "operationId": "download_dataset_api_v1_dataset_editor_datasets__dataset_key__download_get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP опубликованной разметки и структуры датасета без TIFF и черновиков.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/scenes": {
       "get": {
         "summary": "Scenes",

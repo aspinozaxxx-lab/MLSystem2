@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 import json
 import shutil
 import sqlite3
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
+from zipfile import ZipFile
 
 import numpy as np
 import pytest
@@ -225,6 +227,62 @@ def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
     assert partial.content == full.content[:32]
     assert partial.headers["content-range"].startswith("bytes 0-31/")
     assert invalid.status_code == 416
+
+
+def test_dataset_editor_downloads_published_markup_without_rasters_or_drafts(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    base_url = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    scene = env.client.get(f"{base_url}/scenes").json()["scenes"][0]
+    annotation_name = scene["annotation_name"]
+    detail = env.client.get(f"{base_url}/scenes/{quote(annotation_name, safe='')}").json()
+    draft = deepcopy(detail["geojson"])
+    draft["features"] = []
+    saved = env.client.put(
+        f"{base_url}/drafts/{quote(annotation_name, safe='')}",
+        json={"base_revision": scene["revision"], "geojson": draft},
+    )
+    assert saved.status_code == 200, saved.text
+    annotation = env.editor_dataset / annotation_name
+    published = annotation.read_bytes()
+    footprint = env.editor_dataset / f"{annotation.stem}_footprint.geojson"
+    footprint.write_text(json.dumps(detail["valid_data_footprint"]), encoding="utf-8")
+    (env.editor_dataset / "снимок.tif").write_bytes(b"TIFF")
+    (env.editor_dataset / "служебный.json").write_text("{}", encoding="utf-8")
+    _git(env.editor_root, "add", ".")
+    _git(env.editor_root, "commit", "-m", "Добавить файлы для проверки архива")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+
+    response = env.client.get(f"{base_url}/download")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["content-disposition"] == (
+        "attachment; filename*=UTF-8''" + quote("Реки_test.zip", safe="")
+    )
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {
+            "Реки/test/", f"Реки/test/{annotation_name}", f"Реки/test/{footprint.name}",
+        }
+        assert archive.read(f"Реки/test/{annotation_name}") == published
+        assert archive.read(f"Реки/test/{footprint.name}") == footprint.read_bytes()
+        assert archive.testzip() is None
+    assert annotation.read_bytes() == published
+
+    with TestClient(create_app()) as unauthenticated:
+        assert unauthenticated.get(f"{base_url}/download").status_code == 401
+
+
+def test_dataset_editor_downloads_empty_dataset_structure(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    response = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(env.empty_dataset_key, safe='')}/download"
+    )
+    assert response.status_code == 200, response.text
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["Реки/empty/"]
 
 
 def test_dataset_editor_save_checks_revision_geometry_and_publication(
@@ -1392,6 +1450,9 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes"
     )
     assert scenes_response.status_code == 400
+    download_url = f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/download"
+    assert env.client.get(download_url).status_code == 400
+    assert not editor_cache.exists()
     session_factory = create_session_factory(get_config())
     with session_factory() as session:
         assert process_next_managed_materialization(session, get_config()) is True
@@ -1401,6 +1462,16 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert scenes_response.status_code == 200, scenes_response.text
     assert editor_cache.is_dir()
+    downloaded = env.client.get(download_url)
+    assert downloaded.status_code == 200, downloaded.text
+    with ZipFile(BytesIO(downloaded.content)) as archive:
+        prefix = "Реки и озера/main/"
+        manifest = json.loads(archive.read(f"{prefix}.mlsystem2-dataset.json"))
+        assert manifest["task"] == "multiclass"
+        assert len(manifest["classes"]) == 2
+        exported = json.loads(archive.read(f"{prefix}{annotation_name}"))
+        assert exported["features"]
+        assert all(name.endswith(("/", ".geojson", ".json")) for name in archive.namelist())
     scene = scenes_response.json()["scenes"][0]
     detail_response = env.client.get(
         "/api/v1/dataset-editor/datasets/"
