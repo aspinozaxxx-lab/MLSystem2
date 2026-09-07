@@ -20,6 +20,7 @@ import {
   Undo2,
 } from "lucide-react";
 import Feature from "ol/Feature";
+import Collection from "ol/Collection";
 import { defaults as defaultControls } from "ol/control/defaults";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
@@ -77,6 +78,10 @@ type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
 type EditMode = "select" | "draw" | "pseudo";
 type BandMode = "RGB" | "NRG" | "NGB";
+type ClassDisplayState = {
+  hiddenClasses: ReadonlySet<string>;
+  highlightedClass: string | null;
+};
 type VertexSelection = {
   feature: Feature<Geometry>;
   vertex: EditableVertex;
@@ -241,7 +246,9 @@ const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
 const styleCache = new Map<string, Style>();
 const pseudoStyleCache = new Map<string, Style>();
 const selectedPseudoStyleCache = new Map<string, Style>();
+const highlightedStyleCache = new WeakMap<Style, Style[]>();
 const EDITABLE_VERTICES_STYLE = new Style({
+  zIndex: 20,
   geometry: (feature) => new MultiPoint(
     editableVertexCoordinates((feature as Feature<Geometry>).getGeometry()),
   ),
@@ -279,6 +286,7 @@ export function DatasetEditorPage({
   const [sortDirection, setSortDirection] = useState<SortDirection>("descending");
   const [fillEnabled, setFillEnabled] = useState(true);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  const [hiddenClasses, setHiddenClasses] = useState<ReadonlySet<string>>(new Set());
   const [pseudoVisible, setPseudoVisible] = useState(false);
   const [pseudoMarkup, setPseudoMarkup] = useState<PseudoMarkupInfo | null>(null);
   const [pseudoRequestPending, setPseudoRequestPending] = useState(false);
@@ -302,6 +310,7 @@ export function DatasetEditorPage({
   const workspaceRef = useRef<HTMLElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
+  const snapFeaturesRef = useRef<Collection<Feature<Geometry>> | null>(null);
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const pseudoSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const pseudoLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
@@ -317,6 +326,8 @@ export function DatasetEditorPage({
   const roleRef = useRef<ObjectSelection>(role);
   const fillEnabledRef = useRef(fillEnabled);
   const annotationsVisibleRef = useRef(annotationsVisible);
+  const classDisplayRef = useRef<ClassDisplayState>({ hiddenClasses, highlightedClass: null });
+  classDisplayRef.current = { ...classDisplayRef.current, hiddenClasses };
   const bandModeRef = useRef<BandMode>(bandMode);
   const activeAnnotationRef = useRef(annotationName);
   const drawInProgressRef = useRef(false);
@@ -332,6 +343,14 @@ export function DatasetEditorPage({
   const draftSaveInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const datasetKeyRef = useRef(datasetKey);
   datasetKeyRef.current = datasetKey;
+
+  const highlightClass = useCallback((slug: string | null) => {
+    if (classDisplayRef.current.highlightedClass === slug) return;
+    classDisplayRef.current = { ...classDisplayRef.current, highlightedClass: slug };
+    vectorLayerRef.current?.changed();
+    pseudoLayerRef.current?.changed();
+    mapRef.current?.render();
+  }, []);
 
   const selectedDataset = useMemo(
     () => datasets.find((item) => item.key === datasetKey) || null,
@@ -374,6 +393,17 @@ export function DatasetEditorPage({
     () => activeDraft ? featureClassCounts(activeDraft.current.geojson) : {},
     [activeDraft],
   );
+  const legendClasses = objectTypeChoices.map((item) => ({
+    ...item,
+    count: activeClassCounts[item.slug] || 0,
+  })).concat({
+    id: 0,
+    slug: "hard_negative",
+    name: "Hard negative",
+    color: HARD_NEGATIVE_COLOR,
+    priority: 0,
+    count: activeDraft ? featureCounts(activeDraft.current.geojson).hardNegative : 0,
+  });
   const activePseudoCacheKey = useMemo(
     () => pseudoCacheKey(
       datasetKey,
@@ -421,7 +451,13 @@ export function DatasetEditorPage({
 
   useEffect(() => {
     activeAnnotationRef.current = annotationName;
-  }, [annotationName]);
+    highlightClass(null);
+  }, [annotationName, highlightClass]);
+
+  useEffect(() => {
+    setHiddenClasses(new Set());
+    highlightClass(null);
+  }, [datasetKey, highlightClass]);
 
   useEffect(() => {
     dirtyRef.current = hasUnsavedLocalDrafts;
@@ -1058,18 +1094,26 @@ export function DatasetEditorPage({
       ),
     });
     const pseudoSource = new VectorSource<Feature<Geometry>>();
+    const visibleMarkup = (feature: Feature<Geometry>) =>
+      isEditorFeatureVisible(feature, objectTypeChoices, classDisplayRef.current);
     const pseudoLayer = new VectorLayer({
       source: pseudoSource,
       visible: false,
-      style: (feature) => pseudoMarkupStyle(
+      style: (feature) => displayedClassStyles(
         feature as Feature<Geometry>,
         objectTypeChoices,
+        classDisplayRef.current,
+        pseudoMarkupStyle(feature as Feature<Geometry>, objectTypeChoices),
+        true,
       ),
     });
     const vectorLayer = new VectorLayer({
       source: vectorSource,
       visible: annotationsVisibleRef.current,
-      style: (feature) =>
+      style: (feature) => displayedClassStyles(
+        feature as Feature<Geometry>,
+        objectTypeChoices,
+        classDisplayRef.current,
         featureStyle(
           feature as Feature<Geometry>,
           false,
@@ -1077,10 +1121,15 @@ export function DatasetEditorPage({
           newFeaturesRef.current,
           objectTypeChoices,
         ),
+      ),
     });
     const select = new Select({
       layers: [vectorLayer],
-      style: (feature) =>
+      filter: (feature) => visibleMarkup(feature as Feature<Geometry>),
+      style: (feature) => displayedClassStyles(
+        feature as Feature<Geometry>,
+        objectTypeChoices,
+        classDisplayRef.current,
         selectedFeatureStyles(
           feature as Feature<Geometry>,
           fillEnabledRef.current,
@@ -1088,14 +1137,21 @@ export function DatasetEditorPage({
           objectTypeChoices,
           selectedVerticesRef.current,
         ),
+      ),
     });
     const pseudoSelect = new Select({
       layers: [pseudoLayer],
       multi: true,
       hitTolerance: 4,
-      style: (feature) => selectedPseudoMarkupStyle(
+      filter: (feature) => isEditorFeatureVisible(
+        feature as Feature<Geometry>, objectTypeChoices, classDisplayRef.current, true,
+      ),
+      style: (feature) => displayedClassStyles(
         feature as Feature<Geometry>,
         objectTypeChoices,
+        classDisplayRef.current,
+        selectedPseudoMarkupStyle(feature as Feature<Geometry>, objectTypeChoices),
+        true,
       ),
     });
     pseudoSelect.setActive(false);
@@ -1125,7 +1181,18 @@ export function DatasetEditorPage({
         return preventMapMiddleButtonDefault(originalEvent);
       },
     });
-    const snap = new Snap({ source: vectorSource });
+    const snapFeatures = new Collection(vectorSource.getFeatures().filter(visibleMarkup));
+    const snap = new Snap({ features: snapFeatures });
+    const syncSnapFeature = (feature: Feature<Geometry> | undefined) => {
+      if (!feature) return;
+      const included = snapFeatures.getArray().includes(feature);
+      const visible = vectorSource.hasFeature(feature) && visibleMarkup(feature);
+      if (visible && !included) snapFeatures.push(feature);
+      if (!visible && included) snapFeatures.remove(feature);
+    };
+    vectorSource.on("addfeature", (event) => syncSnapFeature(event.feature));
+    vectorSource.on("changefeature", (event) => syncSnapFeature(event.feature));
+    vectorSource.on("removefeature", (event) => syncSnapFeature(event.feature));
     const draw = new Draw({ source: vectorSource, type: "Polygon" });
     draw.setActive(false);
     const geometryBackups = new Map<Feature<Geometry>, Geometry>();
@@ -1213,7 +1280,7 @@ export function DatasetEditorPage({
     });
     vertexBox.on("boxend", () => {
       const extent = vertexBox.getGeometry().getExtent();
-      const selections = vectorSource.getFeatures().flatMap((feature) =>
+      const selections = vectorSource.getFeatures().filter(visibleMarkup).flatMap((feature) =>
         editableVerticesInExtent(feature.getGeometry(), extent).map((vertex) => ({
           feature,
           vertex,
@@ -1303,6 +1370,7 @@ export function DatasetEditorPage({
     pseudoLayerRef.current = pseudoLayer;
     pseudoSelectRef.current = pseudoSelect;
     vectorLayerRef.current = vectorLayer;
+    snapFeaturesRef.current = snapFeatures;
     rasterLayerRef.current = rasterLayer;
     selectRef.current = select;
     vertexBoxRef.current = vertexBox;
@@ -1321,6 +1389,7 @@ export function DatasetEditorPage({
       pseudoLayerRef.current = null;
       pseudoSelectRef.current = null;
       vectorSourceRef.current = null;
+      snapFeaturesRef.current = null;
       vectorLayerRef.current = null;
       rasterLayerRef.current = null;
       selectRef.current = null;
@@ -1343,6 +1412,33 @@ export function DatasetEditorPage({
     updateDraft,
     objectTypeChoices,
   ]);
+
+  useEffect(() => {
+    const display = classDisplayRef.current;
+    const visible = (feature: Feature<Geometry>, pseudo = false) =>
+      isEditorFeatureVisible(feature, objectTypeChoices, display, pseudo);
+    const selected = selectRef.current?.getFeatures();
+    selected?.getArray().slice().forEach((feature) => {
+      if (!visible(feature)) selected.remove(feature);
+    });
+    const selectedPseudo = pseudoSelectRef.current?.getFeatures();
+    selectedPseudo?.getArray().slice().forEach((feature) => {
+      if (!visible(feature, true)) selectedPseudo.remove(feature);
+    });
+    setSelectedPseudoCount(selectedPseudo?.getLength() || 0);
+    setSelectedVertices(selectedVerticesRef.current.filter((selection) => visible(selection.feature)));
+    const snapFeatures = snapFeaturesRef.current;
+    if (snapFeatures) {
+      snapFeatures.clear();
+      snapFeatures.extend(vectorSourceRef.current?.getFeatures().filter((feature) => visible(feature)) || []);
+    }
+  }, [hiddenClasses, activeDraft?.current.geojson, objectTypeChoices, setSelectedVertices]);
+
+  useEffect(() => {
+    vectorLayerRef.current?.changed();
+    pseudoLayerRef.current?.changed();
+    mapRef.current?.render();
+  }, [hiddenClasses]);
 
   useEffect(() => {
     const source = pseudoSourceRef.current;
@@ -1712,6 +1808,15 @@ export function DatasetEditorPage({
     setAnnotationsVisible(next);
     vectorLayerRef.current?.setVisible(next);
     mapRef.current?.render();
+  };
+
+  const toggleClassVisibility = (slug: string) => {
+    setHiddenClasses((current) => {
+      const next = new Set(current);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
   };
 
   const selectBandMode = (next: BandMode) => {
@@ -2225,17 +2330,28 @@ export function DatasetEditorPage({
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
-                  <div className="dataset-editor-legend" aria-label="Легенда типов объектов">
-                    {objectTypeChoices.map((item) => (
-                      <span key={item.slug}>
-                        <i style={{ backgroundColor: item.color }} />
-                        {item.name}: <strong>{activeClassCounts[item.slug] || 0}</strong>
-                      </span>
+                  <div className="dataset-editor-legend" role="group" aria-label="Видимость классов на карте">
+                    {legendClasses.map((item) => (
+                      <button
+                        key={item.slug}
+                        type="button"
+                        className={`dataset-editor-class-chip${hiddenClasses.has(item.slug) ? " is-hidden" : ""}`}
+                        style={{ "--object-color": item.color } as CSSProperties}
+                        aria-label={`Показывать класс ${item.name}`}
+                        aria-pressed={!hiddenClasses.has(item.slug)}
+                        title={`${hiddenClasses.has(item.slug) ? "Показать" : "Скрыть"} класс «${item.name}» в разметке и псевдоразметке. Наведение подсвечивает видимые объекты класса.`}
+                        onClick={() => toggleClassVisibility(item.slug)}
+                        onMouseEnter={() => highlightClass(item.slug)}
+                        onMouseLeave={() => highlightClass(null)}
+                        onFocus={() => highlightClass(item.slug)}
+                        onBlur={() => highlightClass(null)}
+                      >
+                        <i aria-hidden="true" />
+                        <span className="dataset-editor-class-chip-name">{item.name}</span>
+                        <strong>{item.count}</strong>
+                        {hiddenClasses.has(item.slug) ? <EyeOff size={13} aria-hidden="true" /> : null}
+                      </button>
                     ))}
-                    <span>
-                      <i style={{ backgroundColor: HARD_NEGATIVE_COLOR }} />
-                      Hard negative: <strong>{activeDraft ? featureCounts(activeDraft.current.geojson).hardNegative : 0}</strong>
-                    </span>
                   </div>
                 ) : null}
                 <div className="dataset-editor-map-shell">
@@ -2754,15 +2870,68 @@ function pseudoFeatureTarget(
 ): ObjectSelection | null {
   if (!feature || !dataset) return null;
   if (dataset.task !== "multiclass") return "positive";
+  return pseudoFeatureType(feature, dataset.object_types)?.slug || dataset.object_types[0]?.slug || null;
+}
+
+function pseudoFeatureType(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+): EditorObjectType | undefined {
   const slug = feature.get("object_type_slug");
-  if (typeof slug === "string" && dataset.object_types.some((item) => item.slug === slug)) {
-    return slug;
-  }
+  const bySlug = objectTypes.find((item) => item.slug === slug);
+  if (bySlug) return bySlug;
   const rawId = feature.get("object_type_id");
-  const objectType = dataset.object_types.find((item) =>
+  return objectTypes.find((item) =>
     rawId !== undefined && rawId !== null && item.id === Number(rawId)
   );
-  return objectType?.slug || dataset.object_types[0]?.slug || null;
+}
+
+function editorFeatureDisplayClass(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+  pseudo: boolean,
+): string {
+  if (feature.get(ROLE_PROPERTY) === "hard_negative") return "hard_negative";
+  if (pseudo) return pseudoFeatureType(feature, objectTypes)?.slug || "";
+  return String(feature.get(CLASS_PROPERTY) || "positive");
+}
+
+export function isEditorFeatureVisible(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+  display: ClassDisplayState,
+  pseudo = false,
+): boolean {
+  return !display.hiddenClasses.has(editorFeatureDisplayClass(feature, objectTypes, pseudo));
+}
+
+export function displayedClassStyles(
+  feature: Feature<Geometry>,
+  objectTypes: EditorObjectType[],
+  display: ClassDisplayState,
+  styles: Style | Style[],
+  pseudo = false,
+): Style | Style[] | undefined {
+  if (!isEditorFeatureVisible(feature, objectTypes, display, pseudo)) return undefined;
+  if (display.highlightedClass !== editorFeatureDisplayClass(feature, objectTypes, pseudo)) return styles;
+  const baseStyles = Array.isArray(styles) ? styles : [styles];
+  const base = baseStyles[0];
+  if (!base) return styles;
+  let highlighted = highlightedStyleCache.get(base);
+  if (!highlighted) {
+    const stroke = base.getStroke();
+    const width = stroke?.getWidth() || 2;
+    const outline = new Style({
+      stroke: new Stroke({ color: "#FFFFFF", width: width + 5, lineDash: stroke?.getLineDash() || undefined }),
+      zIndex: 10,
+    });
+    const accent = base.clone();
+    accent.getStroke()?.setWidth(width + 2);
+    accent.setZIndex(11);
+    highlighted = [outline, accent];
+    highlightedStyleCache.set(base, highlighted);
+  }
+  return [...highlighted, ...baseStyles.slice(1)];
 }
 
 function formatRebuildChange(change: RebuildChange): string {
@@ -2819,12 +2988,7 @@ function pseudoFeatureColor(
   objectTypes: EditorObjectType[],
 ): string {
   const sourceColor = feature.get("object_type_color");
-  const slug = feature.get("object_type_slug");
-  const rawId = feature.get("object_type_id");
-  const objectType = objectTypes.find((item) =>
-    (typeof slug === "string" && item.slug === slug)
-    || (rawId !== undefined && rawId !== null && item.id === Number(rawId))
-  );
+  const objectType = pseudoFeatureType(feature, objectTypes);
   return typeof sourceColor === "string" && /^#[0-9a-f]{6}$/i.test(sourceColor)
     ? sourceColor.toUpperCase()
     : objectType?.color || "#22D3EE";
@@ -2872,6 +3036,7 @@ function selectedFeatureStyles(
     .map((selection) => selection.vertex.coordinate);
   if (coordinates.length) {
     styles.push(new Style({
+      zIndex: 21,
       geometry: new MultiPoint(coordinates),
       image: SELECTED_VERTEX_IMAGE,
     }));

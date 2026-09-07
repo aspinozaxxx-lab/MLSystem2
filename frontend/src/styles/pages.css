@@ -1786,6 +1786,39 @@
   gap: 5px;
 }
 
+.dataset-editor-class-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--object-color) 45%, var(--border));
+  border-radius: 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--object-color) 9%, var(--surface));
+  font-size: 12px;
+}
+
+.dataset-editor-class-chip i {
+  background: var(--object-color);
+}
+
+.dataset-editor-class-chip:hover,
+.dataset-editor-class-chip:focus-visible {
+  border-color: var(--object-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--object-color) 25%, transparent);
+}
+
+.dataset-editor-class-chip.is-hidden {
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-style: dashed;
+}
+
+.dataset-editor-class-chip.is-hidden .dataset-editor-class-chip-name {
+  text-decoration: line-through;
+}
+
 .dataset-editor-source-warning {
   display: flex;
   flex-wrap: wrap;
