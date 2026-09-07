@@ -78,6 +78,7 @@ def create_tile_dataloader(
             "dataset": dataset, "batch_size": request.batch_size, "sampler": sampler,
             "shuffle": False, "num_workers": tile_settings.num_workers,
             "collate_fn": _collate_tile_batch, "worker_init_fn": _seed_tile_worker,
+            "pin_memory": torch.cuda.is_available(),
         }
         if tile_settings.num_workers > 0:
             # Полная эпоха может занимать сотни ГБ; достаточно двух batch на процесс.

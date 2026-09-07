@@ -35,6 +35,8 @@
 минимальной ошибке валидации, F1 вычисляется на фиксированном пороге 0.5. Существующие пауза и остановка
 с сохранением действуют на границе пакетов. `diagnostics.checkpoint_selection` хранит эпоху, loss и F1
 выбранных весов. Обычный бинарный выход применяется только для инференса; обучение запрашивает оба logits.
+Next-gen2 переносит batch на GPU с `non_blocking=True` и проверяет конечность градиентов B0 одним
+объединённым тензором; при ошибке прежний проход определяет первый повреждённый параметр.
 
 `train_model` переносит модель на `config.device` и создаёт AdamW. `legacy` побитово сохраняет cosine scheduler и validation каждой эпохи. `next_gen` использует `ReduceLROnPlateau(mode=max,factor=0.5,patience=3,min_lr=1e-7)` по полной scene-macro val F1; validation выполняется на эпохе 1, по интервалу и перед штатным завершением, а early stopping считает только validation-события. Между ними `EpochMetrics` содержит train loss и `validation_performed=false` без выдуманных val-значений.
 

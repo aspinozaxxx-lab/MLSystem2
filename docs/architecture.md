@@ -549,7 +549,7 @@ Geoalert metadata.
 в пакете. Полная валидация идёт каждую эпоху; scheduler `ReduceLROnPlateau(mode=min,patience=3,factor=0.5)`
 и выбор best/ранняя остановка используют validation loss. F1 остаётся диагностикой на пороге 0.5.
 Профиль UI задаёт исходные 512/256, batch 8, 50 эпох, LR 1e-4, weight decay 0.01 и patience 9; серверный
-loader этого варианта использует workers 0 и seed 42. Очереди, пауза, остановка с сохранением, MLflow,
+loader этого варианта использует настроенное число workers и seed 42. Очереди, пауза, остановка с сохранением, MLflow,
 экспорт и псевдоразметка остаются штатными. Правила `legacy` и `next_gen` не изменяются.
 
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.

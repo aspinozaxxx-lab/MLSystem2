@@ -1242,6 +1242,54 @@ def test_multiclass_losses_support_pixel_hard_negative_weight(loss_name: str) ->
     assert torch.isfinite(logits.grad).all()
 
 
+@pytest.mark.parametrize("combine", [False, True])
+@pytest.mark.parametrize(
+    ("bad_first", "bad_last", "expected"),
+    [
+        (None, None, None),
+        (float("nan"), None, "first.weight"),
+        (None, float("inf"), "last.weight"),
+        (None, float("-inf"), "last.weight"),
+        (float("inf"), float("nan"), "first.weight"),
+    ],
+)
+def test_gradient_check_preserves_values_and_reports_first_bad_parameter(
+    combine, bad_first, bad_last, expected,
+) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train._trainer import _first_nonfinite_gradient
+
+    model = torch.nn.Module()
+    for name in ("first", "unused", "last"):
+        model.add_module(name, torch.nn.Linear(2, 2, bias=False))
+    # Большие конечные числа не должны ошибочно отклоняться из-за переполнения нормы.
+    model.first.weight.grad = torch.full_like(model.first.weight, torch.finfo(torch.float32).max)
+    model.last.weight.grad = torch.ones_like(model.last.weight).t()
+    assert not model.last.weight.grad.is_contiguous()
+    if bad_first is not None:
+        model.first.weight.grad[0, 0] = bad_first
+    if bad_last is not None:
+        model.last.weight.grad[1, 1] = bad_last
+    before = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
+    rng = torch.get_rng_state().clone()
+
+    assert _first_nonfinite_gradient(torch, model, combine=combine) == expected
+    assert torch.equal(torch.get_rng_state(), rng)
+    assert model.unused.weight.grad is None
+    for name, parameter in model.named_parameters():
+        if name in before:
+            torch.testing.assert_close(parameter.grad, before[name], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("combine", [False, True])
+def test_gradient_check_accepts_absent_gradients(combine) -> None:
+    torch = pytest.importorskip("torch")
+    from mlsystem2.train._trainer import _first_nonfinite_gradient
+
+    assert _first_nonfinite_gradient(torch, torch.nn.Module(), combine=combine) is None
+    assert _first_nonfinite_gradient(torch, torch.nn.Linear(2, 2), combine=combine) is None
+
+
 def test_train_model_skips_nonfinite_gradient_batch(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
 

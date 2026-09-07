@@ -653,7 +653,9 @@ def _train_epoch(
     nonfinite_gradient_skips = 0
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
-        images = images.to(device=device, dtype=torch.float32)
+        images = images.to(
+            device=device, dtype=torch.float32, non_blocking=config.pipeline_variant == "next_gen2"
+        )
         masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
         valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
         class_hard_negative_pixels = _prepare_class_hard_negative_pixels(
@@ -698,7 +700,9 @@ def _train_epoch(
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
         loss_weight = int(images.shape[0]) if config.pipeline_variant == "next_gen2" else 1
         loss.backward()
-        bad_gradient = _first_nonfinite_gradient(torch, model)
+        bad_gradient = _first_nonfinite_gradient(
+            torch, model, combine=config.pipeline_variant == "next_gen2"
+        )
         if bad_gradient is not None:
             nonfinite_gradient_skips += 1
             warnings.warn(
@@ -821,7 +825,9 @@ def _validate_epoch(
     ):
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
-            images = images.to(device=device, dtype=torch.float32)
+            images = images.to(
+                device=device, dtype=torch.float32, non_blocking=config.pipeline_variant == "next_gen2"
+            )
             masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
             _ensure_finite_tensor(torch, images, "images", epoch, batch_index, "val")
@@ -1672,7 +1678,9 @@ def _prepare_supervision_masks(torch, masks, config, device):
         hard_negative_pixels = raw == HARD_NEGATIVE_LABEL
         target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
         return target, hard_negative_pixels
-    raw = masks.to(device=device, dtype=torch.float32)
+    raw = masks.to(
+        device=device, dtype=torch.float32, non_blocking=config.pipeline_variant == "next_gen2"
+    )
     hard_negative_pixels = raw == float(HARD_NEGATIVE_LABEL)
     target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
     return target, hard_negative_pixels
@@ -2138,7 +2146,16 @@ def _ensure_finite_scalar(value: float, name: str, epoch: int) -> None:
         raise TrainError(f"Non-finite metric at epoch={epoch}, metric={name}, value={value}")
 
 
-def _first_nonfinite_gradient(torch, model) -> str | None:
+def _first_nonfinite_gradient(torch, model, *, combine: bool = False) -> str | None:
+    if combine:
+        # У B0 около 14 МиБ градиентов: одна проверка убирает сотни синхронизаций с GPU.
+        # При ошибке прежний проход ниже называет первый повреждённый параметр.
+        gradients = [
+            parameter.grad.reshape(-1) for parameter in model.parameters()
+            if parameter.grad is not None
+        ]
+        if not gradients or bool(torch.isfinite(torch.cat(gradients)).all()):
+            return None
     for name, parameter in model.named_parameters():
         if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all()):
             return name
