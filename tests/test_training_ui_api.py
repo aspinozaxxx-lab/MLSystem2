@@ -1529,7 +1529,7 @@ def test_training_worker_preempts_and_resumes_training_for_urgent_inference(
         row.process_pid = 5678
 
     monkeypatch.setattr(_worker, "_start_inference_job", fake_start_inference)
-    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    monkeypatch.setattr(_worker, "job_process_is_alive", lambda _pid: True)
     created_at = datetime(2026, 8, 13, tzinfo=timezone.utc)
 
     with session_factory() as session:
@@ -1659,7 +1659,7 @@ def test_secondary_training_pauses_for_regular_job_and_resumes(
         row.process_pid = 5678
 
     monkeypatch.setattr(_worker, "_start_inference_job", fake_start_inference)
-    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    monkeypatch.setattr(_worker, "job_process_is_alive", lambda _pid: True)
     created_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
 
     with session_factory() as session:
@@ -1728,7 +1728,7 @@ def test_secondary_inference_pauses_for_regular_training_and_resumes(
         row.process_pid = 8765
 
     monkeypatch.setattr(_worker, "_start_training_job", fake_start_training)
-    monkeypatch.setattr(_worker, "_pid_is_alive", lambda _pid: True)
+    monkeypatch.setattr(_worker, "job_process_is_alive", lambda _pid: True)
     created_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
 
     with session_factory() as session:
@@ -3742,7 +3742,7 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             assert payload["train"]["pretrained"] is True
             assert payload["tile_preparation"]["context"] == 0
             assert payload["tile_preparation"]["stride"] == 256
-            assert payload["tile_preparation"]["num_workers"] == 0
+            assert "num_workers" not in payload["tile_preparation"]
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Реки\\test",

@@ -176,6 +176,49 @@ def test_coordinates_split_masks_and_sampler_match_original_notebook(tmp_path):
     actual_val.close()
 
 
+def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    image, annotation = _scene(tmp_path)
+    dataset = _dataset(image, annotation)
+    settings = SimpleNamespace(tile_preparation=SimpleNamespace(
+        tile_size=32, stride=16, context=0, seed=42, augmentation_level=0,
+        positive_factor=0.5, hard_negative_factor=0.0, background_factor=0.5,
+        class_balance=False, num_workers=0, prefetch_epochs=1000,
+    ))
+    monkeypatch.setattr(_dataloader, "get_settings", lambda: settings)
+    monkeypatch.setattr(_dataloader, "TileDataset", lambda **kwargs: dataset)
+    request = SimpleNamespace(
+        scenes=dataset._scenes, annotation_file=annotation, hard_negative_annotation_file=None,
+        class_annotations=[], classes=[], mode="train", tile_split=dataset._tile_split,
+        include_object_instances=False, pipeline_variant="next_gen2", collect_band_histogram=False,
+        batch_size=4,
+    )
+    observed = []
+    for workers in (0, 2):
+        dataset.close()
+        settings.tile_preparation.num_workers = workers
+        loader = _dataloader.create_tile_dataloader(request)
+        assert loader.num_workers == workers
+        assert not loader.persistent_workers
+        if workers:
+            assert loader.prefetch_factor == 2
+        torch.manual_seed(1729)
+        epochs = []
+        for _ in range(2):
+            batches = []
+            for images, masks, meta in loader:
+                batches.append((images.clone(), masks.clone(), torch.rand(3), meta))
+            epochs.append((batches, torch.get_rng_state().clone()))
+        observed.append(epochs)
+    for serial, parallel in zip(*observed):
+        assert torch.equal(serial[1], parallel[1])
+        for expected, actual in zip(serial[0], parallel[0], strict=True):
+            for index in range(3):
+                assert torch.equal(expected[index], actual[index])
+            assert expected[3] == actual[3]
+    dataset.close()
+
+
 def test_one_epoch_matches_notebook_loss_gradients_and_adamw(tmp_path):
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")

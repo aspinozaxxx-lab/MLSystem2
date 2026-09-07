@@ -73,7 +73,7 @@ from ._models import (
     TrainingResultRow,
     TrainingResultTestMetricRow,
 )
-from ._processes import terminate_job_process
+from ._processes import job_process_is_alive, terminate_job_process
 from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
 from ._queueing import (
     DATASET_EDITOR_PSEUDO_OPERATION,
@@ -472,7 +472,7 @@ def _reconcile_running_training_jobs(session: Session, config: TrainingUIAPIConf
         if exit_code is not None:
             _finish_training_job(session, row, config, succeeded=exit_code == 0)
             continue
-        if row.process_pid is not None and _pid_is_alive(row.process_pid):
+        if row.process_pid is not None and job_process_is_alive(row.process_pid):
             continue
         _finish_training_job(session, row, config, succeeded=False)
 
@@ -499,7 +499,7 @@ def _reconcile_running_inference_jobs(session: Session, config: TrainingUIAPICon
             )
             _finish_inference_job(session, row, config, succeeded=False)
             continue
-        if row.process_pid is not None and _pid_is_alive(row.process_pid):
+        if row.process_pid is not None and job_process_is_alive(row.process_pid):
             continue
         _finish_inference_job(session, row, config, succeeded=False)
 
@@ -733,7 +733,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
-            **({"num_workers": 0, "seed": 42} if pipeline_variant == "next_gen2" else {}),
+            **({"seed": 42} if pipeline_variant == "next_gen2" else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),
@@ -2710,14 +2710,6 @@ def _read_exit_code(run_dir: Path | None) -> int | None:
         return int(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return 1
-
-
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
 
 
 def _pseudolabel_timed_out(row: JobRow) -> bool:

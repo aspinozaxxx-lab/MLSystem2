@@ -247,15 +247,17 @@ class TileDataset:
         nodata = self._scene_nodata[scene_window.scene_index]
 
         image_raw = self._read_image_raw(dataset, window, nodata)
-        nodata_pixels = np.logical_or(
-            _nodata_pixels(image_raw, nodata),
-            self._read_invalid_data_pixels(dataset, window),
-        )
         if self._pipeline_variant == "next_gen2":
             # Ноутбук обучается на всех пикселях окна, включая nodata и raster mask.
             nodata_pixels = np.zeros(image_raw.shape[-2:], dtype=bool)
+        else:
+            nodata_pixels = np.logical_or(
+                _nodata_pixels(image_raw, nodata),
+                self._read_invalid_data_pixels(dataset, window),
+            )
         image = image_raw.astype(np.float32, copy=False)
-        image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
+        if self._pipeline_variant != "next_gen2":
+            image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
             scene_window.scene_index,
             dataset,
@@ -653,6 +655,9 @@ class TileDataset:
         window: Window,
         nodata: object,
     ) -> np.ndarray:
+        if self._pipeline_variant == "next_gen2":
+            # Все окна целиком внутри TIFF: виртуальная подложка boundless не нужна.
+            return dataset.read(window=window, masked=False)
         return dataset.read(
             window=window,
             boundless=True,

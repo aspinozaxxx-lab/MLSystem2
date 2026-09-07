@@ -14,7 +14,7 @@ tile_preparation:
   stride: 256
   context: 0
   augmentation_level: 0
-  num_workers: 0
+  num_workers: 8
   seed: 42
 
 train:

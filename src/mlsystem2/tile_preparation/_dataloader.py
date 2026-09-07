@@ -80,10 +80,9 @@ def create_tile_dataloader(
             "collate_fn": _collate_tile_batch, "worker_init_fn": _seed_tile_worker,
         }
         if tile_settings.num_workers > 0:
-            kwargs["prefetch_factor"] = _effective_prefetch_factor(
-                prefetch_epochs=tile_settings.prefetch_epochs, dataset_size=len(dataset),
-                batch_size=request.batch_size, num_workers=tile_settings.num_workers,
-            )
+            # Полная эпоха может занимать сотни ГБ; достаточно двух batch на процесс.
+            # Workers пересоздаются, чтобы RNG основной программы потреблялся как при workers=0.
+            kwargs["prefetch_factor"] = 2
         return DataLoader(**kwargs)
 
     if request.mode == "val":
