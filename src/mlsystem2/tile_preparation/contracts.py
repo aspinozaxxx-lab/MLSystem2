@@ -113,8 +113,8 @@ class TileDataloaderRequest(BaseModel):
         if self.pipeline_variant == "next_gen2":
             if self.tile_split is None or self.tile_split.strategy != "window_random":
                 raise ValueError("next-gen2 требует разбиение по тайлам")
-            if self.tile_split.val_fraction != 0.2 or not self.tile_split.spatial_purge:
-                raise ValueError("next-gen2 требует 20% тайлов для валидации и исключение пересечений")
+            if not self.tile_split.spatial_purge:
+                raise ValueError("next-gen2 требует исключение пересечений обучающих и валидационных тайлов")
             if has_legacy_multiclass or has_per_image_multiclass:
                 raise ValueError("next-gen2 поддерживает только бинарную разметку")
             if self.max_batches_per_epoch is not None:

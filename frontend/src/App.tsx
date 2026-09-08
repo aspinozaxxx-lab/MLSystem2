@@ -3996,7 +3996,7 @@ function ConfigEditor({
   return (
     <div className="config-grid">
       {pipelineVariant === "next_gen2" ? (
-        <p className="muted">next-gen2: полные окна без дополнения краёв; 20% тайлов для валидации; нормализация каждого окна; положительные тайлы получают вес 15. Из обучения исключаются все окна, пересекающие области валидационных тайлов, в том числе на других снимках. Лучшие веса и ранняя остановка определяются по F1.</p>
+        <p className="muted">next-gen2: полные тайлы без нахлёста и дополнения краёв; нормализация каждого окна; положительные тайлы получают вес 15. Шаг равен размеру тайла. Доля валидации рассчитывается после исключения пересечений между снимками. Лучшие веса и ранняя остановка определяются по F1.</p>
       ) : null}
       {(schema.fields || []).filter((field) =>
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
@@ -4008,7 +4008,9 @@ function ConfigEditor({
           field.key === "train.pipeline_variant" &&
           Boolean(architecture) &&
           !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
-        const tooltip = pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
+        const tooltip = pipelineVariant === "next_gen2" && field.key === "dataset.val_fraction"
+          ? "Доля валидационных тайлов среди оставшихся train и validation после исключения пересечений; округляется до целого тайла."
+          : pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
           ? "Число полных эпох без улучшения валидационной F1 при пороге 0.5."
           : pipelineVariant === "next_gen2" && field.key === "train.weight_decay"
             ? "Регуляризация AdamW. Исходный ноутбук использует значение по умолчанию 0.01."
@@ -5041,6 +5043,9 @@ export function configWithField(
 ): JsonRecord {
   const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
   const next = { ...value, ...preset, [key]: nextValue };
+  if (next["train.pipeline_variant"] === "next_gen2") {
+    next["tile_preparation.stride"] = next["tile_preparation.tile_size"];
+  }
   if (key === "train.pipeline_variant" && nextValue === "next_gen") {
     next["train.max_val_batches_per_epoch"] = null;
     if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
@@ -5055,7 +5060,7 @@ export function trainingConfigFieldVisible(
 ): boolean {
   if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
   if (pipelineVariant === "next_gen2" && [
-    "dataset.val_fraction", "tile_preparation.context", "tile_preparation.augmentation_level",
+    "tile_preparation.stride", "tile_preparation.context", "tile_preparation.augmentation_level",
     "tile_preparation.positive_factor", "tile_preparation.hard_negative_factor",
     "tile_preparation.background_factor", "train.pretrained", "train.loss",
     "train.focal_alpha", "train.pos_weight", "train.background_weight",

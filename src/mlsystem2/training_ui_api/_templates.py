@@ -17,7 +17,7 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
     "train.pipeline_variant": "next_gen2",
     "dataset.val_fraction": 0.2,
     "tile_preparation.tile_size": 512,
-    "tile_preparation.stride": 256,
+    "tile_preparation.stride": 512,
     "tile_preparation.context": 0,
     "tile_preparation.augmentation_level": 0,
     "tile_preparation.positive_factor": 0.5,
@@ -643,6 +643,8 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
+    if result.get("train.pipeline_variant") == "next_gen2":
+        result["tile_preparation.stride"] = result["tile_preparation.tile_size"]
     if "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
         result["tile_preparation.context"] = 128 if tile_size == 768 else 0

@@ -112,6 +112,8 @@ class TileDataset:
         self._pipeline_variant = pipeline_variant
         if pipeline_variant == "next_gen2" and (context or augmentation_level):
             raise TilePreparationError("next-gen2 использует окна без контекста и аугментаций")
+        if pipeline_variant == "next_gen2":
+            stride = tile_size
         self._notebook_positive_ratios: np.ndarray | None = None
         self._notebook_class_weights: list[float] = []
         self._collect_band_histogram_enabled = collect_band_histogram
@@ -973,11 +975,6 @@ class TileDataset:
             raise TilePreparationError("Для разделения нужны минимум два полных тайла.")
         if len(set(self._scene_crs)) != 1 or self._scene_crs[0] is None:
             raise TilePreparationError("Для исключения пересечений TIFF должны иметь одну известную CRS.")
-        # Выбор зависит только от seed и координат, а не от разметки или порядка файлов.
-        candidate_train, validation, _ = _split_index_group(
-            list(range(len(self._windows))), self._windows,
-            val_fraction=tile_split.val_fraction, seed=tile_split.seed, group_name="tiles",
-        )
         geometries = []
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
@@ -988,6 +985,30 @@ class TileDataset:
                     (0, 0), (window.width, 0), (window.width, window.height), (0, window.height),
                 )
             ]))
+        # Порядок зависит только от seed и координат, а не от разметки или порядка файлов.
+        ordered = sorted(range(len(self._windows)), key=lambda index: _window_split_key(self._windows[index], tile_split.seed))
+        ranks = np.empty(len(ordered), dtype=np.int64)
+        ranks[ordered] = np.arange(len(ordered))
+        first_overlap_rank = ranks.copy()
+        all_tree = STRtree(geometries)
+        for index, geometry in enumerate(geometries):
+            for other in all_tree.query(geometry):
+                if ranks[other] < first_overlap_rank[index] and geometry.intersection(geometries[int(other)]).area > 0:
+                    first_overlap_rank[index] = ranks[other]
+        # Для первых k validation-тайлов train содержит окна без пересечений с рангами < k.
+        # Выбираем k по итоговой доле после исключений, с округлением до целого тайла.
+        train_counts = len(ordered) - np.cumsum(np.bincount(first_overlap_rank, minlength=len(ordered)))
+        feasible_counts = [count for count in range(1, len(ordered)) if train_counts[count - 1] > 0]
+        if not feasible_counts:
+            raise TilePreparationError("Нельзя выделить непересекающиеся обучающие и валидационные тайлы.")
+        validation_count = min(feasible_counts, key=lambda count: (
+            abs(count / (count + int(train_counts[count - 1])) - tile_split.val_fraction), count,
+        ))
+        validation_set = set(ordered[:validation_count])
+        validation = [index for index in range(len(ordered)) if index in validation_set]
+        candidate_train = [index for index in range(len(ordered)) if index not in validation_set]
+        train = [index for index in candidate_train if first_overlap_rank[index] >= validation_count]
+        purged = [index for index in candidate_train if first_overlap_rank[index] < validation_count]
         heldout = [geometries[index] for index in validation]
         tree = STRtree(heldout)
 
@@ -996,9 +1017,6 @@ class TileDataset:
             # Общая граница без площади не содержит общих пикселей и допустима.
             return any(geometry.intersection(heldout[int(other)]).area > 0 for other in tree.query(geometry))
 
-        train, purged = [], []
-        for index in candidate_train:
-            (purged if overlaps_validation(index) else train).append(index)
         overlap_after_purge = sum(overlaps_validation(index) for index in train)
         if overlap_after_purge:
             raise TilePreparationError("Обучающие тайлы пересекают области валидационных тайлов.")
@@ -1010,9 +1028,12 @@ class TileDataset:
         return selected, {
             "strategy": "window_random", "mode": self._mode,
             "seed": tile_split.seed, "val_fraction": tile_split.val_fraction,
+            "val_fraction_basis": "retained_train_and_validation",
+            "actual_val_fraction": len(validation) / (len(train) + len(validation)),
             "selection": "sha256(seed,scene_id,x,y)", "spatial_purge": True,
             "overlap_rule": "positive_area_across_all_scenes",
             "tile_size": self._tile_size,
+            "stride": self._tile_size,
             "windows": [[item.scene_id, item.window.x, item.window.y] for item in self._windows],
             "indices": {"train": train, "val": validation, "purged": purged},
             "train_scene_ids": sorted({self._windows[index].scene_id for index in train}),

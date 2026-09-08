@@ -3847,7 +3847,13 @@ def _checkpoint_inference_window(
             raise RuntimeError(
                 "Размер полезного центра checkpoint не соответствует sample_size и context."
             )
-    checkpoint_stride = core_size if checkpoint_context else int(stride)
+    parameters = getattr(getattr(getattr(loaded, "model", None), "spec", None), "parameters", None) or {}
+    variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
+    # Сетка eval-ноутбука независима от нарезки нового обучения без нахлёста.
+    checkpoint_stride = (
+        max(1, checkpoint_tile_size // 2) if variant == "next_gen2"
+        else core_size if checkpoint_context else int(stride)
+    )
     if checkpoint_stride <= 0 or checkpoint_stride > core_size:
         checkpoint_stride = core_size
     _validate_window_grid(

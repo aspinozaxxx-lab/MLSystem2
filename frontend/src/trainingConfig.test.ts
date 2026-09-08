@@ -65,7 +65,7 @@ describe("trainingConfigSchema", () => {
     const defaults = {
       next_gen2: {
         "tile_preparation.tile_size": 512,
-        "tile_preparation.stride": 256,
+        "tile_preparation.stride": 512,
         "tile_preparation.context": 0,
         "train.loss": "cross_entropy",
         "train.max_val_batches_per_epoch": null,
@@ -79,7 +79,11 @@ describe("trainingConfigSchema", () => {
     expect(trainingConfigSchema(schema, "binary", "next_gen2")?.fields[0].options).toEqual(["cross_entropy"]);
     expect(trainingConfigFieldVisible("tile_preparation.context", "next_gen2", "segformer_b0")).toBe(false);
     expect(trainingConfigFieldVisible("train.pos_weight", "next_gen2", "segformer_b0")).toBe(false);
-    expect(trainingConfigFieldVisible("tile_preparation.stride", "next_gen2", "segformer_b0")).toBe(true);
+    expect(trainingConfigFieldVisible("tile_preparation.stride", "next_gen2", "segformer_b0")).toBe(false);
+    expect(trainingConfigFieldVisible("dataset.val_fraction", "next_gen2", "segformer_b0")).toBe(true);
+    expect(configWithField(value, "tile_preparation.tile_size", 768)["tile_preparation.stride"]).toBe(768);
+    expect(trainingConfigFieldVisible("tile_preparation.stride", "legacy", "smp_segformer_b0")).toBe(true);
+    expect(configWithField({ "train.pipeline_variant": "legacy", "tile_preparation.stride": 256 }, "tile_preparation.tile_size", 768)["tile_preparation.stride"]).toBe(256);
     expect(configWithField(value, "train.pipeline_variant", "next_gen")["train.loss"]).toBe("bce_dice");
   });
 });

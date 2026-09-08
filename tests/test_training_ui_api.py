@@ -3741,7 +3741,7 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             assert payload["train"]["loss"] == "cross_entropy"
             assert payload["train"]["pretrained"] is True
             assert payload["tile_preparation"]["context"] == 0
-            assert payload["tile_preparation"]["stride"] == 256
+            assert payload["tile_preparation"]["stride"] == payload["tile_preparation"]["tile_size"] == 512
             assert "num_workers" not in payload["tile_preparation"]
         pseudo = _service.create_pseudo_markup_job(
             session,

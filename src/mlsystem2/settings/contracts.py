@@ -228,6 +228,10 @@ class SystemSettings(BaseModel):
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
         if self.train.pipeline_variant == "next_gen2":
+            # В этом варианте шаг определяется размером тайла, включая старые run-конфиги.
+            self.tile_preparation = self.tile_preparation.model_copy(
+                update={"stride": self.tile_preparation.tile_size}
+            )
             if (
                 self.train.model_name != "segformer_b0"
                 or self.train.input_channels != 4
@@ -237,8 +241,6 @@ class SystemSettings(BaseModel):
                 raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 4 и выходом 1")
             if self.tile_preparation.context != 0 or self.tile_preparation.augmentation_level != 0:
                 raise ValueError("next-gen2 использует окна без контекста и без аугментаций")
-            if self.dataset.val_fraction != 0.2:
-                raise ValueError("next-gen2 выделяет 20% тайлов для валидации с исключением пересечений")
             if self.train.threshold != 0.5:
                 raise ValueError("next-gen2 использует порог 0.5 двухклассовой модели")
             if (

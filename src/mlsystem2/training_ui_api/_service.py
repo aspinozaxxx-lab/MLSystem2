@@ -1041,7 +1041,7 @@ def _validate_training_pipeline_variant(
             raise TrainingUIAPIError("next-gen2 поддерживает только SegFormer B0 HF.")
         required = {
             "dataset.task": "binary", "dataset.imagery_type": "kanopus",
-            "dataset.val_fraction": 0.2, "train.input_channels": 4,
+            "train.input_channels": 4,
             "train.loss": "cross_entropy", "train.pretrained": True,
             "tile_preparation.context": 0, "tile_preparation.augmentation_level": 0,
             "train.threshold": 0.5, "train.max_train_batches_per_epoch": None,
