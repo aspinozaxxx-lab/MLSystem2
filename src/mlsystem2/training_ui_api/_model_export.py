@@ -20,6 +20,7 @@ from ._templates import (
     COMPACT_FILTER_KEEP,
     COMPACT_FILTER_MODES,
     COMPACT_FILTER_REMOVE,
+    NEXT_GEN2_INFERENCE_THRESHOLD,
 )
 from .contracts import TrainingUIAPIError
 
@@ -76,6 +77,11 @@ def build_triton_model_export_zip(
         checkpoint_path.write_bytes(checkpoint_bytes)
         loaded = _load_binary_checkpoint(checkpoint_path)
         task, class_schema = _checkpoint_task_schema(loaded)
+        metadata = loaded.artifact.metadata
+        parameters = getattr(loaded.model.spec, "parameters", None) or {}
+        next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "next_gen2"
+        if next_gen2 and task != "binary":
+            raise TrainingUIAPIError("Экспорт next_gen2 поддерживает только бинарную модель.")
         class_schema = _export_class_schema_override(
             task,
             class_schema,
@@ -85,6 +91,8 @@ def build_triton_model_export_zip(
         effective_threshold = (
             _validate_threshold(threshold) if threshold is not None else metadata_threshold
         )
+        if next_gen2 and threshold is None:
+            effective_threshold = NEXT_GEN2_INFERENCE_THRESHOLD
         parsed_instance_kind = _validate_instance_kind(instance_kind)
         parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
             loaded.artifact.metadata,
@@ -99,6 +107,10 @@ def build_triton_model_export_zip(
             parsed_context,
         )
         input_channels = int(loaded.model.spec.input_channels)
+        if next_gen2 and parsed_context != 0:
+            raise TrainingUIAPIError("Профиль next_gen2 требует context=0.")
+        if next_gen2 and resolution_m is not None:
+            raise TrainingUIAPIError("Профиль next_gen2 использует исходную сетку без resolution_m.")
 
         export_root = temp_root / "export"
         service_root = temp_root / "models-serving-service"
@@ -111,7 +123,17 @@ def build_triton_model_export_zip(
         service_zip_dir.mkdir(parents=True)
 
         onnx_path = version_dir / "model.onnx"
-        if task == "binary":
+        if next_gen2:
+            _export_segmentation_mask_onnx(
+                model=loaded.model.model,
+                input_channels=input_channels,
+                output_channels=1,
+                sample_size=parsed_sample_size,
+                threshold=effective_threshold,
+                onnx_path=onnx_path,
+                probability_output=True,
+            )
+        elif task == "binary":
             _export_binary_mask_onnx(
                 model=loaded.model.model,
                 input_channels=input_channels,
@@ -135,6 +157,7 @@ def build_triton_model_export_zip(
                 input_channels,
                 foreground_channels=(len(class_schema) if task == "multiclass" else 1),
                 instance_kind=parsed_instance_kind,
+                probability_output=next_gen2,
             ),
         )
         _write_text(
@@ -147,6 +170,8 @@ def build_triton_model_export_zip(
                 context=parsed_context,
                 postprocess_config=normalized_postprocess_config,
                 resolution_m=resolution_m,
+                probability_output=next_gen2,
+                threshold=effective_threshold,
             ),
         )
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
@@ -168,8 +193,13 @@ def build_triton_model_export_zip(
                 "inference_core_size": inference_core_size,
                 "threshold": effective_threshold,
                 "threshold_source": (
-                    "request" if threshold is not None else "checkpoint_metadata"
+                    "request" if threshold is not None else
+                    "next_gen2_eval_notebook" if next_gen2 else "checkpoint_metadata"
                 ),
+                "output_kind": "probabilities" if next_gen2 else "binary_masks",
+                "inference_merge": "gaussian_probabilities" if next_gen2 else "drop",
+                "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 else inference_core_size,
+                "requires_inference_brick": "SlidingWindowSegmentation" if next_gen2 else "Segmentation",
                 "task": task,
                 "class_schema": class_schema,
                 "onnx_opset": ONNX_OPSET,
@@ -764,7 +794,10 @@ def _export_segmentation_mask_onnx(
     sample_size: int,
     threshold: float,
     onnx_path: Path,
+    probability_output: bool = False,
 ) -> None:
+    if probability_output and output_channels != 1:
+        raise TrainingUIAPIError("Выход вероятностей поддерживается для бинарной модели.")
     try:
         import torch
     except ImportError as exc:
@@ -792,7 +825,10 @@ def _export_segmentation_mask_onnx(
                     align_corners=False,
                 )
             if output_channels == 1:
-                return (torch.sigmoid(logits) > self.threshold_value).to(torch.uint8)
+                probability = torch.sigmoid(logits)
+                if probability_output:
+                    return probability
+                return (probability > self.threshold_value).to(torch.uint8)
             probabilities = torch.softmax(logits, dim=1)
             confidence, labels = torch.max(probabilities, dim=1)
             labels = torch.where(
@@ -811,16 +847,17 @@ def _export_segmentation_mask_onnx(
     model.eval()
     wrapper = SegmentationMaskWrapper(model, threshold).eval()
     dummy = torch.zeros((1, input_channels, sample_size, sample_size), dtype=torch.float32)
+    output_name = "probabilities" if probability_output else "mask"
     try:
         with torch.no_grad():
             export_kwargs = {
                 "input_names": ["input"],
-                "output_names": ["mask"],
+                "output_names": [output_name],
                 "opset_version": ONNX_OPSET,
                 "do_constant_folding": True,
                 "dynamic_axes": {
                     "input": {2: "height", 3: "width"},
-                    "mask": {2: "height", 3: "width"},
+                    output_name: {2: "height", 3: "width"},
                 },
             }
             export_params = signature(torch.onnx.export).parameters
@@ -911,7 +948,10 @@ def _triton_config(
     input_channels: int,
     foreground_channels: int = 1,
     instance_kind: str = "KIND_CPU",
+    probability_output: bool = False,
 ) -> str:
+    output_name = "probabilities" if probability_output else "mask"
+    output_type = "TYPE_FP32" if probability_output else "TYPE_UINT8"
     return f"""name: "{model_name}"
 platform: "onnxruntime_onnx"
 max_batch_size: 0
@@ -924,8 +964,8 @@ input [
 ]
 output [
   {{
-    name: "mask"
-    data_type: TYPE_UINT8
+    name: "{output_name}"
+    data_type: {output_type}
     dims: [ -1, {foreground_channels}, -1, -1 ]
   }}
 ]
@@ -946,6 +986,8 @@ def _pipeline_yaml(
     context: int = 0,
     postprocess_config: dict[str, object] | None = None,
     resolution_m: float | None = None,
+    probability_output: bool = False,
+    threshold: float = 0.5,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
     if input_channels == 3:
@@ -978,7 +1020,7 @@ def _pipeline_yaml(
         if resolution_m is not None and float(resolution_m) > 0
         else ""
     )
-    return f"""version: 0.1.4
+    result = f"""version: 0.1.4
 config:
   _class: Compose
   inputs:
@@ -1019,6 +1061,37 @@ config:
 {vector_outputs_yaml}
 {vectorize_options_yaml}{vector_postprocess_yaml}
 """
+    if probability_output:
+        # Сохранить штатную композицию и явную постобработку. Legacy YAML
+        # остаётся прежним; порог нового профиля применяется к итоговой мозаике.
+        import yaml
+
+        document = yaml.safe_load(result)
+        bricks = document["config"]["bricks"]
+        bricks[0]["apply_mask"] = False
+        segmentation = bricks[1]
+        segmentation["_class"] = "SlidingWindowSegmentation"
+        segmentation["window_size"] = sample_size
+        segmentation["stride"] = max(1, sample_size // 2)
+        segmentation["sigma_scale"] = 0.25
+        for key in ("bounds", "sample_size", "nodata"):
+            segmentation.pop(key, None)
+        mask_labels = segmentation["output_labels"]
+        probability_labels = [f"mlsystem2_probability_{index}" for index in range(len(mask_labels))]
+        segmentation["output_labels"] = probability_labels
+        segmentation["adapter"]["output_dtype"] = "float32"
+        thresholds = [
+            {"_class": "MultiThresholding", "input_raster": probability_label,
+             "thresholds": [threshold], "strict_more": True,
+             "out_masks": [f"mlsystem2_background_{index}", mask_label]}
+            for index, (probability_label, mask_label) in enumerate(zip(probability_labels, mask_labels))
+        ]
+        bricks[2:2] = thresholds
+        for brick in bricks:
+            if brick["_class"] == "VectorizeMasks":
+                brick["value_property_name"] = "class_id"
+        result = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    return result
 
 
 def _validate_instance_kind(value: str) -> str:

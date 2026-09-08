@@ -75,8 +75,14 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
   нативных и импортированных результатов; каждая модель собирается тем же кодом, что одиночный экспорт результата, endpoint
   возвращает файл и не создает записей в БД. В metadata каждой нативной модели сохраняются нормализованный
   postprocess-конфиг и его SHA-256; низкоуровневый экспорт произвольного `.pt` не выбирает классовый шаблон.
-  После экспорта фактическое число semantic channels фиксируется в описании выхода ONNX: прежний ABI маски
-  сохраняется, а strict model config Triton принимает HF-граф с изначально символической размерностью каналов.
+  После экспорта фактическое число semantic channels фиксируется в описании выхода ONNX;
+  strict model config Triton принимает HF-граф с изначально символической размерностью каналов.
+  Бинарный `next_gen2` экспортирует FP32 `probabilities` и pipeline с `SlidingWindowSegmentation`
+  (окно сети, шаг в половину окна, Gaussian sigma 0.25), затем строгий порог 0.9 либо явный override.
+  SplitRaster сохраняет исходные пиксели под nodata, VectorizeMasks строит контуры по границам пикселей.
+  Этот профиль требует обновлённого inference, context=0 и исходного разрешения; metadata ZIP фиксирует
+  `output_kind`, `inference_merge`, `inference_stride` и `requires_inference_brick`.
+  Остальные профили сохраняют прежний UINT8 ABI маски.
 - Одиночная и групповая формы экспорта предлагают редактируемое имя `<class.technical_name>_kanopus` либо
   исторически совместимое `<class.technical_name>_orto`; `model_name_stem` остаётся только fallback старого API.
 - `POST /api/v1/scene-list-export` - multipart endpoint с `imagery_type=kanopus|ortho`, optional
