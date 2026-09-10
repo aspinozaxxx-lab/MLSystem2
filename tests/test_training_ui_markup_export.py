@@ -4322,6 +4322,165 @@ def _write_prediction_from_sample(config, sample_id, output_path: Path) -> None:
     )
 
 
+@pytest.fixture
+def annotation_merge_sample(tmp_path: Path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    _write_geojson(config.mlmarkup_root / "Вырубки/main/deforestation.geojson", [
+        (1, box(11, 45, 15, 53), "участок"),
+        (2, box(15, 45, 19, 53), "участок"),
+        (3, box(111, 45, 115, 53), "участок"),
+        (4, box(115, 45, 119, 53), "участок"),
+    ])
+    with TestClient(create_app()) as client:
+        _login(client)
+        response = client.post("/api/v1/test-samples", json={
+            "name": "Исходная выборка", "dataset_key": "Вырубки\\main",
+            "tile_width": 16, "tile_height": 16, "image_count": 2, "object_count": 4,
+        })
+        assert response.status_code == 200, response.text
+        sample = response.json()
+        root = config.stored_files_root / "test-samples" / sample["id"]
+        first = json.loads((root / "tile_001.geojson").read_text(encoding="utf-8"))
+        groups = [[feature["id"] for feature in first["features"]]]
+        assert len(groups[0]) == 2
+        yield config, client, sample, root, groups
+
+
+def test_annotations_merge_preserves_snapshot_and_is_idempotent(annotation_merge_sample, monkeypatch):
+    from mlsystem2.training_ui_api import _test_sample_annotations
+
+    config, client, sample, root, groups = annotation_merge_sample
+    sample = client.patch(f'/api/v1/test-samples/{sample["id"]}', json={
+        "enabled_tile_indices": [1], "is_primary": True,
+    }).json()
+    before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+    queued = []
+    monkeypatch.setattr(_test_sample_annotations, "queue_test_sample_evaluation",
+                        lambda session, row, config, **kwargs: queued.append(row.id))
+    request = {"expected_revision": sample["content_revision"], "name": "Объединённая выборка",
+               "tiles": [{"tile_index": 1, "groups": groups}]}
+    url = f'/api/v1/test-samples/{sample["id"]}/merge-annotations'
+    response = client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["id"] != sample["id"]
+    assert updated["enabled_image_count"] == 1
+    assert updated["enabled_object_count"] == 1
+    assert updated["actual_object_count"] == 3
+    assert not updated["is_primary"]
+    assert updated["evaluation"]["pixel"] is None
+    assert updated["evaluation"]["objects"] is None
+    assert all(tile["f1_score"] is None for tile in updated["tiles"])
+    assert [tile["enabled"] for tile in updated["tiles"]] == [True, False]
+    assert client.get(f'/api/v1/test-samples/{sample["id"]}').json()["is_primary"]
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == before
+    new_root = root.with_name(updated["id"])
+    for tile in ("tile_001", "tile_002"):
+        for suffix in (".tif", "_mask.png"):
+            assert (new_root / (tile + suffix)).read_bytes() == before[tile + suffix]
+    assert (new_root / "tile_002.geojson").read_bytes() == before["tile_002.geojson"]
+    assert (new_root / "tile_001_preview.png").read_bytes() != before["tile_001_preview.png"]
+    assert client.get(updated["tiles"][0]["preview_url"]).status_code == 200
+    assert client.get(updated["tiles"][0]["thumbnail_url"]).status_code == 200
+    audit = json.loads((new_root / "annotation_revision.json").read_text(encoding="utf-8"))
+    assert audit["source_sample_id"] == sample["id"]
+    assert audit["source_revision"] == sample["content_revision"]
+    assert audit["actor"] == "mluser"
+    assert audit["tiles"][0]["changed_pixels"] == 0
+    repeated = client.post(url, json=request)
+    assert repeated.status_code == 200
+    assert repeated.json()["id"] == updated["id"]
+    assert queued == [uuid.UUID(updated["id"])]
+    archive_response = client.post(updated["download_url"], json={
+        "enabled_tile_indices": [1], "include_previews": False,
+    })
+    with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
+        assert len(json.loads(archive.read("tile001.geojson"))["features"]) == 1
+        assert archive.read("tile001.tif") == before["tile_001.tif"]
+    with create_session_factory(config)() as session:
+        assert len(session.scalars(select(_TestSampleRow)).all()) == 2
+
+
+@pytest.mark.parametrize("case,status_code", [
+    ("stale", 409), ("unknown_tile", 400), ("unknown_id", 400),
+    ("repeat_id", 422), ("repeat_tile", 422), ("single", 422),
+    ("multiclass", 400), ("disconnected", 400), ("mask", 400), ("properties", 400),
+])
+def test_annotations_merge_rejects_unsafe_changes(annotation_merge_sample, case, status_code):
+    config, client, sample, root, groups = annotation_merge_sample
+    request = {"expected_revision": sample["content_revision"], "name": "Проверка отказа",
+               "tiles": [{"tile_index": 1, "groups": groups}]}
+    if case == "stale":
+        request["expected_revision"] += 1
+    elif case == "unknown_tile":
+        request["tiles"][0]["tile_index"] = 999
+    elif case == "unknown_id":
+        request["tiles"][0]["groups"] = [["отсутствует", groups[0][0]]]
+    elif case == "repeat_id":
+        request["tiles"][0]["groups"] = [groups[0], groups[0]]
+    elif case == "repeat_tile":
+        request["tiles"].append(request["tiles"][0])
+    elif case == "single":
+        request["tiles"][0]["groups"] = [[groups[0][0]]]
+    elif case == "multiclass":
+        with create_session_factory(config)() as session:
+            session.get(_TestSampleRow, uuid.UUID(sample["id"])).task = "multiclass"
+            session.commit()
+    elif case in {"disconnected", "properties"}:
+        path = root / "tile_001.geojson"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if case == "disconnected":
+            document["features"][1]["geometry"] = mapping(box(1000, 1000, 1001, 1001))
+        else:
+            document["features"][1]["properties"]["kind"] = "другой участок"
+        path.write_text(json.dumps(document), encoding="utf-8")
+    elif case == "mask":
+        Image.fromarray(np.zeros((16, 16), dtype=np.uint8)).save(root / "tile_001_mask.png")
+    before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+    response = client.post(f'/api/v1/test-samples/{sample["id"]}/merge-annotations', json=request)
+    assert response.status_code == status_code, response.text
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == before
+    assert {p.name for p in root.parent.iterdir()} == {root.name}
+    with create_session_factory(config)() as session:
+        assert len(session.scalars(select(_TestSampleRow)).all()) == 1
+
+
+def test_annotations_merge_rolls_back_files_after_database_failure(annotation_merge_sample, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    config, client, sample, root, groups = annotation_merge_sample
+    before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+
+    def fail_commit(session):
+        raise RuntimeError("Проверочная ошибка фиксации транзакции")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "commit", fail_commit)
+        with pytest.raises(RuntimeError, match="Проверочная ошибка"):
+            client.post(f'/api/v1/test-samples/{sample["id"]}/merge-annotations', json={
+                "expected_revision": sample["content_revision"], "name": "Ошибка транзакции",
+                "tiles": [{"tile_index": 1, "groups": groups}],
+            })
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == before
+    assert {p.name for p in root.parent.iterdir()} == {root.name}
+    with create_session_factory(config)() as session:
+        assert len(session.scalars(select(_TestSampleRow)).all()) == 1
+
+
+def test_annotations_merge_requires_authentication(tmp_path, monkeypatch):
+    _configure_export_environment(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/v1/test-samples/{uuid.uuid4()}/merge-annotations", json={})
+        assert response.status_code == 401
+        _login(client)
+        response = client.post(f"/api/v1/test-samples/{uuid.uuid4()}/merge-annotations", json={
+            "expected_revision": 1, "name": "Нет выборки",
+            "tiles": [{"tile_index": 1, "groups": [[1, 2]]}],
+        })
+        assert response.status_code == 404
+
+
 def _configure_export_environment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "MLSYSTEM2_TRAINING_UI_DATABASE_URL",

@@ -4405,6 +4405,7 @@ def _summary(
     source_pseudo_result = test_sample_source_pseudo_markup(session, row, config)
     return TestSampleSummary(
         id=row.id,
+        content_revision=row.content_revision,
         name=row.name,
         dataset_key=row.dataset_key,
         dataset_name=row.dataset_name,

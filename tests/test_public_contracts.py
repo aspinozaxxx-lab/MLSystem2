@@ -54,6 +54,19 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_test_sample_annotation_merge_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TestSampleAnnotationsMerge, TestSampleTileMerge
+
+    assert set(TestSampleAnnotationsMerge.model_fields) == {"expected_revision", "name", "tiles"}
+    assert set(TestSampleTileMerge.model_fields) == {"tile_index", "groups"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    assert "post" in schema["paths"]["/api/v1/test-samples/{sample_id}/merge-annotations"]
+    assert "content_revision" in schema["components"]["schemas"]["TestSampleDetail"]["properties"]
+
+
 def test_next_gen2_uses_existing_public_contracts() -> None:
     from mlsystem2.settings.contracts import TrainSettings
     from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSplitRequest

@@ -9,6 +9,11 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
+from mlsystem2.training_ui_api._test_sample_annotations import (
+    TestSampleRevisionConflict,
+    merge_test_sample_annotations,
+)
+
 from mlsystem2.training_ui_api._test_samples import (
     TestSampleBatchUnavailable,
     TestSampleUnavailable,
@@ -39,6 +44,7 @@ from mlsystem2.training_ui_api._service import (
 )
 from mlsystem2.training_ui_api.contracts import (
     JobDetail,
+    TestSampleAnnotationsMerge,
     TestSampleBatchCreate,
     TestSampleBatchInfo,
     TestSampleBatchOptionsResponse,
@@ -185,6 +191,22 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         detail = _sample_or_404(lambda: update_test_sample(db, sample_id, request, ctx.config))
         db.commit()
         return detail
+
+    @app.post("/api/v1/test-samples/{sample_id}/merge-annotations", response_model=TestSampleDetail)
+    def post_test_sample_annotations_merge(
+        sample_id: uuid.UUID,
+        request: TestSampleAnnotationsMerge,
+        db: Session = Depends(ctx.get_db),
+        actor: str = Depends(ctx.authenticated),
+    ) -> TestSampleDetail:
+        try:
+            with merge_test_sample_annotations(db, sample_id, request, ctx.config, actor=actor) as detail:
+                db.commit()
+                return detail
+        except TestSampleRevisionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TestSampleUnavailable as exc:
+            raise HTTPException(status_code=404, detail="Тестовая разметка не найдена.") from exc
 
     @app.put(
         "/api/v1/test-samples/{sample_id}/primary",

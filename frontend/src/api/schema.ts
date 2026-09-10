@@ -915,6 +915,23 @@ export interface paths {
         patch: operations["patch_test_sample_api_v1_test_samples__sample_id__patch"];
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/merge-annotations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Annotations Merge */
+        post: operations["post_test_sample_annotations_merge_api_v1_test_samples__sample_id__merge_annotations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/primary": {
         parameters: {
             query?: never;
@@ -1786,8 +1803,8 @@ export interface components {
         };
         /** Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post */
         Body_post_pseudo_markup_api_v1_results_datasets__dataset_key__pseudo_markup_post: {
-            /** Dataset Key */
-            dataset_key?: string | null;
+            /** Source Dataset Key */
+            source_dataset_key?: string | null;
             /** Image Folder Key */
             image_folder_key?: string | null;
             /** Training Result Id */
@@ -1803,7 +1820,10 @@ export interface components {
              * @default false
              */
             include_footprints: boolean;
-            /** Geojson */
+            /**
+             * Geojson
+             * Format: binary
+             */
             geojson: string;
         };
         /** Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post */
@@ -3530,6 +3550,15 @@ export interface components {
          * @enum {string}
          */
         TemplateSource: "hpo_best" | "analogy" | "manual";
+        /** TestSampleAnnotationsMerge */
+        TestSampleAnnotationsMerge: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Name */
+            name: string;
+            /** Tiles */
+            tiles: components["schemas"]["TestSampleTileMerge"][];
+        };
         /** TestSampleBatchClassOption */
         TestSampleBatchClassOption: {
             /** Class Key */
@@ -3813,6 +3842,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Content Revision
+             * @default 1
+             */
+            content_revision: number;
             /** Name */
             name: string;
             /** Dataset Key */
@@ -4050,6 +4084,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Content Revision
+             * @default 1
+             */
+            content_revision: number;
             /** Name */
             name: string;
             /** Dataset Key */
@@ -4153,6 +4192,13 @@ export interface components {
             thumbnail_url: string;
             /** Preview Url */
             preview_url: string;
+        };
+        /** TestSampleTileMerge */
+        TestSampleTileMerge: {
+            /** Tile Index */
+            tile_index: number;
+            /** Groups */
+            groups: (string | number)[][];
         };
         /** TestSampleTileUpdate */
         TestSampleTileUpdate: {
@@ -4461,10 +4507,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -6303,6 +6345,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TestSampleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_sample_annotations_merge_api_v1_test_samples__sample_id__merge_annotations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleAnnotationsMerge"];
             };
         };
         responses: {

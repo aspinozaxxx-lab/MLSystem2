@@ -43,6 +43,39 @@ class TestSampleTileUpdate(BaseModel):
     enabled: bool
 
 
+class TestSampleTileMerge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tile_index: int = Field(gt=0)
+    groups: list[list[str | int]] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_groups(self) -> Self:
+        identifiers = [identifier for group in self.groups for identifier in group]
+        if any(len(group) < 2 for group in self.groups):
+            raise ValueError("В группе объединения нужны минимум два объекта.")
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("Объект может входить только в одну группу объединения.")
+        return self
+
+
+class TestSampleAnnotationsMerge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=180)
+    tiles: list[TestSampleTileMerge] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_tiles(self) -> Self:
+        indices = [tile.tile_index for tile in self.tiles]
+        if len(set(indices)) != len(indices):
+            raise ValueError("Тайлы запроса объединения не должны повторяться.")
+        if not self.name.strip():
+            raise ValueError("Название тестовой разметки не может быть пустым.")
+        return self
+
+
 class TestSamplePrimaryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,6 +180,7 @@ class TestSampleSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    content_revision: int = Field(default=1, gt=0)
     name: str
     dataset_key: str
     dataset_name: str
@@ -358,6 +392,7 @@ class TestSampleBatchInfo(BaseModel):
 
 
 __all__ = [
+    "TestSampleAnnotationsMerge",
     "TestSampleBatchCreate",
     "TestSampleBatchClassOption",
     "TestSampleBatchDatasetOption",
@@ -381,6 +416,7 @@ __all__ = [
     "TestSamplePseudoMarkupInfo",
     "TestSampleSummary",
     "TestSampleTileInfo",
+    "TestSampleTileMerge",
     "TestSampleTileUpdate",
     "TestSampleUpdate",
 ]
