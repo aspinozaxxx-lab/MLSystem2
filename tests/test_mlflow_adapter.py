@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mlsystem2.mlflow_adapter.api import (
     download_run_artifact,
     get_best_training_checkpoint,
@@ -668,3 +670,116 @@ def test_log_training_metrics_writes_train_best_hpo_metric(monkeypatch) -> None:
         ("train/best_quality_f1", 0.6, None),
         ("train/best_threshold_pixel_f1", 0.6, None),
     ]
+
+
+@pytest.mark.parametrize(
+    "raw_key",
+    [
+        "model.split.purged_windows_by_scene.hlam2/"
+        "KVI_07000_04503-02_KANOPUS_20181018_075153_8.L2.PMS.SCN01 (1)",
+        "model.split.Захламнения/снимок [копия]:1",
+        "model.split.снимок\\папка\nимя",
+        "model." + "снимок" * 80,
+        "/папка/снимок",
+        "папка//снимок",
+        "папка/../снимок",
+        "..",
+    ],
+)
+def test_safe_mlflow_params_accepts_scene_names(raw_key: str) -> None:
+    from mlflow.utils.validation import _validate_param_name
+
+    params = _client._safe_mlflow_params({raw_key: 149})
+
+    assert len(params) == 1
+    key, value = next(iter(params.items()))
+    _validate_param_name(key)
+    assert len(key) <= 240
+    assert value == 149
+    assert params == _client._safe_mlflow_params({raw_key: 149})
+
+
+def test_safe_mlflow_params_preserves_distinct_and_existing_keys() -> None:
+    first = "model.split.снимок (1)"
+    second = "model.split.снимок [1]"
+    existing = next(iter(_client._safe_mlflow_params({first: 1})))
+    values = {
+        first: 1,
+        second: 2,
+        existing: 3,
+        "model." + "a" * 300 + "1": 4,
+        "model." + "a" * 300 + "2": 5,
+    }
+
+    params = _client._safe_mlflow_params(values)
+
+    assert len(params) == len(values)
+    assert params[existing] == 3
+    assert set(params.values()) == {1, 2, 3, 4, 5}
+    assert params == _client._safe_mlflow_params(dict(reversed(list(values.items()))))
+
+
+def test_safe_mlflow_params_keeps_safe_keys_and_value_contract() -> None:
+    params = _client._safe_mlflow_params(
+        {"train.pipeline_variant": "next_gen2", "split/сцена_1-2.3": 7,
+         "config": {"режим": "проверка"}, "long": "я" * 600, "": "пропустить"}
+    )
+
+    assert params == {
+        "train.pipeline_variant": "next_gen2",
+        "split/сцена_1-2.3": 7,
+        "config": '{"режим": "проверка"}',
+        "long": "я" * 500,
+    }
+
+
+def test_training_artifacts_upload_checkpoints_with_parenthesized_scene_name(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from mlflow.utils.validation import _validate_param_name
+
+    scene = "hlam2/KVI_07000_04503-02_KANOPUS_20181018_075153_8.L2.PMS.SCN01 (1)"
+    split = {"purged_windows_by_scene": {scene: 149}}
+    reports: dict[str, object] = {}
+    uploaded: list[tuple[str, str]] = []
+    params: dict[str, object] = {}
+
+    class MLflow:
+        @staticmethod
+        def log_dict(payload, artifact_file):
+            reports[artifact_file] = payload
+
+        @staticmethod
+        def log_params(values):
+            for key in values:
+                _validate_param_name(key)
+            params.update(values)
+
+        @staticmethod
+        def log_artifact(path, artifact_path):
+            uploaded.append((Path(path).name, artifact_path))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    best, final = tmp_path / "best.pt", tmp_path / "final.pt"
+    best.write_bytes(b"best")
+    final.write_bytes(b"final")
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True,
+    )
+
+    _client.log_training_artifacts(
+        run,
+        TrainResult(
+            history=[], epochs_total=1, training_time_sec=1,
+            best_checkpoint_path=str(best), final_checkpoint_path=str(final),
+            diagnostics={
+                "pipeline_variant": "next_gen2", "split_manifest": split,
+                "flattened_params": {f"model.split.purged_windows_by_scene.{scene}": 149},
+            },
+        ),
+    )
+
+    assert list(params.values()) == [149]
+    assert reports["reports/split_manifest.json"] == split
+    assert uploaded == [("best.pt", "checkpoints"), ("final.pt", "checkpoints")]
+    assert set(reports["reports/checkpoint_hashes.json"]) == {"best.pt", "final.pt"}

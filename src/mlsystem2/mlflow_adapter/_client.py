@@ -7,6 +7,7 @@ from hashlib import sha1, sha256
 import json
 import os
 from pathlib import Path
+import posixpath
 import shutil
 import tempfile
 
@@ -632,10 +633,28 @@ def _safe_metric_component(value: str) -> str:
 
 def _safe_mlflow_params(values: dict[object, object]) -> dict[str, str | int | float | bool]:
     result: dict[str, str | int | float | bool] = {}
+    original_keys = {str(key) for key in values}
     for raw_key, raw_value in values.items():
-        key = str(raw_key)[:240]
-        if not key:
+        original_key = str(raw_key)
+        if not original_key:
             continue
+        key = "".join(
+            character if character.isalnum() or character in "_-./ " else "_"
+            for character in original_key
+        )
+        if posixpath.normpath(key) != key or key == "." or key.startswith(("/", "..")):
+            key = key.replace("/", "_").lstrip(".") or "param"
+        if key != original_key or len(key) > 240:
+            # Хеш различает имена после замены символов и сокращения длинных путей.
+            digest = sha256(original_key.encode("utf-8")).hexdigest()[:16]
+            base = key
+            suffix = f"_{digest}"
+            key = base[: 240 - len(suffix)] + suffix
+            counter = 1
+            while key in original_keys or key in result:
+                suffix = f"_{digest}_{counter}"
+                key = base[: 240 - len(suffix)] + suffix
+                counter += 1
         if isinstance(raw_value, (str, int, float, bool)):
             value: str | int | float | bool = raw_value
         else:
