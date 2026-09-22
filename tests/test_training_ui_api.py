@@ -2880,6 +2880,7 @@ def test_class_results_includes_sample_size_hint_from_training_job(
 def test_training_ui_frontend_is_react_vite_app() -> None:
     package_json = json.loads(Path("frontend/package.json").read_text(encoding="utf-8"))
     app_tsx = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    config_helpers = Path("frontend/src/utils/trainingConfig.ts").read_text(encoding="utf-8")
     api_client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     api_types = Path("frontend/src/api/types.ts").read_text(encoding="utf-8")
     assert "react" in package_json["dependencies"]
@@ -2936,7 +2937,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "hasActiveDatasetResults" in app_tsx
     assert 'const sourceDatasetKey = String(source.get("dataset_key")' in app_tsx
     assert "encodeURIComponent(datasetKey)}/pseudo-markup" in app_tsx
-    assert "recommended_range" in app_tsx
+    assert "recommended_range" in config_helpers
     assert "downloadBlob(response.blob" in app_tsx
     assert 'pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"' in app_tsx
     assert 'components["schemas"]["BootstrapInfo"]' in api_types
