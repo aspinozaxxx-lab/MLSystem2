@@ -4,7 +4,7 @@ import {
   configWithField,
   trainingConfigFieldVisible,
   trainingConfigSchema,
-} from "./App";
+} from "./utils/trainingConfig";
 import type { ConfigSchema } from "./api/types";
 
 const schema: ConfigSchema = {

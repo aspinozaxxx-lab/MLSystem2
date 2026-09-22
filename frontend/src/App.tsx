@@ -45,8 +45,6 @@ import type {
   AutomationSnapshot,
   BootstrapInfo,
   DatasetResultsResponse,
-  ConfigField,
-  ConfigSchema,
   CustomDatasetInfo,
   DatasetCatalogInfo,
   DatasetEditorCopyResult,
@@ -61,7 +59,6 @@ import type {
   JobLogInfo,
   JobSummary,
   JsonRecord,
-  MLflowExperimentInfo,
   ModelInfo,
   PseudoMarkupResultInfo,
   QueueCountInfo,
@@ -117,6 +114,10 @@ import {
   type TestMarkupDownloadOption,
   type TestMarkupDraft,
 } from "./utils/testMarkups";
+
+import { ConfigEditor } from "./ConfigEditor";
+import { TrainingLaunchForm } from "./TrainingLaunchForm";
+import { configFieldTooltip, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
 const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
@@ -449,7 +450,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${route[0] === "dataset-editor" ? "page-wide" : ""}`}>{children}</main>
+      <main className={`page ${route[0] === "dataset-editor" ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
     </div>
   );
 }
@@ -581,11 +582,8 @@ function ToolCard({ link, fallbackTitle, icon }: { link?: { title: string; url: 
 }
 
 function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
-  const [experiments, setExperiments] = useState<MLflowExperimentInfo[]>([]);
   const [architecture, setArchitecture] = useState(bootstrap.models[0]?.architecture || "");
   const [datasetKey, setDatasetKey] = useState(bootstrap.datasets[0]?.key || "");
-  const [experimentId, setExperimentId] = useState("");
-  const [experimentName, setExperimentName] = useState("MLSystem2");
   const [config, setConfig] = useState<JsonRecord>({});
   const [busy, setBusy] = useState(false);
   const [runInferenceAfterTraining, setRunInferenceAfterTraining] = useState(false);
@@ -605,14 +603,6 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   );
 
   useEffect(() => {
-    void run(() => apiJson<MLflowExperimentInfo[]>("/mlflow/experiments")).then((payload) => {
-      const list = payload || [];
-      setExperiments(list);
-      setExperimentId(latestExperimentId(list));
-    });
-  }, [run]);
-
-  useEffect(() => {
     const next = { ...(template?.default_config || {}) };
     if (selectedDataset?.task === "multiclass") {
       next["train.loss"] = "cross_entropy_dice";
@@ -630,7 +620,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
       const scenesFile = formData.get("scenes_txt");
       const geojsonFile = formData.get("annotation_geojson");
       if (!(scenesFile instanceof File) || !scenesFile.name || !(geojsonFile instanceof File) || !geojsonFile.name) {
-        showModal({ title: "Ошибка", body: <p>Для Custom нужны GeoJSON и TXT со снимками.</p> });
+        showModal({ title: "Ошибка", body: <p>Для своего датасета нужны GeoJSON и TXT со снимками.</p> });
         setBusy(false);
         return;
       }
@@ -646,32 +636,11 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
       customDatasetId = custom.id;
     }
 
-    let selectedExperimentId = experimentId || null;
-    let selectedExperimentName = experimentName.trim() || "MLSystem2";
-    if (!selectedExperimentId) {
-      const created = await run(() =>
-        apiJson<MLflowExperimentInfo>("/mlflow/experiments", {
-          method: "POST",
-          body: { name: selectedExperimentName },
-        }),
-      );
-      if (!created) {
-        setBusy(false);
-        return;
-      }
-      selectedExperimentId = created.experiment_id;
-      selectedExperimentName = created.name;
-    } else {
-      selectedExperimentName =
-        experiments.find((item) => item.experiment_id === selectedExperimentId)?.name || selectedExperimentName;
-    }
-
     const created = await run(() =>
       apiJson<JobDetail>("/training-jobs", {
         method: "POST",
         body: {
-          mlflow_experiment_id: selectedExperimentId,
-          mlflow_experiment_name: selectedExperimentName,
+          mlflow_experiment_name: "MLSystem2",
           dataset_key: datasetKey,
           custom_dataset_id: customDatasetId,
           architecture,
@@ -692,7 +661,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
             Закрыть
           </button>
           <a className="primary" href={`#/jobs/${created.id}`} onClick={closeModal}>
-            Открыть job
+            Открыть задание
           </a>
         </>
       ),
@@ -702,112 +671,25 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
 
   return (
     <>
-      <PageHeader title="Запуск обучения" subtitle="Создание training job в очереди MLSystem2" />
-      <form className="form-stack" onSubmit={submit}>
-        <section className="panel">
-          <div className="form-grid">
-            <label className="field">
-              <span>MLflow experiment</span>
-              <select value={experimentId} onChange={(event) => setExperimentId(event.target.value)}>
-                <option value="">Новый experiment</option>
-                {experiments.map((item) => (
-                  <option value={item.experiment_id} key={item.experiment_id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {!experimentId ? (
-              <label className="field">
-                <span>Новое имя experiment</span>
-                <input value={experimentName} onChange={(event) => setExperimentName(event.target.value)} />
-              </label>
-            ) : null}
-            <label className="field">
-              <span>Датасет</span>
-              <select value={datasetKey} onChange={(event) => setDatasetKey(event.target.value)}>
-                {bootstrap.datasets.map((item) => (
-                  <option value={item.key} key={item.key}>
-                    {datasetOptionLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Модель</span>
-              <select value={architecture} onChange={(event) => setArchitecture(event.target.value)}>
-                {bootstrap.models.map((item) => (
-                  <option value={item.architecture} key={item.architecture}>
-                    {item.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </section>
-        {datasetKey === "custom" ? (
-          <section className="panel">
-            <PanelHeader title="Custom dataset" subtitle="Разовая загрузка GeoJSON и TXT со списком снимков" />
-            <div className="form-grid">
-              <label className="field">
-                <span>GeoJSON</span>
-                <input name="annotation_geojson" type="file" accept=".geojson,application/geo+json" />
-              </label>
-              <label className="field">
-                <span>TXT со снимками</span>
-                <input name="scenes_txt" type="file" accept=".txt,text/plain" />
-              </label>
-            </div>
-          </section>
-        ) : null}
-        <section className="panel">
-          <PanelHeader
-            title="Параметры"
-            subtitle={template ? template.display_name : "Шаблон не найден"}
-            aside={template ? <span className="badge neutral">version={template.version}</span> : null}
-          />
-          {template && trainingSchema ? (
-            <ConfigEditor
-              schema={trainingSchema}
-              value={config}
-              onChange={setConfig}
-              architecture={architecture}
-            />
-          ) : (
-            <div className="error-box">Нет шаблона для выбранной модели.</div>
-          )}
-        </section>
-        <section className="panel compact-panel">
-          <label className="field checkbox-field">
-            <input
-              type="checkbox"
-              checked={runInferenceAfterTraining}
-              onChange={(event) => setRunInferenceAfterTraining(event.target.checked)}
-            />
-            <span>После обучения запустить инференс по снимкам этого датасета</span>
-          </label>
-          <p className="muted">
-            После успешного обучения штатная псевдоразметка будет поставлена в очередь для всех снимков выбранного датасета.
-          </p>
-          <label className="field checkbox-field">
-            <input
-              type="checkbox"
-              checked={secondaryPriority}
-              onChange={(event) => setSecondaryPriority(event.target.checked)}
-            />
-            <span>Второстепенный приоритет</span>
-          </label>
-          <p className="muted">
-            Обучение и последующая псевдоразметка выполняются в свободное время, приостанавливаются для любых обычных заданий и затем продолжаются с сохранённого места.
-          </p>
-        </section>
-        <div className="button-row">
-          <button className="primary" type="submit" disabled={busy || !template}>
-            <Play size={16} />
-            Запустить обучение
-          </button>
-        </div>
-      </form>
+      <PageHeader title="Запуск обучения" subtitle="Настройте модель, подготовку данных и условия завершения" />
+      <TrainingLaunchForm
+        models={bootstrap.models}
+        datasets={bootstrap.datasets}
+        architecture={architecture}
+        onArchitectureChange={setArchitecture}
+        datasetKey={datasetKey}
+        onDatasetChange={setDatasetKey}
+        template={template}
+        schema={trainingSchema}
+        value={config}
+        onChange={setConfig}
+        runInferenceAfterTraining={runInferenceAfterTraining}
+        onRunInferenceChange={setRunInferenceAfterTraining}
+        secondaryPriority={secondaryPriority}
+        onSecondaryPriorityChange={setSecondaryPriority}
+        busy={busy}
+        onSubmit={submit}
+      />
     </>
   );
 }
@@ -3973,114 +3855,6 @@ function PanelHeader({ title, subtitle, aside }: { title: string; subtitle?: str
   );
 }
 
-function ConfigEditor({
-  schema,
-  value,
-  onChange,
-  architecture,
-  readonly = false,
-  onApplyField,
-}: {
-  schema: ConfigSchema;
-  value: JsonRecord;
-  onChange: (next: JsonRecord) => void;
-  architecture?: string;
-  readonly?: boolean;
-  onApplyField?: (key: string, value: unknown) => void;
-}) {
-  const setField = (field: ConfigField, raw: unknown) => {
-    const nextValue = coerceConfigValue(field, raw);
-    onChange(configWithField(value, field.key, nextValue, schema.pipeline_defaults));
-  };
-  const pipelineVariant = String(value["train.pipeline_variant"] || "legacy");
-  return (
-    <div className="config-grid">
-      {pipelineVariant === "next_gen2" ? (
-        <p className="muted">next-gen2: полные тайлы без нахлёста и дополнения краёв; нормализация каждого окна; положительные тайлы получают вес 15. Шаг равен размеру тайла. Доля валидации рассчитывается после исключения пересечений между снимками. Лучшие веса и ранняя остановка определяются по F1.</p>
-      ) : null}
-      {(schema.fields || []).filter((field) =>
-        trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
-      ).map((field) => {
-        const current = value[field.key] ?? "";
-        const nextGenValLimit =
-          field.key === "train.max_val_batches_per_epoch" && pipelineVariant === "next_gen";
-        const fixedPipelineVariant =
-          field.key === "train.pipeline_variant" &&
-          Boolean(architecture) &&
-          !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
-        const tooltip = pipelineVariant === "next_gen2" && field.key === "dataset.val_fraction"
-          ? "Доля валидационных тайлов среди оставшихся train и validation после исключения пересечений; округляется до целого тайла."
-          : pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
-          ? "Число полных эпох без улучшения валидационной F1 при пороге 0.5."
-          : pipelineVariant === "next_gen2" && field.key === "train.weight_decay"
-            ? "Регуляризация AdamW. Исходный ноутбук использует значение по умолчанию 0.01."
-            : configFieldTooltip(field);
-        const label = (
-          <span title={tooltip || field.label}>
-            <span>{field.label}</span>
-          </span>
-        );
-        if (field.value_type === "boolean") {
-          return (
-            <label className="field checkbox-field" key={field.key} title={tooltip || field.label}>
-              <input
-                type="checkbox"
-                checked={Boolean(current)}
-                disabled={readonly || nextGenValLimit || fixedPipelineVariant}
-                onChange={(event) => setField(field, event.target.checked)}
-              />
-              <span>{field.label}</span>
-              {onApplyField && !readonly ? (
-                <button className="secondary compact-action" type="button" onClick={() => onApplyField(field.key, Boolean(current))}>
-                  ко всем
-                </button>
-              ) : null}
-            </label>
-          );
-        }
-        return (
-          <label className="field" key={field.key}>
-            {label}
-            <div className="inline-row">
-              {field.options?.length ? (
-                <select
-                  value={String(current)}
-                  disabled={readonly || nextGenValLimit || fixedPipelineVariant}
-                  title={tooltip || field.label}
-                  onChange={(event) => setField(field, event.target.value)}
-                >
-                  {field.options.filter((option) => field.key !== "train.pipeline_variant" ||
-                    (architecture === "segformer_b0" ? option !== "legacy" : option !== "next_gen2")
-                  ).map((option) => (
-                    <option value={option} key={option}>
-                      {field.key === "train.pipeline_variant" ? option.replace("_", "-") : option}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type={field.value_type.startsWith("integer") || field.value_type.startsWith("number") ? "number" : "text"}
-                  step={field.value_type.startsWith("number") ? "any" : "1"}
-                  value={String(current)}
-                  disabled={readonly || nextGenValLimit || fixedPipelineVariant}
-                  required={field.required}
-                  onChange={(event) => setField(field, event.target.value)}
-                  title={tooltip || field.label}
-                />
-              )}
-              {onApplyField && !readonly ? (
-                <button className="secondary compact-action" type="button" onClick={() => onApplyField(field.key, value[field.key])}>
-                  ко всем
-                </button>
-              ) : null}
-            </div>
-          </label>
-        );
-      })}
-    </div>
-  );
-}
-
 function TemplateTree({
   title,
   templates,
@@ -4759,35 +4533,6 @@ function parseExportContext(value: string): number | null | undefined {
   return context;
 }
 
-export function trainingConfigSchema(
-  schema: ConfigSchema | undefined,
-  task: DatasetInfo["task"],
-  pipelineVariant = "legacy",
-): ConfigSchema | undefined {
-  if (!schema) return undefined;
-  const allowedLosses =
-    pipelineVariant === "next_gen2"
-      ? ["cross_entropy"]
-      : task === "multiclass"
-      ? ["cross_entropy", "cross_entropy_dice"]
-      : ["bce_dice", "focal_dice", "focal_tversky"];
-  return {
-    ...schema,
-    fields: schema.fields.map((field) =>
-      field.key === "train.loss"
-        ? {
-            ...field,
-            options: allowedLosses,
-            tooltip:
-              task === "multiclass"
-                ? "Multiclass loss: cross entropy, отдельно или вместе с Dice."
-                : field.tooltip,
-          }
-        : field,
-    ),
-  };
-}
-
 function templateFor(templates: TrainingTemplate[], architecture: string, datasetKey: string | null): TrainingTemplate | undefined {
   const datasetTemplate =
     datasetKey && datasetKey !== "custom"
@@ -4798,36 +4543,6 @@ function templateFor(templates: TrainingTemplate[], architecture: string, datase
 
 function templateTitle(template: AnyTemplate): string {
   return template.dataset_key ? `${template.display_name} · ${template.dataset_name || template.dataset_key}` : template.display_name;
-}
-
-function latestExperimentId(experiments: MLflowExperimentInfo[]): string {
-  if (!experiments.length) return "";
-  return experiments.reduce((latest, item) => {
-    const latestNumber = Number(latest.experiment_id);
-    const itemNumber = Number(item.experiment_id);
-    if (Number.isFinite(latestNumber) && Number.isFinite(itemNumber)) {
-      return itemNumber > latestNumber ? item : latest;
-    }
-    return item.name.localeCompare(latest.name) > 0 ? item : latest;
-  }, experiments[0]).experiment_id;
-}
-
-function coerceConfigValue(field: ConfigField, raw: unknown): unknown {
-  if (field.value_type === "boolean") return Boolean(raw);
-  if (field.value_type.startsWith("integer")) {
-    const number = Number.parseInt(String(raw), 10);
-    return Number.isFinite(number) ? number : null;
-  }
-  if (field.value_type.startsWith("number")) {
-    const number = Number.parseFloat(String(raw));
-    return Number.isFinite(number) ? number : null;
-  }
-  return String(raw);
-}
-
-function configFieldTooltip(field: ConfigField): string {
-  const parts = [field.tooltip, configAllowedRange(field), field.recommended_range ? `Рекомендуется: ${field.recommended_range}` : ""];
-  return parts.filter(Boolean).join(" · ");
 }
 
 function configTooltipForKey(bootstrap: BootstrapInfo, key: string): string {
@@ -4843,15 +4558,6 @@ function formatConfigValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
-}
-
-function configAllowedRange(field: ConfigField): string {
-  const min = field.min_value;
-  const max = field.max_value;
-  if (min !== null && min !== undefined && max !== null && max !== undefined) return `${min}..${max}`;
-  if (min !== null && min !== undefined) return `>= ${min}`;
-  if (max !== null && max !== undefined) return `<= ${max}`;
-  return "";
 }
 
 function statusBadge(status: string, type?: string | null, progress?: { current?: number | null; total?: number | null; elapsed_minutes?: number | null } | null) {
@@ -5033,44 +4739,6 @@ function queuePriority(job: JobSummary): number {
   if (job.status === "paused") return 1;
   if (job.status === "queued") return 2;
   return 3;
-}
-
-export function configWithField(
-  value: JsonRecord,
-  key: string,
-  nextValue: unknown,
-  pipelineDefaults?: Record<string, JsonRecord>,
-): JsonRecord {
-  const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
-  const next = { ...value, ...preset, [key]: nextValue };
-  if (next["train.pipeline_variant"] === "next_gen2") {
-    next["tile_preparation.stride"] = next["tile_preparation.tile_size"];
-  }
-  if (key === "train.pipeline_variant" && nextValue === "next_gen") {
-    next["train.max_val_batches_per_epoch"] = null;
-    if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
-  }
-  return next;
-}
-
-export function trainingConfigFieldVisible(
-  key: string,
-  pipelineVariant: string,
-  architecture?: string,
-): boolean {
-  if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
-  if (pipelineVariant === "next_gen2" && [
-    "tile_preparation.stride", "tile_preparation.context", "tile_preparation.augmentation_level",
-    "tile_preparation.positive_factor", "tile_preparation.hard_negative_factor",
-    "tile_preparation.background_factor", "train.pretrained", "train.loss",
-    "train.focal_alpha", "train.pos_weight", "train.background_weight",
-    "train.hard_negative_weight", "train.tversky_alpha", "train.tversky_beta",
-    "train.threshold", "train.max_train_batches_per_epoch", "train.max_val_batches_per_epoch",
-  ].includes(key)) return false;
-  if (key === "train.pretrained") {
-    return pipelineVariant === "next_gen" && architecture === "segformer_b0";
-  }
-  return true;
 }
 
 type ManagedDatasetDraftSource = {
