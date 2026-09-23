@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import signal
 
@@ -19,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-name", default=None, help="Необязательное имя запуска.")
     args = parser.parse_args(argv)
 
+    logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("mlsystem2").setLevel(logging.INFO)
     _install_signal_handlers()
     if args.run:
         settings_path = args.settings or os.getenv("MLSYSTEM2_SETTINGS_PATH") or "configs/settings.server.yaml"

@@ -1,5 +1,6 @@
-# Исходные параметры train_full_pipeline_заболачивание.ipynb.
+# Фиксированный профиль segFormer_train_hlam_main_v2.ipynb.
 # Выберите опубликованную бинарную разметку Канопуса.
+# Число загрузчиков наследуется из settings.server.yaml (8 на сервере).
 runtime:
   scratch_root: /data/mlsystem2/runtime/train/next-gen2/scratch
   logs_root: /data/mlsystem2/runtime/train/next-gen2/logs
@@ -13,8 +14,7 @@ tile_preparation:
   tile_size: 512
   stride: 256
   context: 0
-  augmentation_level: 0
-  num_workers: 8
+  augmentation_level: 3
   seed: 42
 
 train:
@@ -25,13 +25,15 @@ train:
   output_channels: 1
   pretrained: true
   initial_checkpoint_uri: null
-  epochs: 50
-  batch_size: 8
+  epochs: 20
+  batch_size: 16
   learning_rate: 0.0001
   weight_decay: 0.01
-  loss: cross_entropy
+  loss: cross_entropy_tversky
+  tversky_alpha: 0.75
+  tversky_beta: 0.25
   threshold: 0.5
-  early_stopping_patience: 9
+  early_stopping_patience: 10
   max_train_batches_per_epoch: null
   max_val_batches_per_epoch: null
   max_training_time_sec: null

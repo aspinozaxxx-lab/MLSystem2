@@ -4,6 +4,7 @@ import builtins
 import inspect
 import random
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 
 import numpy as np
@@ -652,6 +653,9 @@ def test_tile_preparation_report_exposes_three_train_factors() -> None:
     class SnapshotLoader:
         def __init__(self, split: str) -> None:
             self.split = split
+            self.loader = SimpleNamespace(
+                num_workers=8, prefetch_factor=2, persistent_workers=False, pin_memory=True,
+            )
 
         def snapshot(self) -> dict[str, object]:
             return {"split": self.split}
@@ -671,6 +675,10 @@ def test_tile_preparation_report_exposes_three_train_factors() -> None:
     assert report["seed"] == 42
     assert report["splits"]["train"] == {"split": "train"}
     assert report["splits"]["val"] == {"split": "val"}
+    assert report["loader_runtime"] == {
+        split: {"num_workers": 8, "prefetch_factor": 2, "persistent_workers": False, "pin_memory": True}
+        for split in ("train", "val")
+    }
 
 
 def test_counting_loader_reports_target_positive_ratio() -> None:

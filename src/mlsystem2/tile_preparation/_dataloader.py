@@ -79,12 +79,20 @@ def create_tile_dataloader(
             "shuffle": False, "num_workers": tile_settings.num_workers,
             "collate_fn": _collate_tile_batch, "worker_init_fn": _seed_tile_worker,
             "pin_memory": torch.cuda.is_available(),
+            "persistent_workers": False,
         }
         if tile_settings.num_workers > 0:
             # Полная эпоха может занимать сотни ГБ; достаточно двух batch на процесс.
             # Workers пересоздаются, чтобы RNG основной программы потреблялся как при workers=0.
             kwargs["prefetch_factor"] = 2
-        return DataLoader(**kwargs)
+        loader = DataLoader(**kwargs)
+        LOGGER.info(
+            "Загрузчик next-gen2 (%s): workers=%s, prefetch_factor=%s, "
+            "persistent_workers=%s, pin_memory=%s, batch_size=%s",
+            request.mode, loader.num_workers, loader.prefetch_factor,
+            loader.persistent_workers, loader.pin_memory, loader.batch_size,
+        )
+        return loader
 
     if request.mode == "val":
         return _create_val_loader(
@@ -636,3 +644,13 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):
         worker_info.dataset.close()
+    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) == "next_gen2":
+        import cv2
+
+        cv2.setNumThreads(1)
+        cv2.ocl.setUseOpenCL(False)
+        transform = worker_info.dataset._notebook_transform
+        if transform is not None:
+            # Compose хранит собственные генераторы и не использует np.random.seed.
+            # PyTorch назначает новые worker seeds при каждом создании итератора эпохи.
+            transform.set_random_seed(worker_seed)

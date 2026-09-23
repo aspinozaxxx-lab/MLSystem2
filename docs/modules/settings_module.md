@@ -30,9 +30,10 @@
 ## Алгоритм работы и его особенности
 
 `next_gen2` требует фиксированный профиль ноутбука: binary, pretrained HF B0, 4 канала,
-тайлы 512/256, context 0, augmentation_level 3, workers 0, seed 42, batch 16, LR 1e-4,
+тайлы 512/256, context 0, augmentation_level 3, seed 42, batch 16, LR 1e-4,
 weight decay 0.01, loss `cross_entropy_tversky`, alpha/beta 0.75/0.25 и threshold 0.5.
-Менять можно только epochs, early_stopping_patience и max_training_time_sec. Batch limits запрещены.
+В UI меняются только epochs, early_stopping_patience и max_training_time_sec. Batch limits запрещены.
+Число workers — параметр исполнения из серверного settings.yml (8), а не ограничение профиля ноутбука.
 
 `load_settings` проверяет файлы, рекурсивно накладывает `run.yml` на стабильный `settings.yml`, запрещает лишние поля и сохраняет результат. Отсутствующий `train.pipeline_variant` означает `legacy`; старые YAML остаются совместимыми. `next_gen` v1 разрешён только для binary, четырёх каналов, одного выхода и `segformer_b0|smp_segformer_b0`; ненулевой `max_val_batches_per_epoch` отклоняется. Pretrained разрешён только HF B0. Gaussian A/B дополнительно требует tile `512` и stride `256`. Остальные проверки и поведение `legacy` не изменены.
 

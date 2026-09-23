@@ -282,7 +282,7 @@ def run_train_pipeline(
         timings.append(timing)
         train_result = _expect_train_result(train_result)
 
-        tile_report = _tile_preparation_report(settings, train_loader, val_loader)
+        tile_report = _tile_preparation_report(settings, train_loader, val_loader, test_loader)
         if settings.train.pipeline_variant in {"next_gen", "next_gen2"}:
             _attach_next_gen_diagnostics(
                 train_result,
@@ -1124,6 +1124,7 @@ def _tile_preparation_report(
     settings: SystemSettings,
     train_loader: _CountingLoader,
     val_loader: _CountingLoader,
+    test_loader: object | None = None,
 ) -> dict[str, object]:
     return {
         "tile_size": settings.tile_preparation.tile_size,
@@ -1136,6 +1137,14 @@ def _tile_preparation_report(
         "input_dtype": "uint8",
         "num_workers": settings.tile_preparation.num_workers,
         "prefetch_epochs": settings.tile_preparation.prefetch_epochs,
+        "loader_runtime": {
+            split: {
+                key: _loader_attr(loader, key)
+                for key in ("num_workers", "prefetch_factor", "persistent_workers", "pin_memory")
+            }
+            for split, loader in (("train", train_loader.loader), ("val", val_loader.loader), ("test", test_loader))
+            if loader is not None
+        },
         "augmentation_level": settings.tile_preparation.augmentation_level,
         "positive_factor": settings.tile_preparation.positive_factor,
         "hard_negative_factor": settings.tile_preparation.hard_negative_factor,

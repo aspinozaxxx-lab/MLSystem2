@@ -3745,7 +3745,13 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             assert payload["tile_preparation"]["context"] == 0
             assert payload["tile_preparation"]["stride"] == 256
             assert payload["tile_preparation"]["tile_size"] == 512
-            assert payload["tile_preparation"]["num_workers"] == 0
+            assert "num_workers" not in payload["tile_preparation"]
+            settings_path = Path(__file__).resolve().parents[1] / "configs" / "settings.server.yaml"
+            run_path = tmp_path / "generated-next-gen2.yaml"
+            run_path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+            from mlsystem2.settings.api import load_settings
+
+            assert load_settings(settings_path, run_path).tile_preparation.num_workers == 8
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Реки\\test",

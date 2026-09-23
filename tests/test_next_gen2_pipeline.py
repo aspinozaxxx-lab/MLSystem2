@@ -25,6 +25,7 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec, SaveChe
 from mlsystem2.settings.contracts import SystemSettings
 from mlsystem2.settings.api import load_settings
 from mlsystem2.tile_preparation import _dataloader
+from mlsystem2.tile_preparation._augmentations import build_notebook_augmentations
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation._windows import build_tile_windows
 from mlsystem2.tile_preparation.contracts import TileDataloaderRequest, TileSceneSource, TileSplitRequest
@@ -346,10 +347,11 @@ def test_coordinates_masks_and_sampler_match_original_notebook(tmp_path, with_ha
     actual.close()
 
 
-def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["train", "val", "test"])
+def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monkeypatch, mode):
     torch = pytest.importorskip("torch")
     image, annotation = _scene(tmp_path)
-    dataset = _dataset(image, annotation)
+    dataset = _dataset(image, annotation, mode=mode)
     settings = SimpleNamespace(tile_preparation=SimpleNamespace(
         tile_size=32, stride=16, context=0, seed=42, augmentation_level=0,
         positive_factor=0.5, hard_negative_factor=0.0, background_factor=0.5,
@@ -359,7 +361,7 @@ def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monk
     monkeypatch.setattr(_dataloader, "TileDataset", lambda **kwargs: dataset)
     request = SimpleNamespace(
         scenes=dataset._scenes, annotation_file=annotation, hard_negative_annotation_file=None,
-        class_annotations=[], classes=[], mode="train", tile_split=dataset._tile_split,
+        class_annotations=[], classes=[], mode=mode, tile_split=dataset._tile_split,
         include_object_instances=False, pipeline_variant="next_gen2", collect_band_histogram=False,
         batch_size=4,
     )
@@ -387,6 +389,82 @@ def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monk
                 assert torch.equal(expected[index], actual[index])
             assert expected[3] == actual[3]
     dataset.close()
+
+
+def test_server_example_inherits_workers_and_keeps_notebook_profile():
+    root = Path(__file__).resolve().parents[1]
+    settings = load_settings(root / "configs/settings.server.yaml", root / "configs/run.next-gen2.server.yaml")
+    assert settings.tile_preparation.num_workers == 8
+    assert settings.tile_preparation.seed == 42
+    for key, value in NEXT_GEN2_DEFAULT_CONFIG.items():
+        group, field = key.split(".", 1)
+        assert getattr(getattr(settings, group), field) == value
+    payload = settings.model_dump()
+    payload["tile_preparation"]["num_workers"] = 0
+    assert SystemSettings.model_validate(payload).tile_preparation.num_workers == 0
+    payload["train"]["batch_size"] = 32
+    with pytest.raises(ValueError, match="фиксированный профиль"):
+        SystemSettings.model_validate(payload)
+
+
+def test_parallel_notebook_augmentations_are_independent_and_repeatable(tmp_path):
+    torch = pytest.importorskip("torch")
+    image, annotation = _scene(tmp_path)
+    dataset = _dataset(image, annotation)
+    # Один и тот же тайл позволяет заметить одинаковые RNG в соседних workers.
+    dataset._windows = [dataset._windows[12]] * 8
+    dataset._notebook_transform = build_notebook_augmentations(42)
+    dataset.close()
+    loader = torch.utils.data.DataLoader(
+        dataset, batch_size=1, num_workers=2, prefetch_factor=2, persistent_workers=False,
+        collate_fn=_dataloader._collate_tile_batch, worker_init_fn=_dataloader._seed_tile_worker,
+    )
+    runs = []
+    for _ in range(2):
+        torch.manual_seed(1729)
+        epochs = []
+        for _ in range(2):
+            iterator = iter(loader)
+            workers = list(iterator._workers)
+            epochs.append([(images.clone(), masks.clone()) for images, masks, _ in iterator])
+            assert all(not worker.is_alive() for worker in workers)
+        runs.append(epochs)
+    for left, right in zip(runs[0], runs[1], strict=True):
+        for expected, actual in zip(left, right, strict=True):
+            torch.testing.assert_close(expected[0], actual[0], rtol=0, atol=0)
+            torch.testing.assert_close(expected[1], actual[1], rtol=0, atol=0)
+        assert any(not torch.equal(left[index][0], left[index + 1][0]) for index in range(0, 8, 2))
+    assert any(not torch.equal(left[0], right[0]) for left, right in zip(*runs[0], strict=True))
+    dataset.close()
+
+
+def test_worker_limits_opencv_and_preserves_image_mask_geometry(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import cv2
+
+    image, annotation = _scene(tmp_path)
+    dataset = _dataset(image, annotation)
+    dataset._notebook_transform = build_notebook_augmentations(42)
+    monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: SimpleNamespace(dataset=dataset))
+    monkeypatch.setenv("MLSYSTEM2_TILE_WORKER", "0")
+    threads = cv2.getNumThreads()
+    opencl = cv2.ocl.useOpenCL()
+    mask = np.zeros((128, 128), dtype=np.float32)
+    mask[20:100, 35:85] = 1
+    pixels = np.repeat((mask * 255).astype(np.uint8)[..., None], 4, axis=2)
+    try:
+        for seed in (17, 48, 199):
+            monkeypatch.setattr(torch, "initial_seed", lambda: seed)
+            _dataloader._seed_tile_worker(0)
+            assert cv2.getNumThreads() == 1
+            assert not cv2.ocl.useOpenCL()
+            transformed = dataset._notebook_transform(image=pixels.copy(), mask=mask.copy())
+            foreground = transformed["image"][..., 0] > 127
+            assert np.mean(foreground == (transformed["mask"] == 1)) > 0.98
+    finally:
+        cv2.setNumThreads(threads)
+        cv2.ocl.setUseOpenCL(opencl)
+        dataset.close()
 
 
 @pytest.mark.parametrize("stride", [16, 32])
@@ -549,7 +627,7 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
         "runtime": {"project_root": str(tmp_path), "scratch_root": str(tmp_path / "scratch"),
                     "logs_root": str(tmp_path / "logs"), "cleanup_scratch_after_mlflow_log": False},
         "dataset": {"images_dir": str(tmp_path), "annotations_dir": str(annotations), "val_fraction": 0.2},
-        "tile_preparation": {"tile_size": 512, "stride": 256, "context": 0, "num_workers": 0, "augmentation_level": 3},
+        "tile_preparation": {"tile_size": 512, "stride": 256, "context": 0, "num_workers": 2, "augmentation_level": 3},
         "train": train,
         "mlflow": {"enabled": False, "tracking_uri": "file:///unused", "experiment_name": "Проверка next-gen2"},
     })
@@ -565,15 +643,22 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
         return transformers.SegformerForSemanticSegmentation(transformers.SegformerConfig(num_labels=2))
     monkeypatch.setattr(transformers.SegformerForSemanticSegmentation, "from_pretrained", local_pretrained)
     logged = []
+    tile_reports = []
     requests = []
     def create_loader(request):
         requests.append(request)
         return _dataloader.create_tile_dataloader(request)
     deps = replace(_runner._default_dependencies(), create_tile_dataloader=create_loader,
-                   log_training_artifacts=lambda run, result: logged.append(result))
+                   log_training_artifacts=lambda run, result: logged.append(result),
+                   log_tile_preparation=lambda run, report: tile_reports.append(report))
     result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
     assert result.status.value == "succeeded", result.report.errors
     assert [r.mode for r in requests] == ["train", "val", "test"]
+    assert tile_reports[0]["loader_runtime"] == {
+        mode: {"num_workers": 2, "prefetch_factor": 2, "persistent_workers": False,
+               "pin_memory": torch.cuda.is_available()}
+        for mode in ("train", "val", "test")
+    }
     assert all(r.tile_split.strategy == "window_random" and not r.tile_split.spatial_purge and r.tile_split.test_fraction == 0.2 for r in requests)
     assert _runner._mlflow_start_request(settings, TrainPipelineRequest()).tags["checkpoint_selection_metric"] == "val_loss"
     assert pretrained_calls[0][1]["num_labels"] == 2

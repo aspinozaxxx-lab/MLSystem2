@@ -741,7 +741,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
-            **({"seed": 42, "num_workers": 0} if pipeline_variant == "next_gen2" else {}),
+            **({"seed": 42} if pipeline_variant == "next_gen2" else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),

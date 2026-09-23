@@ -241,7 +241,7 @@ class SystemSettings(BaseModel):
                 (self.dataset.val_fraction, 0.2),
                 (self.tile_preparation.tile_size, 512), (self.tile_preparation.stride, 256),
                 (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
-                (self.tile_preparation.num_workers, 0), (self.tile_preparation.seed, 42),
+                (self.tile_preparation.seed, 42),
                 (self.train.batch_size, 16), (self.train.learning_rate, 1e-4),
                 (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
                 (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),

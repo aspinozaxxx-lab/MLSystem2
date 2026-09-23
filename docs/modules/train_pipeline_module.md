@@ -52,3 +52,6 @@ preprocessing, runtime/commit/CUDA/packages, зафиксированную data
 До создания модели конвейер ограничивает внутренние Torch CPU pools значениями
 `MLSYSTEM2_TORCH_NUM_THREADS` и `MLSYSTEM2_TORCH_NUM_INTEROP_THREADS`; серверный worker передаёт `4` и `2`.
 Это ограничение не меняет число DataLoader workers или объём `prefetch_epochs`.
+Для next-gen2 действует отдельный ограниченный prefetch_factor=2. Фактические num_workers,
+prefetch_factor, persistent_workers и pin_memory каждого train/val/test-загрузчика сохраняются
+в loader_runtime существующего отчёта tile_preparation в MLflow.
