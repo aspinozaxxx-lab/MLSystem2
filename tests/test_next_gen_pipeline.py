@@ -549,7 +549,7 @@ def test_legacy_cosine_scheduler_golden(
     )
 
     assert [item.learning_rate for item in result.history] == pytest.approx(
-        [0.0008535533905932737, 0.0005, 0.00014644660940672628, 0.0]
+        [0.001, 0.0008535533905932737, 0.0005, 0.00014644660940672628]
     )
     checkpoint = torch.load(result.best_checkpoint_path, map_location="cpu", weights_only=False)
     metadata = checkpoint["metadata"]
@@ -567,7 +567,7 @@ def test_next_gen_plateau_scheduler_counts_validation_events(
 ) -> None:
     torch = pytest.importorskip("torch")
     monkeypatch.setattr(_trainer, "_validate_epoch", _constant_binary_validation)
-    config = _next_gen_train_config(epochs=5).model_copy(
+    config = _next_gen_train_config(epochs=6).model_copy(
         update={"validation_interval_epochs": 1}
     )
 
@@ -583,7 +583,7 @@ def test_next_gen_plateau_scheduler_counts_validation_events(
     )
 
     assert [item.learning_rate for item in result.history] == pytest.approx(
-        [0.001, 0.001, 0.001, 0.001, 0.0005]
+        [0.001, 0.001, 0.001, 0.001, 0.001, 0.0005]
     )
 
 

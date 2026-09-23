@@ -84,15 +84,19 @@ def get_best_training_checkpoint(
         run = client.get_run(run_id)
         tags = getattr(getattr(run, "data", None), "tags", {})
         quality_metric = str(tags.get("quality_metric") or "")
-        metric_name = (
-            QUALITY_CHECKPOINT_METRIC
-            if quality_metric in {"pixel", "objects"}
-            else BEST_CHECKPOINT_METRIC
-        )
-        history = client.get_metric_history(run_id, metric_name)
-        if not history and metric_name == QUALITY_CHECKPOINT_METRIC:
-            history = client.get_metric_history(run_id, BEST_CHECKPOINT_METRIC)
-            metric_name = BEST_CHECKPOINT_METRIC
+        metric_names = []
+        if quality_metric in {"pixel", "objects"}:
+            # Исторические запуски сохраняют прежний критерий без перезаписи данных.
+            metric_names.append(QUALITY_CHECKPOINT_METRIC)
+            if quality_metric == "objects":
+                metric_names.extend(("val/object_f1", "val/best_threshold_object_f1"))
+            else:
+                metric_names.append("val/macro_pixel_f1")
+        metric_names.append(BEST_CHECKPOINT_METRIC)
+        for metric_name in metric_names:
+            history = client.get_metric_history(run_id, metric_name)
+            if history:
+                break
         thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
@@ -404,14 +408,12 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        if metrics.learning_rate is not None:
+            mlflow.log_metric("train/learning_rate", metrics.learning_rate, step=metrics.epoch)
         if hasattr(mlflow, "set_tag"):
             mlflow.set_tag("quality_metric", metrics.quality_metric)
         if not metrics.validation_performed:
             mlflow.log_metric("val/performed", 0, step=metrics.epoch)
-            if metrics.learning_rate is not None:
-                mlflow.log_metric(
-                    "train/learning_rate", metrics.learning_rate, step=metrics.epoch
-                )
             mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
             return
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
@@ -419,11 +421,6 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric(
             "val/best_pixel_threshold", metrics.val_best_pixel_threshold, step=metrics.epoch
         )
-        mlflow.log_metric("val/quality_f1", metrics.val_quality_f1, step=metrics.epoch)
-        mlflow.log_metric(
-            "val/quality_precision", metrics.val_quality_precision, step=metrics.epoch
-        )
-        mlflow.log_metric("val/quality_recall", metrics.val_quality_recall, step=metrics.epoch)
         mlflow.log_metric(
             "val/best_threshold_pixel_f1",
             metrics.val_best_threshold_pixel_f1,
@@ -503,10 +500,6 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                     )
         if metrics.val_per_scene_metrics:
             mlflow.log_metric("val/performed", 1, step=metrics.epoch)
-            if metrics.learning_rate is not None:
-                mlflow.log_metric(
-                    "train/learning_rate", metrics.learning_rate, step=metrics.epoch
-                )
         object_scalars = {
             "val/best_threshold_object_precision": (metrics.val_best_threshold_object_precision),
             "val/best_threshold_object_recall": metrics.val_best_threshold_object_recall,

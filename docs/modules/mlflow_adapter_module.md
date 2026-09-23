@@ -8,7 +8,7 @@
 
 - `list_experiments(tracking_uri: str) -> list[MLflowExperiment]` - возвращает доступные experiments из указанного MLflow tracking URI.
 - `create_experiment(request: MLflowExperimentRequest) -> MLflowExperiment` - создает experiment или возвращает существующий с тем же именем.
-- `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает `val/quality_f1` для запуска с tag `quality_metric`, использует pixel fallback для старого запуска и возвращает эпоху, значение F1, threshold и ссылку на `checkpoints/best.pt`.
+- `get_best_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - читает F1 выбранного критерия (`val/object_f1`, `val/macro_pixel_f1` либо `val/best_threshold_pixel_f1`), сохраняет приоритет исторической `val/quality_f1` и возвращает эпоху, F1, threshold и ссылку на `checkpoints/best.pt`.
 - `get_usable_training_checkpoint(tracking_uri: str, run_id: str) -> MLflowBestCheckpoint | None` - дополнительно требует статус MLflow `FINISHED`, threshold и фактический артефакт `checkpoints/best.pt`; используется при выборе модели для нового инференса.
 - `get_finished_run_artifact(tracking_uri: str, run_id: str, artifact_path: str) -> MLflowRunArtifactInfo | None` - возвращает точный файловый артефакт только завершённого запуска без требования training-метрик.
 - `get_training_epoch_progress(tracking_uri: str, run_id: str) -> MLflowTrainingProgress` - возвращает число завершённых эпох по истории `train/epoch_time_sec`.
@@ -18,7 +18,7 @@
 - `log_dataset_artifacts(run: MLflowRunRef, files: dict[str, str | Path]) -> None` - пишет исходные txt/geojson файлы датасета в папку `dataset` артефактов MLflow.
 - `log_tile_preparation(run: MLflowRunRef, report: dict[str, object]) -> None` - пишет отчет подготовки тайлов.
 - `log_run_config(run: MLflowRunRef, config_path: str | Path) -> None` - пишет YAML-конфиг запуска.
-- `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет перечисленные ниже loss, quality, pixel, optional object и threshold метрики одной эпохи и tag `quality_metric`.
+- `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет перечисленные ниже loss, learning rate, pixel, optional object и threshold метрики одной эпохи и tag `quality_metric`.
 - `log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None` - пишет итоговые `train/epochs_total`, `train/training_time_sec`, `train/best_quality_f1`, `train/best_threshold_pixel_f1`.
 - `log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None` - пишет историю обучения и checkpoint-файлы.
 - `log_timing_report(run: MLflowRunRef, report: TimingReport) -> None` - пишет отчет времени выполнения.
@@ -57,9 +57,6 @@
 - `val/loss`
 - `val/best_threshold`
 - `val/best_pixel_threshold`
-- `val/quality_f1`
-- `val/quality_precision`
-- `val/quality_recall`
 - `val/best_threshold_pixel_f1`
 - `val/pixel_f1`
 - `val/pixel_precision`
@@ -73,7 +70,7 @@
 - `val/object_precision` — только при наличии object validation
 - `val/object_recall` — только при наличии object validation
 - `train/epoch_time_sec`
-- `train/learning_rate` — для next-gen
+- `train/learning_rate` — во всех вариантах обучения, если значение задано; скорость обучения текущей эпохи до шага scheduler
 - `val/performed` — `0/1` для разреженной next-gen validation
 - `val/scene/{scene_id}/{pixel_f1|pixel_precision|pixel_recall|fixed_0_5_*}` — для next-gen
 - `val/fixed_0_5_pixel_f1`, `val/fixed_0_5_pixel_precision`, `val/fixed_0_5_pixel_recall` — для next-gen
@@ -89,7 +86,7 @@
 ## Алгоритм работы и его особенности
 
 Для новых `pipeline_variant=next_gen2` runs tag `checkpoint_selection_metric=quality_f1` задаёт выбор
-по максимуму `val/quality_f1`; при равенстве выбирается ранняя эпоха. Исторические runs без tag либо
+по максимуму F1 выбранного критерия; при равенстве выбирается ранняя эпоха. Исторические runs без tag либо
 с `val_loss` сохраняют выбор по минимуму `val/loss`, чтобы возвращаемая эпоха соответствовала весам.
 `get_best_training_checkpoint` возвращает F1 и порог выбранной эпохи. Итоговые
 `train/best_quality_f1` и `train/best_threshold_pixel_f1` относятся к сохранённым весам; решение дополнительно
@@ -103,13 +100,22 @@
 
 `log_training_metrics` не дублирует per-epoch метрики и игнорирует эпохи без validation при выборе best.
 `log_training_epoch` для таких эпох пишет train loss/time/LR и `val/performed=0`; для next-gen validation
-дополнительно пишет macro/micro и per-scene метрики. Legacy-набор и порядок прежних epoch-метрик сохранены.
+дополнительно пишет macro/micro и per-scene метрики. `train/learning_rate` записывается один раз
+на каждой эпохе всех вариантов, если значение задано, независимо от validation и поснимочных метрик.
+В новых запусках `val/quality_f1`, `val/quality_precision`, `val/quality_recall` не публикуются.
+Внутренние поля `EpochMetrics.val_quality_*`, выбор checkpoint и early stopping сохраняются.
 `log_training_artifacts` пишет полную историю и best/final checkpoint. Для next-gen из diagnostics также
 сохраняются `config/resolved_train_config.json`, `reports/split_manifest.json`, `preprocessing.json`,
 `runtime_environment.json`, `validation_by_scene.json`, optional `inference_merge_comparison.json` и
 `checkpoint_hashes.json`; runtime содержит commit, Python/packages, CUDA/GPU, peak VRAM и dataset revision;
 безопасные scalar/JSON параметры flatten-ятся, строки ограничиваются по длине.
 
-`get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` читает `val/quality_f1`, потому что `best.pt` сохраняется train-модулем по этой же метрике. Запуск без tag считается старым и читается по `val/best_threshold_pixel_f1`; если новый metric history отсутствует, также применяется pixel fallback. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается вместе с checkpoint summary.
+`get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` сначала читает историческую
+`val/quality_f1`. При её отсутствии для `objects` используются `val/object_f1`, затем
+`val/best_threshold_object_f1`; для `pixel` — `val/macro_pixel_f1`, если она есть.
+Общий fallback и критерий запуска без tag — `val/best_threshold_pixel_f1`.
+Так binary pixel, scene-macro, multiclass macro и object сохраняют тот же выбор эпохи без дублирующего
+графика. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается
+вместе с checkpoint summary. Исторические метрики, теги и артефакты не изменяются.
 
 `get_finished_run_artifact` проверяет статус запуска, точное имя и то, что найден именно файл. `download_run_artifact` оборачивает публичный MLflow client и нужен вызывающим модулям, которым требуется локальный файл артефакта без прямого импорта MLflow.

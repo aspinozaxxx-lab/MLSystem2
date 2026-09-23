@@ -47,7 +47,7 @@ def test_adapter_roundtrip_with_real_mlflow(tmp_path: Path, monkeypatch) -> None
             epoch=epoch, train_loss=0.3, val_loss=0.2,
             val_best_threshold=threshold, val_best_threshold_pixel_f1=f1,
             val_best_threshold_precision=f1, val_best_threshold_recall=f1,
-            epoch_time_sec=1.0,
+            learning_rate=0.001 / epoch, epoch_time_sec=1.0,
         )
         for epoch, f1, threshold in ((1, 0.8, 0.4), (2, 0.7, 0.6))
     ]
@@ -78,8 +78,14 @@ def test_adapter_roundtrip_with_real_mlflow(tmp_path: Path, monkeypatch) -> None
             experiment_ids=[experiment_id],
         )] == [dataset_name]
         assert [item.step for item in client.get_metric_history(
-            run.run_id, "val/quality_f1",
+            run.run_id, "val/best_threshold_pixel_f1",
         )] == [1, 2]
+        for name in ("val/quality_f1", "val/quality_precision", "val/quality_recall"):
+            assert name not in stored.data.metrics
+            assert client.get_metric_history(run.run_id, name) == []
+        assert [(item.step, item.value) for item in client.get_metric_history(
+            run.run_id, "train/learning_rate",
+        )] == [(1, 0.001), (2, 0.0005)]
         assert api.get_training_epoch_progress(tracking_uri, run.run_id).completed_epochs == 2
         best = api.get_usable_training_checkpoint(tracking_uri, run.run_id)
         assert best is not None
@@ -277,7 +283,50 @@ def test_get_best_training_checkpoint_uses_metric_history(monkeypatch) -> None:
     assert calls["run_id"] == "run-1"
 
 
-# Proveriaet status run i fakticheskoe nalichie best.pt.
+@pytest.mark.parametrize("quality_metric,metric_name", [
+    ("pixel", "val/best_threshold_pixel_f1"),
+    ("pixel", "val/macro_pixel_f1"),
+    ("objects", "val/object_f1"),
+    ("objects", "val/best_threshold_object_f1"),
+    ("pixel", "val/quality_f1"),
+    ("objects", "val/quality_f1"),
+])
+def test_checkpoint_reads_matching_f1_and_preserves_historical_quality(
+    monkeypatch, quality_metric, metric_name,
+) -> None:
+    """Выбор эпохи сохраняет критерий и при равном F1 выбирает раннюю эпоху."""
+    from types import SimpleNamespace
+
+    values = {"val/best_threshold_pixel_f1": [0.95, 0.4, 0.5]}
+    if metric_name == "val/quality_f1":
+        values["val/macro_pixel_f1"] = [0.95, 0.4, 0.5]
+        values["val/object_f1"] = [0.95, 0.4, 0.5]
+    values[metric_name] = [0.6, 0.9, 0.9]
+    values["val/best_threshold"] = [0.3, 0.6, 0.8]
+    client = SimpleNamespace(
+        get_run=lambda _: SimpleNamespace(
+            data=SimpleNamespace(tags={"quality_metric": quality_metric}),
+            info=SimpleNamespace(artifact_uri="s3://artifacts/run"),
+        ),
+        get_metric_history=lambda _, name: [
+            SimpleNamespace(step=step, value=value)
+            for step, value in enumerate(values.get(name, []), 1)
+        ],
+    )
+    monkeypatch.setattr(_client, "_mlflow", lambda: SimpleNamespace(
+        set_tracking_uri=lambda _: None,
+        tracking=SimpleNamespace(MlflowClient=lambda: client),
+    ))
+
+    checkpoint = get_best_training_checkpoint("http://mlflow:5000/mlflow", "run")
+
+    assert checkpoint is not None
+    assert checkpoint.metric_name == metric_name
+    assert checkpoint.quality_metric == quality_metric
+    assert (checkpoint.epoch, checkpoint.f1_score, checkpoint.threshold) == (2, 0.9, 0.6)
+
+
+# Проверяет статус запуска и фактическое наличие best.pt.
 def test_get_usable_training_checkpoint_requires_finished_run_and_artifact(monkeypatch) -> None:
     checkpoint = _client.MLflowBestCheckpoint(
         tracking_uri="http://mlflow:5000",
@@ -641,9 +690,6 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
         ("val/loss", 1.0, 3),
         ("val/best_threshold", 0.75, 3),
         ("val/best_pixel_threshold", 0.75, 3),
-        ("val/quality_f1", 0.6, 3),
-        ("val/quality_precision", 0.7, 3),
-        ("val/quality_recall", 0.52, 3),
         ("val/best_threshold_pixel_f1", 0.6, 3),
         ("val/pixel_f1", 0.6, 3),
         ("val/pixel_precision", 0.7, 3),
@@ -651,6 +697,37 @@ def test_log_training_epoch_writes_only_epoch_hpo_metrics(monkeypatch) -> None:
         ("val/best_threshold_precision", 0.7, 3),
         ("val/best_threshold_recall", 0.52, 3),
         ("train/epoch_time_sec", 1.0, 3),
+    ]
+
+
+@pytest.mark.parametrize("validation_performed,per_scene_metrics", [
+    (True, []),
+    (True, [{"scene_id": "снимок", "pixel_f1": 0.7}]),
+    (False, []),
+])
+def test_learning_rate_is_logged_once_per_epoch(
+    monkeypatch, validation_performed, per_scene_metrics,
+) -> None:
+    """LR сохраняется и без поснимочных метрик, и без validation."""
+    logged: list[tuple[str, float, int]] = []
+
+    class MLflow:
+        @staticmethod
+        def log_metric(name: str, value: float, step: int = 0) -> None:
+            logged.append((name, value, step))
+
+    monkeypatch.setattr(_client, "_mlflow", lambda: MLflow)
+    run = MLflowRunRef(
+        run_id="run", experiment_name="test", tracking_uri="file://mlruns", active=True,
+    )
+    _client.log_training_epoch(run, EpochMetrics(
+        epoch=3, train_loss=1.0, val_loss=1.0 if validation_performed else None,
+        validation_performed=validation_performed, val_per_scene_metrics=per_scene_metrics,
+        learning_rate=0.0005, epoch_time_sec=1.0,
+    ))
+
+    assert [item for item in logged if item[0] == "train/learning_rate"] == [
+        ("train/learning_rate", 0.0005, 3),
     ]
 
 

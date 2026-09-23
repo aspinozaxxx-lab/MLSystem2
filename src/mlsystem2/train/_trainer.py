@@ -189,6 +189,7 @@ def train_model(
                 pause_controller.pause_if_requested()
                 _emit(progress_sink, epoch, "epoch_started", None)
                 epoch_started = perf_counter()
+                epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
 
                 train_epoch = _train_epoch(
                     torch,
@@ -215,7 +216,7 @@ def train_model(
                         train_loss=train_epoch["loss"],
                         val_loss=None,
                         quality_metric=config.quality_metric,
-                        learning_rate=float(optimizer.param_groups[0]["lr"]),
+                        learning_rate=epoch_learning_rate,
                         epoch_time_sec=perf_counter() - epoch_started,
                     )
                     history.append(metrics)
@@ -275,7 +276,7 @@ def train_model(
                     val_multiclass_threshold_sweep=val.get("threshold_sweep", {}),
                     val_metric_warnings=val.get("metric_warnings", []),
                     val_per_scene_metrics=val.get("per_scene_metrics", []),
-                    learning_rate=float(optimizer.param_groups[0]["lr"]),
+                    learning_rate=epoch_learning_rate,
                     epoch_time_sec=perf_counter() - epoch_started,
                 )
                 history.append(metrics)

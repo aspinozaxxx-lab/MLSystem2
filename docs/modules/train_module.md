@@ -13,7 +13,7 @@
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
 - `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два вычисленных веса для next-gen2, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
-- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики.
+- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.

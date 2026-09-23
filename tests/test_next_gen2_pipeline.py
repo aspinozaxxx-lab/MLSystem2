@@ -552,9 +552,12 @@ def test_two_class_checkpoint_roundtrip_is_offline_and_keeps_preprocessing(tmp_p
 @pytest.mark.parametrize("selection,epoch,f1", [
     (None, 2, 0.4), ("val_loss", 2, 0.4), ("quality_f1", 3, 0.95),
 ])
-def test_mlflow_preserves_old_loss_selection_and_reads_new_f1_selection(monkeypatch, selection, epoch, f1):
+@pytest.mark.parametrize("f1_metric", ["val/quality_f1", "val/best_threshold_pixel_f1"])
+def test_mlflow_preserves_old_loss_selection_and_reads_new_f1_selection(
+    monkeypatch, selection, epoch, f1, f1_metric,
+):
     histories = {
-        "val/quality_f1": [SimpleNamespace(value=value, step=i) for i, value in enumerate([0.9, 0.4, 0.95, 0.95], 1)],
+        f1_metric: [SimpleNamespace(value=value, step=i) for i, value in enumerate([0.9, 0.4, 0.95, 0.95], 1)],
         "val/loss": [SimpleNamespace(value=value, step=i) for i, value in enumerate([0.7, 0.3, 0.5, 0.5], 1)],
         "val/best_threshold": [SimpleNamespace(value=0.5, step=i) for i in range(1, 5)],
     }
@@ -563,7 +566,7 @@ def test_mlflow_preserves_old_loss_selection_and_reads_new_f1_selection(monkeypa
         tags["checkpoint_selection_metric"] = selection
     client = SimpleNamespace(
         get_run=lambda _: SimpleNamespace(data=SimpleNamespace(tags=tags), info=SimpleNamespace(artifact_uri="file:///artifacts")),
-        get_metric_history=lambda _, name: histories[name],
+        get_metric_history=lambda _, name: histories.get(name, []),
     )
     monkeypatch.setattr(_client, "_mlflow", lambda: SimpleNamespace(set_tracking_uri=lambda _: None, tracking=SimpleNamespace(MlflowClient=lambda: client)))
     result = _client.get_best_training_checkpoint("local", "run")
