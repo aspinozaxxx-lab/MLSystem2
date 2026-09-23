@@ -2,6 +2,8 @@ import {
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
   Blend,
+  ChevronLeft,
+  ChevronRight,
   CloudUpload,
   Download,
   Eye,
@@ -376,6 +378,9 @@ export function DatasetEditorPage({
     () => sortEditorScenes(scenes, drafts, sortDirection),
     [drafts, scenes, sortDirection],
   );
+  const activeSceneIndex = sortedScenes.findIndex((scene) => scene.annotation_name === annotationName);
+  const previousScene = activeSceneIndex > 0 ? sortedScenes[activeSceneIndex - 1] : undefined;
+  const nextScene = activeSceneIndex >= 0 ? sortedScenes[activeSceneIndex + 1] : undefined;
   const addedAnnotationNames = useMemo(
     () => new Set(scenes.map((scene) => scene.annotation_name.toLocaleLowerCase("ru"))),
     [scenes],
@@ -2166,6 +2171,33 @@ export function DatasetEditorPage({
             {detail && activeDraft ? (
               <>
                 <div className="dataset-editor-toolbar">
+                  {fullscreen ? (
+                    <nav className="dataset-editor-mode-toggle dataset-editor-scene-navigation" aria-label="Навигация по снимкам">
+                      <button
+                        className="secondary icon-button dataset-editor-icon-button"
+                        type="button"
+                        aria-label="Предыдущий снимок"
+                        title={previousScene ? `Предыдущий снимок: ${previousScene.image_name}` : "Первый снимок в списке"}
+                        disabled={!previousScene || busy || drawInProgress}
+                        onClick={() => previousScene && selectScene(previousScene.annotation_name)}
+                      >
+                        <ChevronLeft size={17} />
+                      </button>
+                      <span className="muted" aria-label={`Снимок ${activeSceneIndex + 1} из ${sortedScenes.length}`}>
+                        {activeSceneIndex + 1} / {sortedScenes.length}
+                      </span>
+                      <button
+                        className="secondary icon-button dataset-editor-icon-button"
+                        type="button"
+                        aria-label="Следующий снимок"
+                        title={nextScene ? `Следующий снимок: ${nextScene.image_name}` : "Последний снимок в списке"}
+                        disabled={!nextScene || busy || drawInProgress}
+                        onClick={() => nextScene && selectScene(nextScene.annotation_name)}
+                      >
+                        <ChevronRight size={17} />
+                      </button>
+                    </nav>
+                  ) : null}
                   <span className="source-lines">
                     <strong>{activeDraft.scene.image_name}</strong>
                     <small className="muted">{activeDraft.scene.annotation_name}</small>

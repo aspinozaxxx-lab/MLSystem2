@@ -1667,6 +1667,14 @@
   padding: 0;
 }
 
+.dataset-editor-scene-navigation > span {
+  min-width: 48px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .dataset-editor-role-switch {
   position: relative;
   display: inline-flex;
