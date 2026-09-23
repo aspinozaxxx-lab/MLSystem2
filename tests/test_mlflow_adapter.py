@@ -20,6 +20,87 @@ from mlsystem2.mlflow_adapter import _client
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
 
 
+def test_adapter_roundtrip_with_real_mlflow(tmp_path: Path, monkeypatch) -> None:
+    """Проверить совместимость с установленным MLflow без подмены его клиента."""
+    import mlflow
+
+    from mlsystem2.mlflow_adapter import api
+    from mlsystem2.mlflow_adapter.contracts import MLflowRunStatus
+
+    tracking_uri = f"sqlite:///{(tmp_path / 'mlflow.db').as_posix()}"
+    previous_tracking_uri = mlflow.get_tracking_uri()
+    monkeypatch.delenv("MLSYSTEM2_MLFLOW_RUN_ID_FILE", raising=False)
+    monkeypatch.setenv("MLFLOW_ENABLE_ASYNC_LOGGING", "false")
+    client = mlflow.tracking.MlflowClient(tracking_uri=tracking_uri)
+    experiment_name = "Проверка совместимости MLflow"
+    experiment_id = client.create_experiment(
+        experiment_name, artifact_location=(tmp_path / "artifacts").as_uri(),
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"mlsystem2-checkpoint-roundtrip")
+    config = tmp_path / "train.yaml"
+    config.write_text("model: segformer_b2\n", encoding="utf-8")
+    dataset_name = "Проверка датасета"
+    scene = "снимки/Канопус (1)"
+    history = [
+        EpochMetrics(
+            epoch=epoch, train_loss=0.3, val_loss=0.2,
+            val_best_threshold=threshold, val_best_threshold_pixel_f1=f1,
+            val_best_threshold_precision=f1, val_best_threshold_recall=f1,
+            epoch_time_sec=1.0,
+        )
+        for epoch, f1, threshold in ((1, 0.8, 0.4), (2, 0.7, 0.6))
+    ]
+    try:
+        run = api.start_run(MLflowStartRunRequest(
+            enabled=True, tracking_uri=tracking_uri, experiment_name=experiment_name,
+            dataset=dataset_name, run_name="Проверка записи и чтения",
+        ))
+        api.log_run_config(run, config)
+        for epoch in history:
+            api.log_training_epoch(run, epoch)
+        result = TrainResult(
+            history=history, epochs_total=2, training_time_sec=2,
+            best_checkpoint_path=str(checkpoint), best_threshold=0.4,
+            diagnostics={"flattened_params": {f"split.scenes.{scene}": 149}},
+        )
+        api.log_training_metrics(run, result)
+        api.log_training_artifacts(run, result)
+        assert api.get_usable_training_checkpoint(tracking_uri, run.run_id) is None
+        api.end_run(run, MLflowRunStatus.FINISHED)
+
+        stored = client.get_run(run.run_id)
+        assert stored.info.status == "FINISHED"
+        assert stored.data.tags["dataset"] == dataset_name
+        assert list(stored.data.params.values()) == ["149"]
+        assert stored.inputs.dataset_inputs[0].dataset.name == dataset_name
+        assert [item.name for item in client.search_datasets(
+            experiment_ids=[experiment_id],
+        )] == [dataset_name]
+        assert [item.step for item in client.get_metric_history(
+            run.run_id, "val/quality_f1",
+        )] == [1, 2]
+        assert api.get_training_epoch_progress(tracking_uri, run.run_id).completed_epochs == 2
+        best = api.get_usable_training_checkpoint(tracking_uri, run.run_id)
+        assert best is not None
+        assert (best.epoch, best.f1_score, best.threshold) == (1, 0.8, 0.4)
+        assert api.get_finished_run_artifact(
+            tracking_uri, run.run_id, "config/train_config.yaml",
+        ) is not None
+        download_dir = tmp_path / "download"
+        download_dir.mkdir()
+        downloaded = api.download_run_artifact(
+            tracking_uri=tracking_uri, run_id=run.run_id,
+            artifact_path="checkpoints/best.pt", dst_dir=download_dir,
+        )
+        assert Path(downloaded.local_path).read_bytes() == checkpoint.read_bytes()
+        assert experiment_name in {item.name for item in api.list_experiments(tracking_uri)}
+    finally:
+        if mlflow.active_run() is not None:
+            mlflow.end_run(status="FAILED")
+        mlflow.set_tracking_uri(previous_tracking_uri)
+
+
 def test_next_run_name_uses_class_date_and_daily_counter() -> None:
     name = _client._next_run_name(
         [
