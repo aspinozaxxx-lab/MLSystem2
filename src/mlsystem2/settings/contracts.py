@@ -137,7 +137,7 @@ class TrainSettings(BaseModel):
     device: str = "cuda"
     learning_rate: float = Field(gt=0.0)
     weight_decay: float = Field(ge=0.0)
-    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]
+    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice", "cross_entropy_tversky"]
     focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     pos_weight: float = Field(default=1.0, gt=0.0)
     background_weight: float = Field(default=1.0, gt=0.0)
@@ -156,8 +156,10 @@ class TrainSettings(BaseModel):
         if self.task == "multiclass" and self.loss not in multiclass_losses:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.pipeline_variant == "next_gen2":
-            if self.task != "binary" or self.loss != "cross_entropy":
-                raise ValueError("next-gen2 требует бинарную задачу и cross_entropy")
+            if self.task != "binary" or self.loss != "cross_entropy_tversky":
+                raise ValueError("next-gen2 требует binary и CrossEntropy + Tversky")
+        elif self.loss == "cross_entropy_tversky":
+            raise ValueError("CrossEntropy + Tversky доступен только в next-gen2")
         elif self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
         if self.task != "binary" and self.quality_metric == "objects":
@@ -228,10 +230,6 @@ class SystemSettings(BaseModel):
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
         if self.train.pipeline_variant == "next_gen2":
-            # В этом варианте шаг определяется размером тайла, включая старые run-конфиги.
-            self.tile_preparation = self.tile_preparation.model_copy(
-                update={"stride": self.tile_preparation.tile_size}
-            )
             if (
                 self.train.model_name != "segformer_b0"
                 or self.train.input_channels != 4
@@ -239,10 +237,18 @@ class SystemSettings(BaseModel):
                 or not self.train.pretrained
             ):
                 raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 4 и выходом 1")
-            if self.tile_preparation.context != 0 or self.tile_preparation.augmentation_level != 0:
-                raise ValueError("next-gen2 использует окна без контекста и без аугментаций")
-            if self.train.threshold != 0.5:
-                raise ValueError("next-gen2 использует порог 0.5 двухклассовой модели")
+            fixed = (
+                (self.dataset.val_fraction, 0.2),
+                (self.tile_preparation.tile_size, 512), (self.tile_preparation.stride, 256),
+                (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
+                (self.tile_preparation.num_workers, 0), (self.tile_preparation.seed, 42),
+                (self.train.batch_size, 16), (self.train.learning_rate, 1e-4),
+                (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
+                (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),
+                (self.train.initial_checkpoint_uri, None),
+            )
+            if any(actual != expected for actual, expected in fixed):
+                raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны только эпохи, patience и лимит времени")
             if (
                 self.train.max_train_batches_per_epoch is not None
                 or self.train.max_val_batches_per_epoch is not None

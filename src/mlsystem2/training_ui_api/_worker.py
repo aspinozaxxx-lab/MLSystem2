@@ -86,6 +86,8 @@ from ._queueing import (
     is_urgent_job,
 )
 from ._templates import (
+    NEXT_GEN2_DEFAULT_CONFIG,
+    NEXT_GEN2_EDITABLE_KEYS,
     NEXT_GEN2_INFERENCE_BATCH_SIZE,
     NEXT_GEN2_INFERENCE_THRESHOLD,
     normalize_tile_factors,
@@ -694,6 +696,8 @@ def _build_training_config(
 ) -> dict[str, Any]:
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
+    if pipeline_variant == "next_gen2":
+        flat.update({key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS})
     positive_factor = _float_value(flat, "tile_preparation.positive_factor", 0.5)
     hard_negative_factor = _float_value(flat, "tile_preparation.hard_negative_factor", 0.0)
     background_factor = _float_value(
@@ -737,7 +741,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
-            **({"seed": 42} if pipeline_variant == "next_gen2" else {}),
+            **({"seed": 42, "num_workers": 0} if pipeline_variant == "next_gen2" else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),

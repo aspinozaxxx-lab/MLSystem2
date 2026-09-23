@@ -129,6 +129,16 @@ export function TrainingLaunchForm({
     </section>
   );
 
+  const tilePreview = (<figure className="training-tile-preview">
+                    <div>Вход {trainingNumber(tile.size)} × {trainingNumber(tile.size)} px</div>
+                    <div className="training-tile-image" role="img" aria-label={`Вход ${tile.size} на ${tile.size} пикселей, контекст ${tile.context}, полезный центр ${tile.core} на ${tile.core} пикселей`}>
+                      <div className="training-tile-core" style={{ "--training-core": `${tile.size ? Math.min(100, tile.core / tile.size * 100) : 0}%` } as CSSProperties}>
+                        {tile.core > 0 ? <span>Полезный<br />центр</span> : null}
+                      </div>
+                    </div>
+                    <figcaption>Центр {trainingNumber(tile.core)} × {trainingNumber(tile.core)} px</figcaption>
+                  </figure>);
+
   return (
     <form className="training-launch" onSubmit={submit} noValidate aria-busy={busy}>
       <fieldset className="training-controls" disabled={busy}>
@@ -158,54 +168,44 @@ export function TrainingLaunchForm({
             </div>
           </>)}
 
-          {section("data", "02", "Подготовка данных", `Тайл ${trainingNumber(tile.size)} px · центр ${trainingNumber(tile.core)} px · валидация ${trainingNumber(Number(value["dataset.val_fraction"]) * 100)}%`,
+          {!nextGen2 && section("data", "02", "Подготовка данных", `Тайл ${trainingNumber(tile.size)} px · центр ${trainingNumber(tile.core)} px · валидация ${trainingNumber(Number(value["dataset.val_fraction"]) * 100)}%`,
             <div className="training-data-workspace">
               <div className="training-tiling">
                 <h3>Нарезка снимков</h3>
                 <div className="training-tile-editor">
                   <div className="training-tile-fields">
                     {renderFields(TILE_FIELDS)}
-                    <p className="training-help">{nextGen2 ? "Шаг равен размеру тайла. Контекст отключён." : "Контекст по краям не участвует в loss и оценке качества."}</p>
+                    <p className="training-help">Контекст по краям не участвует в loss и оценке качества.</p>
                   </div>
-                  <figure className="training-tile-preview">
-                    <div>Вход {trainingNumber(tile.size)} × {trainingNumber(tile.size)} px</div>
-                    <div className="training-tile-image" role="img" aria-label={`Вход ${tile.size} на ${tile.size} пикселей, контекст ${tile.context}, полезный центр ${tile.core} на ${tile.core} пикселей`}>
-                      <div className="training-tile-core" style={{ "--training-core": `${tile.size ? Math.min(100, tile.core / tile.size * 100) : 0}%` } as CSSProperties}>
-                        {tile.core > 0 ? <span>Полезный<br />центр</span> : null}
-                      </div>
-                    </div>
-                    <figcaption>Центр {trainingNumber(tile.core)} × {trainingNumber(tile.core)} px</figcaption>
-                  </figure>
+                  {tilePreview}
                 </div>
                 {tileError ? <p className="training-error" role="alert">{tileError}</p> : null}
               </div>
               <div className="training-sampling">
                 <h3>Выборка и преобразования</h3>
                 {renderFields(groupKeys("data").filter((key) => !TILE_FIELDS.includes(key) && !SAMPLE_FACTOR_KEYS.some((factor) => factor === key)))}
-                {nextGen2 ? <p className="training-note">В next-gen2 используются полные тайлы без нахлёста и дополнения краёв, нормализация каждого окна. Sampler задаёт вес 15 тайлам с объектами и 1 остальным.</p>
-                  : SAMPLE_FACTOR_KEYS.every((key) => fields.some((field) => field.key === key))
+                {SAMPLE_FACTOR_KEYS.every((key) => fields.some((field) => field.key === key))
                   ? <SampleBalance value={samplePercentages(value)} onChange={(percentages) => onChange(configWithSamplePercentages(value, percentages))} />
                   : renderFields(SAMPLE_FACTOR_KEYS)}
               </div>
             </div>)}
 
-          {section("training", "03", "Обучение", `Batch size ${trainingNumber(value["train.batch_size"])} · LR ${value["train.learning_rate"] ?? "—"} · ${value["train.loss"] ?? "—"}`,
+          {!nextGen2 && section("training", "03", "Обучение", `Batch size ${trainingNumber(value["train.batch_size"])} · LR ${value["train.learning_rate"] ?? "—"} · ${value["train.loss"] ?? "—"}`,
             <div className="training-parameter-groups">
               <div><h3>Параметры обучения</h3>{renderFields(TRAIN_FIELDS)}</div>
               <div><h3>Loss и веса</h3>
-                {nextGen2 ? <p className="training-note">Cross entropy. Остальные параметры loss определены конвейером next-gen2.</p> : null}
                 {renderFields(groupKeys("training").filter((key) => !TRAIN_FIELDS.includes(key)))}
               </div>
             </div>)}
 
-          {section("stopping", "04", "Условия остановки", `Максимум ${trainingNumber(value["train.epochs"])} эпох · patience ${trainingNumber(value["train.early_stopping_patience"])}${value["train.max_training_time_sec"] == null ? "" : ` · ${trainingNumber(Number(value["train.max_training_time_sec"]) / 60)} мин`}`,
+          {section("stopping", nextGen2 ? "02" : "04", "Условия остановки", `Максимум ${trainingNumber(value["train.epochs"])} эпох · patience ${trainingNumber(value["train.early_stopping_patience"])}${value["train.max_training_time_sec"] == null ? "" : ` · ${trainingNumber(Number(value["train.max_training_time_sec"]) / 60)} мин`}`,
             <div className="training-parameter-groups training-stop-groups">
               <div><h3>Когда завершить обучение</h3>{renderFields(STOP_FIELDS)}
                 <p className="training-help">Patience — {variant === "next_gen" ? "проверки качества" : "эпохи"} без улучшения. Лимит времени проверяется после завершения эпохи.</p>
               </div>
               <div><h3>Валидация и оценка качества</h3>{renderFields(groupKeys("stopping").filter((key) => !STOP_FIELDS.includes(key)))}
                 {variant === "next_gen" ? <p className="training-help">Полная валидация: на первой эпохе, с указанным интервалом и перед завершением.</p> : null}
-                {nextGen2 ? <p className="training-note">Валидация каждую эпоху. Лучшие веса и ранняя остановка определяются по F1 при threshold 0.5.</p> : null}
+                {nextGen2 ? <p className="training-note">Валидация каждую эпоху. Лучшие веса и ранняя остановка определяются по минимуму validation loss.</p> : null}
               </div>
             </div>)}
         </div>
@@ -219,6 +219,14 @@ export function TrainingLaunchForm({
           </label>
         </div>
       </fieldset>
+
+      {nextGen2 ? <section className="training-pipeline-description" aria-label="Описание next-gen2">
+        <h2>Особенности next-gen2 <span>Фиксированный профиль ноутбука</span></h2>
+        <div className="training-pipeline-details">
+          <div>{(schema?.pipeline_descriptions?.next_gen2 || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</div>
+          {tilePreview}
+        </div>
+      </section> : null}
 
       <aside className="training-launch-summary" aria-label="Краткое описание обучения">
         <div><h2>Кратко об обучении <span>Обновляется при изменении параметров</span></h2>

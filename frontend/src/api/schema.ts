@@ -1913,6 +1913,10 @@ export interface components {
         };
         /** ConfigSchema */
         ConfigSchema: {
+            /** Pipeline Descriptions */
+            pipeline_descriptions?: {
+                [key: string]: string;
+            };
             /** Fields */
             fields: components["schemas"]["ConfigField"][];
             /** Pipeline Defaults */

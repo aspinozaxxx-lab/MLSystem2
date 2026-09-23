@@ -5127,6 +5127,13 @@
       },
       "ConfigSchema": {
         "properties": {
+          "pipeline_descriptions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Pipeline Descriptions"
+          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/ConfigField"

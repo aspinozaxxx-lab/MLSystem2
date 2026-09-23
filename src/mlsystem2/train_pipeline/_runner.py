@@ -209,6 +209,16 @@ def run_train_pipeline(
         )
         timings.append(timing)
         train_loader, val_loader = loaders
+        test_loader = None
+        if settings.train.pipeline_variant == "next_gen2":
+            test_loader, test_timing = timed_call(
+                "tile_preparation_test",
+                lambda: deps.create_tile_dataloader(_tile_request(
+                    dataset_result.dataset, settings.train.batch_size, "test",
+                    _tile_split_request(settings), pipeline_variant="next_gen2",
+                )),
+            )
+            timings.append(test_timing)
         train_loader = _CountingLoader(
             train_loader,
             "train",
@@ -264,6 +274,7 @@ def run_train_pipeline(
                     train_loader,
                     val_loader,
                     dataset=dataset_result.dataset,
+                    test_loader=test_loader,
                 ),
                 progress_sink=progress_sink,
             ),
@@ -364,7 +375,7 @@ def _mlflow_start_request(
             "class": _mlflow_class_tag(settings),
             "task": settings.train.task,
             "seed": str(settings.tile_preparation.seed),
-            **({"checkpoint_selection_metric": "quality_f1"}
+            **({"checkpoint_selection_metric": "val_loss"}
                if settings.train.pipeline_variant == "next_gen2" else {}),
         },
     )
@@ -450,6 +461,7 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
 def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
+        test_fraction=0.2 if settings.train.pipeline_variant == "next_gen2" else 0.0,
         seed=settings.tile_preparation.seed,
         strategy=(
             "scene_fold"
@@ -457,7 +469,7 @@ def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
             else "window_random"
         ),
         validation_fold=settings.next_gen.validation_fold,
-        spatial_purge=settings.train.pipeline_variant in {"next_gen", "next_gen2"},
+        spatial_purge=settings.train.pipeline_variant == "next_gen",
     )
 
 
@@ -551,15 +563,15 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
             "band_contract": ["RED", "GRN", "BLU", "NIR"],
             "split": getattr(dataset, "tile_split_manifest", {}),
             "class_weights": getattr(dataset, "notebook_class_weights", []),
-            "sampler": {"positive_ratio_threshold": 0.001, "positive_weight": 15.0,
-                        "background_weight": 1.0, "replacement": True},
+            "sampler": {"positive_ratio_threshold": 0.001, "positive_weight": 7.0,
+                        "hard_negative_weight": 8.0, "background_weight": 1.0, "replacement": True},
             "scheduler": {"name": "reduce_lr_on_plateau", "mode": "min",
                           "factor": 0.5, "patience": 3, "min_lr": 0.0},
-            "checkpoint_selection_metric": "quality_f1",
+            "checkpoint_selection_metric": "val_loss",
             "threshold_policy": {"mode": "fixed", "configured_threshold": 0.5},
             "source_notebook": {
-                "name": "train_full_pipeline_заболачивание.ipynb",
-                "sha256": "165157276ae777ef9e7538b7daead9d27cb8dc42c8bdf8225278b40defd5a5f4",
+                "name": "segFormer_train_hlam_main_v2.ipynb",
+                "sha256": "ed6b8494e5202c9fa3a6690a835ee74ad62c584cddb067dd07a7fbe343a2416f",
             },
         }
     if settings.train.pipeline_variant == "next_gen":
@@ -1218,6 +1230,7 @@ def _train_request(
     train_loader: object,
     val_loader: object,
     dataset: PreparedDataset | None = None,
+    test_loader: object | None = None,
 ) -> TrainRequest:
     prepared_classes = list(dataset.classes) if dataset is not None else []
     prepared_annotations = list(dataset.class_annotations) if dataset is not None else []
@@ -1225,6 +1238,7 @@ def _train_request(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
+        test_loader=test_loader,
         config=TrainConfig(
             epochs=settings.train.epochs,
             task=settings.train.task,

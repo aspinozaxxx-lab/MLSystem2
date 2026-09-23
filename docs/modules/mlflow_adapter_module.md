@@ -85,12 +85,12 @@
 
 ## Алгоритм работы и его особенности
 
-Для новых `pipeline_variant=next_gen2` runs tag `checkpoint_selection_metric=quality_f1` задаёт выбор
-по максимуму F1 выбранного критерия; при равенстве выбирается ранняя эпоха. Исторические runs без tag либо
-с `val_loss` сохраняют выбор по минимуму `val/loss`, чтобы возвращаемая эпоха соответствовала весам.
-`get_best_training_checkpoint` возвращает F1 и порог выбранной эпохи. Итоговые
-`train/best_quality_f1` и `train/best_threshold_pixel_f1` относятся к сохранённым весам; решение дополнительно
-записывается в `reports/checkpoint_selection.json`. Новые имена метрик не вводятся.
+Новые next-gen2 runs получают checkpoint_selection_metric=val_loss и читаются по минимуму val/loss.
+Исторические quality_f1 runs продолжают читаться по F1; без тега сохраняется исторический выбор по loss.
+При равенстве выбирается ранняя эпоха. Возвращаемые F1 и threshold относятся к выбранным весам.
+Решение сохраняется в reports/checkpoint_selection.json. После обучения next-gen2 публикует
+итоговые test/loss, test/pixel_precision, test/pixel_recall, test/pixel_f1, test/threshold,
+test/checkpoint_epoch и reports/test_metrics.json. Старые runs не изменяются.
 
 `start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.dataset` задан, адаптер сначала проверяет наличие одноименного MLflow dataset в experiment и создает его при отсутствии, затем добавляет MLflow tag `dataset` и логирует MLflow input dataset через `mlflow.log_input`; имя, source и tag dataset равны переданному значению. Адаптер не вычисляет имя датасета и не ходит в папки датасета; вызывающий модуль должен передать готовое имя без расширения `.geojson`. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
 

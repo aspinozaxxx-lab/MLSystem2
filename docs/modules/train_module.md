@@ -17,7 +17,7 @@
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
-- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
+- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
 - `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
 ## Список используемых данным модулем модулей и с какой целью
@@ -29,14 +29,13 @@
 
 ## Алгоритм работы и его особенности
 
-В `next_gen2` используется двухклассовая CrossEntropy с весами обучающей части, AdamW без ограничения
-нормы градиента и `ReduceLROnPlateau(mode=min,patience=3,factor=0.5)` по validation loss. Полная validation
-выполняется каждую эпоху; средние loss взвешиваются по размеру пакета. Best и early stopping следуют
-максимальной валидационной F1 на фиксированном пороге 0.5; при равенстве сохраняется ранняя эпоха. Пауза и остановка
-с сохранением действуют на границе пакетов. `diagnostics.checkpoint_selection` хранит эпоху, loss и F1
-выбранных весов. Обычный бинарный выход применяется только для инференса; обучение запрашивает оба logits.
-Next-gen2 переносит batch на GPU с `non_blocking=True` и проверяет конечность градиентов B0 одним
-объединённым тензором; при ошибке прежний проход определяет первый повреждённый параметр.
+`next_gen2` получает два logits, использует 25% weighted CrossEntropy + 75% SMP multiclass
+Tversky (alpha/beta 0.75/0.25), AdamW без clipping и ReduceLROnPlateau(min, patience=3, factor=0.5).
+Loss усредняется по числу примеров; validation полная каждую эпоху. Best и early stopping используют
+минимум validation loss, при равенстве сохраняется ранняя эпоха. После штатного завершения best
+загружается локально и один раз оценивается через optional test_loader; test не влияет на обучение.
+Диагностика содержит checkpoint_selection и test_metrics (loss, pixel precision/recall/F1, порог и эпоху).
+Пауза и остановка с сохранением остаются на границе пакетов; при ручной остановке test не запускается.
 
 `train_model` переносит модель на `config.device` и создаёт AdamW. `legacy` побитово сохраняет cosine scheduler и validation каждой эпохи. `next_gen` использует `ReduceLROnPlateau(mode=max,factor=0.5,patience=3,min_lr=1e-7)` по полной scene-macro val F1; validation выполняется на эпохе 1, по интервалу и перед штатным завершением, а early stopping считает только validation-события. Между ними `EpochMetrics` содержит train loss и `validation_performed=false` без выдуманных val-значений.
 
@@ -54,7 +53,7 @@ Dice масштабирует foreground probability на фоне, Tversky — 
 
 Multiclass режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`. Logits имеют форму `[B,num_classes,H,W]`, mask — `[B,H,W] long`. Перед loss общий hard-negative `-1` заменяется на background class `0`; `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. Nodata и padding уже представлены background class `0` и участвуют в loss и validation. `background_weight` задаёт вес класса `0`, а `hard_negative_weight` дополнительно усиливает общий hard negative для всех foreground-каналов. Class-specific hard negative исключается из базового multiclass loss и добавляет штраф `-log(1-p_class) × background_weight × hard_negative_weight` только выбранному foreground-каналу; другие типы в этой области не считаются ошибкой. В validation такой пиксель участвует как отрицательный только для назначенного класса, исключается из остальных поклассовых и агрегированной foreground-метрики. Validation применяет `softmax → argmax → confidence threshold`, считает precision/recall/F1/IoU отдельно по типам, macro pixel F1/precision/recall/IoU, micro F1 и foreground-vs-background F1. Один threshold выбирается по максимуму macro pixel F1, затем macro precision, затем по большему threshold.
 
-Best checkpoint и early stopping используют `val_quality_f1`; для multiclass это macro pixel F1. Для `quality_metric=objects` требуется binary val batch с `object_instances`; multiclass с объектовой метрикой отклоняется валидацией. Metadata checkpoint сохраняет task, полную class schema, выбранный confidence threshold, структурированные validation-метрики, loss, входной `sample_size`, `inference_context`, `inference_core_size`, `seed` и `train_config`. Старые checkpoint без новых полей остаются совместимыми и при экспорте получают `context=0`, если оператор не задал его вручную.
+В остальных вариантах best checkpoint и early stopping используют `val_quality_f1`; для multiclass это macro pixel F1. Для `quality_metric=objects` требуется binary val batch с `object_instances`; multiclass с объектовой метрикой отклоняется валидацией. Metadata checkpoint сохраняет task, полную class schema, выбранный confidence threshold, структурированные validation-метрики, loss, входной `sample_size`, `inference_context`, `inference_core_size`, `seed` и `train_config`. Старые checkpoint без новых полей остаются совместимыми и при экспорте получают `context=0`, если оператор не задал его вручную.
 
 `max_train_batches_per_epoch` ограничивает train для smoke/debug. `legacy` сохраняет optional val-limit; в `next_gen` он запрещён. `max_training_time_sec` инициирует обязательную validation после завершённой train-эпохи и штатное сохранение final checkpoint.
 
@@ -75,7 +74,7 @@ DataLoader, scheduler, история эпох и MLflow-run не пересоз
 `best.pt`. Запрос проверяется на границе каждого train/validation batch и во время паузы. Незавершённая эпоха
 не добавляется в history; модель из её текущего состояния не сохраняется. Результат получает
 `stopped_early=true`, `final_checkpoint_path=None` и единственный checkpoint-артефакт `best`, выбранный по
-максимальной F1 завершённых эпох. Если до запроса не завершилась ни одна эпоха и `best.pt` отсутствует,
+критерию конвейера среди завершённых эпох. Если до запроса не завершилась ни одна эпоха и `best.pt` отсутствует,
 обучение не может быть выдано как успешный результат.
 
 Train loop проверяет `images`, `masks`, `logits`, `loss`, `train_loss` и `val_loss` на finite values, чтобы ошибка обучения была диагностируемой до создания `EpochMetrics`. После backward применяется фиксированный gradient clipping `max_norm=1.0`. Non-finite gradient skip - аварийная защита, а не нормальный путь обучения: один batch может быть пропущен, но этот счетчик не входит в публичные метрики; если пропусков больше внутреннего аварийного лимита, обучение завершается `TrainError`. Если за эпоху не выполнен ни один optimizer step, обучение также завершается `TrainError`.

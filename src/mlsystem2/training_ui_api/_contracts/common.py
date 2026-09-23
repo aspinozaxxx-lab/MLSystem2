@@ -88,6 +88,7 @@ class ConfigField(BaseModel):
 
 
 class ConfigSchema(BaseModel):
+    pipeline_descriptions: dict[str, str] = Field(default_factory=dict)
     model_config = ConfigDict(extra="forbid")
 
     fields: list[ConfigField]

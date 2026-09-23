@@ -49,10 +49,17 @@ class TileSplitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     val_fraction: float = Field(gt=0.0, lt=1.0)
+    test_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
     seed: int = 42
     strategy: Literal["window_random", "scene_fold"] = "window_random"
     validation_fold: int = Field(default=0, ge=0)
     spatial_purge: bool = False
+
+    @model_validator(mode="after")
+    def validate_fractions(self) -> Self:
+        if self.val_fraction + self.test_fraction >= 1:
+            raise ValueError("Сумма долей validation и test должна быть меньше 1")
+        return self
 
 
 class TileDataloaderRequest(BaseModel):
@@ -64,7 +71,7 @@ class TileDataloaderRequest(BaseModel):
     class_annotations: list[TileClassAnnotation] = Field(default_factory=list)
     classes: list[TileClassDefinition] = Field(default_factory=list)
     batch_size: int = Field(gt=0)
-    mode: Literal["train", "val"]
+    mode: Literal["train", "val", "test"]
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
@@ -113,12 +120,14 @@ class TileDataloaderRequest(BaseModel):
         if self.pipeline_variant == "next_gen2":
             if self.tile_split is None or self.tile_split.strategy != "window_random":
                 raise ValueError("next-gen2 требует разбиение по тайлам")
-            if not self.tile_split.spatial_purge:
-                raise ValueError("next-gen2 требует исключение пересечений обучающих и валидационных тайлов")
+            if self.tile_split.spatial_purge or self.tile_split.test_fraction != 0.2 or self.tile_split.val_fraction != 0.2:
+                raise ValueError("next-gen2 требует случайное разбиение 60/20/20 без исключения пересечений")
             if has_legacy_multiclass or has_per_image_multiclass:
                 raise ValueError("next-gen2 поддерживает только бинарную разметку")
             if self.max_batches_per_epoch is not None:
                 raise ValueError("next-gen2 не допускает ограничение числа пакетов")
+        elif self.mode == "test" or (self.tile_split and self.tile_split.test_fraction):
+            raise ValueError("Внутренний test split доступен только в next-gen2")
         return self
 
 

@@ -17,8 +17,8 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `TileClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
 - `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file` и `footprint_file`.
-- `TileSplitRequest` — `val_fraction`, `seed`, `strategy=window_random|scene_fold`, `validation_fold`, `spatial_purge`.
-- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional сбор histogram.
+- `TileSplitRequest` — `val_fraction`, `test_fraction` (default 0), `seed`, `strategy=window_random|scene_fold`, `validation_fold`, `spatial_purge`.
+- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional сбор histogram.
 
 ## Список используемых данным модулем модулей и с какой целью
 
@@ -29,22 +29,13 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 
 ## Алгоритм работы и его особенности
 
-Отдельная ветка `next_gen2` строит полные окна без нахлёста, контекста и фильтрации nodata; шаг всегда равен размеру тайла. `window_random`
-упорядочивает тайлы по SHA-256 от seed, scene_id и координат, независимо от разметки и порядка сцен.
-Число validation-тайлов подбирается по ближайшей достижимой доле `val_fraction` в итоговых выборках
-после исключения пересечений. Первый ранг пересечения каждого окна позволяет вычислить размеры без повторного purge.
-Spatial purge через STRtree исключает все train-окна с общей площадью с validation-тайлами любого TIFF;
-соприкосновение границ допустимо. Одна сцена может содержать обе выборки. Manifest сохраняет координаты,
-индексы train/validation/исключённых окон и проверенное число оставшихся пересечений.
-Резерв test не создаётся. Только по оставшимся обучающим маскам рассчитываются обратные частоты классов
-со средним весом 1 и веса sampler 15/1 при доле объекта >0.001. Validation полная, без балансировки
-и кэша. Нормализация выполняется моделью. Геометрия положительной разметки на nodata сохраняется;
-системная hard-negative разметка остаётся фоном. Прежние ветки не меняются.
-Полные окна next-gen2 читаются непосредственно, без виртуальной подложки `boundless` и чтения
-отбрасываемой маски валидности TIFF. Число загрузчиков берётся из серверных настроек: восемь процессов,
-до двух готовящихся batch на процесс независимо от размера эпохи. Workers пересоздаются каждую эпоху;
-порядок тайлов и потребление RNG основной программы совпадают с однопроцессной загрузкой ноутбука.
-При доступной CUDA next-gen2 закрепляет память batch через DataLoader для быстрой передачи на GPU.
+`next_gen2` строит полные окна 512/256 без контекста и фильтрации nodata. Случайное разбиение
+60/20/20 с seed 42 воспроизводит два train_test_split ноутбука; пересечения не исключаются.
+Manifest содержит все координаты и индексы train/val/test. По сырым train-маскам вычисляются
+обратные частоты классов и sampler 7/8/1 для positive/hard negative/фона; порог positive 0.001.
+Hard negative перекрывает positive. Ко всем train-тайлам применяются геометрия и фотометрия
+Albumentations до нормализации в модели. Val/test не балансируются и не аугментируются.
+Workers 0; при CUDA используется pinned memory. Глобальные и per-image источники остаются штатными.
 
 Для каждой сцены строится сетка полезных центров `0,stride,...`. Полное входное окно начинается в `-context` и имеет размер `tile_size`; его полезный центр имеет размер `tile_size - 2 × context`. Поэтому первые и последние пиксели TIFF попадают в полезную область, а внешняя рамка читается через `boundless=True` как nodata. `context=0` полностью сохраняет прежнюю сетку. Sampling-категория определяется только по геометрии полезного центра. Настройки обязаны удовлетворять `tile_size > 2 × context`.
 

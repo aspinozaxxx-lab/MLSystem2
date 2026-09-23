@@ -3168,6 +3168,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             "focal_tversky",
             "cross_entropy",
             "cross_entropy_dice",
+            "cross_entropy_tversky",
         ]
         hard_weight_field = next(
             item
@@ -3739,11 +3740,12 @@ def test_training_ui_worker_snapshots_per_image_annotations(
         payload = _worker._build_training_config(session, row, config, run_dir)
         if pipeline_variant == "next_gen2":
             assert job.pipeline_variant == "next_gen2"
-            assert payload["train"]["loss"] == "cross_entropy"
+            assert payload["train"]["loss"] == "cross_entropy_tversky"
             assert payload["train"]["pretrained"] is True
             assert payload["tile_preparation"]["context"] == 0
-            assert payload["tile_preparation"]["stride"] == payload["tile_preparation"]["tile_size"] == 512
-            assert "num_workers" not in payload["tile_preparation"]
+            assert payload["tile_preparation"]["stride"] == 256
+            assert payload["tile_preparation"]["tile_size"] == 512
+            assert payload["tile_preparation"]["num_workers"] == 0
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Реки\\test",
@@ -4818,3 +4820,33 @@ def _short_training_config() -> dict[str, object]:
         "train.max_val_batches_per_epoch": 1000,
         "train.max_training_time_sec": None,
     }
+
+
+def test_next_gen2_template_upgrade_is_once_and_preserves_later_stop_settings(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api._templates import NEXT_GEN2_DEFAULT_CONFIG
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    configure_schema(None)
+    session_factory = create_session_factory(get_config())
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        session.flush()
+        row = session.scalar(select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == "segformer_b0"))
+        row.default_config = {**row.default_config, "train.pipeline_variant": "next_gen2", "train.loss": "cross_entropy", "train.epochs": 300}
+        session.flush()
+        ensure_seed_templates(session)
+        assert row.default_config.items() >= NEXT_GEN2_DEFAULT_CONFIG.items()
+        version = row.version
+        row.default_config = {**row.default_config, "train.epochs": 47, "train.early_stopping_patience": 6, "train.max_training_time_sec": 600}
+        session.flush()
+        ensure_seed_templates(session)
+        assert row.version == version
+        assert row.default_config["train.epochs"] == 47
+        assert row.default_config["train.early_stopping_patience"] == 6
+        assert row.default_config["train.max_training_time_sec"] == 600
+        changed = sanitize_template_config({**row.default_config, "train.learning_rate": 9, "tile_preparation.stride": 512})
+        assert changed["train.learning_rate"] == 1e-4
+        assert changed["tile_preparation.stride"] == 256
+        assert changed["train.epochs"] == 47

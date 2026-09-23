@@ -543,35 +543,38 @@ checkpoint строит модель из неё без Hugging Face Hub. В `ne
 A/B выполняется только после обучения на лучшем checkpoint и не меняет production core-crop, ONNX или
 Geoalert metadata.
 
-`next_gen2` — отдельный вариант исходного `train_full_pipeline_заболачивание.ipynb` внутри тех же модулей.
-Он поддерживает бинарный Канопус и HF SegFormer B0. Нарезка строит только полные окна внутри TIFF:
-`range(0, размер - tile_size + 1, tile_size)`, без нахлёста, контекста, дополнения краёв, фильтрации чёрных окон и
-аугментаций. Значения nodata и маски TIFF не исключаются из нормализации, разметки или loss. Разбиение
-изменено относительно ноутбука: `window_random` упорядочивает тайлы по SHA-256 от
-seed, scene_id и координат, независимо от разметки и порядка снимков. Число первых validation-тайлов
-выбирается по ближайшей достижимой доле `dataset.val_fraction` (по умолчанию 0.2) среди итоговых
-train и validation после исключения пересечений. Из оставшихся train-окон исключаются
-все имеющие общую площадь с validation-тайлами, в том числе другого TIFF. Соприкосновение границ допустимо;
-учитывается полный вход, включая nodata. Один снимок может содержать обе выборки. Manifest сохраняет
-координаты и индексы train/validation/исключённых окон. Отдельный резерв test не создаётся.
-Нормализация каждого канала каждого окна — min-max; постоянный канал становится нулём. Веса CrossEntropy
-вычисляются только по обучающим маскам, а WeightedRandomSampler с возвращением назначает вес 15 тайлам с
-долей объекта больше 0.001 и вес 1 остальным. Используется предобученная двухклассовая HF-голова; четвёртый
-вход получает RED, смещение новой свёртки остаётся случайным, как в ноутбуке. Обучение получает оба logits
-через `forward(..., return_two_class_logits=True)`; обычный вызов модели отдаёт их разность для совместимого
-бинарного инференса и ONNX. AdamW не ограничивает норму градиента; средние loss взвешиваются по числу примеров
-в пакете. Полная валидация идёт каждую эпоху; scheduler `ReduceLROnPlateau(mode=min,patience=3,factor=0.5)`
-использует validation loss. Выбор best и ранняя остановка используют максимальную валидационную F1
-на пороге 0.5; при равенстве сохраняется ранняя эпоха. Новые MLflow runs получают tag
-`checkpoint_selection_metric=quality_f1`; исторические next-gen2 runs без него читаются по минимуму loss.
-Псевдоразметка и контрольная оценка `next-gen2` воспроизводят отдельный eval-ноутбук: полные окна,
-гауссово усреднение вероятностей класса 1 и строгий порог `> 0.9` после объединения. Автоматическая
-постобработка по числу снимков не применяется; явные параметры inference-шаблона сохраняются.
-В обучении шаг автоматически равен размеру тайла и отдельно не редактируется; сохранённые настройки с
-другим шагом при новом запуске приводятся к этому правилу. Инференс сохраняет отдельную сетку eval-ноутбука.
-Профиль UI задаёт 512/512, batch 32, до 300 эпох, лимит 10800 секунд, LR 1e-4, weight decay 0.01 и patience 50; серверный
-loader этого варианта использует настроенное число workers и seed 42. Очереди, пауза, остановка с сохранением, MLflow,
-экспорт и псевдоразметка остаются штатными. Правила `legacy` и `next_gen` не изменяются.
+`next_gen2` воспроизводит фиксированный профиль `segFormer_train_hlam_main_v2.ipynb` внутри существующих модулей.
+Он поддерживает бинарный Канопус и предобученную HF SegFormer B0: четыре входных канала, два logits,
+RGB-ядра копируются, NIR получает RED, bias новой свёртки остаётся случайным. Внешний бинарный выход
+и ONNX сохраняют разность logits; прежние checkpoint загружаются без обращения к Hub.
+Полные окна 512×512 строятся с шагом 256, без контекста, дополнения краёв и фильтрации nodata.
+Два последовательных случайных разбиения с seed 42 дают 60% train, 20% validation и 20% test.
+Порядок и округление совпадают с `train_test_split(0.4)` и `train_test_split(0.5)` ноутбука.
+Spatial purge не применяется: общие пиксели перекрывающихся тайлов могут оказаться в разных выборках;
+это ограничение явно указано в описании профиля. Manifest сохраняет координаты и индексы трёх выборок.
+Hard negative перекрывает positive и считается фоном. Только по train рассчитываются обратные частоты
+классов со средним весом 1. WeightedRandomSampler с возвращением назначает вес 7 при доле объекта >0.001,
+вес 8 любому тайлу с hard negative и 1 фону. Это веса отдельных тайлов, не доли категорий.
+Ко всем train-тайлам до min-max применяются Albumentations: H/V flip и RandomRotate90 с p=0.5,
+affine scale 0.9–1.1/translate ±32/rotate ±15 с отражёнными границами и p=0.4,
+OneOf шум (дисперсия 5–30)/Gaussian blur (3–5) с p=0.3 и яркость/контраст ±0.15 с p=0.3.
+Неподдерживаемые параметры исходного ноутбука заменены действующими эквивалентами Albumentations 2.
+Нормализация каждого канала каждого окна — min-max; постоянный канал становится нулём.
+Validation и test полные, без аугментаций и сэмплирования. Batch 16, float32, AdamW LR 1e-4,
+weight decay 0.01, без gradient clipping. Loss — 0.25 × weighted CrossEntropy + 0.75 × SMP multiclass
+Tversky (alpha 0.75, beta 0.25). Полная validation каждую эпоху; scheduler
+`ReduceLROnPlateau(mode=min,patience=3,factor=0.5)`, best и early stopping используют validation loss.
+При равенстве сохраняется ранняя эпоха. После штатного обучения best один раз проверяется на test
+при пороге 0.5; результаты пишутся в MLflow как `test/*` и `reports/test_metrics.json`.
+Новые runs получают `checkpoint_selection_metric=val_loss`; исторические теги `quality_f1` продолжают
+читаться по F1. История запусков и сохранённые модели не изменяются.
+В UI изменяемы только максимум эпох (default 20), early stopping patience (10) и максимальная
+длительность (без лимита). Остальной профиль закреплён в интерфейсе, обработке шаблонов, worker и settings;
+старые шаблоны next-gen2 однократно получают новые defaults, последующие изменения трёх условий сохраняются.
+Подсказка объясняет особенности кратко, подробное описание с визуализацией тайла находится внизу формы.
+DataLoader использует num_workers=0 и seed 42. Псевдоразметка и контрольная оценка сохранённых моделей
+сохраняют отдельный eval-профиль: Gaussian merge и строгий порог >0.9. Очереди, пауза, остановка с
+сохранением, экспорт и прежние варианты обучения работают через существующие фасады.
 
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
@@ -581,7 +584,7 @@ loader этого варианта использует настроенное �
 5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON вместе с manifest в `dataset/`.
 6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. В `legacy` split детерминирован по `scene_id+x+y`, train использует прежний category-aware sampling, а val — фиксированный balanced subset. В `next_gen` split выполняется по сценам со spatial purge, train sampler зависит от epoch/draw, а val всегда полный и несбалансированный. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; геометрические аугментации синхронно преобразуют image, target и valid-mask.
 7. `train_pipeline` создаёт одну из десяти UI-архитектур: прежние девять SMP-вариантов и отдельный `segformer_b0` «SegFormer B0 HF (next-gen)». Спецификация checkpoint обязана совпадать с запросом, поэтому варианты, preprocessing и число каналов нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
-8. `train` выполняет PyTorch обучение segmentation-модели, validation, early stopping и best/final checkpoints. `legacy` сохраняет AdamW с cosine scheduler и прежние binary/multiclass loss и пороги; `next_gen` использует AdamW с `ReduceLROnPlateau`, полную validation и scene-macro pixel F1. Для binary рассчитываются пиксельная и объектовая F1; `train.quality_metric` выбирает метрику best checkpoint и early stopping. Объекты сопоставляются один к одному при `IoU ≥ 0,5`. Для multiclass основной score — macro pixel F1 по типам. В `legacy` nodata представлен target background `0` и входит в loss и TP/FP/FN; в `next_gen` valid-mask полностью исключает его из этих расчётов. `background_weight`, `pos_weight` и `hard_negative_weight` сохраняют прежнюю семантику на valid pixels. Binary checkpoint остаются совместимыми; next-gen metadata дополнительно содержит variant, preprocessing, band contract, split/fold, scheduler, threshold policy, pretrained provenance и dataset/code revision.
+8. `train` выполняет PyTorch обучение segmentation-модели, validation, early stopping и best/final checkpoints. `legacy` сохраняет AdamW с cosine scheduler и прежние binary/multiclass loss и пороги; `next_gen` использует AdamW с `ReduceLROnPlateau`, полную validation и scene-macro pixel F1. Для binary рассчитываются пиксельная и объектовая F1; `train.quality_metric` выбирает метрику best checkpoint и early stopping в `legacy` и `next_gen`; `next_gen2` использует минимум validation loss. Объекты сопоставляются один к одному при `IoU ≥ 0,5`. Для multiclass основной score — macro pixel F1 по типам. В `legacy` nodata представлен target background `0` и входит в loss и TP/FP/FN; в `next_gen` valid-mask полностью исключает его из этих расчётов. `background_weight`, `pos_weight` и `hard_negative_weight` сохраняют прежнюю семантику на valid pixels. Binary checkpoint остаются совместимыми; next-gen metadata дополнительно содержит variant, preprocessing, band contract, split/fold, scheduler, threshold policy, pretrained provenance и dataset/code revision.
 9. `train_pipeline` передает в `train` progress sink. Train-loss пишется для каждой завершённой эпохи; val-метрики `next_gen` существуют только для эпох с полной validation.
 10. `mlflow_adapter` записывает итоговые метрики, checkpoint, SHA-256, resolved JSON, split manifest, preprocessing, runtime/CUDA/packages/dataset revision, per-scene validation, optional Gaussian comparison, tile/timing и итоговый отчёты.
 

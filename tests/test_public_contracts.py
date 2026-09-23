@@ -81,4 +81,7 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
         "window_random", "scene_fold",
     ]
     assert ConfigSchema(fields=[]).pipeline_defaults == {}
+    assert ConfigSchema(fields=[]).pipeline_descriptions == {}
+    assert TileSplitRequest.model_json_schema()["properties"]["test_fraction"]["default"] == 0.0
+    assert TileDataloaderRequest.model_json_schema()["properties"]["mode"]["enum"] == ["train", "val", "test"]
     assert TrainConfig.model_fields["class_weights"].default_factory() == []

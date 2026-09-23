@@ -167,7 +167,7 @@ def train_model(
 
     total_started = perf_counter()
     history: list[EpochMetrics] = []
-    best_score = -1.0
+    best_score = -float("inf")
     best_metrics: EpochMetrics | None = None
     last_validation_metrics: EpochMetrics | None = None
     patience = 0
@@ -282,7 +282,7 @@ def train_model(
                 history.append(metrics)
                 last_validation_metrics = metrics
 
-                score = _checkpoint_score(metrics)
+                score = -float(metrics.val_loss) if config.pipeline_variant == "next_gen2" else _checkpoint_score(metrics)
                 if score > best_score:
                     best_score = score
                     best_metrics = metrics
@@ -323,11 +323,31 @@ def train_model(
         diagnostics: dict[str, Any] = {}
         if config.pipeline_variant == "next_gen2" and best_metrics is not None:
             diagnostics["checkpoint_selection"] = {
-                "metric": "quality_f1", "mode": "max", "epoch": best_metrics.epoch,
+                "metric": "val_loss", "mode": "min", "epoch": best_metrics.epoch,
                 "val_loss": best_metrics.val_loss,
                 "quality_f1": best_metrics.val_quality_f1,
                 "pixel_f1": best_metrics.val_best_threshold_pixel_f1,
             }
+        if request.test_loader is not None and not stopped_early and best_metrics is not None:
+            # Test не участвует в scheduler, выборе весов или ранней остановке.
+            model.to(torch.device("cpu"))
+            _release_training_cuda(torch, device)
+            test_model = load_checkpoint(LoadCheckpointRequest(
+                checkpoint_uri=str(best_checkpoint_path), map_location=str(device),
+            )).model.model
+            test_model.to(device)
+            test = _validate_epoch(
+                torch, test_model, request.test_loader, device,
+                config.model_copy(update={"quality_metric": "pixel"}), best_metrics.epoch,
+            )
+            diagnostics["test_metrics"] = {
+                "loss": test["loss"], "pixel_f1": test["best_threshold_pixel_f1"],
+                "pixel_precision": test["best_threshold_pixel_precision"],
+                "pixel_recall": test["best_threshold_pixel_recall"],
+                "threshold": test["best_threshold"], "checkpoint_epoch": best_metrics.epoch,
+            }
+            test_model.to(torch.device("cpu"))
+            _release_training_cuda(torch, device)
         if config.pipeline_variant == "next_gen":
             diagnostics["peak_vram_bytes"] = (
                 int(torch.cuda.max_memory_allocated(device))
@@ -923,7 +943,7 @@ def _validate_epoch(
                     )
             else:
                 for threshold, counts in threshold_counts.items():
-                    threshold_pred = probs >= threshold
+                    threshold_pred = logits.argmax(dim=1, keepdim=True) == 1 if next_gen2 else probs >= threshold
                     counts["tp"] += int((threshold_pred & true).sum().item())
                     counts["fp"] += int((threshold_pred & ~true).sum().item())
                     counts["fn"] += int((~threshold_pred & true).sum().item())
@@ -934,7 +954,7 @@ def _validate_epoch(
                     object_instances,
                     config.inference_context,
                 )
-                object_probs = probs[:, 0, :, :]
+                object_probs = (logits.argmax(dim=1) == 1).float() if next_gen2 else probs[:, 0, :, :]
                 true_instances = _as_numpy_instances(object_instances)
                 if valid_pixels is not None:
                     object_probs = torch.where(
@@ -1721,10 +1741,16 @@ def _loss(
     valid_pixels=None,
 ):
     if config.pipeline_variant == "next_gen2":
-        return torch.nn.functional.cross_entropy(
+        from segmentation_models_pytorch.losses import TverskyLoss
+
+        cross_entropy = torch.nn.functional.cross_entropy(
             logits, masks[:, 0].long(),
             weight=torch.as_tensor(config.class_weights, dtype=logits.dtype, device=logits.device),
         )
+        tversky = TverskyLoss(mode="multiclass", alpha=0.75, beta=0.25, from_logits=True)(
+            logits, masks[:, 0].long(),
+        )
+        return 0.25 * cross_entropy + 0.75 * tversky
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(
@@ -2212,7 +2238,7 @@ def _save_training_checkpoint(
         metadata.update(
             {
                 "pipeline_variant": request.config.pipeline_variant,
-                "checkpoint_selection_metric": "quality_f1",
+                "checkpoint_selection_metric": "val_loss" if request.config.pipeline_variant == "next_gen2" else "quality_f1",
                 "run_metadata": dict(request.run_metadata),
                 "validation_performed": metrics.validation_performed,
                 "val_per_scene_metrics": metrics.val_per_scene_metrics,

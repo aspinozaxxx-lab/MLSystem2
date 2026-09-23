@@ -103,6 +103,7 @@ from ._queueing import (
 )
 from ._templates import (
     NEXT_GEN2_DEFAULT_CONFIG,
+    NEXT_GEN2_EDITABLE_KEYS,
     initial_inference_templates,
     initial_templates,
     sanitize_inference_template_config,
@@ -466,6 +467,17 @@ def ensure_seed_templates(session: Session) -> None:
         (row.architecture, row.dataset_key): row
         for row in session.scalars(select(TrainingTemplateRow)).all()
     }
+    # Обновляем только настройки будущих запусков; история jobs и MLflow неизменна.
+    for template in existing.values():
+        changed = False
+        for attribute in ("default_config", "baseline_default_config"):
+            previous = dict(getattr(template, attribute) or {})
+            if previous.get("train.pipeline_variant") == "next_gen2" and previous.get("train.loss") != "cross_entropy_tversky":
+                setattr(template, attribute, {**previous, **NEXT_GEN2_DEFAULT_CONFIG})
+                changed = True
+        if changed:
+            template.version += 1
+            template.updated_at = _now()
     seed_payloads = initial_templates()
     for payload in seed_payloads:
         row = existing.get((payload["architecture"], None))
@@ -1042,10 +1054,7 @@ def _validate_training_pipeline_variant(
         required = {
             "dataset.task": "binary", "dataset.imagery_type": "kanopus",
             "train.input_channels": 4,
-            "train.loss": "cross_entropy", "train.pretrained": True,
-            "tile_preparation.context": 0, "tile_preparation.augmentation_level": 0,
-            "train.threshold": 0.5, "train.max_train_batches_per_epoch": None,
-            "train.max_val_batches_per_epoch": None,
+            **{key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS},
         }
         for key, expected in required.items():
             if job_config.get(key) != expected:

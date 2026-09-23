@@ -17,38 +17,69 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
     "train.pipeline_variant": "next_gen2",
     "dataset.val_fraction": 0.2,
     "tile_preparation.tile_size": 512,
-    "tile_preparation.stride": 512,
+    "tile_preparation.stride": 256,
     "tile_preparation.context": 0,
-    "tile_preparation.augmentation_level": 0,
+    "tile_preparation.augmentation_level": 3,
     "tile_preparation.positive_factor": 0.5,
     "tile_preparation.hard_negative_factor": 0.0,
     "tile_preparation.background_factor": 0.5,
     "train.pretrained": True,
     "train.initial_checkpoint_uri": None,
-    "train.epochs": 300,
-    "train.batch_size": 32,
+    "train.epochs": 20,
+    "train.batch_size": 16,
     "train.learning_rate": 1e-4,
     "train.weight_decay": 0.01,
-    "train.loss": "cross_entropy",
+    "train.loss": "cross_entropy_tversky",
+    "train.tversky_alpha": 0.75,
+    "train.tversky_beta": 0.25,
     "train.pos_weight": 1.0,
     "train.background_weight": 1.0,
     "train.hard_negative_weight": 1.0,
     "train.threshold": 0.5,
-    "train.early_stopping_patience": 50,
+    "train.early_stopping_patience": 10,
     "train.max_train_batches_per_epoch": None,
     "train.max_val_batches_per_epoch": None,
-    "train.max_training_time_sec": 10800,
+    "train.max_training_time_sec": None,
 }
+
+NEXT_GEN2_EDITABLE_KEYS = {"train.epochs", "train.early_stopping_patience", "train.max_training_time_sec"}
+NEXT_GEN2_DESCRIPTION = (
+    "Фиксированный профиль segFormer_train_hlam_main_v2.ipynb. Модель — предобученный SegFormer B0 из Hugging Face "
+    "(nvidia/segformer-b0-finetuned-ade-512-512), четыре канала RED, GRN, BLU, NIR и два класса: фон и объект. "
+    "Для NIR копируются начальные веса RED. Используется выбранный датасет Канопус.\n\n"
+    "Тайлы 512 × 512 px с шагом 256 px и перекрытием 50%, без контекста и дополнения краёв. "
+    "Каждый канал каждого тайла нормализуется min-max; постоянный канал становится нулевым. Nodata входит в расчёты. "
+    "Случайное разбиение по тайлам: 60% train, 20% validation, 20% test, seed 42. "
+    "Пространственные пересечения не исключаются: соседние тайлы могут содержать общие пиксели в разных выборках, "
+    "поэтому такая оценка не заменяет проверку на независимых снимках.\n\n"
+    "Сэмплирование с возвращением: вес тайла с объектами — 7 при доле объекта больше 0,1%; "
+    "с hard negative — 8; обычного фона — 1. Это относительные веса тайлов, а не проценты выборки. "
+    "Hard negative перекрывает положительную разметку и считается фоном. "
+    "Веса классов CrossEntropy рассчитываются по обратным частотам только обучающих масок.\n\n"
+    "Аугментации применяются ко всем обучающим тайлам до нормализации: горизонтальное и вертикальное отражения "
+    "и поворот на 90° с вероятностью 0,5 каждый; affine с вероятностью 0,4 — масштаб 0,9–1,1, "
+    "сдвиг до 32 px и поворот до 15° с зеркальными границами. С вероятностью 0,3 выбирается шум "
+    "с дисперсией 5–30 или Gaussian blur с ядром 3–5; яркость и контраст ±15% — с вероятностью 0,3. "
+    "Validation и test без аугментаций.\n\n"
+    "Batch size 16, AdamW, learning rate 0,0001, weight decay 0,01; float32 без gradient clipping, "
+    "DataLoader без дополнительных процессов. Loss: 25% CrossEntropy + 75% Tversky (alpha 0,75, beta 0,25). "
+    "ReduceLROnPlateau следит за validation loss: patience 3, уменьшение LR вдвое. "
+    "Полная validation — каждую эпоху; лучший checkpoint и early stopping — по минимуму validation loss. "
+    "После обучения лучшие веса один раз оцениваются на test при пороге 0,5; метрики и LR по эпохам сохраняются в MLflow.\n\n"
+    "По умолчанию: максимум 20 эпох, early stopping patience 10 эпох, без лимита времени. "
+    "Изменять можно только эти три условия остановки. Лимит времени проверяется после завершения эпохи."
+)
 
 
 CONFIG_SCHEMA: dict[str, Any] = {
     "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG},
+    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — обучение и нарезка из ноутбука с разделением по тайлам, исключением пересечений train/validation и выбором весов по F1.",
+            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — фиксированный профиль ноутбука: SegFormer B0, тайлы 512/256, train/validation/test 60/20/20, аугментации, CrossEntropy + Tversky, выбор весов по validation loss. Перекрытия выборок не исключаются. Доступны только максимум эпох, patience и лимит времени; подробности внизу формы.",
             "options": ["legacy", "next_gen", "next_gen2"],
         },
         {
@@ -157,6 +188,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
                 "focal_tversky",
                 "cross_entropy",
                 "cross_entropy_dice",
+                "cross_entropy_tversky",
             ],
         },
         {
@@ -644,7 +676,7 @@ def sanitize_template_config(
                 continue
             result[key] = value
     if result.get("train.pipeline_variant") == "next_gen2":
-        result["tile_preparation.stride"] = result["tile_preparation.tile_size"]
+        result.update({key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS})
     if "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
         result["tile_preparation.context"] = 128 if tile_size == 768 else 0

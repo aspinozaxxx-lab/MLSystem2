@@ -4,6 +4,7 @@ import type { ConfigSchema, DatasetInfo, JsonRecord, TrainingTemplate } from "./
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
 
 const schema: ConfigSchema = {
+  pipeline_descriptions: { next_gen2: "Фиксированный профиль. Train/validation/test 60/20/20.\n\nВыбор весов по validation loss." },
   fields: [
     ...["train.pipeline_variant", "train.loss"].map((key) => ({ key, label: key === "train.loss" ? "Loss" : "Конвейер", value_type: "select", required: true, tooltip: "", options: key === "train.loss" ? ["bce_dice", "focal_tversky"] : ["legacy", "next_gen", "next_gen2"] })),
     ...["tile_preparation.tile_size", "tile_preparation.stride", "tile_preparation.context", "train.batch_size", "train.epochs", "train.early_stopping_patience"].map((key) => ({ key, label: key, value_type: "integer", required: true, tooltip: "" })),
@@ -75,5 +76,12 @@ describe("форма запуска обучения", () => {
     expect(html).not.toContain('role="slider"');
     expect(html).toContain("полезный центр 512 на 512 пикселей");
     expect(html).toContain('name="train.epochs"');
+    expect(html).toContain('name="train.early_stopping_patience"');
+    expect(html).toContain('name="train.max_training_time_sec"');
+    expect(html.match(/<input[^>]+type="number"/g)).toHaveLength(3);
+    expect(html).not.toContain('name="train.batch_size"');
+    expect(html).not.toContain('name="train.learning_rate"');
+    expect(html).toContain("Фиксированный профиль. Train/validation/test 60/20/20.");
+    expect(html).toContain("Выбор весов по validation loss.");
   });
 });

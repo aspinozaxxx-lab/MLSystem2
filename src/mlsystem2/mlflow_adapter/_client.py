@@ -543,6 +543,8 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
                 mlflow.log_metric("train/best_macro_pixel_f1", max(macro_values))
         if result.best_threshold is not None:
             mlflow.log_metric("train/best_confidence_threshold", result.best_threshold)
+        for name, value in result.diagnostics.get("test_metrics", {}).items():
+            mlflow.log_metric(f"test/{name}", float(value))
         peak_vram_bytes = result.diagnostics.get("peak_vram_bytes")
         if peak_vram_bytes is not None:
             mlflow.log_metric("train/peak_vram_bytes", float(peak_vram_bytes))
@@ -575,6 +577,7 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         "validation_by_scene": "reports/validation_by_scene.json",
         "inference_merge_comparison": "reports/inference_merge_comparison.json",
         "checkpoint_selection": "reports/checkpoint_selection.json",
+        "test_metrics": "reports/test_metrics.json",
     }
     for key, artifact_path in diagnostic_artifacts.items():
         value = diagnostics.get(key)

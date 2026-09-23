@@ -33,9 +33,6 @@ export function ConfigEditor({
   const pipelineVariant = String(value["train.pipeline_variant"] || "legacy");
   return (
     <div className="config-grid">
-      {showPipelineNote && pipelineVariant === "next_gen2" ? (
-        <p className="muted">next-gen2: полные тайлы без нахлёста и дополнения краёв; нормализация каждого окна; положительные тайлы получают вес 15. Шаг равен размеру тайла. Доля валидации рассчитывается после исключения пересечений между снимками. Лучшие веса и ранняя остановка определяются по F1.</p>
-      ) : null}
       {(schema.fields || []).filter((field) =>
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
       ).map((field) => {
@@ -56,10 +53,10 @@ export function ConfigEditor({
           field.key === "train.pipeline_variant" &&
           Boolean(architecture) &&
           !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
-        const tooltip = pipelineVariant === "next_gen2" && field.key === "dataset.val_fraction"
-          ? "Доля валидационных тайлов среди оставшихся train и validation после исключения пересечений; округляется до целого тайла."
+        const tooltip = pipelineVariant === "next_gen2" && field.key === "train.epochs"
+          ? "Максимальное число эпох. По умолчанию 20; обучение может завершиться раньше по early stopping или лимиту времени."
           : pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
-          ? "Число полных эпох без улучшения валидационной F1 при пороге 0.5."
+          ? "Число полных эпох без уменьшения validation loss. По умолчанию 10."
           : pipelineVariant === "next_gen" && field.key === "train.early_stopping_patience"
           ? "Число проверок validation без улучшения, а не число эпох."
           : pipelineVariant === "next_gen2" && field.key === "train.weight_decay"
@@ -133,6 +130,11 @@ export function ConfigEditor({
           </label>
         );
       })}
+      {showPipelineNote && pipelineVariant === "next_gen2" ? (
+        <div className="training-pipeline-description">
+          {(schema.pipeline_descriptions?.next_gen2 || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+        </div>
+      ) : null}
     </div>
   );
 }

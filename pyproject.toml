@@ -16,6 +16,7 @@ dependencies = [
   "numpy",
   "Pillow",
   "scipy",
+  "albumentations==2.0.8",
   "boto3",
   "rasterio",
   "shapely",
@@ -65,3 +66,4 @@ line-length = 100
 "tests/fixtures/next_gen2_train.ipynb" = ["F401"]
 # Исходный eval-ноутбук сохранён побитово, включая отсутствующий импорт shapes.
 "tests/fixtures/next_gen2_eval.ipynb" = ["F401", "F821"]
+"tests/fixtures/next_gen2_hlam_train.ipynb" = ["F401", "F811", "E402", "E701"]

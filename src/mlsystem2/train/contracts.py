@@ -40,7 +40,7 @@ class TrainConfig(BaseModel):
     device: str
     learning_rate: float = Field(gt=0.0)
     weight_decay: float = Field(ge=0.0)
-    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice"]
+    loss: Literal["bce_dice", "focal_dice", "focal_tversky", "cross_entropy", "cross_entropy_dice", "cross_entropy_tversky"]
     focal_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     pos_weight: float = Field(default=1.0, gt=0.0)
     background_weight: float = Field(default=1.0, gt=0.0)
@@ -61,8 +61,8 @@ class TrainConfig(BaseModel):
         if self.task == "multiclass" and self.loss not in multiclass_losses:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.pipeline_variant == "next_gen2":
-            if self.task != "binary" or self.loss != "cross_entropy":
-                raise ValueError("next-gen2 требует бинарную задачу и cross_entropy")
+            if self.task != "binary" or self.loss != "cross_entropy_tversky":
+                raise ValueError("next-gen2 требует binary и CrossEntropy + Tversky")
             if len(self.class_weights) != 2 or any(
                 not (0 < value < float("inf")) for value in self.class_weights
             ):
@@ -75,6 +75,8 @@ class TrainConfig(BaseModel):
                 or self.validation_interval_epochs != 1
             ):
                 raise ValueError("next-gen2 требует полные эпохи, порог 0.5 и контекст 0")
+        elif self.loss == "cross_entropy_tversky":
+            raise ValueError("CrossEntropy + Tversky доступен только в next-gen2")
         elif self.task == "binary" and self.loss in multiclass_losses:
             raise ValueError("binary train не поддерживает multiclass loss")
         if self.task != "binary" and self.quality_metric == "objects":
@@ -219,6 +221,7 @@ class TrainRequest(BaseModel):
     model: ModelHandle
     train_loader: object
     val_loader: object
+    test_loader: object | None = None
     config: TrainConfig
     checkpoint_dir: str
     sample_size: int | None = Field(default=None, gt=0)

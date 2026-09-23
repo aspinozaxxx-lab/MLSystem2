@@ -8,7 +8,7 @@ export function trainingConfigSchema(
   if (!schema) return undefined;
   const allowedLosses =
     pipelineVariant === "next_gen2"
-      ? ["cross_entropy"]
+      ? ["cross_entropy_tversky"]
       : task === "multiclass"
       ? ["cross_entropy", "cross_entropy_dice"]
       : ["bce_dice", "focal_dice", "focal_tversky"];
@@ -65,11 +65,11 @@ export function configWithField(
   nextValue: unknown,
   pipelineDefaults?: Record<string, JsonRecord>,
 ): JsonRecord {
+  if (value["train.pipeline_variant"] === "next_gen2" && ![
+    "train.pipeline_variant", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+  ].includes(key)) return value;
   const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
   const next = { ...value, ...preset, [key]: nextValue };
-  if (next["train.pipeline_variant"] === "next_gen2") {
-    next["tile_preparation.stride"] = next["tile_preparation.tile_size"];
-  }
   if (key === "train.pipeline_variant" && nextValue === "next_gen") {
     next["train.max_val_batches_per_epoch"] = null;
     if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
@@ -83,14 +83,9 @@ export function trainingConfigFieldVisible(
   architecture?: string,
 ): boolean {
   if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
-  if (pipelineVariant === "next_gen2" && [
-    "tile_preparation.stride", "tile_preparation.context", "tile_preparation.augmentation_level",
-    "tile_preparation.positive_factor", "tile_preparation.hard_negative_factor",
-    "tile_preparation.background_factor", "train.pretrained", "train.loss",
-    "train.focal_alpha", "train.pos_weight", "train.background_weight",
-    "train.hard_negative_weight", "train.tversky_alpha", "train.tversky_beta",
-    "train.threshold", "train.max_train_batches_per_epoch", "train.max_val_batches_per_epoch",
-  ].includes(key)) return false;
+  if (pipelineVariant === "next_gen2") return [
+    "train.pipeline_variant", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+  ].includes(key);
   if (key === "train.pretrained") {
     return pipelineVariant === "next_gen" && architecture === "segformer_b0";
   }

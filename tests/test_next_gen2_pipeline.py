@@ -17,7 +17,6 @@ import yaml
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
-from shapely.ops import unary_union
 
 from mlsystem2.mlflow_adapter import _client
 from mlsystem2.models import _factory
@@ -39,7 +38,7 @@ from mlsystem2.training_ui_api._templates import (
 )
 
 
-SOURCE = Path(__file__).parent / "fixtures" / "next_gen2_train.ipynb"
+SOURCE = Path(__file__).parent / "fixtures" / "next_gen2_hlam_train.ipynb"
 EVAL_SOURCE = SOURCE.with_name("next_gen2_eval.ipynb")
 
 
@@ -198,19 +197,26 @@ def test_inference_revision_invalidates_only_next_gen2_test_metrics():
 def _notebook_functions():
     torch = pytest.importorskip("torch")
     notebook = json.loads(SOURCE.read_text(encoding="utf-8"))
-    tree = ast.parse("\n".join("".join(cell["source"]) for cell in notebook["cells"]))
+    tree = ast.parse("\n".join("".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"))
     definitions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
+
+    import pandas as pd
+    from functools import lru_cache
 
     def read_geometry(path):
         features = json.loads(Path(path).read_text(encoding="utf-8"))["features"]
-        return SimpleNamespace(empty=not features, geometry=[shape(f["geometry"]) for f in features])
+        return pd.DataFrame([{**f.get("properties", {}), "geometry": shape(f["geometry"])} for f in features])
 
     namespace = {
         "np": np, "rasterio": rasterio, "rasterize": rasterize,
         "windows": rasterio.windows, "torch": torch,
         "Dataset": torch.utils.data.Dataset,
         "WeightedRandomSampler": torch.utils.data.WeightedRandomSampler,
-        "tqdm": lambda values: values, "gpd": SimpleNamespace(read_file=read_geometry),
+        "tqdm": lambda values, **kwargs: values, "gpd": SimpleNamespace(read_file=read_geometry, GeoDataFrame=pd.DataFrame),
+        "Path": Path, "ROOT_TIF": Path("."), "ROOT_GEO": Path("."), "TARGET_REGIONS": [],
+        "lru_cache": lru_cache, "HARD_NEG_WEIGHT": 8.0, "ROLE_COL": "_mlsystem2_role",
+        "POSITIVE_VALUES": {"positive", "pos", "1", "target"},
+        "HN_VALUES": {"hard_negative", "hard-negative", "hardnegative", "hn", "hneg", "neg"},
     }
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), namespace)
     return namespace
@@ -241,8 +247,7 @@ def _scene(tmp_path: Path, name="SCN01", x_offset=0):
 
 def _dataset(image, annotation, mode="train"):
     return TileDataset(
-        scenes=[TileSceneSource(scene_id="SCN01", image_path=image)],
-        annotation_file=annotation, tile_size=32, stride=16, mode=mode, seed=42,
+        scenes=[TileSceneSource(scene_id="SCN01", image_path=image, annotation_file=annotation)], tile_size=32, stride=16, mode=mode, seed=42,
         augmentation_level=0, pipeline_variant="next_gen2",
     )
 
@@ -252,7 +257,7 @@ def _config(**overrides):
         **{
             "pipeline_variant": "next_gen2", "epochs": 3, "batch_size": 2,
             "device": "cpu", "learning_rate": 1e-4, "weight_decay": 0.01,
-            "loss": "cross_entropy", "early_stopping_patience": 9,
+            "loss": "cross_entropy_tversky", "tversky_alpha": 0.75, "tversky_beta": 0.25, "early_stopping_patience": 9,
             "threshold_mode": "fixed", "class_weights": [0.3, 1.7],
             **overrides,
         }
@@ -268,20 +273,22 @@ def _spec():
 
 def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     assert hashlib.sha256(SOURCE.read_bytes()).hexdigest() == (
-        "165157276ae777ef9e7538b7daead9d27cb8dc42c8bdf8225278b40defd5a5f4"
+        "ed6b8494e5202c9fa3a6690a835ee74ad62c584cddb067dd07a7fbe343a2416f"
     )
     payload = sanitize_template_config({"train.pipeline_variant": "next_gen2"})
     assert payload.items() >= NEXT_GEN2_DEFAULT_CONFIG.items()
     assert CONFIG_SCHEMA["pipeline_defaults"]["next_gen2"] == NEXT_GEN2_DEFAULT_CONFIG
-    assert payload["tile_preparation.stride"] == payload["tile_preparation.tile_size"] == 512
+    assert payload["tile_preparation.stride"] == 256
+    assert payload["tile_preparation.tile_size"] == 512
     old_config = {**payload, "tile_preparation.tile_size": 768, "tile_preparation.stride": 256}
-    assert sanitize_template_config(old_config)["tile_preparation.stride"] == 768
+    assert sanitize_template_config(old_config)["tile_preparation.stride"] == 256
+    assert sanitize_template_config(old_config)["tile_preparation.tile_size"] == 512
     assert old_config["tile_preparation.stride"] == 256
     for variant in ("legacy", "next_gen"):
         assert sanitize_template_config({**old_config, "train.pipeline_variant": variant})["tile_preparation.stride"] == 256
     payload.update({"dataset.task": "binary", "dataset.imagery_type": "kanopus", "train.input_channels": 4})
     _service._validate_training_pipeline_variant(payload, "segformer_b0")
-    _service._validate_training_pipeline_variant({**payload, "dataset.val_fraction": 0.3}, "segformer_b0")
+    _service._validate_training_pipeline_variant({**payload, "train.epochs": 35, "train.early_stopping_patience": 7, "train.max_training_time_sec": 600}, "segformer_b0")
     assert _service._job_pipeline_variant(SimpleNamespace(config=payload)) == "next_gen2"
     legacy = next(item for item in initial_templates() if item["architecture"] == "smp_segformer_b0")
     assert legacy["default_config"]["train.pipeline_variant"] == "legacy"
@@ -291,6 +298,8 @@ def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     ("dataset.task", "multiclass"), ("dataset.imagery_type", "ortho"),
     ("tile_preparation.context", 128), ("tile_preparation.augmentation_level", 1),
     ("train.loss", "bce_dice"), ("train.max_train_batches_per_epoch", 1),
+    ("dataset.val_fraction", 0.3), ("train.batch_size", 32), ("train.learning_rate", 0.001),
+    ("tile_preparation.tile_size", 768), ("tile_preparation.stride", 512),
 ])
 def test_api_rejects_incompatible_notebook_settings(key, value):
     payload = {**NEXT_GEN2_DEFAULT_CONFIG, "dataset.task": "binary",
@@ -299,14 +308,22 @@ def test_api_rejects_incompatible_notebook_settings(key, value):
         _service._validate_training_pipeline_variant(payload, "segformer_b0")
 
 
-def test_coordinates_masks_and_sampler_match_original_notebook(tmp_path):
+@pytest.mark.parametrize("with_hard_negative", [False, True])
+def test_coordinates_masks_and_sampler_match_original_notebook(tmp_path, with_hard_negative):
     reference = _notebook_functions()
     torch = pytest.importorskip("torch")
     image, annotation = _scene(tmp_path)
-    coords = reference["build_all_patch_coords"]([(str(image), str(annotation))], 32, 32)
+    if with_hard_negative:
+        payload = json.loads(annotation.read_text(encoding="utf-8"))
+        payload["features"].append({
+            "type": "Feature", "properties": {"_mlsystem2_role": "hard_negative"},
+            "geometry": mapping(box(10, 65, 25, 85)),
+        })
+        annotation.write_text(json.dumps(payload), encoding="utf-8")
+    coords = reference["build_all_patch_coords"]([(str(image), str(annotation))], 32, 16)
     actual = _dataset(image, annotation)
     assert [(w.window.x, w.window.y) for w in actual._windows] == [(c[2], c[3]) for c in coords]
-    assert len(coords) == 9
+    assert len(coords) == 25
     assert len(build_tile_windows(100, 100, 32, 16)) == 49
     assert actual.black_filtered_window_count == 0
     original = reference["OnTheFlyDataset"](coords, 32, return_positive_info=True)
@@ -314,9 +331,11 @@ def test_coordinates_masks_and_sampler_match_original_notebook(tmp_path):
         raw, target, metadata = actual[i]
         expected_image, expected_mask, _ = original[i]
         np.testing.assert_array_equal(reference["normalize_image"](raw.copy()), expected_image.numpy())
-        np.testing.assert_array_equal(target[0], expected_mask.numpy())
+        np.testing.assert_array_equal(np.maximum(target[0], 0), expected_mask.numpy())
         assert "valid_pixels" not in metadata
-    weights, sampler = reference["compute_class_weights_and_sampler"](original)
+    hn_dataset = reference["OnTheFlyDataset"](coords, 32, return_hn_info=True)
+    hn_indices = reference["find_hard_negative_indices"](hn_dataset)
+    weights, sampler = reference["compute_class_weights_and_sampler"](original, hard_neg_indices=hn_indices)
     np.testing.assert_array_equal(actual.notebook_class_weights, weights.numpy())
     np.testing.assert_array_equal(actual.sampling_weights(), sampler.weights.numpy())
     torch.manual_seed(77)
@@ -370,112 +389,50 @@ def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monk
     dataset.close()
 
 
-@pytest.mark.parametrize("val_fraction", [0.2, 0.3])
-def test_tile_split_excludes_validation_areas_across_scenes_and_ignores_their_labels(tmp_path, val_fraction):
-    torch = pytest.importorskip("torch")
-    identifiers = ["SCN01", "SCN02", "SCN03"]
-    scenes = []
-    for name, offset in zip(identifiers, (0, 40, 300), strict=True):
-        image, annotation = _scene(tmp_path, name, offset)
-        footprint = tmp_path / f"{name}_footprint.geojson"
-        footprint.write_text(json.dumps({"type": "FeatureCollection", "features": [
-            {"type": "Feature", "properties": {}, "geometry": mapping(box(offset, 0, offset + 20, 100))},
-        ]}), encoding="utf-8")
-        scenes.append(TileSceneSource(scene_id=name, image_path=image, annotation_file=annotation, footprint_file=footprint))
-    split = TileSplitRequest(strategy="window_random", val_fraction=val_fraction, spatial_purge=True, seed=42)
-    def build(mode, sources=scenes):
-        return TileDataset(scenes=sources, tile_size=32, stride=16, mode=mode, seed=42,
-                           augmentation_level=0, pipeline_variant="next_gen2", tile_split=split)
-    train, val = build("train"), build("val")
-    try:
-        manifest = train.tile_split_manifest
-        assert manifest["indices"] == val.tile_split_manifest["indices"]
-        subsets = [set(manifest["indices"][key]) for key in ("train", "val", "purged")]
-        assert all(subsets[left].isdisjoint(subsets[right]) for left, right in ((0, 1), (0, 2), (1, 2)))
-        assert set.union(*subsets) == set(range(27))
-        assert set(manifest["train_scene_ids"]) & set(manifest["validation_scene_ids"])
-        validation_areas = []
-        for item in val._windows:
-            with rasterio.open(scenes[item.scene_index].image_path) as source:
-                validation_areas.append(box(*source.window_bounds(rasterio.windows.Window(item.window.x, item.window.y, 32, 32))))
-        validation_area = unary_union(validation_areas)
-        for item in train._windows:
-            with rasterio.open(scenes[item.scene_index].image_path) as source:
-                rectangle = rasterio.windows.Window(item.window.x, item.window.y, 32, 32)
-                assert box(*source.window_bounds(rectangle)).intersection(validation_area).area == 0
-        cross_scene_purge = 0
-        for index in manifest["indices"]["purged"]:
-            scene_id, x, y = manifest["windows"][index]
-            scene = next(scene for scene in scenes if scene.scene_id == scene_id)
-            with rasterio.open(scene.image_path) as source:
-                area = box(*source.window_bounds(rasterio.windows.Window(x, y, 32, 32)))
-            assert area.intersection(validation_area).area > 0
-            cross_scene_purge += any(area.intersection(other).area > 0 and item.scene_id != scene_id
-                                     for other, item in zip(validation_areas, val._windows, strict=True))
-        assert cross_scene_purge > 0
-        assert manifest["geographic_overlap_after_purge"] == 0
-        # На крошечном пуле соседний val-тайл может исключить сразу несколько train-окон.
-        # Допускается точность одного тайла; географическое пересечение не допускается.
-        assert abs(len(val) - val_fraction * (len(train) + len(val))) < 1
-        assert manifest["actual_val_fraction"] == len(val) / (len(train) + len(val))
-        assert sum(val[index][1].sum() for index in range(len(val))) > 0
-        draws = torch.utils.data.WeightedRandomSampler(train.sampling_weights(), 1000, replacement=True)
-        validation_keys = {(item.scene_id, item.window.x, item.window.y) for item in val._windows}
-        assert all((train._windows[index].scene_id, train._windows[index].window.x, train._windows[index].window.y)
-                   not in validation_keys for index in draws)
-        weights, sampling = train.notebook_class_weights, train.sampling_weights()
-        for scene in scenes:
-            path = Path(scene.annotation_file)
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            kept = []
-            for feature in payload["features"]:
-                geometry = shape(feature["geometry"]).difference(validation_area)
-                if not geometry.is_empty:
-                    kept.append({**feature, "geometry": mapping(geometry)})
-            path.write_text(json.dumps({**payload, "features": kept}), encoding="utf-8")
-        modified_val = build("val")
-        try:
-            assert sum(modified_val[index][1].sum() for index in range(len(modified_val))) == 0
-        finally:
-            modified_val.close()
-        modified = build("train", list(reversed(scenes)))
-        try:
-            np.testing.assert_array_equal(modified.notebook_class_weights, weights)
-            np.testing.assert_array_equal(sorted(modified.sampling_weights()), sorted(sampling))
-            assert {tuple((w.scene_id, w.window.x, w.window.y)) for w in modified._windows} == {
-                (w.scene_id, w.window.x, w.window.y) for w in train._windows
-            }
-        finally:
-            modified.close()
-    finally:
-        train.close()
-        val.close()
-
-
-def test_tile_split_accepts_one_scene_and_keeps_touching_nonoverlapping_tiles(tmp_path):
+@pytest.mark.parametrize("stride", [16, 32])
+def test_tile_split_matches_notebook_train_validation_test(tmp_path, stride):
+    split_module = pytest.importorskip("sklearn.model_selection")
     image, annotation = _scene(tmp_path)
-    split = TileSplitRequest(strategy="window_random", val_fraction=0.2, spatial_purge=True)
-    datasets = [TileDataset(scenes=[TileSceneSource(scene_id="SCN01", image_path=image)],
-                           annotation_file=annotation, tile_size=32, stride=32, mode=mode,
-                           pipeline_variant="next_gen2", tile_split=split, seed=42, augmentation_level=0)
-                for mode in ("train", "val")]
-    try:
-        train, val = datasets
-        assert len(train) == 7 and len(val) == 2
-        assert train.tile_split_manifest["purged_window_count"] == 0
-        assert train.tile_split_manifest["train_scene_ids"] == val.tile_split_manifest["validation_scene_ids"] == ["SCN01"]
-    finally:
-        for dataset in datasets:
-            dataset.close()
+    split = TileSplitRequest(val_fraction=0.2, test_fraction=0.2, seed=42)
+    datasets = {mode: TileDataset(
+        scenes=[TileSceneSource(scene_id="SCN01", image_path=image, annotation_file=annotation)],
+        tile_size=32, stride=stride, mode=mode, seed=42, augmentation_level=0,
+        pipeline_variant="next_gen2", tile_split=split,
+    ) for mode in ("train", "val", "test")}
+    manifest = datasets["train"].tile_split_manifest
+    train, temporary = split_module.train_test_split(list(range(len(manifest["windows"]))), test_size=0.4, random_state=42)
+    validation, test = split_module.train_test_split(temporary, test_size=0.5, random_state=42)
+    assert manifest["indices"] == {"train": train, "val": validation, "test": test}
+    assert not manifest["spatial_purge"]
+    assert set(train).isdisjoint(validation) and set(train).isdisjoint(test) and set(validation).isdisjoint(test)
+    for mode, dataset in datasets.items():
+        assert len(dataset) == len(manifest["indices"][mode])
+        if mode != "train":
+            assert dataset.notebook_class_weights == []
+            assert dataset.sampling_weights() is None
+        dataset.close()
 
 
-@pytest.mark.parametrize("strategy,purge", [("window_random", False), ("scene_fold", True)])
-def test_next_gen2_api_rejects_split_without_spatial_isolation(strategy, purge):
+@pytest.mark.parametrize("count", [5, 6, 9, 13, 14, 15, 17, 18754])
+def test_split_rounding_matches_sklearn(count):
+    splitter = pytest.importorskip("sklearn.model_selection")
+    dataset = object.__new__(TileDataset)
+    dataset._mode, dataset._tile_size = "train", 512
+    dataset._windows = [SimpleNamespace(scene_id="scene", window=SimpleNamespace(x=i * 256, y=0)) for i in range(count)]
+    train, heldout = splitter.train_test_split(list(range(count)), test_size=0.4, random_state=42)
+    validation, test = splitter.train_test_split(heldout, test_size=0.5, random_state=42)
+    selected, manifest = dataset._notebook_tile_split_indices(TileSplitRequest(val_fraction=0.2, test_fraction=0.2))
+    assert selected == train
+    assert manifest["indices"] == {"train": train, "val": validation, "test": test}
+
+
+@pytest.mark.parametrize("strategy,purge", [("window_random", True), ("scene_fold", False)])
+def test_next_gen2_api_rejects_non_notebook_split(strategy, purge):
     with pytest.raises(ValueError, match="next-gen2"):
         TileDataloaderRequest(
-            scenes=[TileSceneSource(scene_id="сцена", image_path="image.tif")],
-            annotation_file="annotation.geojson", batch_size=32, mode="train", pipeline_variant="next_gen2",
-            tile_split=TileSplitRequest(strategy=strategy, val_fraction=0.2, spatial_purge=purge),
+            scenes=[TileSceneSource(scene_id="one", image_path="one.tif")],
+            annotation_file="annotation.geojson", batch_size=16, mode="train", pipeline_variant="next_gen2",
+            tile_split=TileSplitRequest(strategy=strategy, val_fraction=0.2, test_fraction=0.2, spatial_purge=purge),
         )
 
 
@@ -516,7 +473,7 @@ def test_one_epoch_matches_notebook_loss_gradients_and_adamw(tmp_path):
         normalized = torch.from_numpy(np.stack([reference["normalize_image"](item.numpy().copy()) for item in images]))
         reference_optimizer.zero_grad()
         logits = torch.nn.functional.interpolate(original(normalized).logits, size=(32, 32), mode="bilinear", align_corners=False)
-        loss = torch.nn.functional.cross_entropy(logits, masks[:, 0].long(), weight=torch.tensor(config.class_weights))
+        loss = 0.25 * torch.nn.functional.cross_entropy(logits, masks[:, 0].long(), weight=torch.tensor(config.class_weights)) + 0.75 * pytest.importorskip("segmentation_models_pytorch").losses.TverskyLoss(mode="multiclass", alpha=0.75, beta=0.25, from_logits=True)(logits, masks[:, 0].long())
         loss.backward()
         reference_optimizer.step()
         total += loss.item() * len(images)
@@ -587,17 +544,21 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     settings_path = tmp_path / "settings.yaml"
     train = {key.split(".", 1)[1]: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key.startswith("train.")}
     train.update({"model_name": "segformer_b0", "input_channels": 4, "output_channels": 1,
-                  "epochs": 2, "batch_size": 8, "device": "cpu"})
+                  "epochs": 2, "device": "cpu"})
     settings = SystemSettings.model_validate({
         "runtime": {"project_root": str(tmp_path), "scratch_root": str(tmp_path / "scratch"),
                     "logs_root": str(tmp_path / "logs"), "cleanup_scratch_after_mlflow_log": False},
         "dataset": {"images_dir": str(tmp_path), "annotations_dir": str(annotations), "val_fraction": 0.2},
-        "tile_preparation": {"tile_size": 32, "stride": 16, "context": 0, "num_workers": 0},
+        "tile_preparation": {"tile_size": 512, "stride": 256, "context": 0, "num_workers": 0, "augmentation_level": 3},
         "train": train,
         "mlflow": {"enabled": False, "tracking_uri": "file:///unused", "experiment_name": "Проверка next-gen2"},
     })
     settings_path.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True), encoding="utf-8")
     load_settings(settings_path)
+    # Маленькие окна ускоряют проверку полного конвейера; публичный профиль проверен выше.
+    settings = settings.model_copy(update={"tile_preparation": settings.tile_preparation.model_copy(update={"tile_size": 32, "stride": 16})})
+    monkeypatch.setattr(_runner, "get_settings", lambda: settings)
+    monkeypatch.setattr(_dataloader, "get_settings", lambda: settings)
     pretrained_calls = []
     def local_pretrained(*args, **kwargs):
         pretrained_calls.append((args, kwargs))
@@ -612,22 +573,22 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
                    log_training_artifacts=lambda run, result: logged.append(result))
     result = _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
     assert result.status.value == "succeeded", result.report.errors
-    assert [r.pipeline_variant for r in requests] == ["next_gen2", "next_gen2"]
-    assert all(r.tile_split.strategy == "window_random" and r.tile_split.spatial_purge for r in requests)
-    assert _runner._mlflow_start_request(settings, TrainPipelineRequest()).tags["checkpoint_selection_metric"] == "quality_f1"
+    assert [r.mode for r in requests] == ["train", "val", "test"]
+    assert all(r.tile_split.strategy == "window_random" and not r.tile_split.spatial_purge and r.tile_split.test_fraction == 0.2 for r in requests)
+    assert _runner._mlflow_start_request(settings, TrainPipelineRequest()).tags["checkpoint_selection_metric"] == "val_loss"
     assert pretrained_calls[0][1]["num_labels"] == 2
     assert pretrained_calls[0][1]["use_safetensors"] is True
     trained = logged[0]
     assert trained.diagnostics["pipeline_variant"] == "next_gen2"
     split = trained.diagnostics["split_manifest"]["train"]
-    assert len(split["indices"]["val"]) == 9
-    assert split["stride"] == settings.tile_preparation.stride == settings.tile_preparation.tile_size == 32
-    assert set(split["train_scene_ids"]) & set(split["validation_scene_ids"])
-    assert split["geographic_overlap_after_purge"] == 0
+    assert len(split["indices"]["val"]) == len(split["indices"]["test"]) == 25
+    assert not split["spatial_purge"]
+    assert trained.diagnostics["test_metrics"]["threshold"] == 0.5
     payload = torch.load(trained.best_checkpoint_path, map_location="cpu", weights_only=False)
     assert payload["metadata"]["pipeline_variant"] == "next_gen2"
-    assert payload["metadata"]["val_quality_f1"] == max(e.val_quality_f1 for e in trained.history)
-    assert payload["metadata"]["checkpoint_selection_metric"] == "quality_f1"
+    assert payload["metadata"]["val_loss"] == min(e.val_loss for e in trained.history)
+    assert trained.diagnostics["test_metrics"]["checkpoint_epoch"] == payload["metadata"]["epoch"]
+    assert payload["metadata"]["checkpoint_selection_metric"] == "val_loss"
     assert payload["metadata"]["confidence_threshold"] == 0.5
     assert Path(trained.final_checkpoint_path).is_file()
 
@@ -648,7 +609,7 @@ def test_notebook_input_adapter_retains_random_bias_and_both_heads():
     assert model.decode_head.classifier is classifier
 
 
-def test_early_stopping_follows_f1_while_scheduler_keeps_notebook_loss(tmp_path, monkeypatch):
+def test_early_stopping_and_scheduler_follow_notebook_loss(tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")
     model = create_model(_spec())
@@ -676,14 +637,14 @@ def test_early_stopping_follows_f1_while_scheduler_keeps_notebook_loss(tmp_path,
         model=model, train_loader=[], val_loader=[], config=_config(epochs=10, early_stopping_patience=2),
         checkpoint_dir=str(tmp_path), sample_size=32,
     ))
-    assert result.epochs_total == 6
-    assert observed == losses
+    assert result.epochs_total == 4
+    assert observed == losses[:4]
     payload = torch.load(result.best_checkpoint_path, map_location="cpu", weights_only=False)
-    assert payload["metadata"]["epoch"] == 4
-    assert result.diagnostics["checkpoint_selection"]["quality_f1"] == 0.9
-    assert result.diagnostics["checkpoint_selection"]["metric"] == "quality_f1"
+    assert payload["metadata"]["epoch"] == 2
+    assert result.diagnostics["checkpoint_selection"]["quality_f1"] == 0.4
+    assert result.diagnostics["checkpoint_selection"]["metric"] == "val_loss"
     final = torch.load(result.final_checkpoint_path, map_location="cpu", weights_only=True)
-    assert final["metadata"]["epoch"] == 6
+    assert final["metadata"]["epoch"] == 4
 
 
 def test_next_gen2_onnx_keeps_window_normalization_and_binary_output(tmp_path):
@@ -702,3 +663,32 @@ def test_next_gen2_onnx_keeps_window_normalization_and_binary_output(tmp_path):
     operations = {node.op_type for node in exported.graph.node}
     assert {"ReduceMin", "ReduceMax", "Sigmoid"} <= operations
     assert exported.graph.output[0].type.tensor_type.shape.dim[1].dim_value == 1
+
+
+def test_next_gen2_argmax_assigns_ties_to_background():
+    torch = pytest.importorskip("torch")
+    class EqualLogits(torch.nn.Module):
+        def forward(self, images, **kwargs):
+            return torch.zeros(images.shape[0], 2, *images.shape[-2:])
+    batch = (torch.ones(1, 4, 8, 8), torch.ones(1, 1, 8, 8))
+    metrics = _trainer._validate_epoch(torch, EqualLogits(), [batch], torch.device("cpu"), _config(), 1)
+    assert metrics["best_threshold_pixel_recall"] == 0
+    assert metrics["best_threshold_pixel_f1"] == 0
+
+
+def test_notebook_augmentations_apply_to_background_and_leave_validation_unchanged(tmp_path):
+    image, annotation = _scene(tmp_path)
+    payload = json.loads(annotation.read_text(encoding="utf-8"))
+    payload["features"] = []
+    annotation.write_text(json.dumps(payload), encoding="utf-8")
+    kwargs = dict(scenes=[TileSceneSource(scene_id="scene", image_path=image, annotation_file=annotation)],
+                  tile_size=32, stride=16, seed=42, augmentation_level=3, pipeline_variant="next_gen2")
+    train, validation = TileDataset(mode="train", **kwargs), TileDataset(mode="val", **kwargs)
+    raw, target, meta = validation[3]
+    assert validation._notebook_transform is None
+    draws = [train[3] for _ in range(6)]
+    assert any(not np.array_equal(value[0], raw) for value in draws)
+    assert all(value[0].dtype == np.float32 and np.isfinite(value[0]).all() for value in draws)
+    assert all(np.array_equal(value[1], target) for value in draws)
+    train.close()
+    validation.close()

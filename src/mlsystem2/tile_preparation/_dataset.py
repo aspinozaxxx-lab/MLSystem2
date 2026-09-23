@@ -17,7 +17,7 @@ from rasterio.io import DatasetReader
 from rasterio.windows import Window
 
 from ._annotations import AnnotationIndex, load_annotation_index
-from ._augmentations import apply_augmentations, apply_next_gen_augmentations
+from ._augmentations import apply_augmentations, apply_next_gen_augmentations, build_notebook_augmentations
 from ._mask import (
     HARD_NEGATIVE_LABEL,
     build_supervision_mask,
@@ -110,11 +110,14 @@ class TileDataset:
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
         self._pipeline_variant = pipeline_variant
-        if pipeline_variant == "next_gen2" and (context or augmentation_level):
-            raise TilePreparationError("next-gen2 использует окна без контекста и аугментаций")
-        if pipeline_variant == "next_gen2":
-            stride = tile_size
+        if pipeline_variant == "next_gen2" and context:
+            raise TilePreparationError("next-gen2 использует полные окна без контекста")
+        self._notebook_transform = (
+            build_notebook_augmentations(seed)
+            if pipeline_variant == "next_gen2" and mode == "train" and augmentation_level else None
+        )
         self._notebook_positive_ratios: np.ndarray | None = None
+        self._notebook_hard_negatives: np.ndarray | None = None
         self._notebook_class_weights: list[float] = []
         self._collect_band_histogram_enabled = collect_band_histogram
         self._band_histogram: dict[str, object] | None = None
@@ -285,7 +288,14 @@ class TileDataset:
             ),
         )
         augmented = False
-        should_augment = self._mode == "train" and self._augmentation_level > 0
+        if self._notebook_transform is not None:
+            transformed = self._notebook_transform(
+                image=np.moveaxis(image_raw, 0, -1), mask=mask[0],
+            )
+            image = np.moveaxis(transformed["image"], -1, 0).astype(np.float32)
+            mask = transformed["mask"][None, :, :]
+            augmented = bool(transformed["applied_transforms"])
+        should_augment = self._mode == "train" and self._augmentation_level > 0 and self._pipeline_variant != "next_gen2"
         if should_augment and (
             self._pipeline_variant == "next_gen"
             or category in {TILE_CATEGORY_POSITIVE, TILE_CATEGORY_HARD_NEGATIVE}
@@ -454,6 +464,7 @@ class TileDataset:
 
     def _compute_notebook_statistics(self) -> None:
         ratios = []
+        hard_negatives = []
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
             window = Window(item.window.x, item.window.y, self._tile_size, self._tile_size)
@@ -462,7 +473,9 @@ class TileDataset:
                 np.zeros((self._tile_size, self._tile_size), dtype=bool),
             )
             ratios.append(float(np.mean(mask == 1, dtype=np.float32)))
+            hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL)))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
+        self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
         positive = self._notebook_positive_ratios.sum()
         negative = (1 - self._notebook_positive_ratios).sum()
         weights = 1.0 / (np.asarray([negative, positive]) + 1e-6)
@@ -534,7 +547,8 @@ class TileDataset:
         if getattr(self, "_pipeline_variant", "legacy") == "next_gen2":
             if self._notebook_positive_ratios is None:
                 return None
-            weights = np.where(self._notebook_positive_ratios > 0.001, 15.0, 1.0)
+            weights = np.where(self._notebook_positive_ratios > 0.001, 7.0, 1.0)
+            weights[self._notebook_hard_negatives] = np.maximum(weights[self._notebook_hard_negatives], 8.0)
             return (weights / weights.sum()).tolist()
         categories = self._category_hints()
         if categories is None:
@@ -698,6 +712,14 @@ class TileDataset:
             transform=dataset.window_transform(window),
             nodata_pixels=nodata_pixels,
         )
+        if self._pipeline_variant == "next_gen2":
+            # В ноутбуке hard negative перекрывает positive и остаётся фоном в loss.
+            hard_negative = rasterize_window_mask(
+                self._hard_negative_geometries(scene_index, bounds),
+                out_shape=(self._tile_size, self._tile_size),
+                transform=dataset.window_transform(window),
+            )
+            mask[hard_negative == 1] = HARD_NEGATIVE_LABEL
         if self.uses_multiclass_masks:
             return mask.astype(np.int64, copy=False)
         return mask.astype(np.float32, copy=False)[None, :, :]
@@ -739,6 +761,12 @@ class TileDataset:
     ) -> np.ndarray:
         bounds = dataset.window_bounds(window)
         geometries = self._positive_index(scene_index).query_bounds(bounds)
+        if self._pipeline_variant == "next_gen2":
+            nodata_pixels = nodata_pixels | rasterize_window_mask(
+                self._hard_negative_geometries(scene_index, bounds),
+                out_shape=(self._tile_size, self._tile_size),
+                transform=dataset.window_transform(window),
+            ).astype(bool)
         return rasterize_instance_mask(
             geometries,
             out_shape=(self._tile_size, self._tile_size),
@@ -925,7 +953,7 @@ class TileDataset:
         if self._positive_hint_by_index is None:
             return
         if self._pipeline_variant == "next_gen2":
-            selected_indices, manifest = self._spatial_tile_split_indices(tile_split)
+            selected_indices, manifest = self._notebook_tile_split_indices(tile_split)
             if not selected_indices:
                 raise TilePreparationError(f"После разделения по тайлам выборка {self._mode} пуста.")
             if not any(self._positive_hint_by_index[index] for index in selected_indices):
@@ -962,86 +990,32 @@ class TileDataset:
             "selected_window_count": len(selected_indices),
         }
 
-    def _spatial_tile_split_indices(
-        self,
-        tile_split: TileSplitRequest,
-    ) -> tuple[list[int], dict[str, object]]:
-        from shapely.geometry import Polygon
-        from shapely.strtree import STRtree
-
-        if tile_split.strategy != "window_random" or not tile_split.spatial_purge:
-            raise TilePreparationError("next-gen2 требует разделение по тайлам с исключением пересечений.")
-        if len(self._windows) < 2:
-            raise TilePreparationError("Для разделения нужны минимум два полных тайла.")
-        if len(set(self._scene_crs)) != 1 or self._scene_crs[0] is None:
-            raise TilePreparationError("Для исключения пересечений TIFF должны иметь одну известную CRS.")
-        geometries = []
-        for item in self._windows:
-            dataset = self._open_dataset(item.scene_index)
-            window = item.window
-            transform = dataset.window_transform(Window(window.x, window.y, window.width, window.height))
-            geometries.append(Polygon([
-                transform * corner for corner in (
-                    (0, 0), (window.width, 0), (window.width, window.height), (0, window.height),
-                )
-            ]))
-        # Порядок зависит только от seed и координат, а не от разметки или порядка файлов.
-        ordered = sorted(range(len(self._windows)), key=lambda index: _window_split_key(self._windows[index], tile_split.seed))
-        ranks = np.empty(len(ordered), dtype=np.int64)
-        ranks[ordered] = np.arange(len(ordered))
-        first_overlap_rank = ranks.copy()
-        all_tree = STRtree(geometries)
-        for index, geometry in enumerate(geometries):
-            for other in all_tree.query(geometry):
-                if ranks[other] < first_overlap_rank[index] and geometry.intersection(geometries[int(other)]).area > 0:
-                    first_overlap_rank[index] = ranks[other]
-        # Для первых k validation-тайлов train содержит окна без пересечений с рангами < k.
-        # Выбираем k по итоговой доле после исключений, с округлением до целого тайла.
-        train_counts = len(ordered) - np.cumsum(np.bincount(first_overlap_rank, minlength=len(ordered)))
-        feasible_counts = [count for count in range(1, len(ordered)) if train_counts[count - 1] > 0]
-        if not feasible_counts:
-            raise TilePreparationError("Нельзя выделить непересекающиеся обучающие и валидационные тайлы.")
-        validation_count = min(feasible_counts, key=lambda count: (
-            abs(count / (count + int(train_counts[count - 1])) - tile_split.val_fraction), count,
-        ))
-        validation_set = set(ordered[:validation_count])
-        validation = [index for index in range(len(ordered)) if index in validation_set]
-        candidate_train = [index for index in range(len(ordered)) if index not in validation_set]
-        train = [index for index in candidate_train if first_overlap_rank[index] >= validation_count]
-        purged = [index for index in candidate_train if first_overlap_rank[index] < validation_count]
-        heldout = [geometries[index] for index in validation]
-        tree = STRtree(heldout)
-
-        def overlaps_validation(index: int) -> bool:
-            geometry = geometries[index]
-            # Общая граница без площади не содержит общих пикселей и допустима.
-            return any(geometry.intersection(heldout[int(other)]).area > 0 for other in tree.query(geometry))
-
-        overlap_after_purge = sum(overlaps_validation(index) for index in train)
-        if overlap_after_purge:
-            raise TilePreparationError("Обучающие тайлы пересекают области валидационных тайлов.")
-        purged_by_scene: dict[str, int] = {}
-        for index in purged:
-            scene_id = self._windows[index].scene_id
-            purged_by_scene[scene_id] = purged_by_scene.get(scene_id, 0) + 1
-        selected = train if self._mode == "train" else validation
-        return selected, {
+    def _notebook_tile_split_indices(self, tile_split: TileSplitRequest) -> tuple[list[int], dict[str, object]]:
+        # Эквивалент двух train_test_split с random_state=42: сначала 60/40, затем 50/50.
+        count = len(self._windows)
+        heldout_count = math.ceil(count * (tile_split.val_fraction + tile_split.test_fraction))
+        order = np.random.RandomState(tile_split.seed).permutation(count)
+        train = order[heldout_count:].tolist()
+        heldout = order[:heldout_count]
+        if tile_split.test_fraction:
+            test_ratio = tile_split.test_fraction / (tile_split.val_fraction + tile_split.test_fraction)
+            test_count = math.ceil(heldout_count * test_ratio)
+            heldout_order = np.random.RandomState(tile_split.seed).permutation(heldout_count)
+            test = heldout[heldout_order[:test_count]].tolist()
+            validation = heldout[heldout_order[test_count:]].tolist()
+        else:
+            test, validation = [], heldout.tolist()
+        if not train or not validation or (tile_split.test_fraction and not test):
+            raise TilePreparationError("Недостаточно полных тайлов для разбиения train/validation/test")
+        indices = {"train": train, "val": validation, "test": test}
+        return indices[self._mode], {
             "strategy": "window_random", "mode": self._mode,
             "seed": tile_split.seed, "val_fraction": tile_split.val_fraction,
-            "val_fraction_basis": "retained_train_and_validation",
-            "actual_val_fraction": len(validation) / (len(train) + len(validation)),
-            "selection": "sha256(seed,scene_id,x,y)", "spatial_purge": True,
-            "overlap_rule": "positive_area_across_all_scenes",
-            "tile_size": self._tile_size,
-            "stride": self._tile_size,
+            "test_fraction": tile_split.test_fraction, "spatial_purge": False,
+            "selection": "train_test_split", "tile_size": self._tile_size,
             "windows": [[item.scene_id, item.window.x, item.window.y] for item in self._windows],
-            "indices": {"train": train, "val": validation, "purged": purged},
-            "train_scene_ids": sorted({self._windows[index].scene_id for index in train}),
-            "validation_scene_ids": sorted({self._windows[index].scene_id for index in validation}),
-            "candidate_train_window_count": len(candidate_train),
-            "purged_window_count": len(purged), "purged_windows_by_scene": purged_by_scene,
-            "selected_window_count": len(selected),
-            "geographic_overlap_after_purge": overlap_after_purge,
+            "indices": indices, "selected_window_count": len(indices[self._mode]),
+            "actual_val_fraction": len(validation) / count, "actual_test_fraction": len(test) / count,
         }
 
     def _scene_fold_indices(
