@@ -45,7 +45,7 @@ MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT=/data/mlsystem2/training-ui/files
 MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT=/data/mlsystem2/training-ui/tmp
 MLSYSTEM2_TRAINING_UI_FRONTEND_DIST=/opt/mlsystem2/frontend
 MLSYSTEM2_TRAINING_SETTINGS_PATH=/opt/mlsystem2/repo/configs/settings.server.yaml
-MLSYSTEM2_MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+MLSYSTEM2_MLFLOW_TRACKING_URI=http://127.0.0.1:5000/mlflow
 MLSYSTEM2_MLFLOW_UI_URL=/mlflow/
 MLSYSTEM2_GRAFANA_URL=/grafana/
 MLSYSTEM2_IMAGES_UI_URL=/prepared-images/
@@ -232,8 +232,11 @@ docker update --restart=no <старый-frontend-container>
    через `docker compose --env-file /etc/mlsystem/gpu-platform.env
    -f /data/mlsystem/platform/docker-compose.yml up -d --no-deps mlflow`.
 6. Проверить `/mlflow/version` и `/mlflow/health` на `http://127.0.0.1:5000`, затем
-   авторизованный доступ через `https://grovika.ru/mlflow/`. Tracking URI клиента остаётся
-   `http://127.0.0.1:5000`, без `/mlflow`: этот префикс используется интерфейсом.
+   авторизованный доступ через `https://grovika.ru/mlflow/`. В MLflow 3.16.1 `--static-prefix`
+   применяется также к REST API: tracking URI клиента должен быть
+   `http://127.0.0.1:5000/mlflow`, а внутри Docker-сети — `http://mlflow:5000/mlflow`.
+   Обновить `MLSYSTEM2_MLFLOW_TRACKING_URI` в env приложения и `MLFLOW_TRACKING_URI` в env
+   платформы до возобновления worker.
 7. Проверить чтение существующего запуска и контрольную запись метрик, датасета, параметров,
    загрузку и скачивание артефакта через адаптер и MinIO. После проверки возобновить worker
    и удалить только созданную для проверки базу и временный контейнер.

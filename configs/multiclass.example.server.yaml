@@ -98,5 +98,5 @@ inference:
 
 mlflow:
   enabled: true
-  tracking_uri: http://127.0.0.1:5000
+  tracking_uri: http://127.0.0.1:5000/mlflow
   experiment_name: MLSystem2-Multiclass

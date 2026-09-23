@@ -152,7 +152,7 @@ def get_config() -> TrainingUIAPIConfig:
         ),
         mlflow_tracking_uri=os.getenv(
             "MLSYSTEM2_MLFLOW_TRACKING_URI",
-            os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
+            os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000/mlflow"),
         ).rstrip("/"),
         frontend_username=frontend_username,
         frontend_username_aliases=frontend_username_aliases,
