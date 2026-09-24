@@ -64,7 +64,9 @@
 .training-launch .config-grid:empty { display: none; }
 .training-launch .config-unit-input { position: relative; }
 .training-launch .config-unit-input input { padding-right: 48px; }
+.training-launch .config-unit-input select { padding-right: 64px; }
 .training-launch .config-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 11px; font-weight: 400; pointer-events: none; }
+.training-launch .config-unit-input select + .config-unit { right: 28px; }
 .training-launch .config-unit-input input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .training-launch .config-unit-input input { appearance: textfield; -moz-appearance: textfield; }
 .training-source-fields { display: grid; grid-template-columns: minmax(240px, 340px) minmax(280px, 440px) minmax(160px, 220px); gap: 24px; }
