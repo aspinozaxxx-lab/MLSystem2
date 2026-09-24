@@ -3280,6 +3280,8 @@ def _configured_postprocess_profile(
     config: dict[str, Any],
     fallback_image_count: int,
 ) -> _PostprocessProfile:
+    if config.get("pipeline_variant") == "next_gen2":
+        return _POSTPROCESS_NONE
     name = config.get("postprocess_profile")
     if name is None:
         return _select_postprocess_profile(fallback_image_count)

@@ -211,6 +211,26 @@ def test_geoalert_effective_postprocess_keeps_smooth_settings() -> None:
     assert result["postprocess.smooth.offset"] == 0.125
 
 
+@pytest.mark.parametrize("image_count", [1, 24, 100])
+def test_hf_template_disables_implicit_postprocess_but_preserves_area_override(image_count):
+    template = next(item for item in initial_inference_templates() if item["architecture"] == "segformer_b0")
+    config = {"pipeline_variant": "next_gen2", "postprocess_config": template["default_config"]}
+    defaults = _effective_postprocess_config(config, image_count, external=False)
+    assert defaults["postprocess.min_area_m2"] is None
+    assert defaults["postprocess.min_hole_area_m2"] is None
+    assert defaults["postprocess.simplify_m"] is None
+    assert defaults["postprocess.mask_min_object_pixels"] is None
+    assert defaults["postprocess.mask_min_hole_pixels"] is None
+    assert defaults["postprocess.binary_closing_radius"] is None
+    assert defaults["postprocess.smooth.enabled"] is False
+    config["postprocess_config"] = {**template["default_config"], "postprocess.min_area_m2": 20.0}
+    changed = _effective_postprocess_config(config, image_count, external=False)
+    assert changed == {**defaults, "postprocess.min_area_m2": 20.0}
+    # Старое имя автоматического профиля в snapshot F1 также не должно включать фильтры.
+    config["postprocess_profile"] = "detail_v2"
+    assert _effective_postprocess_config(config, image_count, external=False) == changed
+
+
 def test_native_geoalert_pipeline_rejects_smooth_offset_above_half() -> None:
     with pytest.raises(TrainingUIAPIError, match="не больше 0.5"):
         _model_export._pipeline_yaml(

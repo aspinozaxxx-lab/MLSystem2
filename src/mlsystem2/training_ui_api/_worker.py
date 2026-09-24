@@ -927,6 +927,7 @@ def _build_pseudo_markup_config(
         "class_key": class_key,
         "class_name": class_name,
         "source_model": source_model,
+        "pipeline_variant": str(flat.get("train.pipeline_variant") or "legacy"),
         "task": training_result.task if training_result is not None else "binary",
         "object_types": (
             list(training_result.class_schema or []) if training_result is not None else []
@@ -1004,6 +1005,7 @@ def _build_pseudolabel_aoi_config(
         "model_id": state.get("model_id"),
         "model_version": state.get("model_version"),
         "source_model": state.get("model_name"),
+        "pipeline_variant": str(state.get("pipeline_variant") or "legacy"),
         "mlflow_tracking_uri": config.mlflow_tracking_uri,
         "mlflow_run_id": state.get("mlflow_run_id"),
         "checkpoint_uri": state.get("checkpoint_uri"),
@@ -1027,7 +1029,10 @@ def _build_pseudolabel_aoi_config(
         "channel_mapping": state.get("channel_mapping"),
         "input_channels": _int_value(state, "input_channels", 4),
         "postprocess_config": state.get("inference_template_config") or {},
-        "threshold": float(threshold) if threshold is not None else None,
+        "threshold": (
+            NEXT_GEN2_INFERENCE_THRESHOLD if state.get("pipeline_variant") == "next_gen2"
+            else float(threshold) if threshold is not None else None
+        ),
         "tile_size": _int_value(state, "tile_size", 768),
         "context": _int_value(state, "context", 0),
         "stride": _int_value(state, "stride", 768),
@@ -1235,6 +1240,7 @@ def _build_test_sample_f1_config(
         "class_schema": list(training_result.class_schema or []),
         "object_types": list(training_result.class_schema or []),
         "source_model": training_result.model_name,
+        "pipeline_variant": str(flat.get("train.pipeline_variant") or "legacy"),
         "training_result_id": str(training_result.id),
         "test_sample_id": (None if plan is not None and plan.managed else str(sample.id)),
         "test_sample_revision": (

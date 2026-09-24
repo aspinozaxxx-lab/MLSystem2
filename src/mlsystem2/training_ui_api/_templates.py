@@ -863,6 +863,11 @@ def initial_templates() -> list[dict[str, Any]]:
 def initial_inference_templates() -> list[dict[str, Any]]:
     rows = [
         _inference_template(
+            "segformer_b0",
+            "SegFormer B0 HF",
+            source="analogy",
+        ),
+        _inference_template(
             "external_torchscript",
             "импортированная TorchScript-модель",
             source="manual",

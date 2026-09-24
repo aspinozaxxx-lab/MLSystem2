@@ -231,6 +231,7 @@ def create_pseudolabel_job(
                 "task": selected.result.task,
                 "object_types": list(selected.result.class_schema or []),
                 "architecture": selected.result.architecture,
+                "pipeline_variant": str(source_config.get("train.pipeline_variant") or "legacy"),
                 "training_result_id": str(selected.result.id),
                 "mlflow_run_id": selected.result.mlflow_run_id,
                 "checkpoint_artifact_path": selected.checkpoint.artifact_path,

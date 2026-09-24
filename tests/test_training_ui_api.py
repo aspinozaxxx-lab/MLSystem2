@@ -3900,6 +3900,7 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
         assert payload["train"]["batch_size"] == 2
         assert pseudo_payload["tile_size"] == 1536
         assert pseudo_payload["batch_size"] == 4
+        assert pseudo_payload["pipeline_variant"] == "next_gen2"
         settings_path = Path(__file__).resolve().parents[1] / "configs" / "settings.server.yaml"
         run_path = tmp_path / "rgb-next-gen2.yaml"
         run_path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
@@ -3914,7 +3915,9 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
         assert pseudo.config["inference_template_config"]["postprocess.min_area_m2"] == 20.0
         assert pseudo.config["inference_template_config"]["postprocess.simplify_m"] == 0.5
     else:
-        assert pseudo.config["inference_template_id"] is None
+        assert pseudo.config["inference_template_id"] is not None
+        assert pseudo_payload["postprocess_config"]["postprocess.min_area_m2"] is None
+        assert pseudo_payload["postprocess_config"]["postprocess.simplify_m"] is None
     assert pseudo_scenes == "ryazan/ortho.tif\n"
     assert pseudo_payload["images_root"] == str(tmp_path / "images" / "orto")
     assert pseudo_payload["annotation_files"] == []

@@ -84,6 +84,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
   SplitRaster сохраняет исходные пиксели под nodata, VectorizeMasks строит контуры по границам пикселей.
   Для серверного Compose runner расширения регистрируются из `_geoalert_notebook.py` перед загрузкой YAML:
   полные окна через Triton adapter, Gaussian-объединение с полосовым буфером и SplitRaster без изменения исходных пикселей.
+  В заданиях сохраняется вариант конвейера: `next_gen2` применяет только явные параметры постобработки
+  шаблона датасета, без автоматических профилей по числу снимков. Шаблон `segformer_b0` входит в начальные данные.
   Внешний потребитель ZIP также должен поддерживать эти брики. Профиль требует context=0 и исходного разрешения; metadata ZIP фиксирует
   `output_kind`, `inference_merge`, `inference_stride` и `requires_inference_brick`.
   Остальные профили сохраняют прежний UINT8 ABI маски.
