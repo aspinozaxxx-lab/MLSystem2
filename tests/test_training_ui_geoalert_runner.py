@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -14,7 +15,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 import yaml
 
-from mlsystem2.training_ui_api import _geoalert_compose_runner, _model_export, _worker
+from mlsystem2.training_ui_api import _geoalert_compose_runner, _geoalert_runner, _model_export, _worker
 from mlsystem2.training_ui_api._geoalert_runner import (
     _effective_postprocess_config,
     _extract_model_archive,
@@ -388,6 +389,55 @@ def test_runtime_model_archive_rejects_path_outside_model_root(tmp_path: Path) -
 
     with pytest.raises(RuntimeError, match="вне корня модели"):
         _extract_model_archive(archive_path, tmp_path / "target", "expected")
+
+
+def test_cached_next_gen2_keeps_probability_pipeline_after_postprocess_change(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    exports = []
+
+    def export(**kwargs):
+        name = kwargs["model_name"]
+        exports.append(name)
+        model_zip = io.BytesIO()
+        with zipfile.ZipFile(model_zip, "w") as archive:
+            archive.writestr(f"{name}/config.pbtxt", f'name: "{name}"')
+        path = tmp_path / "export.zip"
+        metadata = {
+            "model_archive": "model.zip", "pipeline": "pipeline.yaml", "input_channels": 3,
+            "sample_size": 512, "task": "binary", "output_kind": "probabilities", "threshold": 0.73,
+        }
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("export_metadata.json", json.dumps(metadata))
+            archive.writestr("model.zip", model_zip.getvalue())
+            archive.writestr("pipeline.yaml", _model_export._pipeline_yaml(
+                name, 512, 3, probability_output=True, threshold=0.73,
+            ))
+        return SimpleNamespace(zip_path=path, cleanup=lambda: None)
+
+    monkeypatch.setattr(_geoalert_runner, "build_triton_model_export_zip", export)
+    config = {
+        "geoalert_model_repository": str(tmp_path / "models"),
+        "geoalert_pipeline_root": str(tmp_path / "pipelines"),
+        "tile_size": 512, "threshold": 0.73,
+    }
+    first = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config={},
+    )
+    second = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None,
+        postprocess_config={"postprocess.mask_min_object_pixels": 16},
+    )
+    assert exports == [first.model_name]
+    assert second.model_name == first.model_name
+    assert second.pipeline_path != first.pipeline_path
+    bricks = yaml.safe_load(second.pipeline_path.read_text(encoding="utf-8"))["config"]["bricks"]
+    assert bricks[0]["apply_mask"] is False
+    assert bricks[1]["_class"] == "SlidingWindowSegmentation"
+    assert bricks[1]["stride"] == 256
+    assert bricks[2]["thresholds"] == [0.73]
+    assert bricks[2]["strict_more"] is True
+    assert bricks[3]["min_size"] == 16
 
 
 def _write_raster(path: Path, values: np.ndarray, transform) -> None:

@@ -82,7 +82,9 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
   Бинарный `next_gen2` экспортирует FP32 `probabilities` и pipeline с `SlidingWindowSegmentation`
   (окно сети, шаг в половину окна, Gaussian sigma 0.25), затем строгий порог 0.9 либо явный override.
   SplitRaster сохраняет исходные пиксели под nodata, VectorizeMasks строит контуры по границам пикселей.
-  Этот профиль требует обновлённого inference, context=0 и исходного разрешения; metadata ZIP фиксирует
+  Для серверного Compose runner расширения регистрируются из `_geoalert_notebook.py` перед загрузкой YAML:
+  полные окна через Triton adapter, Gaussian-объединение с полосовым буфером и SplitRaster без изменения исходных пикселей.
+  Внешний потребитель ZIP также должен поддерживать эти брики. Профиль требует context=0 и исходного разрешения; metadata ZIP фиксирует
   `output_kind`, `inference_merge`, `inference_stride` и `requires_inference_brick`.
   Остальные профили сохраняют прежний UINT8 ABI маски.
 - Одиночная и групповая формы экспорта предлагают редактируемое имя `<class.technical_name>_kanopus` либо

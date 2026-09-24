@@ -486,7 +486,7 @@ def _ensure_runtime_export(
     checkpoint_sha = _sha256_file(checkpoint)
     model_identity = json.dumps(
         {
-            "runtime_contract": 2,
+            "runtime_contract": 3,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -548,6 +548,8 @@ def _ensure_runtime_export(
                     else None
                 ),
                 external_manifest=external_manifest,
+                probability_output=model_marker.get("output_kind") == "probabilities",
+                threshold=float(model_marker.get("threshold", 0.9)),
             )
             _install_pipeline_cache(
                 pipeline_path,
@@ -627,6 +629,8 @@ def _ensure_runtime_export(
                 "sample_size": int(metadata.get("sample_size") or config.get("tile_size") or 768),
                 "class_schema": list(metadata.get("class_schema") or []),
                 "task": str(metadata.get("task") or "binary"),
+                "output_kind": str(metadata.get("output_kind") or "binary_masks"),
+                "threshold": float(metadata.get("threshold", 0.9)),
             },
         )
         bricks = _pipeline_bricks(yaml.safe_load(pipeline_bytes.decode("utf-8")))

@@ -311,6 +311,8 @@ def build_geoalert_pipeline_yaml(
     postprocess_config: dict[str, object] | None = None,
     resolution_m: float | None = None,
     external_manifest: ExternalModelManifest | None = None,
+    probability_output: bool = False,
+    threshold: float = 0.9,
 ) -> str:
     """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
 
@@ -325,6 +327,8 @@ def build_geoalert_pipeline_yaml(
         context=context,
         postprocess_config=postprocess_config,
         resolution_m=resolution_m,
+        probability_output=probability_output,
+        threshold=threshold,
     )
 
 

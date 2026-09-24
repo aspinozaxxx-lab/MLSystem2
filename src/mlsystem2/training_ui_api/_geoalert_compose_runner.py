@@ -27,7 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
 
     from urban import Compose
+    if __package__:
+        from ._geoalert_notebook import register_notebook_bricks
+    else:
+        from _geoalert_notebook import register_notebook_bricks
 
+    register_notebook_bricks()
     pipeline = Compose.load(str(spec["pipeline_path"]))
     compose_root = Path(spec["compose_root"]).resolve()
     compose_root.mkdir(parents=True, exist_ok=True)
