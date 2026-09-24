@@ -3220,7 +3220,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
-        assert len(inference_templates) == 12
+        assert len(inference_templates) == 13
+        assert any(
+            item["architecture"] == "segformer_b0" and item["dataset_key"] is None
+            for item in inference_templates
+        )
         segformer_b0_inference = client.get("/api/v1/inference-templates/smp_segformer_b0").json()
         assert segformer_b0_inference["display_name"] == "segformer b0"
         assert segformer_b0_inference["source"] == "analogy"
