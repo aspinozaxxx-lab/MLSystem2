@@ -67,6 +67,7 @@ describe("trainingConfigSchema", () => {
         "tile_preparation.tile_size": 512,
         "tile_preparation.stride": 256,
         "tile_preparation.context": 0,
+        "train.batch_size": 16,
         "train.loss": "cross_entropy_tversky",
         "train.max_val_batches_per_epoch": null,
       },
@@ -81,7 +82,14 @@ describe("trainingConfigSchema", () => {
     expect(trainingConfigFieldVisible("train.pos_weight", "next_gen2", "segformer_b0")).toBe(false);
     expect(trainingConfigFieldVisible("tile_preparation.stride", "next_gen2", "segformer_b0")).toBe(false);
     expect(trainingConfigFieldVisible("dataset.val_fraction", "next_gen2", "segformer_b0")).toBe(false);
-    expect(configWithField(value, "tile_preparation.tile_size", 768)["tile_preparation.stride"]).toBe(256);
+    for (const size of [512, 768, 1024, 1536]) {
+      const changed = configWithField(value, "tile_preparation.tile_size", size);
+      expect(changed["tile_preparation.tile_size"]).toBe(size);
+      expect(changed["tile_preparation.stride"]).toBe(size / 2);
+      expect(changed["tile_preparation.context"]).toBe(0);
+      expect(changed["train.batch_size"]).toBe(({512: 16, 768: 8, 1024: 4, 1536: 2} as Record<number, number>)[size]);
+    }
+    expect(trainingConfigFieldVisible("tile_preparation.tile_size", "next_gen2", "segformer_b0")).toBe(true);
     expect(trainingConfigFieldVisible("tile_preparation.stride", "legacy", "smp_segformer_b0")).toBe(true);
     expect(configWithField({ "train.pipeline_variant": "legacy", "tile_preparation.stride": 256 }, "tile_preparation.tile_size", 768)["tile_preparation.stride"]).toBe(256);
     expect(configWithField(value, "train.pipeline_variant", "next_gen")["train.loss"]).toBe("bce_dice");

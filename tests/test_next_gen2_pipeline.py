@@ -130,15 +130,16 @@ def test_notebook_inference_handles_image_smaller_than_window(tmp_path):
 
 
 @pytest.mark.parametrize("training_stride", [16, 32])
-def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metrics(tmp_path, monkeypatch, training_stride):
+@pytest.mark.parametrize("channels", [3, 4])
+def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metrics(tmp_path, monkeypatch, training_stride, channels):
     pytest.importorskip("torch")
-    image, _ = _scene(tmp_path)
+    image, _ = _scene(tmp_path, channels=channels)
     model = _eval_model()
     reference = _eval_notebook_functions()
     expected_mask, _ = reference["sliding_window_inference"](model, image, 32, 16, 8)
     checkpoint_metadata = {"pipeline_variant": "next_gen2", "confidence_threshold": 0.5,
                            "val_best_threshold": 0.5, "sample_size": 32, "inference_context": 0}
-    loaded = SimpleNamespace(model=_factory._wrap_next_gen(_spec(), model),
+    loaded = SimpleNamespace(model=_factory._wrap_next_gen(_spec(channels), model),
                              artifact=SimpleNamespace(metadata=checkpoint_metadata))
     monkeypatch.setattr(_pseudo_runner, "load_checkpoint", lambda request: loaded)
     monkeypatch.setattr(_pseudo_runner, "_select_postprocess_profile", lambda count: _pseudo_runner._POSTPROCESS_DETAIL_V2)
@@ -150,7 +151,7 @@ def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metri
               "images_root": str(tmp_path), "scenes_file": str(scenes),
               "output_geojson": str(tmp_path / "prediction.geojson"), "threshold": 0.5,
               "tile_size": 32, "stride": training_stride, "batch_size": 8, "device": "cpu",
-              "class_key": "test", "class_name": "Проверка", "input_channels": 4}
+              "class_key": "test", "class_name": "Проверка", "input_channels": channels}
     report = _pseudo_runner.run_pseudo_markup(config)
     assert report["status"] == "ok", report
     assert report["source"]["threshold"] == 0.9
@@ -223,18 +224,18 @@ def _notebook_functions():
     return namespace
 
 
-def _scene(tmp_path: Path, name="SCN01", x_offset=0):
+def _scene(tmp_path: Path, name="SCN01", x_offset=0, channels=4):
     image = tmp_path / f"{name}.tif"
     annotation = tmp_path / f"{name}.geojson"
-    pixels = np.random.default_rng(7).integers(1, 255, (4, 100, 100), dtype=np.uint8)
+    pixels = np.random.default_rng(7).integers(1, 255, (channels, 100, 100), dtype=np.uint8)
     pixels[:, :32, :32] = 0
     pixels[2] = 70
     with rasterio.open(
-        image, "w", driver="GTiff", width=100, height=100, count=4,
+        image, "w", driver="GTiff", width=100, height=100, count=channels,
         dtype="uint8", crs="EPSG:3857", transform=from_origin(x_offset, 100, 1, 1), nodata=0,
     ) as target:
         target.write(pixels)
-        target.descriptions = ("RED", "GRN", "BLU", "NIR")
+        target.descriptions = ("RED", "GRN", "BLU", "NIR")[:channels]
         valid = np.full((100, 100), 255, dtype=np.uint8)
         valid[:32, :32] = 0
         target.write_mask(valid)
@@ -265,9 +266,9 @@ def _config(**overrides):
     )
 
 
-def _spec():
+def _spec(input_channels=4):
     return ModelSpec(
-        name="segformer_b0", input_channels=4, output_channels=1, pretrained=False,
+        name="segformer_b0", input_channels=input_channels, output_channels=1, pretrained=False,
         parameters={"pipeline_variant": "next_gen2", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}},
     )
 
@@ -282,8 +283,8 @@ def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     assert payload["tile_preparation.stride"] == 256
     assert payload["tile_preparation.tile_size"] == 512
     old_config = {**payload, "tile_preparation.tile_size": 768, "tile_preparation.stride": 256}
-    assert sanitize_template_config(old_config)["tile_preparation.stride"] == 256
-    assert sanitize_template_config(old_config)["tile_preparation.tile_size"] == 512
+    assert sanitize_template_config(old_config)["tile_preparation.stride"] == 384
+    assert sanitize_template_config(old_config)["tile_preparation.tile_size"] == 768
     assert old_config["tile_preparation.stride"] == 256
     for variant in ("legacy", "next_gen"):
         assert sanitize_template_config({**old_config, "train.pipeline_variant": variant})["tile_preparation.stride"] == 256
@@ -300,13 +301,62 @@ def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     ("tile_preparation.context", 128), ("tile_preparation.augmentation_level", 1),
     ("train.loss", "bce_dice"), ("train.max_train_batches_per_epoch", 1),
     ("dataset.val_fraction", 0.3), ("train.batch_size", 32), ("train.learning_rate", 0.001),
-    ("tile_preparation.tile_size", 768), ("tile_preparation.stride", 512),
+    ("tile_preparation.tile_size", 640), ("tile_preparation.stride", 512),
 ])
 def test_api_rejects_incompatible_notebook_settings(key, value):
     payload = {**NEXT_GEN2_DEFAULT_CONFIG, "dataset.task": "binary",
                "dataset.imagery_type": "kanopus", "train.input_channels": 4, key: value}
     with pytest.raises(_service.TrainingUIAPIError, match="next-gen2"):
         _service._validate_training_pipeline_variant(payload, "segformer_b0")
+
+
+@pytest.mark.parametrize("tile_size", [512, 768, 1024, 1536])
+@pytest.mark.parametrize("imagery_type,channels", [("kanopus", 4), ("ortho", 3)])
+def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type, channels):
+    payload = sanitize_template_config({
+        "train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size,
+        "train.epochs": 27, "train.early_stopping_patience": 6,
+        "train.max_training_time_sec": 3600,
+    })
+    assert payload["tile_preparation.tile_size"] == tile_size
+    assert payload["tile_preparation.stride"] == tile_size // 2
+    assert payload["tile_preparation.context"] == 0
+    assert payload["train.epochs"] == 27
+    assert payload["train.early_stopping_patience"] == 6
+    assert payload["train.max_training_time_sec"] == 3600
+    assert sanitize_template_config({}, fallback=payload) == payload
+    payload.update({"dataset.task": "binary", "dataset.imagery_type": imagery_type, "train.input_channels": channels})
+    _service._validate_training_pipeline_variant(payload, "segformer_b0")
+    root = Path(__file__).resolve().parents[1]
+    settings = load_settings(root / "configs/settings.server.yaml", root / "configs/run.next-gen2.server.yaml").model_dump()
+    for key, value in payload.items():
+        group, field = key.split(".", 1)
+        if key not in {"dataset.task", "dataset.imagery_type"}:
+            settings[group][field] = value
+    checked = SystemSettings.model_validate(settings)
+    assert checked.tile_preparation.tile_size == tile_size
+    assert checked.train.input_channels == channels
+    assert checked.tile_preparation.num_workers == 8
+
+
+@pytest.mark.parametrize("tile_size", [None, 0, 640, 2048, "1024", [], {}])
+def test_template_rejects_unsupported_next_gen2_tile_size(tile_size):
+    with pytest.raises(_service.TrainingUIAPIError, match="размер тайла"):
+        sanitize_template_config({"train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size})
+
+
+@pytest.mark.parametrize("tile_size,batch_size", [(512, 32), (768, 16), (1024, 8), (1536, 4)])
+def test_inference_batch_uses_checkpoint_tile_size(tile_size, batch_size):
+    loaded = SimpleNamespace(
+        model=SimpleNamespace(spec=_spec(3)),
+        artifact=SimpleNamespace(metadata={"sample_size": tile_size}),
+    )
+    config = {"tile_size": 512, "batch_size": 32, "threshold": 0.5}
+    resolved = _pseudo_runner._native_inference_config(loaded, config)
+    assert resolved["batch_size"] == batch_size
+    assert resolved["threshold"] == 0.9
+    assert resolved["inference_merge"] == "gaussian_probabilities"
+    assert config == {"tile_size": 512, "batch_size": 32, "threshold": 0.5}
 
 
 @pytest.mark.parametrize("with_hard_negative", [False, True])
@@ -562,13 +612,14 @@ def test_one_epoch_matches_notebook_loss_gradients_and_adamw(tmp_path):
         torch.testing.assert_close(dict(model.model.model.named_parameters())[name], parameter, atol=3e-6, rtol=3e-5)
 
 
-def test_two_class_checkpoint_roundtrip_is_offline_and_keeps_preprocessing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("channels", [3, 4])
+def test_two_class_checkpoint_roundtrip_is_offline_and_keeps_preprocessing(tmp_path, monkeypatch, channels):
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
     torch.set_num_threads(2)
-    model = create_model(_spec())
+    model = create_model(_spec(channels))
     model.model.eval()
-    images = torch.randint(0, 255, (2, 4, 32, 32)).float()
+    images = torch.randint(0, 255, (2, channels, 32, 32)).float()
     images[:, 2] = 12
     expected = model.model(images)
     path = tmp_path / "best.pt"
@@ -610,18 +661,19 @@ def test_mlflow_preserves_old_loss_selection_and_reads_new_f1_selection(
     assert result.threshold == 0.5
 
 
-def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("channels", [3, 4])
+def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_path, monkeypatch, channels):
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
     torch.set_num_threads(2)
-    scenes = [_scene(tmp_path, f"SCN{index:02d}", index * 200) for index in range(5)]
+    scenes = [_scene(tmp_path, f"SCN{index:02d}", index * 200, channels=channels) for index in range(5)]
     annotations = tmp_path / "annotations"
     annotations.mkdir()
     for image, annotation in scenes:
         annotation.rename(annotations / f"{tmp_path.name}_{image.stem}.geojson")
     settings_path = tmp_path / "settings.yaml"
     train = {key.split(".", 1)[1]: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key.startswith("train.")}
-    train.update({"model_name": "segformer_b0", "input_channels": 4, "output_channels": 1,
+    train.update({"model_name": "segformer_b0", "input_channels": channels, "output_channels": 1,
                   "epochs": 2, "device": "cpu"})
     settings = SystemSettings.model_validate({
         "runtime": {"project_root": str(tmp_path), "scratch_root": str(tmp_path / "scratch"),
@@ -640,7 +692,13 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     pretrained_calls = []
     def local_pretrained(*args, **kwargs):
         pretrained_calls.append((args, kwargs))
-        return transformers.SegformerForSemanticSegmentation(transformers.SegformerConfig(num_labels=2))
+        model = transformers.SegformerForSemanticSegmentation(transformers.SegformerConfig(num_labels=2))
+        if channels == 3:
+            # Имитируем обученное RGB-смещение: нулевая инициализация с пустыми окнами 32 px
+            # даёт вырожденные LayerNorm, отсутствующие в настоящем pretrained checkpoint.
+            with torch.no_grad():
+                _factory._first_patch_projection(model).bias.copy_(torch.linspace(-0.1, 0.1, 32))
+        return model
     monkeypatch.setattr(transformers.SegformerForSemanticSegmentation, "from_pretrained", local_pretrained)
     logged = []
     tile_reports = []
@@ -675,6 +733,8 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     assert trained.diagnostics["test_metrics"]["checkpoint_epoch"] == payload["metadata"]["epoch"]
     assert payload["metadata"]["checkpoint_selection_metric"] == "val_loss"
     assert payload["metadata"]["confidence_threshold"] == 0.5
+    assert payload["model_spec"]["input_channels"] == channels
+    assert payload["model_spec"]["parameters"]["band_contract"] == ["RED", "GRN", "BLU", "NIR"][:channels]
     assert Path(trained.final_checkpoint_path).is_file()
 
 
@@ -692,6 +752,21 @@ def test_notebook_input_adapter_retains_random_bias_and_both_heads():
     torch.testing.assert_close(adapted.weight[:, 3], rgb[:, 0])
     assert not torch.any(adapted.bias == 123)
     assert model.decode_head.classifier is classifier
+
+
+def test_rgb_pretrained_model_retains_original_projection_and_two_logits(monkeypatch):
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    original = transformers.SegformerForSemanticSegmentation(transformers.SegformerConfig(num_labels=2))
+    projection = _factory._first_patch_projection(original)
+    weights, bias = projection.weight.detach().clone(), projection.bias.detach().clone()
+    monkeypatch.setattr(transformers.SegformerForSemanticSegmentation, "from_pretrained", lambda *args, **kwargs: original)
+    model = create_model(_spec(3).model_copy(update={"pretrained": True}))
+    assert _factory._first_patch_projection(model.model.model) is projection
+    torch.testing.assert_close(projection.weight, weights, rtol=0, atol=0)
+    torch.testing.assert_close(projection.bias, bias, rtol=0, atol=0)
+    assert model.spec.parameters["hf_config"]["num_channels"] == 3
+    assert model.model.model.config.num_labels == 2
 
 
 def test_early_stopping_and_scheduler_follow_notebook_loss(tmp_path, monkeypatch):
@@ -732,22 +807,24 @@ def test_early_stopping_and_scheduler_follow_notebook_loss(tmp_path, monkeypatch
     assert final["metadata"]["epoch"] == 4
 
 
-def test_next_gen2_onnx_keeps_window_normalization_and_binary_output(tmp_path):
+@pytest.mark.parametrize("channels", [3, 4])
+def test_next_gen2_onnx_keeps_window_normalization_and_binary_output(tmp_path, channels):
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")
     onnx = pytest.importorskip("onnx")
     from mlsystem2.training_ui_api import _model_export
     torch.set_num_threads(2)
-    model = create_model(_spec())
+    model = create_model(_spec(channels))
     path = tmp_path / "model.onnx"
     _model_export._export_binary_mask_onnx(
-        model=model.model, input_channels=4, sample_size=32, threshold=0.5, onnx_path=path,
+        model=model.model, input_channels=channels, sample_size=32, threshold=0.5, onnx_path=path,
     )
     exported = onnx.load(str(path))
     onnx.checker.check_model(exported)
     operations = {node.op_type for node in exported.graph.node}
     assert {"ReduceMin", "ReduceMax", "Sigmoid"} <= operations
     assert exported.graph.output[0].type.tensor_type.shape.dim[1].dim_value == 1
+    assert exported.graph.input[0].type.tensor_type.shape.dim[1].dim_value == channels
 
 
 def test_next_gen2_argmax_assigns_ties_to_background():

@@ -85,7 +85,7 @@ export function trainingSummary({
   const patienceUnit = checks ? ending("проверки", "проверок", "проверок") : ending("эпохи", "эпох", "эпох");
   return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${variant}. `
     + `Тайлы ${trainingNumber(tile.size)} × ${trainingNumber(tile.size)} px, центр ${trainingNumber(tile.core)} × ${trainingNumber(tile.core)} px; `
-    + (variant === "next-gen2" ? "шаг 256 px, train/validation/test 60/20/20. " : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
+    + (variant === "next-gen2" ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
     + `Batch size ${trainingNumber(value["train.batch_size"])}, LR ${value["train.learning_rate"] ?? "—"}. `
     + `Максимум ${trainingNumber(value["train.epochs"])} эпох${time == null || time === "" ? "" : `, лимит ${trainingNumber(Number(time) / 60)} мин`}; `
     + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${variant === "next-gen2" ? " validation loss" : ""}. `

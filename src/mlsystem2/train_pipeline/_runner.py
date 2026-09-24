@@ -383,7 +383,7 @@ def _mlflow_start_request(
 
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     expected_band_names = (
-        ["RED", "GRN", "BLU", "NIR"]
+        ["RED", "GRN", "BLU", "NIR"][:settings.train.input_channels]
         if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
         else []
     )
@@ -560,7 +560,7 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
         parameters = {
             "pipeline_variant": "next_gen2",
             "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6},
-            "band_contract": ["RED", "GRN", "BLU", "NIR"],
+            "band_contract": ["RED", "GRN", "BLU", "NIR"][:settings.train.input_channels],
             "split": getattr(dataset, "tile_split_manifest", {}),
             "class_weights": getattr(dataset, "notebook_class_weights", []),
             "sampler": {"positive_ratio_threshold": 0.001, "positive_weight": 7.0,

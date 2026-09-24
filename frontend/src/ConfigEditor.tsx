@@ -37,6 +37,8 @@ export function ConfigEditor({
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
       ).map((field) => {
         const current = value[field.key] ?? "";
+        const nextGen2Tile = pipelineVariant === "next_gen2" && field.key === "tile_preparation.tile_size";
+        const options = nextGen2Tile ? ["512", "768", "1024", "1536"] : field.options;
         const display = presentation[field.key];
         const labelText = display?.label || field.label;
         const scale = display?.scale || 1;
@@ -53,7 +55,9 @@ export function ConfigEditor({
           field.key === "train.pipeline_variant" &&
           Boolean(architecture) &&
           !["smp_segformer_b0", "segformer_b0"].includes(architecture || "");
-        const tooltip = pipelineVariant === "next_gen2" && field.key === "train.epochs"
+        const tooltip = nextGen2Tile
+          ? "Размер квадратного тайла в пикселях. По умолчанию 512. Шаг равен половине размера; контекст отсутствует. Batch size 16/8/4/2 для размеров 512/768/1024/1536 помогает уместить большие окна в видеопамять."
+          : pipelineVariant === "next_gen2" && field.key === "train.epochs"
           ? "Максимальное число эпох. По умолчанию 20; обучение может завершиться раньше по early stopping или лимиту времени."
           : pipelineVariant === "next_gen2" && field.key === "train.early_stopping_patience"
           ? "Число полных эпох без уменьшения validation loss. По умолчанию 10."
@@ -89,7 +93,7 @@ export function ConfigEditor({
           <label className="field" key={field.key}>
             {label}
             <div className={`inline-row${display?.unit ? " config-unit-input" : ""}`}>
-              {field.options?.length ? (
+              {options?.length ? (
                 <select
                   value={String(current)}
                   name={field.key}
@@ -97,7 +101,7 @@ export function ConfigEditor({
                   title={tooltip || field.label}
                   onChange={(event) => setField(field, event.target.value)}
                 >
-                  {field.options.filter((option) => field.key !== "train.pipeline_variant" ||
+                  {options.filter((option) => field.key !== "train.pipeline_variant" ||
                     (architecture === "segformer_b0" ? option !== "legacy" : option !== "next_gen2")
                   ).map((option) => (
                     <option value={option} key={option}>

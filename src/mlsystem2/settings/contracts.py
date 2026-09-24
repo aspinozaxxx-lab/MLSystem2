@@ -232,23 +232,26 @@ class SystemSettings(BaseModel):
         if self.train.pipeline_variant == "next_gen2":
             if (
                 self.train.model_name != "segformer_b0"
-                or self.train.input_channels != 4
+                or self.train.input_channels not in (3, 4)
                 or self.train.output_channels != 1
                 or not self.train.pretrained
             ):
-                raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 4 и выходом 1")
+                raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 3 или 4 и выходом 1")
+            if self.tile_preparation.tile_size not in (512, 768, 1024, 1536):
+                raise ValueError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
             fixed = (
                 (self.dataset.val_fraction, 0.2),
-                (self.tile_preparation.tile_size, 512), (self.tile_preparation.stride, 256),
+                (self.tile_preparation.stride, self.tile_preparation.tile_size // 2),
                 (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
                 (self.tile_preparation.seed, 42),
-                (self.train.batch_size, 16), (self.train.learning_rate, 1e-4),
+                (self.train.batch_size, {512: 16, 768: 8, 1024: 4, 1536: 2}[self.tile_preparation.tile_size]),
+                (self.train.learning_rate, 1e-4),
                 (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
                 (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),
                 (self.train.initial_checkpoint_uri, None),
             )
             if any(actual != expected for actual, expected in fixed):
-                raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны только эпохи, patience и лимит времени")
+                raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны размер тайла, эпохи, patience и лимит времени")
             if (
                 self.train.max_train_batches_per_epoch is not None
                 or self.train.max_val_batches_per_epoch is not None

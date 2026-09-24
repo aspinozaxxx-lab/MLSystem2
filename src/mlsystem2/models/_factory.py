@@ -256,11 +256,11 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
     is_next_gen2 = spec.parameters.get("pipeline_variant") == "next_gen2"
     if is_next_gen2:
-        if spec.name != _SEGFORMER_B0 or spec.input_channels != 4 or spec.output_channels != 1:
-            raise ModelsError("next-gen2 требует HF SegFormer B0 с входом 4 и выходом 1")
+        if spec.name != _SEGFORMER_B0 or spec.input_channels not in (3, 4) or spec.output_channels != 1:
+            raise ModelsError("next-gen2 требует HF SegFormer B0 с входом 3 или 4 и выходом 1")
         if not initialize_pretrained:
             raw_config = spec.parameters.get("hf_config")
-            if not isinstance(raw_config, dict) or raw_config.get("num_channels") != 4:
+            if not isinstance(raw_config, dict) or raw_config.get("num_channels") != spec.input_channels:
                 raise ModelsError("Checkpoint next-gen2 не содержит корректную HF-конфигурацию")
             config = SegformerConfig(**raw_config)
             if config.num_labels != 2:
@@ -274,16 +274,17 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
                 ignore_mismatched_sizes=True,
                 use_safetensors=True,
             )
-            _adapt_pretrained_segformer(model, 4, 2, notebook=True)
+            if spec.input_channels == 4:
+                _adapt_pretrained_segformer(model, 4, 2, notebook=True)
         else:
             model = SegformerForSemanticSegmentation(SegformerConfig(
-                num_channels=4, num_labels=2,
+                num_channels=spec.input_channels, num_labels=2,
                 **{key: value for key, value in model_config.items() if key != "pretrained"},
             ))
         parameters = dict(spec.parameters)
         parameters.update({
             "hf_config": model.config.to_dict(),
-            "input_adapter": "rgb_copy_plus_red_to_nir_random_bias",
+            "input_adapter": "rgb_copy_plus_red_to_nir_random_bias" if spec.input_channels == 4 else "pretrained_rgb",
             "binary_output": "foreground_logit_minus_background_logit",
         })
         if spec.pretrained:
@@ -434,7 +435,6 @@ if torch is not None:
 
         def forward(self, x, *, return_two_class_logits: bool = False):
             raw = x.float()
-            valid = torch.any(raw != self.nodata, dim=1, keepdim=True)
             if self.mode == "window_minmax":
                 low = raw.amin(dim=(-2, -1), keepdim=True)
                 span = raw.amax(dim=(-2, -1), keepdim=True) - low
@@ -449,6 +449,7 @@ if torch is not None:
                 if self.mode == "imagenet_rgb_red_nir":
                     normalized = (normalized - self.preprocess_mean) / self.preprocess_std
             if self.mode != "window_minmax":
+                valid = torch.any(raw != self.nodata, dim=1, keepdim=True)
                 normalized = torch.where(valid, normalized, torch.zeros_like(normalized))
             output = self.model(normalized)
             logits = output.logits if hasattr(output, "logits") else output

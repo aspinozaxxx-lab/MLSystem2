@@ -3683,11 +3683,14 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
-@pytest.mark.parametrize("pipeline_variant", ["legacy", "next_gen2"])
+@pytest.mark.parametrize("pipeline_variant,tile_size", [
+    ("legacy", 512), ("next_gen2", 512), ("next_gen2", 768), ("next_gen2", 1024), ("next_gen2", 1536),
+])
 def test_training_ui_worker_snapshots_per_image_annotations(
     tmp_path: Path,
     monkeypatch,
     pipeline_variant: str,
+    tile_size: int,
 ) -> None:
     dataset_root = tmp_path / "MLMarkup" / "Реки" / "test"
     dataset_root.mkdir(parents=True)
@@ -3729,7 +3732,7 @@ def test_training_ui_worker_snapshots_per_image_annotations(
                 mlflow_experiment_name="per-image-test",
                 dataset_key="Реки\\test",
                 architecture="segformer_b0" if pipeline_variant == "next_gen2" else "smp_segformer_b2",
-                config=({"train.pipeline_variant": "next_gen2"}
+                config=({"train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size}
                         if pipeline_variant == "next_gen2" else _short_training_config()),
             ),
             config,
@@ -3743,8 +3746,9 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             assert payload["train"]["loss"] == "cross_entropy_tversky"
             assert payload["train"]["pretrained"] is True
             assert payload["tile_preparation"]["context"] == 0
-            assert payload["tile_preparation"]["stride"] == 256
-            assert payload["tile_preparation"]["tile_size"] == 512
+            assert payload["tile_preparation"]["stride"] == tile_size // 2
+            assert payload["tile_preparation"]["tile_size"] == tile_size
+            assert payload["train"]["batch_size"] == {512: 16, 768: 8, 1024: 4, 1536: 2}[tile_size]
             assert "num_workers" not in payload["tile_preparation"]
             settings_path = Path(__file__).resolve().parents[1] / "configs" / "settings.server.yaml"
             run_path = tmp_path / "generated-next-gen2.yaml"
@@ -3784,9 +3788,11 @@ def test_training_ui_worker_snapshots_per_image_annotations(
     assert snapshot.read_text(encoding="utf-8") == original
 
 
+@pytest.mark.parametrize("pipeline_variant", ["legacy", "next_gen2"])
 def test_training_ui_builds_ortho_training_config_with_three_channels(
     tmp_path: Path,
     monkeypatch,
+    pipeline_variant: str,
 ) -> None:
     dataset_root = tmp_path / "MLMarkup" / "Крыши" / "main"
     dataset_root.mkdir(parents=True)
@@ -3825,8 +3831,9 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
                 mlflow_experiment_id="1",
                 mlflow_experiment_name="ortho-test",
                 dataset_key="Крыши\\main",
-                architecture="smp_segformer_b2",
-                config=_short_training_config(),
+                architecture="segformer_b0" if pipeline_variant == "next_gen2" else "smp_segformer_b2",
+                config=({"train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": 1536}
+                        if pipeline_variant == "next_gen2" else _short_training_config()),
             ),
             config,
         )
@@ -3838,26 +3845,23 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
         )
         assert training_result is not None
         training_result.status = ResultStatus.OK.value
-        inference_template = _service.create_inference_template(
-            session,
-            TrainingTemplateCreate(
-                architecture="smp_segformer_b2",
-                dataset_key="Крыши\\main",
-            ),
-            config,
-        )
-        inference_template = _service.update_inference_template_by_id(
-            session,
-            inference_template.id,
-            TrainingTemplateUpdate(
-                default_config={
+        inference_template = None
+        if pipeline_variant == "legacy":
+            inference_template = _service.create_inference_template(
+                session,
+                TrainingTemplateCreate(architecture=row.architecture, dataset_key="Крыши\\main"),
+                config,
+            )
+            inference_template = _service.update_inference_template_by_id(
+                session,
+                inference_template.id,
+                TrainingTemplateUpdate(default_config={
                     **inference_template.default_config,
                     "postprocess.min_area_m2": 20.0,
                     "postprocess.simplify_m": 0.5,
-                }
-            ),
-            config,
-        )
+                }),
+                config,
+            )
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Крыши\\main",
@@ -3889,12 +3893,28 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
     assert row.config["dataset.imagery_type"] == "ortho"
     assert payload["dataset"]["images_dir"] == str(tmp_path / "images" / "orto")
     assert payload["train"]["input_channels"] == 3
+    if pipeline_variant == "next_gen2":
+        assert row.tile_size == 1536
+        assert payload["tile_preparation"]["stride"] == 768
+        assert payload["tile_preparation"]["context"] == 0
+        assert payload["train"]["batch_size"] == 2
+        assert pseudo_payload["tile_size"] == 1536
+        assert pseudo_payload["batch_size"] == 4
+        settings_path = Path(__file__).resolve().parents[1] / "configs" / "settings.server.yaml"
+        run_path = tmp_path / "rgb-next-gen2.yaml"
+        run_path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+        from mlsystem2.settings.api import load_settings
+
+        assert load_settings(settings_path, run_path).train.input_channels == 3
     assert pseudo.config["images_root"] == str(tmp_path / "images" / "orto")
     assert pseudo.config["imagery_type"] == "ortho"
     assert pseudo.config["input_channels"] == 3
-    assert pseudo.config["inference_template_id"] == str(inference_template.id)
-    assert pseudo.config["inference_template_config"]["postprocess.min_area_m2"] == 20.0
-    assert pseudo.config["inference_template_config"]["postprocess.simplify_m"] == 0.5
+    if inference_template is not None:
+        assert pseudo.config["inference_template_id"] == str(inference_template.id)
+        assert pseudo.config["inference_template_config"]["postprocess.min_area_m2"] == 20.0
+        assert pseudo.config["inference_template_config"]["postprocess.simplify_m"] == 0.5
+    else:
+        assert pseudo.config["inference_template_id"] is None
     assert pseudo_scenes == "ryazan/ortho.tif\n"
     assert pseudo_payload["images_root"] == str(tmp_path / "images" / "orto")
     assert pseudo_payload["annotation_files"] == []

@@ -79,9 +79,18 @@ describe("форма запуска обучения", () => {
     expect(html).toContain('name="train.early_stopping_patience"');
     expect(html).toContain('name="train.max_training_time_sec"');
     expect(html.match(/<input[^>]+type="number"/g)).toHaveLength(3);
+    const tileSelect = html.match(/<select[^>]+name="tile_preparation.tile_size"[\s\S]*?<\/select>/)?.[0] || "";
+    for (const size of [512, 768, 1024, 1536]) expect(tileSelect).toContain(`value="${size}"`);
+    expect(tileSelect.match(/<option/g)).toHaveLength(4);
     expect(html).not.toContain('name="train.batch_size"');
     expect(html).not.toContain('name="train.learning_rate"');
     expect(html).toContain("Фиксированный профиль. Train/validation/test 60/20/20.");
     expect(html).toContain("Выбор весов по validation loss.");
+  });
+  it("обновляет схему тайла и краткое описание для большого размера next-gen2", () => {
+    const html = render({ ...value, "train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": 1536, "tile_preparation.context": 0, "tile_preparation.stride": 768 });
+    expect(html).toContain("полезный центр 1536 на 1536 пикселей");
+    expect(html).toContain("шаг 768 px, train/validation/test 60/20/20");
+    expect(html).toContain('<option value="1536" selected="">1536</option>');
   });
 });

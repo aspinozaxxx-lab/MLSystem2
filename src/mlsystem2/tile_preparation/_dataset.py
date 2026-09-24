@@ -260,7 +260,8 @@ class TileDataset:
                 _nodata_pixels(image_raw, nodata),
                 self._read_invalid_data_pixels(dataset, window),
             )
-        image = image_raw.astype(np.float32, copy=False)
+        # Albumentations получает исходный uint8; float32 нужен только после преобразований.
+        image = image_raw if self._notebook_transform is not None else image_raw.astype(np.float32, copy=False)
         if self._pipeline_variant != "next_gen2":
             image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(

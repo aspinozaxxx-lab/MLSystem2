@@ -155,7 +155,7 @@ export function TrainingLaunchForm({
                   {datasets.map((item) => <option value={item.key} key={item.key}>{item.name}{item.image_count == null ? "" : ` (${item.image_count} снимков)`}</option>)}
                 </select>
               </label>
-              {renderFields(["train.pipeline_variant"])}
+              {renderFields(nextGen2 ? ["train.pipeline_variant", "tile_preparation.tile_size"] : ["train.pipeline_variant"])}
             </div>
             {datasetKey === "custom" ? <div className="training-uploads">
               <label className="field"><span>Разметка GeoJSON</span><input name="annotation_geojson" type="file" accept=".geojson,application/geo+json" required /></label>
@@ -221,7 +221,7 @@ export function TrainingLaunchForm({
       </fieldset>
 
       {nextGen2 ? <section className="training-pipeline-description" aria-label="Описание next-gen2">
-        <h2>Особенности next-gen2 <span>Фиксированный профиль ноутбука</span></h2>
+        <h2>Особенности next-gen2 <span>Профиль ноутбука с выбором размера тайла</span></h2>
         <div className="training-pipeline-details">
           <div>{(schema?.pipeline_descriptions?.next_gen2 || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</div>
           {tilePreview}

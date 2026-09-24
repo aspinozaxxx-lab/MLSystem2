@@ -104,6 +104,7 @@ from ._queueing import (
 from ._templates import (
     NEXT_GEN2_DEFAULT_CONFIG,
     NEXT_GEN2_EDITABLE_KEYS,
+    NEXT_GEN2_TRAIN_BATCH_SIZES,
     initial_inference_templates,
     initial_templates,
     sanitize_inference_template_config,
@@ -1051,10 +1052,17 @@ def _validate_training_pipeline_variant(
     if variant == "next_gen2":
         if architecture != "segformer_b0":
             raise TrainingUIAPIError("next-gen2 поддерживает только SegFormer B0 HF.")
+        tile_size = job_config.get("tile_preparation.tile_size")
+        if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
+            raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536.")
+        imagery_type = job_config.get("dataset.imagery_type")
+        if imagery_type not in {"kanopus", "ortho"}:
+            raise TrainingUIAPIError("next-gen2 поддерживает Канопус и RGB-ортофотопланы.")
         required = {
-            "dataset.task": "binary", "dataset.imagery_type": "kanopus",
-            "train.input_channels": 4,
+            "dataset.task": "binary", "train.input_channels": 3 if imagery_type == "ortho" else 4,
             **{key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS},
+            "tile_preparation.stride": tile_size // 2,
+            "train.batch_size": NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size],
         }
         for key, expected in required.items():
             if job_config.get(key) != expected:

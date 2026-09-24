@@ -5,12 +5,21 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .contracts import TrainingUIAPIError
 
 COMPACT_FILTER_REMOVE = "remove_compact"
 COMPACT_FILTER_KEEP = "keep_compact"
 COMPACT_FILTER_MODES = (COMPACT_FILTER_REMOVE, COMPACT_FILTER_KEEP)
 NEXT_GEN2_INFERENCE_THRESHOLD = 0.9
 NEXT_GEN2_INFERENCE_BATCH_SIZE = 32
+NEXT_GEN2_TRAIN_BATCH_SIZES = {512: 16, 768: 8, 1024: 4, 1536: 2}
+
+
+def next_gen2_inference_batch_size(tile_size: int) -> int:
+    """Ограничить объём пикселей в inference-пакете при увеличении окна."""
+    if tile_size in NEXT_GEN2_TRAIN_BATCH_SIZES:
+        return 2 * NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size]
+    return max(1, min(NEXT_GEN2_INFERENCE_BATCH_SIZE, 32 * 512 ** 2 // max(1, tile_size) ** 2))
 
 
 NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
@@ -42,12 +51,16 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
     "train.max_training_time_sec": None,
 }
 
-NEXT_GEN2_EDITABLE_KEYS = {"train.epochs", "train.early_stopping_patience", "train.max_training_time_sec"}
+NEXT_GEN2_EDITABLE_KEYS = {
+    "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+}
 NEXT_GEN2_DESCRIPTION = (
-    "Фиксированный профиль segFormer_train_hlam_main_v2.ipynb. Модель — предобученный SegFormer B0 из Hugging Face "
-    "(nvidia/segformer-b0-finetuned-ade-512-512), четыре канала RED, GRN, BLU, NIR и два класса: фон и объект. "
-    "Для NIR копируются начальные веса RED. Используется выбранный датасет Канопус.\n\n"
-    "Тайлы 512 × 512 px с шагом 256 px и перекрытием 50%, без контекста и дополнения краёв. "
+    "Профиль на основе segFormer_train_hlam_main_v2.ipynb. Модель — предобученный SegFormer B0 из Hugging Face "
+    "(nvidia/segformer-b0-finetuned-ade-512-512), два класса: фон и объект. "
+    "Каналы определяются датасетом: RED, GRN, BLU, NIR для Канопус или RED, GRN, BLU для ортофотопланов. "
+    "Для NIR копируются начальные веса RED; у RGB-модели сохраняется исходная предобученная входная свёртка.\n\n"
+    "Размер тайла на выбор: 512, 768, 1024 или 1536 px, по умолчанию 512. "
+    "Шаг равен половине размера тайла: перекрытие 50%, без контекста и дополнения краёв. "
     "Каждый канал каждого тайла нормализуется min-max; постоянный канал становится нулевым. Nodata входит в расчёты. "
     "Случайное разбиение по тайлам: 60% train, 20% validation, 20% test, seed 42. "
     "Пространственные пересечения не исключаются: соседние тайлы могут содержать общие пиксели в разных выборках, "
@@ -61,13 +74,15 @@ NEXT_GEN2_DESCRIPTION = (
     "сдвиг до 32 px и поворот до 15° с зеркальными границами. С вероятностью 0,3 выбирается шум "
     "с дисперсией 5–30 или Gaussian blur с ядром 3–5; яркость и контраст ±15% — с вероятностью 0,3. "
     "Validation и test без аугментаций.\n\n"
-    "Batch size 16, AdamW, learning rate 0,0001, weight decay 0,01; float32 без gradient clipping, "
-    "DataLoader без дополнительных процессов. Loss: 25% CrossEntropy + 75% Tversky (alpha 0,75, beta 0,25). "
+    "Batch size выбирается автоматически по размеру тайла: 16/8/4/2 для 512/768/1024/1536 px, "
+    "чтобы большие окна помещались в видеопамять. AdamW, learning rate 0,0001, weight decay 0,01; float32 без gradient clipping. "
+    "Параллельная загрузка и аугментации используют серверные DataLoader workers. "
+    "Loss: 25% CrossEntropy + 75% Tversky (alpha 0,75, beta 0,25). "
     "ReduceLROnPlateau следит за validation loss: patience 3, уменьшение LR вдвое. "
     "Полная validation — каждую эпоху; лучший checkpoint и early stopping — по минимуму validation loss. "
     "После обучения лучшие веса один раз оцениваются на test при пороге 0,5; метрики и LR по эпохам сохраняются в MLflow.\n\n"
     "По умолчанию: максимум 20 эпох, early stopping patience 10 эпох, без лимита времени. "
-    "Изменять можно только эти три условия остановки. Лимит времени проверяется после завершения эпохи."
+    "Изменять можно размер тайла и эти три условия остановки. Лимит времени проверяется после завершения эпохи."
 )
 
 
@@ -79,7 +94,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — фиксированный профиль ноутбука: SegFormer B0, тайлы 512/256, train/validation/test 60/20/20, аугментации, CrossEntropy + Tversky, выбор весов по validation loss. Перекрытия выборок не исключаются. Доступны только максимум эпох, patience и лимит времени; подробности внизу формы.",
+            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — профиль ноутбука: SegFormer B0, Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536 с перекрытием 50%, train/validation/test 60/20/20, CrossEntropy + Tversky, выбор весов по validation loss. Перекрытия выборок не исключаются. Меняются размер тайла, максимум эпох, patience и лимит времени; подробности внизу формы.",
             "options": ["legacy", "next_gen", "next_gen2"],
         },
         {
@@ -677,7 +692,12 @@ def sanitize_template_config(
             result[key] = value
     if result.get("train.pipeline_variant") == "next_gen2":
         result.update({key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS})
-    if "tile_preparation.context" not in (config or {}):
+        tile_size = result.get("tile_preparation.tile_size")
+        if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
+            raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
+        result["tile_preparation.stride"] = tile_size // 2
+        result["train.batch_size"] = NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size]
+    elif "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
         result["tile_preparation.context"] = 128 if tile_size == 768 else 0
     _resolve_legacy_tile_factors(result, config or {})

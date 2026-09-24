@@ -66,10 +66,16 @@ export function configWithField(
   pipelineDefaults?: Record<string, JsonRecord>,
 ): JsonRecord {
   if (value["train.pipeline_variant"] === "next_gen2" && ![
-    "train.pipeline_variant", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+    "train.pipeline_variant", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key)) return value;
   const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
   const next = { ...value, ...preset, [key]: nextValue };
+  if (next["train.pipeline_variant"] === "next_gen2") {
+    const tileSize = Number(next["tile_preparation.tile_size"]);
+    next["tile_preparation.stride"] = tileSize / 2;
+    next["tile_preparation.context"] = 0;
+    next["train.batch_size"] = ({512: 16, 768: 8, 1024: 4, 1536: 2} as Record<number, number>)[tileSize];
+  }
   if (key === "train.pipeline_variant" && nextValue === "next_gen") {
     next["train.max_val_batches_per_epoch"] = null;
     if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
@@ -84,7 +90,7 @@ export function trainingConfigFieldVisible(
 ): boolean {
   if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
   if (pipelineVariant === "next_gen2") return [
-    "train.pipeline_variant", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+    "train.pipeline_variant", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key);
   if (key === "train.pretrained") {
     return pipelineVariant === "next_gen" && architecture === "segformer_b0";
