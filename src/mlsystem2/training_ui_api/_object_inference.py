@@ -24,7 +24,7 @@ def predict_instances(dataset, predict, *, input_indexes, tile_size, batch_size=
                 window = Window(x, y, tile_size, tile_size)
                 boundless = x + tile_size > dataset.width or y + tile_size > dataset.height
                 images.append(dataset.read(indexes=input_indexes, window=window, boundless=boundless,
-                    fill_value=0, out_dtype="float32", out_shape=(len(input_indexes), tile_size, tile_size)))
+                    fill_value=0 if boundless else None, out_dtype="float32", out_shape=(len(input_indexes), tile_size, tile_size)))
                 validity.append(dataset.dataset_mask(window=window, boundless=boundless, out_shape=(tile_size, tile_size)) > 0)
             performance["reading_sec"] = float(performance.get("reading_sec", 0)) + time.perf_counter() - started
             started = time.perf_counter()

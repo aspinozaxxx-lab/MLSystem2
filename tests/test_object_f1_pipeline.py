@@ -351,7 +351,7 @@ def test_object_loader_pads_only_images_smaller_than_tile(tmp_path):
         with rasterio.open(scenes[0].image_path) as source:
             window = Window(0,0,64,64)
             assert not dataset._needs_boundless_read(source,window)
-            np.testing.assert_array_equal(dataset._read_image_raw(source,window,0),source.read((1,2,3),window=window,boundless=True))
+            np.testing.assert_array_equal(dataset._read_image_raw(source,window,0),source.read((1,2,3),window=window,boundless=True,fill_value=0,out_shape=(3,64,64)))
             np.testing.assert_array_equal(dataset._read_invalid_data_pixels(source,window),source.dataset_mask(window=window,boundless=True)==0)
             assert dataset._needs_boundless_read(source,Window(0,0,128,128))
     finally:

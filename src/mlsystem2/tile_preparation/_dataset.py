@@ -721,6 +721,8 @@ class TileDataset:
         if self._pipeline_variant == "next_gen2":
             # Все окна целиком внутри TIFF: виртуальная подложка boundless не нужна.
             return dataset.read(window=window, masked=False)
+        if self._pipeline_variant == "object_f1" and not self._needs_boundless_read(dataset, window):
+            return dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
         return dataset.read(
             indexes=list(range(1, self.channel_count + 1)) if self._pipeline_variant == "object_f1" else None,
             window=window,
