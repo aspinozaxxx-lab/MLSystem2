@@ -230,13 +230,18 @@ class SystemSettings(BaseModel):
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
         if self.train.pipeline_variant == "next_gen2":
+            batch_sizes = {
+                "segformer_b0": (16, 8, 4, 2), "smp_segformer_b0": (16, 8, 4, 2),
+                "smp_segformer_b1": (8, 4, 2, 1), "smp_segformer_b2": (4, 2, 1, 1),
+                "smp_segformer_b3": (4, 2, 1, 1),
+            }
             if (
-                self.train.model_name != "segformer_b0"
+                self.train.model_name not in batch_sizes
                 or self.train.input_channels not in (3, 4)
                 or self.train.output_channels != 1
                 or not self.train.pretrained
             ):
-                raise ValueError("next-gen2 требует предобученную HF SegFormer B0 с входом 3 или 4 и выходом 1")
+                raise ValueError("next-gen2 требует предобученную SegFormer с входом 3 или 4 и выходом 1")
             if self.tile_preparation.tile_size not in (512, 768, 1024, 1536):
                 raise ValueError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
             fixed = (
@@ -244,7 +249,7 @@ class SystemSettings(BaseModel):
                 (self.tile_preparation.stride, self.tile_preparation.tile_size // 2),
                 (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
                 (self.tile_preparation.seed, 42),
-                (self.train.batch_size, {512: 16, 768: 8, 1024: 4, 1536: 2}[self.tile_preparation.tile_size]),
+                (self.train.batch_size, batch_sizes[self.train.model_name][(512, 768, 1024, 1536).index(self.tile_preparation.tile_size)]),
                 (self.train.learning_rate, 1e-4),
                 (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
                 (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),

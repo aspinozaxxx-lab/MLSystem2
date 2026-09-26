@@ -426,7 +426,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True} if config.get("pipeline_variant") == "next_gen2" else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"])} if config.get("pipeline_variant") == "next_gen2" else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1502,7 +1502,10 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
         **config,
         "pipeline_variant": "next_gen2",
         "threshold": NEXT_GEN2_INFERENCE_THRESHOLD,
-        "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512)),
+        "batch_size": next_gen2_inference_batch_size(
+            int(metadata.get("sample_size") or config.get("tile_size") or 512),
+            str(getattr(spec, "name", "segformer_b0")),
+        ),
         "threshold_source": "next_gen2_eval_notebook",
         "inference_merge": "gaussian_probabilities",
     }
@@ -2438,6 +2441,7 @@ def _infer_test_tile_mask(
     object_types: list[dict[str, Any]] | None = None,
     context: int = 0,
     notebook: bool = False,
+    batch_size: int | None = None,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
@@ -2448,7 +2452,7 @@ def _infer_test_tile_mask(
             mask, confidence_map = _infer_notebook_scene_mask(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
-                batch_size=next_gen2_inference_batch_size(tile_size), threshold=threshold, device=device,
+                batch_size=batch_size or next_gen2_inference_batch_size(tile_size), threshold=threshold, device=device,
             )
         windows = [] if notebook else _windows(dataset.width, dataset.height, tile_size, stride, context)
         for window in windows:

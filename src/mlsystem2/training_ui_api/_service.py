@@ -103,6 +103,8 @@ from ._queueing import (
 )
 from ._templates import (
     NEXT_GEN2_DEFAULT_CONFIG,
+    NEXT_GEN2_MODEL_BATCH_SIZES,
+    next_gen2_train_batch_size,
     NEXT_GEN2_EDITABLE_KEYS,
     NEXT_GEN2_TRAIN_BATCH_SIZES,
     initial_inference_templates,
@@ -473,7 +475,7 @@ def ensure_seed_templates(session: Session) -> None:
         changed = False
         for attribute in ("default_config", "baseline_default_config"):
             previous = dict(getattr(template, attribute) or {})
-            if previous.get("train.pipeline_variant") == "next_gen2" and previous.get("train.loss") != "cross_entropy_tversky":
+            if previous.get("train.pipeline_variant") == "next_gen" or (previous.get("train.pipeline_variant") == "next_gen2" and previous.get("train.loss") != "cross_entropy_tversky"):
                 setattr(template, attribute, {**previous, **NEXT_GEN2_DEFAULT_CONFIG})
                 changed = True
         if changed:
@@ -491,11 +493,11 @@ def ensure_seed_templates(session: Session) -> None:
         row.display_name = payload["display_name"]
         row.config_schema = payload["config_schema"]
         row.default_config = sanitize_template_config(
-            row.default_config,
+            row.default_config, architecture=row.architecture,
             fallback=payload["default_config"],
         )
         row.baseline_default_config = sanitize_template_config(
-            row.baseline_default_config,
+            row.baseline_default_config, architecture=row.architecture,
             fallback=payload["baseline_default_config"],
         )
     baselines = {payload["architecture"]: payload for payload in seed_payloads}
@@ -508,11 +510,11 @@ def ensure_seed_templates(session: Session) -> None:
             continue
         row.config_schema = baseline["config_schema"]
         row.default_config = sanitize_template_config(
-            row.default_config,
+            row.default_config, architecture=row.architecture,
             fallback=baseline["default_config"],
         )
         row.baseline_default_config = sanitize_template_config(
-            row.baseline_default_config,
+            row.baseline_default_config, architecture=row.architecture,
             fallback=baseline["baseline_default_config"],
         )
     _ensure_seed_inference_templates(session)
@@ -682,8 +684,8 @@ def create_training_template(
         parent_template_id=parent.id,
         display_name=f"{parent.display_name} / {dataset.name}",
         config_schema=parent.config_schema,
-        default_config=sanitize_template_config(parent.default_config),
-        baseline_default_config=sanitize_template_config(parent.default_config),
+        default_config=sanitize_template_config(parent.default_config, architecture=parent.architecture),
+        baseline_default_config=sanitize_template_config(parent.default_config, architecture=parent.architecture),
         source=parent.source,
         baseline_source=parent.source,
         source_mlflow_run_id=parent.source_mlflow_run_id,
@@ -715,7 +717,7 @@ def update_training_template_by_id(
     else:
         if request.default_config is not None:
             row.default_config = sanitize_template_config(
-                request.default_config,
+                request.default_config, architecture=row.architecture,
                 fallback=row.default_config,
             )
             row.source = TemplateSource.MANUAL.value
@@ -757,13 +759,15 @@ def apply_training_template_field_to_all(
         raise TrainingUIAPIError(f"Параметр шаблона не найден: {request.key}")
     for template in session.scalars(select(TrainingTemplateRow)).all():
         current = dict(template.default_config)
-        if request.key == "train.pipeline_variant" and request.value == "next_gen2":
-            if template.architecture != "segformer_b0":
+        if request.key == "train.pipeline_variant":
+            preset = template.config_schema.get("pipeline_defaults", {}).get(str(request.value))
+            if request.value == "next_gen2" and preset is None:
                 continue
-            current.update(NEXT_GEN2_DEFAULT_CONFIG)
+            if preset is not None:
+                current.update(preset)
         current[request.key] = request.value
         template.default_config = sanitize_template_config(
-            current, fallback=template.default_config
+            current, fallback=template.default_config, architecture=template.architecture
         )
         template.source = TemplateSource.MANUAL.value
         template.source_mlflow_run_id = None
@@ -979,7 +983,7 @@ def create_training_job(
         session, request.architecture, request.dataset_key
     )
     job_config = sanitize_template_config(
-        request.config,
+        request.config, architecture=request.architecture,
         fallback=template_row.default_config if template_row is not None else None,
         normalize_factors=False,
     )
@@ -1043,15 +1047,13 @@ def _validate_training_pipeline_variant(
     job_config: dict[str, Any], architecture: str
 ) -> None:
     variant = str(job_config.get("train.pipeline_variant") or "legacy")
-    if variant not in {"legacy", "next_gen", "next_gen2"}:
+    if variant not in {"legacy", "next_gen2"}:
         raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
-    if architecture == "segformer_b0" and variant == "legacy":
-        raise TrainingUIAPIError("SegFormer B0 HF доступен в конвейерах next-gen и next-gen2.")
     if variant == "legacy":
         return
     if variant == "next_gen2":
-        if architecture != "segformer_b0":
-            raise TrainingUIAPIError("next-gen2 поддерживает только SegFormer B0 HF.")
+        if architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
+            raise TrainingUIAPIError("next-gen2 поддерживает только архитектуры SegFormer.")
         tile_size = job_config.get("tile_preparation.tile_size")
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536.")
@@ -1062,30 +1064,12 @@ def _validate_training_pipeline_variant(
             "dataset.task": "binary", "train.input_channels": 3 if imagery_type == "ortho" else 4,
             **{key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS},
             "tile_preparation.stride": tile_size // 2,
-            "train.batch_size": NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size],
+            "train.batch_size": next_gen2_train_batch_size(tile_size, architecture),
         }
         for key, expected in required.items():
             if job_config.get(key) != expected:
                 raise TrainingUIAPIError(f"next-gen2: параметр {key} должен быть {expected}.")
         return
-    if job_config.get("dataset.task") != "binary":
-        raise TrainingUIAPIError("next-gen v1 поддерживает только binary-датасеты.")
-    if job_config.get("dataset.imagery_type") != "kanopus":
-        raise TrainingUIAPIError("next-gen v1 поддерживает только снимки Kanopus.")
-    if architecture not in {"smp_segformer_b0", "segformer_b0"}:
-        raise TrainingUIAPIError(
-            "next-gen v1 поддерживает только smp_segformer_b0 и SegFormer B0 HF."
-        )
-    if int(job_config.get("train.input_channels") or 0) != 4:
-        raise TrainingUIAPIError("next-gen v1 требует четыре входных канала.")
-    if job_config.get("train.max_val_batches_per_epoch") is not None:
-        raise TrainingUIAPIError(
-            "next-gen всегда выполняет полную validation: max_val_batches_per_epoch должен быть пустым."
-        )
-    if bool(job_config.get("train.pretrained")) and architecture != "segformer_b0":
-        raise TrainingUIAPIError(
-            "Предобученные веса next-gen доступны только для SegFormer B0 HF."
-        )
 
 
 def queues(session: Session) -> QueueSnapshot:

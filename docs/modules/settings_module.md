@@ -29,9 +29,9 @@
 
 ## Алгоритм работы и его особенности
 
-`next_gen2` требует профиль ноутбука: binary, pretrained HF B0, 3 или 4 канала,
+`next_gen2` требует профиль ноутбука: binary, pretrained HF B0 или SMP SegFormer B0/B1/B2/B3, 3 или 4 канала,
 тайлы 512/768/1024/1536, шаг в половину тайла, context 0, augmentation_level 3, seed 42,
-batch 16/8/4/2 соответственно, LR 1e-4,
+batch по архитектуре: B0 — 16/8/4/2, B1 — 8/4/2/1, B2/B3 — 4/2/1/1 соответственно, LR 1e-4,
 weight decay 0.01, loss `cross_entropy_tversky`, alpha/beta 0.75/0.25 и threshold 0.5.
 В UI меняются tile_size, epochs, early_stopping_patience и max_training_time_sec. Batch limits запрещены.
 Число workers — параметр исполнения из серверного settings.yml (8), а не ограничение профиля ноутбука.

@@ -69,7 +69,7 @@
 .training-launch .config-unit-input select + .config-unit { right: 28px; }
 .training-launch .config-unit-input input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .training-launch .config-unit-input input { appearance: textfield; -moz-appearance: textfield; }
-.training-source-fields { display: grid; grid-template-columns: minmax(240px, 340px) minmax(280px, 440px) minmax(160px, 220px); gap: 24px; }
+.training-source-fields { display: grid; grid-template-columns: minmax(220px, 300px) minmax(150px, 200px) minmax(280px, 440px) minmax(100px, 140px); gap: 24px; }
 .training-source-fields .config-grid { grid-template-columns: 1fr; }
 .training-source-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; margin-top: 20px; color: var(--muted); font-size: 12px; }
 .training-source-meta .config-grid { grid-template-columns: 1fr; }
@@ -168,7 +168,7 @@
 }
 @media (max-width: 1080px) {
   .training-section-toggle { grid-template-columns: 24px 185px minmax(0, 1fr) 18px; gap: 12px; }
-  .training-source-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.8fr); gap: 16px; }
+  .training-source-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .training-data-workspace { grid-template-columns: 1fr; }
   .training-tile-editor { grid-template-columns: 260px 226px; gap: 48px; }
   .training-sampling { border-left: 0; border-top: 1px solid var(--border); padding: 22px 0 0; }

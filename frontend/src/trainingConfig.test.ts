@@ -42,23 +42,24 @@ describe("trainingConfigSchema", () => {
     ]);
   });
 
-  it("clears the validation limit when next-gen is selected", () => {
-    expect(
-      configWithField(
-        { "train.max_val_batches_per_epoch": 1000 },
-        "train.pipeline_variant",
-        "next_gen",
-      ),
-    ).toEqual({
-      "train.pipeline_variant": "next_gen",
-      "train.max_val_batches_per_epoch": null,
-    });
+  it("возвращает параметры legacy при переключении с next-gen2", () => {
+    const defaults = { legacy: { "train.loss": "focal_tversky", "train.pretrained": false, "train.max_val_batches_per_epoch": 1000 } };
+    const config = configWithField({ "train.pipeline_variant": "next_gen2", "train.loss": "cross_entropy_tversky" }, "train.pipeline_variant", "legacy", defaults);
+    expect(config).toEqual({ ...defaults.legacy, "train.pipeline_variant": "legacy" });
   });
 
-  it("shows pretrained only for HF B0 next-gen", () => {
-    expect(trainingConfigFieldVisible("train.pretrained", "next_gen", "segformer_b0")).toBe(true);
-    expect(trainingConfigFieldVisible("train.pretrained", "legacy", "segformer_b0")).toBe(false);
-    expect(trainingConfigFieldVisible("train.pretrained", "next_gen", "smp_segformer_b0")).toBe(false);
+  it("не показывает настройки снятого с запуска next-gen", () => {
+    expect(trainingConfigFieldVisible("next_gen.normalization", "legacy", "segformer_b0")).toBe(false);
+    expect(trainingConfigFieldVisible("train.pretrained", "next_gen2", "smp_segformer_b3")).toBe(false);
+  });
+
+  it.each([16, 8, 4])("учитывает серверный batch архитектуры %i при изменении тайла", (baseBatch) => {
+    const defaults = { next_gen2: { "train.batch_size": baseBatch, "tile_preparation.tile_size": 512 } };
+    const value = configWithField({}, "train.pipeline_variant", "next_gen2", defaults);
+    for (const [size, divisor] of [[512, 1], [768, 2], [1024, 4], [1536, 8]]) {
+      const changed = configWithField(value, "tile_preparation.tile_size", size, defaults);
+      expect(changed["train.batch_size"]).toBe(Math.max(1, baseBatch / divisor));
+    }
   });
 
   it("применяет серверные параметры next-gen2 и убирает несовместимые настройки", () => {
@@ -92,6 +93,6 @@ describe("trainingConfigSchema", () => {
     expect(trainingConfigFieldVisible("tile_preparation.tile_size", "next_gen2", "segformer_b0")).toBe(true);
     expect(trainingConfigFieldVisible("tile_preparation.stride", "legacy", "smp_segformer_b0")).toBe(true);
     expect(configWithField({ "train.pipeline_variant": "legacy", "tile_preparation.stride": 256 }, "tile_preparation.tile_size", 768)["tile_preparation.stride"]).toBe(256);
-    expect(configWithField(value, "train.pipeline_variant", "next_gen")["train.loss"]).toBe("bce_dice");
+    expect(configWithField(value, "train.pipeline_variant", "legacy")["train.loss"]).toBe("bce_dice");
   });
 });

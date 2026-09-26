@@ -13,12 +13,25 @@ COMPACT_FILTER_MODES = (COMPACT_FILTER_REMOVE, COMPACT_FILTER_KEEP)
 NEXT_GEN2_INFERENCE_THRESHOLD = 0.9
 NEXT_GEN2_INFERENCE_BATCH_SIZE = 32
 NEXT_GEN2_TRAIN_BATCH_SIZES = {512: 16, 768: 8, 1024: 4, 1536: 2}
+NEXT_GEN2_MODEL_BATCH_SIZES = {
+    "segformer_b0": (16, 8, 4, 2), "smp_segformer_b0": (16, 8, 4, 2),
+    "smp_segformer_b1": (8, 4, 2, 1), "smp_segformer_b2": (4, 2, 1, 1),
+    "smp_segformer_b3": (4, 2, 1, 1),
+}
 
 
-def next_gen2_inference_batch_size(tile_size: int) -> int:
+def next_gen2_train_batch_size(tile_size: int, architecture: str = "segformer_b0") -> int:
+    if architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
+        raise TrainingUIAPIError("next-gen2 поддерживает только архитектуры SegFormer.")
+    if tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
+        raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
+    return NEXT_GEN2_MODEL_BATCH_SIZES[architecture][tuple(NEXT_GEN2_TRAIN_BATCH_SIZES).index(tile_size)]
+
+
+def next_gen2_inference_batch_size(tile_size: int, architecture: str = "segformer_b0") -> int:
     """Ограничить объём пикселей в inference-пакете при увеличении окна."""
     if tile_size in NEXT_GEN2_TRAIN_BATCH_SIZES:
-        return 2 * NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size]
+        return 2 * next_gen2_train_batch_size(tile_size, architecture)
     return max(1, min(NEXT_GEN2_INFERENCE_BATCH_SIZE, 32 * 512 ** 2 // max(1, tile_size) ** 2))
 
 
@@ -55,8 +68,10 @@ NEXT_GEN2_EDITABLE_KEYS = {
     "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
 }
 NEXT_GEN2_DESCRIPTION = (
-    "Профиль на основе segFormer_train_hlam_main_v2.ipynb. Модель — предобученный SegFormer B0 из Hugging Face "
-    "(nvidia/segformer-b0-finetuned-ade-512-512), два класса: фон и объект. "
+    "Профиль на основе segFormer_train_hlam_main_v2.ipynb для выбранной архитектуры SegFormer. "
+    "HF B0 использует предобученную модель nvidia/segformer-b0-finetuned-ade-512-512; "
+    "SMP B0/B1/B2/B3 — соответствующий encoder MiT с весами ImageNet и новую голову SegFormer. "
+    "Во всех случаях два класса: фон и объект. "
     "Каналы определяются датасетом: RED, GRN, BLU, NIR для Канопус или RED, GRN, BLU для ортофотопланов. "
     "Для NIR копируются начальные веса RED; у RGB-модели сохраняется исходная предобученная входная свёртка.\n\n"
     "Размер тайла на выбор: 512, 768, 1024 или 1536 px, по умолчанию 512. "
@@ -74,7 +89,8 @@ NEXT_GEN2_DESCRIPTION = (
     "сдвиг до 32 px и поворот до 15° с зеркальными границами. С вероятностью 0,3 выбирается шум "
     "с дисперсией 5–30 или Gaussian blur с ядром 3–5; яркость и контраст ±15% — с вероятностью 0,3. "
     "Validation и test без аугментаций.\n\n"
-    "Batch size выбирается автоматически по размеру тайла: 16/8/4/2 для 512/768/1024/1536 px, "
+    "Batch size выбирается автоматически для тайлов 512/768/1024/1536 px: "
+    "B0 — 16/8/4/2, B1 — 8/4/2/1, B2 и B3 — 4/2/1/1, "
     "чтобы большие окна помещались в видеопамять. AdamW, learning rate 0,0001, weight decay 0,01; float32 без gradient clipping. "
     "Параллельная загрузка и аугментации используют серверные DataLoader workers. "
     "Loss: 25% CrossEntropy + 75% Tversky (alpha 0,75, beta 0,25). "
@@ -94,8 +110,8 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "legacy — прежнее обучение; next-gen — разделение по сценам; next-gen2 — профиль ноутбука: SegFormer B0, Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536 с перекрытием 50%, train/validation/test 60/20/20, CrossEntropy + Tversky, выбор весов по validation loss. Перекрытия выборок не исключаются. Меняются размер тайла, максимум эпох, patience и лимит времени; подробности внизу формы.",
-            "options": ["legacy", "next_gen", "next_gen2"],
+            "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука для SegFormer B0/B1/B2/B3: Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536, CrossEntropy + Tversky, выбор весов по validation loss. Batch size учитывает архитектуру и размер тайла; подробности внизу формы.",
+            "options": ["legacy", "next_gen2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -176,7 +192,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pretrained",
             "label": "Предобученные веса",
             "value_type": "boolean",
-            "tooltip": "Загружает закреплённые pretrained-веса HF B0; доступно только для SegFormer B0 HF в next-gen.",
+            "tooltip": "В next-gen2 используются pretrained-веса выбранной архитектуры: ADE20K для HF B0, ImageNet для encoder SMP.",
         },
         {
             "key": "train.learning_rate",
@@ -285,40 +301,6 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "tooltip": "Wall-clock лимит train loop. Пустое значение означает обучение без лимита; проверяется после завершения эпохи.",
             "min_value": 1,
         },
-        {
-            "key": "next_gen.validation_fold",
-            "label": "Validation fold",
-            "value_type": "integer",
-            "tooltip": "Номер scene-fold для next-gen, начиная с нуля.",
-            "min_value": 0,
-        },
-        {
-            "key": "next_gen.normalization",
-            "label": "Нормализация next-gen",
-            "value_type": "select",
-            "tooltip": "Воспроизводимый профиль нормализации четырёх каналов.",
-            "options": ["scale_255", "imagenet_rgb_red_nir", "robust_percentile"],
-        },
-        {
-            "key": "next_gen.validation_interval_epochs",
-            "label": "Интервал validation",
-            "value_type": "integer",
-            "tooltip": "Полная validation выполняется на первой эпохе, затем с этим интервалом и перед штатным завершением.",
-            "min_value": 1,
-        },
-        {
-            "key": "next_gen.threshold_mode",
-            "label": "Политика порога",
-            "value_type": "select",
-            "tooltip": "fixed использует заданный train.threshold; optimize выбирает порог по полной validation.",
-            "options": ["fixed", "optimize"],
-        },
-        {
-            "key": "next_gen.evaluate_gaussian_blend",
-            "label": "Диагностика Gaussian A/B",
-            "value_type": "boolean",
-            "tooltip": "После обучения сравнивает core-crop с Gaussian merge на лучшем checkpoint.",
-        },
     ]
 }
 
@@ -349,11 +331,6 @@ BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "train.max_train_batches_per_epoch": 72,
     "train.max_val_batches_per_epoch": 1000,
     "train.max_training_time_sec": None,
-    "next_gen.validation_fold": 0,
-    "next_gen.normalization": "scale_255",
-    "next_gen.validation_interval_epochs": 5,
-    "next_gen.threshold_mode": "optimize",
-    "next_gen.evaluate_gaussian_blend": False,
 }
 
 
@@ -675,10 +652,15 @@ def sanitize_template_config(
     *,
     fallback: dict[str, Any] | None = None,
     normalize_factors: bool = True,
+    architecture: str = "segformer_b0",
 ) -> dict[str, Any]:
+    if (config or {}).get("train.pipeline_variant") == "next_gen":
+        raise TrainingUIAPIError("Конвейер next-gen снят с запуска. Выберите legacy или next-gen2.")
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
+    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") == "next_gen2":
+        result.update(BASE_DEFAULT_CONFIG)
     if (
         (config or {}).get("train.pipeline_variant") == "next_gen2"
         and result.get("train.pipeline_variant") != "next_gen2"
@@ -696,10 +678,13 @@ def sanitize_template_config(
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
         result["tile_preparation.stride"] = tile_size // 2
-        result["train.batch_size"] = NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size]
+        result["train.batch_size"] = next_gen2_train_batch_size(tile_size, architecture)
     elif "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
         result["tile_preparation.context"] = 128 if tile_size == 768 else 0
+    if result.get("train.pipeline_variant") == "legacy" and result.get("train.loss") == "cross_entropy_tversky":
+        result["train.loss"] = BASE_DEFAULT_CONFIG["train.loss"]
+        result["train.pretrained"] = False
     _resolve_legacy_tile_factors(result, config or {})
     if normalize_factors:
         normalize_tile_factors(result)
@@ -780,34 +765,9 @@ def initial_templates() -> list[dict[str, Any]]:
         ),
         _template(
             "segformer_b0",
-            "SegFormer B0 HF (next-gen)",
+            "SegFormer B0 HF",
             source="manual",
-            overrides={
-                "train.pipeline_variant": "next_gen",
-                "tile_preparation.tile_size": 512,
-                "tile_preparation.context": 128,
-                "tile_preparation.stride": 256,
-                "tile_preparation.augmentation_level": 2,
-                "tile_preparation.positive_factor": 0.5,
-                "tile_preparation.hard_negative_factor": 0.0,
-                "tile_preparation.background_factor": 0.5,
-                "train.pretrained": True,
-                "train.epochs": 60,
-                "train.batch_size": 8,
-                "train.learning_rate": 0.00006,
-                "train.weight_decay": 0.01,
-                "train.loss": "bce_dice",
-                "train.threshold": 0.5,
-                "train.early_stopping_patience": 4,
-                "train.max_train_batches_per_epoch": 72,
-                "train.max_val_batches_per_epoch": None,
-                "train.max_training_time_sec": 3300,
-                "next_gen.validation_fold": 0,
-                "next_gen.normalization": "imagenet_rgb_red_nir",
-                "next_gen.validation_interval_epochs": 5,
-                "next_gen.threshold_mode": "optimize",
-                "next_gen.evaluate_gaussian_blend": False,
-            },
+            overrides=NEXT_GEN2_DEFAULT_CONFIG,
         ),
         _template(
             "smp_segformer_b1",
@@ -948,10 +908,22 @@ def _template(
     default_config = deepcopy(BASE_DEFAULT_CONFIG)
     if overrides:
         default_config.update(overrides)
+    schema = deepcopy(CONFIG_SCHEMA)
+    legacy_defaults = deepcopy(BASE_DEFAULT_CONFIG)
+    if default_config.get("train.pipeline_variant") == "legacy":
+        legacy_defaults.update(default_config)
+    schema["pipeline_defaults"] = {"legacy": legacy_defaults}
+    if architecture in NEXT_GEN2_MODEL_BATCH_SIZES:
+        schema["pipeline_defaults"]["next_gen2"] = {
+            **NEXT_GEN2_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
+    else:
+        schema["fields"][0]["options"] = ["legacy"]
+        schema["pipeline_descriptions"] = {}
     return {
         "architecture": architecture,
         "display_name": display_name,
-        "config_schema": deepcopy(CONFIG_SCHEMA),
+        "config_schema": schema,
         "default_config": default_config,
         "baseline_default_config": deepcopy(default_config),
         "source": source,

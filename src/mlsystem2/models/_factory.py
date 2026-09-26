@@ -161,12 +161,19 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
     if spec.parameters.get("pipeline_variant") == "next_gen2" and (
-        spec.name != _SEGFORMER_B0
+        spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
+        or spec.input_channels not in (3, 4)
+        or spec.output_channels != 1
         or spec.parameters.get("preprocessing") != {"mode": "window_minmax", "epsilon": 1e-6}
     ):
-        raise ModelsError("next-gen2 требует HF SegFormer B0 и оконную min-max нормализацию")
+        raise ModelsError("next-gen2 требует SegFormer с входом 3 или 4, выходом 1 и оконной min-max нормализацией")
     if spec.name in _SMP_ENCODERS:
-        model = _create_smp_segformer(spec)
+        model = _create_smp_segformer(spec, initialize_pretrained=initialize_pretrained)
+        if spec.parameters.get("pipeline_variant") == "next_gen2":
+            parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
+            if spec.pretrained:
+                parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
+            spec = spec.model_copy(update={"parameters": parameters})
         return _wrap_next_gen(spec, model)
     if spec.name == _SMP_DEEPLABV3PLUS_RESNET50:
         model = _create_smp_deeplabv3plus(spec)
@@ -196,18 +203,27 @@ def _ensure_torch_for_smp() -> None:
         )
 
 
-def _create_smp_segformer(spec: ModelSpec):
+def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    if spec.pretrained:
+    notebook = spec.parameters.get("pipeline_variant") == "next_gen2"
+    if spec.pretrained and not notebook:
         raise ModelsError("SMP SegFormer в MLSystem2 поддерживает только encoder_weights=None.")
-    return smp.Segformer(
+    pretrained = notebook and spec.pretrained and initialize_pretrained
+    model = smp.Segformer(
         encoder_name=_SMP_ENCODERS[spec.name],
-        encoder_weights=None,
-        in_channels=spec.input_channels,
-        classes=spec.output_channels,
+        encoder_weights="imagenet" if pretrained else None,
+        in_channels=3 if pretrained else spec.input_channels,
+        classes=2 if notebook else spec.output_channels,
         activation=None,
     )
+    if pretrained and spec.input_channels == 4:
+        rgb_weights = model.encoder.patch_embed1.proj.weight.detach().clone()
+        model.encoder.set_in_channels(4, pretrained=False)
+        with torch.no_grad():
+            model.encoder.patch_embed1.proj.weight[:, :3].copy_(rgb_weights)
+            model.encoder.patch_embed1.proj.weight[:, 3].copy_(rgb_weights[:, 0])
+    return model
 
 
 def _create_smp_deeplabv3plus(spec: ModelSpec):
@@ -256,8 +272,6 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
     is_next_gen2 = spec.parameters.get("pipeline_variant") == "next_gen2"
     if is_next_gen2:
-        if spec.name != _SEGFORMER_B0 or spec.input_channels not in (3, 4) or spec.output_channels != 1:
-            raise ModelsError("next-gen2 требует HF SegFormer B0 с входом 3 или 4 и выходом 1")
         if not initialize_pretrained:
             raw_config = spec.parameters.get("hf_config")
             if not isinstance(raw_config, dict) or raw_config.get("num_channels") != spec.input_channels:
@@ -326,7 +340,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
         hidden_sizes=model_config["hidden_sizes"],
         decoder_hidden_size=model_config["decoder_hidden_size"],
     )
-    if spec.pretrained:
+    if spec.pretrained and initialize_pretrained:
         try:
             model = SegformerForSemanticSegmentation.from_pretrained(
                 model_config["pretrained"],

@@ -41,7 +41,7 @@ from mlsystem2.training_ui_api._models import (
     TrainingTemplateRow,
 )
 from mlsystem2.training_ui_api._service import create_training_job, ensure_seed_templates
-from mlsystem2.training_ui_api._templates import initial_templates, sanitize_template_config
+from mlsystem2.training_ui_api._templates import initial_templates, sanitize_template_config, next_gen2_train_batch_size
 from mlsystem2.training_ui_api._worker import (
     dispatch_inference_queue_once,
     dispatch_queue_once,
@@ -87,46 +87,30 @@ def test_app_links_use_prepared_images_browser(monkeypatch) -> None:
     assert "minio" not in links
 
 
-def test_next_gen_hf_template_and_legacy_defaults_are_explicit() -> None:
+def test_segformer_templates_offer_legacy_and_next_gen2() -> None:
     templates = {item["architecture"]: item for item in initial_templates()}
-
-    assert templates["smp_segformer_b0"]["default_config"]["train.pipeline_variant"] == (
-        "legacy"
-    )
+    assert templates["smp_segformer_b0"]["default_config"]["train.pipeline_variant"] == "legacy"
     hf = templates["segformer_b0"]["default_config"]
-    assert hf["train.pipeline_variant"] == "next_gen"
+    assert hf["train.pipeline_variant"] == "next_gen2"
     assert hf["train.pretrained"] is True
     assert hf["train.max_val_batches_per_epoch"] is None
-    assert hf["next_gen.normalization"] == "imagenet_rgb_red_nir"
-    assert hf["tile_preparation.context"] == 128
+    assert hf["tile_preparation.context"] == 0
+    for name, template in templates.items():
+        schema = template["config_schema"]
+        expected = ["legacy", "next_gen2"] if "segformer" in name else ["legacy"]
+        assert schema["fields"][0]["options"] == expected
+        assert not any(field["key"].startswith("next_gen.") for field in schema["fields"])
+        assert schema["pipeline_defaults"]["legacy"]["train.pipeline_variant"] == "legacy"
+        _service._validate_training_pipeline_variant({"train.pipeline_variant": "legacy"}, name)
 
 
-def test_next_gen_job_validation_rejects_unsupported_combinations() -> None:
-    base = {
-        "train.pipeline_variant": "next_gen",
-        "train.input_channels": 4,
-        "train.pretrained": False,
-        "train.max_val_batches_per_epoch": None,
-        "dataset.task": "binary",
-        "dataset.imagery_type": "kanopus",
-    }
-
-    _service._validate_training_pipeline_variant(dict(base), "smp_segformer_b0")
-    with pytest.raises(TrainingUIAPIError, match="полную validation"):
-        _service._validate_training_pipeline_variant(
-            {**base, "train.max_val_batches_per_epoch": 1},
-            "smp_segformer_b0",
-        )
-    with pytest.raises(TrainingUIAPIError, match="только binary"):
-        _service._validate_training_pipeline_variant(
-            {**base, "dataset.task": "multiclass"},
-            "smp_segformer_b0",
-        )
-    with pytest.raises(TrainingUIAPIError, match="доступны только"):
-        _service._validate_training_pipeline_variant(
-            {**base, "train.pretrained": True},
-            "smp_segformer_b0",
-        )
+def test_new_jobs_and_templates_reject_retired_next_gen() -> None:
+    for architecture in ("segformer_b0", "smp_segformer_b0"):
+        with pytest.raises(TrainingUIAPIError):
+            _service._validate_training_pipeline_variant({"train.pipeline_variant": "next_gen"}, architecture)
+        with pytest.raises(TrainingUIAPIError):
+            sanitize_template_config({"train.pipeline_variant": "next_gen"}, architecture=architecture)
+    assert _service._job_pipeline_variant(SimpleNamespace(config={"train.pipeline_variant": "next_gen"})) == "next_gen"
 
 
 def test_frontend_credentials_support_canonical_users_roles_and_aliases(
@@ -3095,7 +3079,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert [item["display_name"] for item in models] == [
                 "deeplabV3+",
                 "segformer b0",
-                "SegFormer B0 HF (next-gen)",
+                "SegFormer B0 HF",
                 "segformer b1",
             "segformer b2",
             "segformer b3",
@@ -3217,7 +3201,9 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             f"/api/v1/training-templates/by-id/{dataset_template['id']}/apply-field-to-all",
             json={"key": "train.batch_size", "value": 9},
         ).json()["templates"]
-        assert {item["default_config"]["train.batch_size"] for item in applied} == {9}
+        assert {item["default_config"]["train.batch_size"] for item in applied
+                if item["default_config"]["train.pipeline_variant"] == "legacy"} == {9}
+        assert next(item for item in applied if item["architecture"] == "segformer_b0")["default_config"]["train.batch_size"] == 16
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
         assert len(inference_templates) == 13
@@ -3687,14 +3673,18 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
-@pytest.mark.parametrize("pipeline_variant,tile_size", [
-    ("legacy", 512), ("next_gen2", 512), ("next_gen2", 768), ("next_gen2", 1024), ("next_gen2", 1536),
-])
+@pytest.mark.parametrize("pipeline_variant,tile_size,architecture",
+    [("legacy", 512, "smp_segformer_b2"), ("legacy", 512, "segformer_b0")] + [
+        ("next_gen2", size, name) for size in (512, 768, 1024, 1536)
+        for name in ("segformer_b0", "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3")
+    ],
+)
 def test_training_ui_worker_snapshots_per_image_annotations(
     tmp_path: Path,
     monkeypatch,
     pipeline_variant: str,
     tile_size: int,
+    architecture: str,
 ) -> None:
     dataset_root = tmp_path / "MLMarkup" / "Реки" / "test"
     dataset_root.mkdir(parents=True)
@@ -3735,9 +3725,9 @@ def test_training_ui_worker_snapshots_per_image_annotations(
                 mlflow_experiment_id="1",
                 mlflow_experiment_name="per-image-test",
                 dataset_key="Реки\\test",
-                architecture="segformer_b0" if pipeline_variant == "next_gen2" else "smp_segformer_b2",
+                architecture=architecture,
                 config=({"train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size}
-                        if pipeline_variant == "next_gen2" else _short_training_config()),
+                        if pipeline_variant == "next_gen2" else {**_short_training_config(), "train.pipeline_variant": "legacy"}),
             ),
             config,
         )
@@ -3752,7 +3742,7 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             assert payload["tile_preparation"]["context"] == 0
             assert payload["tile_preparation"]["stride"] == tile_size // 2
             assert payload["tile_preparation"]["tile_size"] == tile_size
-            assert payload["train"]["batch_size"] == {512: 16, 768: 8, 1024: 4, 1536: 2}[tile_size]
+            assert payload["train"]["batch_size"] == next_gen2_train_batch_size(tile_size, architecture)
             assert "num_workers" not in payload["tile_preparation"]
             settings_path = Path(__file__).resolve().parents[1] / "configs" / "settings.server.yaml"
             run_path = tmp_path / "generated-next-gen2.yaml"
@@ -4855,7 +4845,8 @@ def _short_training_config() -> dict[str, object]:
     }
 
 
-def test_next_gen2_template_upgrade_is_once_and_preserves_later_stop_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old_variant", ["next_gen", "next_gen2"])
+def test_next_gen2_template_upgrade_is_once_and_preserves_later_stop_settings(tmp_path, monkeypatch, old_variant):
     from mlsystem2.training_ui_api._templates import NEXT_GEN2_DEFAULT_CONFIG
 
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
@@ -4867,7 +4858,7 @@ def test_next_gen2_template_upgrade_is_once_and_preserves_later_stop_settings(tm
         ensure_seed_templates(session)
         session.flush()
         row = session.scalar(select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == "segformer_b0"))
-        row.default_config = {**row.default_config, "train.pipeline_variant": "next_gen2", "train.loss": "cross_entropy", "train.epochs": 300}
+        row.default_config = {**row.default_config, "train.pipeline_variant": old_variant, "train.loss": "cross_entropy", "train.epochs": 300}
         session.flush()
         ensure_seed_templates(session)
         assert row.default_config.items() >= NEXT_GEN2_DEFAULT_CONFIG.items()
@@ -4883,3 +4874,44 @@ def test_next_gen2_template_upgrade_is_once_and_preserves_later_stop_settings(tm
         assert changed["train.learning_rate"] == 1e-4
         assert changed["tile_preparation.stride"] == 256
         assert changed["train.epochs"] == 47
+
+
+def test_pipeline_template_switches_preserve_history_and_restore_legacy(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api.contracts import TrainingTemplateApplyField
+
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    configure_schema(None)
+    session_factory = create_session_factory(get_config())
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        ensure_seed_templates(session)
+        history = JobRow(
+            type="training", source="manual", status="ok", dataset_name="Проверка",
+            queue_position=1,
+            model_name="SegFormer B0 HF (next-gen)", architecture="segformer_b0",
+            config={"train.pipeline_variant": "next_gen", "train.batch_size": 8},
+        )
+        session.add(history)
+        session.flush()
+        row = session.scalar(select(TrainingTemplateRow).where(TrainingTemplateRow.architecture == "segformer_b0"))
+        row.default_config = {**row.default_config, "train.pipeline_variant": "next_gen"}
+        session.flush()
+        ensure_seed_templates(session)
+        assert row.default_config["train.pipeline_variant"] == "next_gen2"
+        for variant in ("next_gen2", "legacy"):
+            _service.apply_training_template_field_to_all(
+                session, row.id, TrainingTemplateApplyField(key="train.pipeline_variant", value=variant),
+            )
+            for template in session.scalars(select(TrainingTemplateRow)).all():
+                config = template.default_config
+                if variant == "next_gen2" and "segformer" in template.architecture:
+                    assert config["train.pipeline_variant"] == "next_gen2"
+                    assert config["train.batch_size"] == next_gen2_train_batch_size(512, template.architecture)
+                    assert config["train.pretrained"] is True
+                else:
+                    assert config["train.pipeline_variant"] == "legacy"
+                    assert config["train.loss"] != "cross_entropy_tversky"
+                    assert config["train.pretrained"] is False
+        assert history.config == {"train.pipeline_variant": "next_gen", "train.batch_size": 8}
+        assert history.model_name == "SegFormer B0 HF (next-gen)"

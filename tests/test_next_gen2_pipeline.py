@@ -286,7 +286,7 @@ def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
     assert sanitize_template_config(old_config)["tile_preparation.stride"] == 384
     assert sanitize_template_config(old_config)["tile_preparation.tile_size"] == 768
     assert old_config["tile_preparation.stride"] == 256
-    for variant in ("legacy", "next_gen"):
+    for variant in ("legacy",):
         assert sanitize_template_config({**old_config, "train.pipeline_variant": variant})["tile_preparation.stride"] == 256
     payload.update({"dataset.task": "binary", "dataset.imagery_type": "kanopus", "train.input_channels": 4})
     _service._validate_training_pipeline_variant(payload, "segformer_b0")
@@ -310,29 +310,31 @@ def test_api_rejects_incompatible_notebook_settings(key, value):
         _service._validate_training_pipeline_variant(payload, "segformer_b0")
 
 
+@pytest.mark.parametrize("architecture", ["segformer_b0", "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"])
 @pytest.mark.parametrize("tile_size", [512, 768, 1024, 1536])
 @pytest.mark.parametrize("imagery_type,channels", [("kanopus", 4), ("ortho", 3)])
-def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type, channels):
+def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type, channels, architecture):
     payload = sanitize_template_config({
         "train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size,
         "train.epochs": 27, "train.early_stopping_patience": 6,
         "train.max_training_time_sec": 3600,
-    })
+    }, architecture=architecture)
     assert payload["tile_preparation.tile_size"] == tile_size
     assert payload["tile_preparation.stride"] == tile_size // 2
     assert payload["tile_preparation.context"] == 0
     assert payload["train.epochs"] == 27
     assert payload["train.early_stopping_patience"] == 6
     assert payload["train.max_training_time_sec"] == 3600
-    assert sanitize_template_config({}, fallback=payload) == payload
+    assert sanitize_template_config({}, fallback=payload, architecture=architecture) == payload
     payload.update({"dataset.task": "binary", "dataset.imagery_type": imagery_type, "train.input_channels": channels})
-    _service._validate_training_pipeline_variant(payload, "segformer_b0")
+    _service._validate_training_pipeline_variant(payload, architecture)
     root = Path(__file__).resolve().parents[1]
     settings = load_settings(root / "configs/settings.server.yaml", root / "configs/run.next-gen2.server.yaml").model_dump()
     for key, value in payload.items():
         group, field = key.split(".", 1)
         if key not in {"dataset.task", "dataset.imagery_type"}:
             settings[group][field] = value
+    settings["train"]["model_name"] = architecture
     checked = SystemSettings.model_validate(settings)
     assert checked.tile_preparation.tile_size == tile_size
     assert checked.train.input_channels == channels

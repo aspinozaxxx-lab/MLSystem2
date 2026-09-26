@@ -27,28 +27,13 @@
 
 ## Алгоритм работы и его особенности
 
-`next_gen2` использует HF B0 с двумя внутренними logits и одним внешним выходом. Веса загружаются
-из того же закреплённого источника с `num_labels=2`, `ignore_mismatched_sizes=True`, `use_safetensors=True`.
-Для четырёх каналов новая входная свёртка копирует RGB и RED→NIR, сохраняя случайное смещение ноутбука.
-Для трёх каналов ортофотопланов исходная предобученная RGB-свёртка сохраняется целиком.
-При загрузке checkpoint число каналов HF-конфигурации должно совпадать с ModelSpec.
-Внутри модели каждый канал окна нормализуется min-max; диапазон ≤1e-6 даёт нули, nodata не исключается.
-Вызов `model(raw, return_two_class_logits=True)` возвращает два logits для точной CrossEntropy обучения;
-обычный `model(raw)` — разность foreground/background после билинейного увеличения, совместимую с
-бинарным sigmoid и экспортом. HF-конфигурация с обеими головами сохраняется; загрузка checkpoint автономна.
-
-`ModelSpec.output_channels` задает число каналов logits. Для binary segmentation это `1`; для multiclass segmentation это `len(dataset.classes)+1`, где нулевой канал соответствует background.
-
-В `legacy` поддерживаются две ветки SegFormer. `segformer_b0` и `segformer_b2` строятся через Hugging Face `SegformerForSemanticSegmentation` с `num_channels=spec.input_channels` и `num_labels=spec.output_channels`, затем оборачиваются приватным wrapper. Legacy-wrapper сохраняет внешний raw Geoalert ABI и внутри `forward` выполняет фиксированное scaling `x.float() / 255.0` перед SegFormer.
-
-`smp_segformer_b0`, `smp_segformer_b1`, `smp_segformer_b2` и `smp_segformer_b3` строятся через `segmentation_models_pytorch.Segformer` с `encoder_name="mit_b0"`, `"mit_b1"`, `"mit_b2"` или `"mit_b3"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. UI использует все варианты B0/B1/B2/B3. Для legacy SMP wrapper `x / 255.0` не применяется; next-gen B0 получает общий preprocessing-wrapper согласно `ModelSpec`.
-
-`smp_deeplabv3plus_resnet50` добавлен как один необходимый вариант DeepLabV3Plus для проверки старого MLSystem-compatible train path. Модель строится через `segmentation_models_pytorch.DeepLabV3Plus` с `encoder_name="resnet50"`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Input tensor остается `[B,C,H,W]` в raw Geoalert-compatible диапазоне, где `C` берётся из `ModelSpec`. Output - logits `[B,output_channels,H,W]`; activation внутри модели не применяется, а `train` сам выполняет sigmoid/cross entropy, loss и расчет метрик.
-
-`smp_unet_resnet34`, `smp_unet_resnet50`, `smp_unet_resnet101` и `smp_unet_resnet152` добавлены как необходимые архитектуры для UI запуска обучения. Они строятся через `segmentation_models_pytorch.Unet` с соответствующим `encoder_name`, `encoder_weights=None`, `in_channels=spec.input_channels`, `classes=spec.output_channels`, `activation=None`. Эти варианты не добавляют отдельной preprocessing-логики и используют тот же raw Geoalert-compatible tensor ABI, что и другие SMP-модели.
-
-Конфигурация `segformer_b0`: `depths=[2, 2, 2, 2]`, `hidden_sizes=[32, 64, 160, 256]`, `decoder_hidden_size=256`, pretrained источник `nvidia/segformer-b0-finetuned-ade-512-512`.
-
-Конфигурация `segformer_b2`: `depths=[3, 4, 6, 3]`, `hidden_sizes=[64, 128, 320, 512]`, `decoder_hidden_size=768`, pretrained источник `nvidia/segformer-b2-finetuned-ade-512-512`.
-
-В `legacy` Hugging Face pretrained сохраняет прежний путь с `ignore_mismatched_sizes=True`. Для `next_gen` HF B0 используется только закреплённый `nvidia/segformer-b0-finetuned-ade-512-512@489d5cd81a0b59fab9b7ea758d3548ebe99677da` без `ignore_mismatched_sizes`: первый convolution расширяется `3→4`, RGB копируется, NIR получает RED, head заменяется на один logit. Wrapper `next_gen` содержит выбранный preprocessing и обнуляет nodata уже после нормализации; поэтому одна формула входит в PyTorch checkpoint и ONNX. Полная HF-конфигурация и provenance хранятся в `ModelSpec.parameters`. `load_checkpoint` строит HF-архитектуру из сохранённой конфигурации и не обращается к Hub; `pretrained=true` после сохранения является только provenance. Checkpoint `.pt` хранит `model_state_dict`, `model_spec`, `metadata`.
+HF SegFormer строится через transformers, SMP — через Segformer с MiT B0/B1/B2/B3.
+В legacy сохраняются raw-input ABI и прежние головы; HF делит вход на 255, SMP получает raw.
+Next-gen2 поддерживает обе реализации: вход RGB или RGB+NIR, два внутренних logits, внешний выход —
+разность foreground/background. Каналы каждого окна нормализуются min-max, постоянный канал даёт нули.
+HF B0 сохраняет закреплённые веса ноутбука; SMP использует encoder ImageNet и новую голову.
+Для четырёх каналов копируются RGB и RED→NIR, смещение новой свёртки случайное.
+`return_two_class_logits=True` возвращает оба logits для CrossEntropy + Tversky.
+Checkpoint хранит spec, веса и metadata; восстановление любой модели не загружает pretrained-веса.
+Сохранённые next_gen совместимы. DeepLabV3Plus и UNet сохраняют прежнее поведение.
+Подробные параметры и правила вариантов описаны в разделе конвейера обучения архитектуры.

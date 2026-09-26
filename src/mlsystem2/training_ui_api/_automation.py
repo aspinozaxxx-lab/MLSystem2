@@ -292,7 +292,7 @@ def _ensure_training_for_rule(
             name=AUTOMATION_EXPERIMENT_NAME,
         )
     )
-    job_config = sanitize_template_config(template.default_config)
+    job_config = sanitize_template_config(template.default_config, architecture=rule.architecture)
     job_config["train.quality_metric"] = dataset.quality_metric
     job_config["train.input_channels"] = dataset.input_channels or 4
     job_config["dataset.task"] = dataset.task

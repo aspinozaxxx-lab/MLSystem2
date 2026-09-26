@@ -605,6 +605,8 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   useEffect(() => {
     const next = { ...(template?.default_config || {}) };
     if (selectedDataset?.task === "multiclass") {
+      Object.assign(next, template?.config_schema.pipeline_defaults?.legacy || {});
+      next["train.pipeline_variant"] = "legacy";
       next["train.loss"] = "cross_entropy_dice";
     }
     setConfig(next);

@@ -88,7 +88,7 @@ from ._queueing import (
 from ._templates import (
     NEXT_GEN2_DEFAULT_CONFIG,
     NEXT_GEN2_EDITABLE_KEYS,
-    NEXT_GEN2_TRAIN_BATCH_SIZES,
+    next_gen2_train_batch_size,
     NEXT_GEN2_INFERENCE_THRESHOLD,
     next_gen2_inference_batch_size,
     normalize_tile_factors,
@@ -701,7 +701,7 @@ def _build_training_config(
         flat.update({key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512)
         flat["tile_preparation.stride"] = tile_size // 2
-        flat["train.batch_size"] = NEXT_GEN2_TRAIN_BATCH_SIZES[tile_size]
+        flat["train.batch_size"] = next_gen2_train_batch_size(tile_size, row.architecture)
     positive_factor = _float_value(flat, "tile_preparation.positive_factor", 0.5)
     hard_negative_factor = _float_value(flat, "tile_preparation.hard_negative_factor", 0.0)
     background_factor = _float_value(
@@ -955,7 +955,7 @@ def _build_pseudo_markup_config(
         ),
         "batch_size": (
             1 if external_manifest is not None else (
-                next_gen2_inference_batch_size(tile_size) if flat.get("train.pipeline_variant") == "next_gen2"
+                next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") == "next_gen2"
                 else _int_value(flat, "train.batch_size", 1)
             )
         ),
@@ -1182,7 +1182,7 @@ def _build_test_sample_f1_config(
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
         if flat.get("train.pipeline_variant") == "next_gen2":
-            batch_size = next_gen2_inference_batch_size(inference_tile_size)
+            batch_size = next_gen2_inference_batch_size(inference_tile_size, training_result.architecture)
     row.tile_size = inference_tile_size
     row.config = {
         **(row.config or {}),

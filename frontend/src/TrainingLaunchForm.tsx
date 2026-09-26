@@ -20,16 +20,12 @@ const FIELD_PRESENTATION: Record<string, FieldPresentation> = {
   "tile_preparation.stride": { label: "Шаг", unit: "px" },
   "tile_preparation.context": { label: "Контекст", unit: "px" },
   "tile_preparation.augmentation_level": { label: "Уровень аугментаций" },
-  "next_gen.normalization": { label: "Нормализация" },
   "train.background_weight": { label: "Background weight" },
   "train.max_train_batches_per_epoch": { label: "Train batches / эпоха" },
   "train.max_val_batches_per_epoch": { label: "Validation batches / эпоха" },
   "train.epochs": { label: "Максимум эпох" },
   "train.max_training_time_sec": { label: "Лимит времени", unit: "мин", scale: 1 / 60 },
   "train.threshold": { label: "Threshold" },
-  "next_gen.threshold_mode": { label: "Выбор threshold" },
-  "next_gen.validation_interval_epochs": { label: "Интервал валидации", unit: "эпох" },
-  "next_gen.evaluate_gaussian_blend": { label: "Gaussian A/B после обучения" },
 };
 
 type TrainingLaunchFormProps = {
@@ -71,11 +67,10 @@ export function TrainingLaunchForm({
     : "";
   const presentation: Record<string, FieldPresentation> = {
     ...FIELD_PRESENTATION,
-    "train.early_stopping_patience": { unit: variant === "next_gen" ? "пров." : "эпох" },
+    "train.early_stopping_patience": { unit: "эпох" },
   };
   const fields = (schema?.fields || []).filter((field) => {
     if (!trainingConfigFieldVisible(field.key, variant, architecture)) return false;
-    if (field.key === "train.max_val_batches_per_epoch" && variant === "next_gen") return false;
     if (field.key === "train.focal_alpha") return ["focal_dice", "focal_tversky"].includes(String(value["train.loss"]));
     if (["train.tversky_alpha", "train.tversky_beta"].includes(field.key)) return value["train.loss"] === "focal_tversky";
     return true;
@@ -145,17 +140,18 @@ export function TrainingLaunchForm({
         <div className="training-accordion">
           {section("model", "01", "Модель и датасет", `${modelName} · ${datasetName} · ${variantLabel}`, <>
             <div className="training-source-fields">
-              <label className="field"><span>Модель</span>
+              <label className="field"><span>Архитектура модели</span>
                 <select name="architecture" value={architecture} onChange={(event) => onArchitectureChange(event.target.value)} required>
                   {models.map((model) => <option value={model.architecture} key={model.architecture}>{model.display_name}</option>)}
                 </select>
               </label>
+              {renderFields(["train.pipeline_variant"])}
               <label className="field"><span>Датасет</span>
                 <select name="dataset_key" value={datasetKey} onChange={(event) => onDatasetChange(event.target.value)} required>
                   {datasets.map((item) => <option value={item.key} key={item.key}>{item.name}{item.image_count == null ? "" : ` (${item.image_count} снимков)`}</option>)}
                 </select>
               </label>
-              {renderFields(nextGen2 ? ["train.pipeline_variant", "tile_preparation.tile_size"] : ["train.pipeline_variant"])}
+              {nextGen2 ? renderFields(["tile_preparation.tile_size"]) : null}
             </div>
             {datasetKey === "custom" ? <div className="training-uploads">
               <label className="field"><span>Разметка GeoJSON</span><input name="annotation_geojson" type="file" accept=".geojson,application/geo+json" required /></label>
@@ -201,10 +197,9 @@ export function TrainingLaunchForm({
           {section("stopping", nextGen2 ? "02" : "04", "Условия остановки", `Максимум ${trainingNumber(value["train.epochs"])} эпох · patience ${trainingNumber(value["train.early_stopping_patience"])}${value["train.max_training_time_sec"] == null ? "" : ` · ${trainingNumber(Number(value["train.max_training_time_sec"]) / 60)} мин`}`,
             <div className="training-parameter-groups training-stop-groups">
               <div><h3>Когда завершить обучение</h3>{renderFields(STOP_FIELDS)}
-                <p className="training-help">Patience — {variant === "next_gen" ? "проверки качества" : "эпохи"} без улучшения. Лимит времени проверяется после завершения эпохи.</p>
+                <p className="training-help">Patience — эпохи без улучшения. Лимит времени проверяется после завершения эпохи.</p>
               </div>
               <div><h3>Валидация и оценка качества</h3>{renderFields(groupKeys("stopping").filter((key) => !STOP_FIELDS.includes(key)))}
-                {variant === "next_gen" ? <p className="training-help">Полная валидация: на первой эпохе, с указанным интервалом и перед завершением.</p> : null}
                 {nextGen2 ? <p className="training-note">Валидация каждую эпоху. Лучшие веса и ранняя остановка определяются по минимуму validation loss.</p> : null}
               </div>
             </div>)}
@@ -221,7 +216,7 @@ export function TrainingLaunchForm({
       </fieldset>
 
       {nextGen2 ? <section className="training-pipeline-description" aria-label="Описание next-gen2">
-        <h2>Особенности next-gen2 <span>Профиль ноутбука с выбором размера тайла</span></h2>
+        <h2>Особенности next-gen2 <span>Профиль для выбранной SegFormer и размера тайла</span></h2>
         <div className="training-pipeline-details">
           <div>{(schema?.pipeline_descriptions?.next_gen2 || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</div>
           {tilePreview}

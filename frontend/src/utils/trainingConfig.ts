@@ -15,7 +15,9 @@ export function trainingConfigSchema(
   return {
     ...schema,
     fields: schema.fields.map((field) =>
-      field.key === "train.loss"
+      field.key === "train.pipeline_variant" && task === "multiclass"
+        ? { ...field, options: ["legacy"] }
+        : field.key === "train.loss"
         ? {
             ...field,
             options: allowedLosses,
@@ -74,11 +76,13 @@ export function configWithField(
     const tileSize = Number(next["tile_preparation.tile_size"]);
     next["tile_preparation.stride"] = tileSize / 2;
     next["tile_preparation.context"] = 0;
-    next["train.batch_size"] = ({512: 16, 768: 8, 1024: 4, 1536: 2} as Record<number, number>)[tileSize];
+    const baseBatch = Number(pipelineDefaults?.next_gen2?.["train.batch_size"] ?? 16);
+    next["train.batch_size"] = Math.max(1, Math.ceil(baseBatch *
+      ({512: 16, 768: 8, 1024: 4, 1536: 2} as Record<number, number>)[tileSize] / 16));
   }
-  if (key === "train.pipeline_variant" && nextValue === "next_gen") {
-    next["train.max_val_batches_per_epoch"] = null;
-    if (value["train.pipeline_variant"] === "next_gen2") next["train.loss"] = "bce_dice";
+  if (key === "train.pipeline_variant" && nextValue === "legacy" && next["train.loss"] === "cross_entropy_tversky") {
+    next["train.loss"] = "bce_dice";
+    next["train.pretrained"] = false;
   }
   return next;
 }
@@ -88,12 +92,12 @@ export function trainingConfigFieldVisible(
   pipelineVariant: string,
   architecture?: string,
 ): boolean {
-  if (key.startsWith("next_gen.")) return pipelineVariant === "next_gen";
+  if (key.startsWith("next_gen.")) return false;
   if (pipelineVariant === "next_gen2") return [
     "train.pipeline_variant", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key);
   if (key === "train.pretrained") {
-    return pipelineVariant === "next_gen" && architecture === "segformer_b0";
+    return false;
   }
   return true;
 }
