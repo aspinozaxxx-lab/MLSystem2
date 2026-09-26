@@ -51,7 +51,7 @@ class TileSplitRequest(BaseModel):
     val_fraction: float = Field(gt=0.0, lt=1.0)
     test_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
     seed: int = 42
-    strategy: Literal["window_random", "scene_fold"] = "window_random"
+    strategy: Literal["window_random", "scene_fold", "scene_groups"] = "window_random"
     validation_fold: int = Field(default=0, ge=0)
     spatial_purge: bool = False
 
@@ -75,8 +75,9 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1"] = "legacy"
     collect_band_histogram: bool = False
+    input_channels: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
@@ -107,7 +108,7 @@ class TileDataloaderRequest(BaseModel):
                 "hard_negative_annotation_file задается в TileDataloaderRequest только для binary режима"
             )
         if self.include_object_instances and (
-            self.mode != "val" or has_legacy_multiclass or has_per_image_multiclass
+            (self.mode != "val" and self.pipeline_variant != "object_f1") or has_legacy_multiclass or has_per_image_multiclass
         ):
             raise ValueError(
                 "include_object_instances поддерживается только для binary val loader"
@@ -117,7 +118,14 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("next_gen loader требует tile_split strategy=scene_fold")
             if self.mode == "val" and self.max_batches_per_epoch is not None:
                 raise ValueError("next_gen val loader не допускает ограничение числа batch")
-        if self.pipeline_variant == "next_gen2":
+        if self.pipeline_variant == "object_f1":
+            if self.tile_split is None or self.tile_split.strategy != "scene_groups" or self.tile_split.val_fraction != 0.2 or self.tile_split.test_fraction != 0.2:
+                raise ValueError("object f1 требует разбиение групп снимков 60/20/20")
+            if has_legacy_multiclass or has_per_image_multiclass or self.input_channels not in (3, 4):
+                raise ValueError("object f1 требует binary и вход RGB или RGB+NIR")
+            if not self.include_object_instances or self.max_batches_per_epoch is not None:
+                raise ValueError("object f1 требует маски объектов и полные эпохи")
+        elif self.pipeline_variant == "next_gen2":
             if self.tile_split is None or self.tile_split.strategy != "window_random":
                 raise ValueError("next-gen2 требует разбиение по тайлам")
             if self.tile_split.spatial_purge or self.tile_split.test_fraction != 0.2 or self.tile_split.val_fraction != 0.2:

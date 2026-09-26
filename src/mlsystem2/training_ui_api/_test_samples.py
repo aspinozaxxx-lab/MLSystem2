@@ -4137,6 +4137,8 @@ def _effective_inference_template(
     )
     if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "next_gen2":
         hash_payload["inference_profile"] = "next_gen2_eval_v1"
+    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "object_f1":
+        hash_payload["inference_profile"] = "object_f1_instances_v1"
     if evaluation_scope is not None:
         hash_payload["evaluation_scope"] = evaluation_scope
         hash_payload["f1_aggregation"] = "macro"

@@ -16,7 +16,7 @@
 
 - `DatasetPreparationError` — невосстановимая ошибка подготовки.
 - `DatasetClassRequest` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
-- `DatasetPreparationRequest` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, optional `classes`, `val_fraction`, `expected_band_count`, `expected_dtype`, `expected_band_names`; задаётся ровно один из трёх режимов.
+- `DatasetPreparationRequest` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, optional `classes`, `val_fraction`, `expected_band_count`, `expected_dtype`, `expected_band_names`, `allow_rgb_alpha=false` (разрешить RGB+alpha при ожидаемых трёх каналах); задаётся ровно один из трёх режимов.
 - `DatasetClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `PreparedScene` — `scene_id`, `image_path`, optional локальные `annotation_file` и `footprint_file`.
 - `DatasetManifest`, `DatasetClassDefinition`, `DatasetSourceRevision` — строгая схема `.mlsystem2-dataset.json`, классы, ревизии исходных папок, идентификатор сборки и baseline-хеши.
@@ -33,6 +33,8 @@
 Модуль не использует публичные API других модулей. `rasterio` проверяет TIFF, `shapely` разбирает геометрию, локальные файлы читаются через `Path`.
 
 ## Алгоритм работы и его особенности
+
+`DatasetPreparationRequest.allow_rgb_alpha=false` сохраняет прежний контракт; true разрешает ожидаемые три RGB-канала в четырёхканальном TIFF только при явном ColorInterp.alpha четвёртого канала. Счётчики и проверки типов/имён относятся к модельным RGB-каналам.
 
 Legacy binary читает TXT, включая записи-папки и старые scene id, разрешает неоднозначность по геометрии и возвращает каждый TIFF отдельной сценой. Legacy multiclass объединяет сцены классов и назначает `class_id=1..N`. Per-image режим индексирует прямые файлы разметки в `annotations_dir` и TIFF рекурсивно; имя сопоставляется строго как `<parent>_<stem>.geojson`, а парный `<parent>_<stem>_footprint.geojson` содержит valid-data footprint и никогда не читается как supervision. Для обратной совместимости отсутствующий footprint не делает старый набор невалидным. Все TIFF проверяются по CRS, каналам, dtype и nodata/mask. Когда вызывающий next-gen задаёт `expected_band_names=RED,GRN,BLU,NIR`, явные описания каналов обязаны точно совпасть; полное отсутствие описаний принимает архитектурный порядок с предупреждением, частичный или противоречащий порядок является ошибкой. Общие VRT не создаются.
 

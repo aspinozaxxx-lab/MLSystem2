@@ -33,6 +33,7 @@ class DatasetPreparationRequest(BaseModel):
     classes: list[DatasetClassRequest] | None = None
     val_fraction: float = Field(gt=0.0, lt=1.0)
     expected_band_count: int | None = Field(default=None, gt=0)
+    allow_rgb_alpha: bool = False
     expected_dtype: str | None = Field(default=None, min_length=1)
     expected_band_names: list[str] = Field(default_factory=list)
 

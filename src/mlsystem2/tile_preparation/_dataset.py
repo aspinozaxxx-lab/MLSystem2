@@ -16,6 +16,8 @@ import rasterio
 from rasterio.io import DatasetReader
 from rasterio.windows import Window
 
+from mlsystem2.inference.api import object_window_origins
+from ._object_targets import boundary_targets, rasterize_objects, scene_group_split
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations, apply_next_gen_augmentations, build_notebook_augmentations
 from ._mask import (
@@ -74,6 +76,7 @@ class TileDataset:
         include_object_instances: bool = False,
         pipeline_variant: str = "legacy",
         collect_band_histogram: bool = False,
+        input_channels: int | None = None,
     ) -> None:
         if not scenes:
             raise TilePreparationError("Не задано ни одного TIFF для нарезки тайлов.")
@@ -110,11 +113,12 @@ class TileDataset:
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
         self._pipeline_variant = pipeline_variant
-        if pipeline_variant == "next_gen2" and context:
+        self._input_channels = input_channels
+        if pipeline_variant in {"next_gen2", "object_f1"} and context:
             raise TilePreparationError("next-gen2 использует полные окна без контекста")
         self._notebook_transform = (
-            build_notebook_augmentations(seed)
-            if pipeline_variant == "next_gen2" and mode == "train" and augmentation_level else None
+            build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1")
+            if pipeline_variant in {"next_gen2", "object_f1"} and mode == "train" and augmentation_level else None
         )
         self._notebook_positive_ratios: np.ndarray | None = None
         self._notebook_hard_negatives: np.ndarray | None = None
@@ -149,9 +153,17 @@ class TileDataset:
             image_path = Path(scene.image_path)
             try:
                 with rasterio.open(image_path) as dataset:
+                    count = dataset.count
+                    if pipeline_variant == "object_f1":
+                        if input_channels == 4 and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+                            raise TilePreparationError("Для RGB+NIR нужен канал NIR: alpha используется только как маска валидности RGB")
+                        if input_channels == 3 and dataset.count == 4 and dataset.colorinterp[3] == rasterio.enums.ColorInterp.alpha:
+                            count = 3
+                        if count != input_channels:
+                            raise TilePreparationError("Каналы object f1 должны соответствовать RGB или RGB+NIR; alpha не является NIR")
                     if self._count is None:
-                        self._count = dataset.count
-                    elif dataset.count != self._count:
+                        self._count = count
+                    elif count != self._count:
                         raise TilePreparationError(
                             "Количество каналов TIFF различается: "
                             f"ожидалось {self._count}, получено {dataset.count}: {image_path}"
@@ -169,7 +181,9 @@ class TileDataset:
                         context,
                         full_windows_only=pipeline_variant == "next_gen2",
                     )
-                    if pipeline_variant == "next_gen2":
+                    if pipeline_variant == "object_f1":
+                        candidate_windows = [TileWindow(x, y, tile_size, tile_size) for y in object_window_origins(dataset.height, tile_size) for x in object_window_origins(dataset.width, tile_size)]
+                    if pipeline_variant in {"next_gen2", "object_f1"}:
                         valid_windows = candidate_windows
                         diagnostics = ValidFootprintDiagnostics(
                             len(candidate_windows), len(candidate_windows), 0, 0, 0, 0
@@ -233,7 +247,7 @@ class TileDataset:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
         self._record_scene_selected_counts()
-        if self._pipeline_variant == "next_gen2" and self._mode == "train":
+        if self._pipeline_variant in {"next_gen2", "object_f1"} and self._mode == "train":
             self._compute_notebook_statistics()
         if self._collect_band_histogram_enabled:
             self._band_histogram = self._collect_band_histogram()
@@ -255,6 +269,8 @@ class TileDataset:
         if self._pipeline_variant == "next_gen2":
             # Ноутбук обучается на всех пикселях окна, включая nodata и raster mask.
             nodata_pixels = np.zeros(image_raw.shape[-2:], dtype=bool)
+        elif self._pipeline_variant == "object_f1":
+            nodata_pixels = self._read_invalid_data_pixels(dataset, window)
         else:
             nodata_pixels = np.logical_or(
                 _nodata_pixels(image_raw, nodata),
@@ -262,7 +278,7 @@ class TileDataset:
             )
         # Albumentations получает исходный uint8; float32 нужен только после преобразований.
         image = image_raw if self._notebook_transform is not None else image_raw.astype(np.float32, copy=False)
-        if self._pipeline_variant != "next_gen2":
+        if self._pipeline_variant not in {"next_gen2", "object_f1"}:
             image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
             scene_window.scene_index,
@@ -288,15 +304,24 @@ class TileDataset:
                 and bool(np.any(self._core_array(class_hard_negative_masks)))
             ),
         )
+        object_instances = None
+        ambiguous = None
+        if self._pipeline_variant == "object_f1":
+            object_instances, ambiguous = rasterize_objects(self._positive_index(scene_window.scene_index), dataset, window, self._tile_size, nodata_pixels | (mask[0] < 0))
         augmented = False
         if self._notebook_transform is not None:
             transformed = self._notebook_transform(
                 image=np.moveaxis(image_raw, 0, -1), mask=mask[0],
+                **({"instances": object_instances.astype(np.float32), "valid": (~nodata_pixels).astype(np.uint8), "ambiguous": ambiguous.astype(np.uint8)} if object_instances is not None else {}),
             )
             image = np.moveaxis(transformed["image"], -1, 0).astype(np.float32)
             mask = transformed["mask"][None, :, :]
             augmented = bool(transformed["applied_transforms"])
-        should_augment = self._mode == "train" and self._augmentation_level > 0 and self._pipeline_variant != "next_gen2"
+            if object_instances is not None:
+                object_instances = transformed["instances"].astype(np.int32)
+                nodata_pixels = ~transformed["valid"].astype(bool)
+                ambiguous = transformed["ambiguous"].astype(bool)
+        should_augment = self._mode == "train" and self._augmentation_level > 0 and self._pipeline_variant not in {"next_gen2", "object_f1"}
         if should_augment and (
             self._pipeline_variant == "next_gen"
             or category in {TILE_CATEGORY_POSITIVE, TILE_CATEGORY_HARD_NEGATIVE}
@@ -338,7 +363,7 @@ class TileDataset:
             else:
                 mask = augmentation_mask
 
-        object_instances = (
+        object_instances = object_instances if self._pipeline_variant == "object_f1" else (
             self._read_object_instances(
                 scene_window.scene_index,
                 dataset,
@@ -353,9 +378,12 @@ class TileDataset:
             augmented,
             object_instances,
             class_hard_negative_masks,
-            valid_pixels=(~nodata_pixels if self._pipeline_variant == "next_gen" else None),
-            scene_window=(scene_window if self._pipeline_variant == "next_gen" else None),
+            valid_pixels=(~nodata_pixels if self._pipeline_variant in {"next_gen", "object_f1"} else None),
+            scene_window=(scene_window if self._pipeline_variant in {"next_gen", "object_f1"} else None),
         )
+        if self._pipeline_variant == "object_f1":
+            boundary, usable = boundary_targets(object_instances, ~nodata_pixels & (mask[0] >= 0), ambiguous)
+            meta.update(boundary_target=boundary, boundary_valid=usable, overlap_pixels=int(ambiguous.sum()))
         return np.ascontiguousarray(image), np.ascontiguousarray(mask), meta
 
     @property
@@ -380,6 +408,11 @@ class TileDataset:
 
     @property
     def scene_tile_diagnostics(self) -> list[dict[str, object]]:
+        if self._pipeline_variant == "object_f1":
+            for i, item in enumerate(self._scene_tile_diagnostics):
+                if "overlapping_polygon_pairs" not in item:
+                    with rasterio.open(self._scenes[i].image_path) as source:
+                        item.update(self._positive_index(i).instance_diagnostics(source.bounds))
         return [dict(item) for item in self._scene_tile_diagnostics]
 
     @property
@@ -466,6 +499,7 @@ class TileDataset:
     def _compute_notebook_statistics(self) -> None:
         ratios = []
         hard_negatives = []
+        valid_counts = np.zeros(2, dtype=np.float64)
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
             window = Window(item.window.x, item.window.y, self._tile_size, self._tile_size)
@@ -473,13 +507,18 @@ class TileDataset:
                 item.scene_index, dataset, window,
                 np.zeros((self._tile_size, self._tile_size), dtype=bool),
             )
+            if self._pipeline_variant == "object_f1":
+                valid = ~self._read_invalid_data_pixels(dataset, window)
+                positive_count = int(((mask[0] == 1) & valid).sum())
+                valid_counts += [int(valid.sum()) - positive_count, positive_count]
             ratios.append(float(np.mean(mask == 1, dtype=np.float32)))
             hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL)))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
         self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
         positive = self._notebook_positive_ratios.sum()
         negative = (1 - self._notebook_positive_ratios).sum()
-        weights = 1.0 / (np.asarray([negative, positive]) + 1e-6)
+        counts = valid_counts if self._pipeline_variant == "object_f1" else np.asarray([negative, positive])
+        weights = 1.0 / (counts + 1e-6)
         self._notebook_class_weights = (weights / weights.mean()).astype(np.float32).tolist()
 
     @property
@@ -545,7 +584,7 @@ class TileDataset:
         hard_negative_factor: float | None = None,
         background_factor: float | None = None,
     ) -> list[float] | None:
-        if getattr(self, "_pipeline_variant", "legacy") == "next_gen2":
+        if getattr(self, "_pipeline_variant", "legacy") in {"next_gen2", "object_f1"}:
             if self._notebook_positive_ratios is None:
                 return None
             weights = np.where(self._notebook_positive_ratios > 0.001, 7.0, 1.0)
@@ -676,6 +715,7 @@ class TileDataset:
             # Все окна целиком внутри TIFF: виртуальная подложка boundless не нужна.
             return dataset.read(window=window, masked=False)
         return dataset.read(
+            indexes=list(range(1, self.channel_count + 1)) if self._pipeline_variant == "object_f1" else None,
             window=window,
             boundless=True,
             fill_value=nodata,
@@ -713,7 +753,7 @@ class TileDataset:
             transform=dataset.window_transform(window),
             nodata_pixels=nodata_pixels,
         )
-        if self._pipeline_variant == "next_gen2":
+        if self._pipeline_variant in {"next_gen2", "object_f1"}:
             # В ноутбуке hard negative перекрывает positive и остаётся фоном в loss.
             hard_negative = rasterize_window_mask(
                 self._hard_negative_geometries(scene_index, bounds),
@@ -952,6 +992,14 @@ class TileDataset:
 
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
+            return
+        if self._pipeline_variant == "object_f1":
+            parts, manifest = scene_group_split(self._scenes, tile_split)
+            selected_indices = [i for i, item in enumerate(self._windows) if item.scene_id in parts[self._mode]]
+            if not selected_indices:
+                raise TilePreparationError(f"object f1: пустая часть {self._mode}")
+            self._tile_split_manifest = {**manifest, "mode": self._mode, "selected_window_count": len(selected_indices)}
+            self._select_indices(selected_indices)
             return
         if self._pipeline_variant == "next_gen2":
             selected_indices, manifest = self._notebook_tile_split_indices(tile_split)

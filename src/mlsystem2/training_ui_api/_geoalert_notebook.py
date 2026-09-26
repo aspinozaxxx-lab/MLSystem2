@@ -35,6 +35,29 @@ def register_notebook_bricks() -> None:
                 self.window_size, self.stride, self.sigma_scale,
             )
 
+    class ObjectF1Segmentation(ModelBrick):
+        input_raster: str = "input"
+        input_channels: int = Field(default=3, ge=3, le=4)
+        output_raster: str = "object_instances"
+        window_size: int = Field(gt=0)
+        threshold: float = Field(default=0.5, gt=0, lt=1)
+
+        def __call__(self, path):
+            from mlsystem2.training_ui_api._object_inference import predict_instances
+
+            with rasterio.open(Path(path) / f"{self.input_raster}.tif") as source:
+                accumulator, result = predict_instances(source,
+                    lambda images: np.stack([self.adapter(image) for image in images]),
+                    input_indexes=tuple(range(1, self.input_channels + 1)), tile_size=self.window_size, threshold=self.threshold)
+                try:
+                    profile = {**_raster_profile(source, "int32"), "nodata": 0}
+                    with rasterio.open(Path(path) / f"{self.output_raster}.tif", "w", **profile) as target:
+                        for _, window in target.block_windows(1):
+                            x, y, w, h = map(int, (window.col_off, window.row_off, window.width, window.height))
+                            target.write(result.instances[y:y+h, x:x+w], 1, window=window)
+                finally:
+                    accumulator.close()
+
 
 def _raster_profile(source, dtype):
     return {

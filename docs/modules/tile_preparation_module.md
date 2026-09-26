@@ -17,17 +17,20 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `TileClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
 - `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file` и `footprint_file`.
-- `TileSplitRequest` — `val_fraction`, `test_fraction` (default 0), `seed`, `strategy=window_random|scene_fold`, `validation_fold`, `spatial_purge`.
-- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional сбор histogram.
+- `TileSplitRequest` — `val_fraction`, `test_fraction` (default 0), `seed`, `strategy=window_random|scene_fold|scene_groups`, `validation_fold`, `spatial_purge`.
+- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional `input_channels` (3/4 для object_f1), optional сбор histogram.
 
 ## Список используемых данным модулем модулей и с какой целью
 
+- `inference.api` — единая сетка окон полного покрытия для object_f1.
 - `settings.api` — параметры сетки, workers, sampling, augmentation и val-cache.
 - `rasterio` — ленивое чтение окон отдельных TIFF с `boundless=True`.
 - `shapely`, `rasterio.features` — пространственный индекс и rasterize разметки.
 - `torch.utils.data` — sampler, DataLoader и фиксированный val subset.
 
 ## Алгоритм работы и его особенности
+
+`object_f1` добавляет `input_channels`, постоянные instance ID во всех loaders, boundary_target, boundary_valid, valid_pixels и координаты окон в batch_meta. `scene_groups` делит независимые группы 60/20/20; общая сетка полного покрытия получена через `inference.api`. RGBA читается как RGB + valid mask. Части MultiPolygon разделяются; конфликтные пиксели исключаются из границ. При аугментации все маски преобразуются совместно; sampler и workers наследуются из next-gen2.
 
 `next_gen2` строит полные окна 512/768/1024/1536 с шагом в половину окна без контекста и фильтрации nodata. Случайное разбиение
 60/20/20 с seed 42 воспроизводит два train_test_split ноутбука; пересечения не исключаются.

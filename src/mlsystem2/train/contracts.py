@@ -28,7 +28,7 @@ class TrainConfig(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1"] = "legacy"
     class_weights: list[float] = Field(default_factory=list)
     validation_interval_epochs: int = Field(default=1, gt=0)
     threshold_mode: Literal["fixed", "optimize"] = "optimize"
@@ -57,10 +57,12 @@ class TrainConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
+        if self.pipeline_variant == "object_f1" and self.quality_metric != "objects":
+            raise ValueError("object f1 требует объектовую метрику")
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.pipeline_variant == "next_gen2":
+        if self.pipeline_variant in {"next_gen2", "object_f1"}:
             if self.task != "binary" or self.loss != "cross_entropy_tversky":
                 raise ValueError("next-gen2 требует binary и CrossEntropy + Tversky")
             if len(self.class_weights) != 2 or any(
@@ -158,6 +160,10 @@ class EpochMetrics(BaseModel):
 
     epoch: int = Field(ge=0)
     validation_performed: bool = True
+    train_region_loss: float | None = None
+    train_boundary_loss: float | None = None
+    val_region_loss: float | None = None
+    val_boundary_loss: float | None = None
     train_loss: float = Field(ge=0.0)
     val_loss: float | None = Field(default=None, ge=0.0)
     quality_metric: Literal["pixel", "objects"] = "pixel"

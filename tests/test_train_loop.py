@@ -499,7 +499,9 @@ def test_checkpoint_score_uses_best_threshold_pixel_f1() -> None:
     assert _trainer._checkpoint_score(metrics) == 0.7
 
 
+@pytest.mark.parametrize("variant", ["legacy", "object_f1"])
 def test_object_quality_drives_checkpoint_and_early_stopping(
+    variant: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -554,12 +556,14 @@ def test_object_quality_drives_checkpoint_and_early_stopping(
         val_loader=[],
         config=TrainConfig(
             quality_metric="objects",
+            pipeline_variant=variant,
+            class_weights=[1.0, 1.0] if variant == "object_f1" else [],
             epochs=3,
             batch_size=1,
             device="cpu",
             learning_rate=0.001,
             weight_decay=0.0,
-            loss="bce_dice",
+            loss="cross_entropy_tversky" if variant == "object_f1" else "bce_dice",
             threshold=0.5,
             early_stopping_patience=1,
         ),
@@ -572,7 +576,9 @@ def test_object_quality_drives_checkpoint_and_early_stopping(
     assert saved == [("best", 0.9), ("final", 0.8)]
 
 
+@pytest.mark.parametrize("variant", ["legacy", "object_f1"])
 def test_stop_request_keeps_best_f1_checkpoint_and_does_not_create_final(
+    variant: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -640,12 +646,14 @@ def test_stop_request_keeps_best_f1_checkpoint_and_does_not_create_final(
         val_loader=[],
         config=TrainConfig(
             quality_metric="objects",
+            pipeline_variant=variant,
+            class_weights=[1.0, 1.0] if variant == "object_f1" else [],
             epochs=5,
             batch_size=1,
             device="cpu",
             learning_rate=0.001,
             weight_decay=0.0,
-            loss="bce_dice",
+            loss="cross_entropy_tversky" if variant == "object_f1" else "bce_dice",
             threshold=0.5,
             early_stopping_patience=5,
         ),

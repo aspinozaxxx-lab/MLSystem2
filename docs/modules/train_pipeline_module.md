@@ -29,6 +29,8 @@
 
 ## Алгоритм работы и его особенности
 
+`object_f1` использует профиль next-gen2, но scene_groups 60/20/20 и instance masks во всех loaders. Подготовка разрешает RGB+alpha, loader получает число модельных каналов. ModelSpec содержит output_layout, object_separation, boundary_width, input_channel_policy и версию экспорта; metric tag — val/object_f1. Split manifest и метрики по полным снимкам сохраняются.
+
 Для `next_gen2` оркестратор создаёт train/val/test loaders: полные окна 512/768/1024/1536 с шагом в половину окна, случайное
 разбиение 60/20/20 без spatial purge. TrainConfig получает веса классов только по train-маскам.
 Модель — выбранная двухклассовая SegFormer (SMP B0/B1/B2/B3, исторически HF B0) с внешним бинарным выходом, RGB или RGB+NIR по типу датасета. Предобученные веса определяются train.pretrained в обоих конвейерах.

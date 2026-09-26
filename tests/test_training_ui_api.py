@@ -88,13 +88,15 @@ def test_app_links_use_prepared_images_browser(monkeypatch) -> None:
     assert "minio" not in links
 
 
-def test_segformer_templates_offer_legacy_and_next_gen2() -> None:
+def test_segformer_templates_offer_supported_pipelines() -> None:
     templates = {item["architecture"]: item for item in initial_templates()}
     assert templates["smp_segformer_b0"]["default_config"]["train.pipeline_variant"] == "legacy"
     assert "segformer_b0" not in templates
     for name, template in templates.items():
         schema = template["config_schema"]
         expected = ["legacy", "next_gen2"] if "segformer" in name else ["legacy"]
+        if name == "smp_segformer_b0":
+            expected.append("object_f1")
         assert schema["fields"][0]["options"] == expected
         assert not any(field["key"].startswith("next_gen.") for field in schema["fields"])
         assert schema["pipeline_defaults"]["legacy"]["train.pipeline_variant"] == "legacy"

@@ -136,3 +136,25 @@ describe("trainingConfigSchema", () => {
     expect(configWithField(value, "train.pipeline_variant", "legacy")["train.loss"]).toBe("bce_dice");
   });
 });
+
+
+describe("профиль object f1", () => {
+  it("сохраняет выбор весов, размеры тайла и только доступные настройки", () => {
+    const defaults = { object_f1: { "train.pipeline_variant": "object_f1", "train.pretrained": true,
+      "train.batch_size": 16, "tile_preparation.tile_size": 512, "train.learning_rate": 0.0001 } };
+    const selected = configWithField({}, "train.pipeline_variant", "object_f1", defaults);
+    expect(selected["train.pretrained"]).toBe(true);
+    for (const [size, batch] of [[512,16], [768,8], [1024,4], [1536,2]]) {
+      expect(configWithField(selected, "tile_preparation.tile_size", size, defaults)["train.batch_size"]).toBe(batch);
+    }
+    for (const key of ["train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec"]) {
+      expect(trainingConfigFieldVisible(key, "object_f1", "smp_segformer_b0")).toBe(true);
+    }
+    for (const key of ["train.learning_rate", "train.batch_size", "tile_preparation.stride", "dataset.val_fraction"]) {
+      expect(trainingConfigFieldVisible(key, "object_f1", "smp_segformer_b0")).toBe(false);
+    }
+    const template = { architecture: "smp_segformer_b0", default_config: {}, config_schema: { ...schema, pipeline_defaults: defaults } };
+    expect(trainingConfigForTemplate(template, "binary", "object_f1", false)["train.pretrained"]).toBe(false);
+    expect(trainingConfigForTemplate(template, "multiclass", "object_f1")["train.pipeline_variant"]).toBe("legacy");
+  });
+});

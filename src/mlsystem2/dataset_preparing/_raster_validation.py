@@ -41,6 +41,7 @@ def validate_rasters(
     scene_to_image: dict[str, Path],
     *,
     expected_band_count: int | None = None,
+    allow_rgb_alpha: bool = False,
     expected_dtype: str | None = None,
     expected_band_names: list[str] | None = None,
 ) -> RasterValidationResult:
@@ -69,17 +70,21 @@ def validate_rasters(
                     errors.append(f"У снимка нет usable mask или nodata: {path}")
                     continue
 
+                if allow_rgb_alpha and expected_band_count == 4 and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+                    errors.append(f"Ожидается RGB+NIR, но alpha является маской валидности: {path}")
+                    continue
+                rgb_alpha = allow_rgb_alpha and expected_band_count == 3 and dataset.count == 4 and dataset.colorinterp[3] == rasterio.enums.ColorInterp.alpha
                 info = RasterInfo(
                     scene_id=scene_id,
                     path=path,
                     width=dataset.width,
                     height=dataset.height,
-                    band_count=dataset.count,
-                    dtypes=tuple(dataset.dtypes),
+                    band_count=3 if rgb_alpha else dataset.count,
+                    dtypes=tuple(dataset.dtypes[:3] if rgb_alpha else dataset.dtypes),
                     crs=crs,
                     transform=transform,
                     bounds=dataset.bounds,
-                    band_descriptions=tuple(dataset.descriptions),
+                    band_descriptions=tuple(dataset.descriptions[:3] if rgb_alpha else dataset.descriptions),
                 )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Снимок не открывается через rasterio: {path}: {exc}")

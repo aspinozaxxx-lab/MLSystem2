@@ -55,6 +55,7 @@ from ._external_models import (
     predict_external_scene,
     predict_external_test_tile,
 )
+from ._object_inference import predict_instances, torch_object_predictor
 from ._inference_backend import PYTORCH_INFERENCE_BACKEND
 from ._markup_export import find_intersecting_images
 from ._external_imagery import ExternalImageryError, prepare_external_imagery
@@ -359,7 +360,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
             config = _native_inference_config(loaded, config)
-            if config.get("pipeline_variant") == "next_gen2":
+            if config.get("pipeline_variant") in {"next_gen2", "object_f1"}:
                 threshold = float(config["threshold"])
                 profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -412,6 +413,10 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 )
                 prediction = external_prediction.mask
                 predicted_instances = external_prediction.instances
+            elif config.get("pipeline_variant") == "object_f1":
+                predicted_instances = _infer_object_test_tile(torch, model, input_channels, tile, config,
+                    inference_tile_size, int(config["batch_size"]), float(threshold), device, profile)
+                prediction = (predicted_instances > 0).astype(np.uint8)
             else:
                 assert threshold is not None
                 prediction = _infer_test_tile_mask(
@@ -577,6 +582,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                         Path(str(geojson_path)),
                         Path(str(tile["image_path"])),
                         predicted.shape,
+                        split_parts=config.get("pipeline_variant") == "object_f1",
                     )
                     if geojson_path
                     else label_components(
@@ -726,10 +732,23 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _infer_object_test_tile(torch, model, input_channels, tile, config, size, batch, threshold, device, profile):
+    image_path = Path(str(tile["image_path"]))
+    features = _infer_scene(torch=torch, model=model, input_channels=input_channels, image_path=image_path,
+        scene=str(tile.get("index", "test")), config=config, tile_size=size, stride=size//2, batch_size=batch,
+        threshold=threshold, device=device, postprocess_profile=profile)
+    with rasterio.open(image_path) as dataset:
+        shapes = [(transform_geom("EPSG:4326", dataset.crs, feature["geometry"]), i)
+                  for i, feature in enumerate(features, start=1)]
+        return rasterio_features.rasterize(shapes, out_shape=(dataset.height, dataset.width), transform=dataset.transform,
+            dtype="int32") if shapes else np.zeros((dataset.height, dataset.width), np.int32)
+
+
 def _test_tile_instance_mask(
     geojson_path: Path,
     image_path: Path,
     out_shape: tuple[int, int],
+    split_parts: bool = False,
 ) -> np.ndarray:
     try:
         payload = json.loads(geojson_path.read_text(encoding="utf-8-sig"))
@@ -759,7 +778,11 @@ def _test_tile_instance_mask(
         if transformer is not None:
             geometry = shapely_transform(transformer.transform, geometry)
         if not geometry.is_empty:
-            geometries.append((geometry, index))
+            if split_parts:
+                for part in _iter_polygons(geometry):
+                    geometries.append((part, len(geometries) + 1))
+            else:
+                geometries.append((geometry, index))
     return rasterio_features.rasterize(
         geometries,
         out_shape=out_shape,
@@ -1166,7 +1189,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
             config = _native_inference_config(loaded, config)
-            if config.get("pipeline_variant") == "next_gen2":
+            if config.get("pipeline_variant") in {"next_gen2", "object_f1"}:
                 threshold = float(config["threshold"])
                 postprocess_profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -1363,8 +1386,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             **progress_context,
         )
         if (
-            external_manifest is not None
-            and external_manifest.adapter == "detectron2_instances"
+            config.get("pipeline_variant") == "object_f1"
+            or (external_manifest is not None
+            and external_manifest.adapter == "detectron2_instances")
         ):
             merged_features = merge_external_instance_features(all_features)
         else:
@@ -1496,6 +1520,10 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
     spec = getattr(getattr(loaded, "model", None), "spec", None)
     parameters = getattr(spec, "parameters", None) or {}
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
+    if variant == "object_f1":
+        return {**config, "pipeline_variant": "object_f1", "threshold": 0.5,
+                "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512), str(getattr(spec, "name", "smp_segformer_b0"))),
+                "inference_merge": "gaussian_instances", "threshold_source": "object_f1_profile"}
     if variant != "next_gen2":
         return config
     return {
@@ -1804,6 +1832,14 @@ def _infer_scene(
             channel_mapping=channel_mapping,
         )
         nodata = _resolve_nodata(dataset)
+        if config.get("pipeline_variant") == "object_f1":
+            accumulator, result = predict_instances(dataset, torch_object_predictor(torch, model, device, input_channels),
+                input_indexes=input_indexes, tile_size=tile_size, batch_size=batch_size, threshold=threshold, metrics=performance)
+            try:
+                return _features_from_mask(result.instances, dataset.transform, dataset.crs, dataset.res, scene, config,
+                    postprocess_profile=postprocess_profile, confidence_map=result.probabilities[0])
+            finally:
+                accumulator.close()
         if config.get("pipeline_variant") == "next_gen2":
             mask_window = Window(0, 0, dataset.width, dataset.height)
             mask, confidence_map = _infer_notebook_scene_mask(
@@ -2674,7 +2710,11 @@ def _features_from_mask(
     class_ids = sorted(object_type_by_id) if object_type_by_id else [1]
     for class_id in class_ids:
         binary_mask = mask == class_id if object_type_by_id else mask > 0
-        labels, component_count = label_components(binary_mask, structure=_label_structure())
+        if config.get("pipeline_variant") == "object_f1":
+            labels = mask.astype(np.int32, copy=False)
+            component_count = int(labels.max())
+        else:
+            labels, component_count = label_components(binary_mask, structure=_label_structure())
         component_confidence: dict[int, float] = {}
         if confidence_map is not None and component_count:
             means = ndimage.mean(
@@ -2737,6 +2777,8 @@ def _features_from_mask(
                     "postprocess_profile": postprocess_profile.name,
                     "postprocess_level": postprocess_profile.level,
             }
+            if config.get("pipeline_variant") == "object_f1":
+                properties["instance_id"] = f"{scene}:{component_id}"
             if object_type is not None:
                 properties.update(
                     {
@@ -3284,7 +3326,7 @@ def _configured_postprocess_profile(
     config: dict[str, Any],
     fallback_image_count: int,
 ) -> _PostprocessProfile:
-    if config.get("pipeline_variant") == "next_gen2":
+    if config.get("pipeline_variant") in {"next_gen2", "object_f1"}:
         return _POSTPROCESS_NONE
     name = config.get("postprocess_profile")
     if name is None:
@@ -3857,7 +3899,7 @@ def _checkpoint_inference_window(
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
     # Сетка eval-ноутбука независима от нарезки нового обучения без нахлёста.
     checkpoint_stride = (
-        max(1, checkpoint_tile_size // 2) if variant == "next_gen2"
+        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "object_f1"}
         else core_size if checkpoint_context else int(stride)
     )
     if checkpoint_stride <= 0 or checkpoint_stride > core_size:

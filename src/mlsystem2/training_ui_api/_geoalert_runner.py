@@ -27,7 +27,7 @@ from rasterio.warp import transform_geom
 import yaml
 
 from ._external_imagery import ExternalImageryError, prepare_external_imagery
-from ._external_models import external_model_manifest
+from ._external_models import external_model_manifest, merge_external_instance_features
 from ._inference_backend import GEOALERT_INFERENCE_BACKEND, configured_inference_backend
 from ._markup_export import find_intersecting_images
 from ._model_export import (
@@ -216,6 +216,8 @@ def _run_pseudo_markup(config: dict[str, Any], run_root: Path) -> dict[str, Any]
     failures = list(child_result.get("failures") or [])
     features = _collect_features(config, child_result.get("reports") or [])
     feature_count_before_merge = len(features)
+    if config.get("pipeline_variant") == "object_f1":
+        features = merge_external_instance_features(features)
     if prepared.is_aoi:
         features = _finalize_aoi_features(
             features,
@@ -486,7 +488,7 @@ def _ensure_runtime_export(
     checkpoint_sha = _sha256_file(checkpoint)
     model_identity = json.dumps(
         {
-            "runtime_contract": 3,
+            "runtime_contract": 4,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -500,7 +502,7 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 3,
+            "pipeline_contract": 4,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
@@ -548,7 +550,8 @@ def _ensure_runtime_export(
                     else None
                 ),
                 external_manifest=external_manifest,
-                probability_output=model_marker.get("output_kind") == "probabilities",
+                probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
+                object_output=model_marker.get("output_kind") == "object_probabilities",
                 threshold=float(model_marker.get("threshold", 0.9)),
             )
             _install_pipeline_cache(
@@ -691,6 +694,7 @@ def _run_compose(
         raise RuntimeError("Окружение Geoalert Workflow Engine не найдено на сервере.")
     env = os.environ.copy()
     python_paths = [
+        Path(__file__).resolve().parents[2],
         inference_root / "shims",
         inference_root / "modules",
         inference_root / "modules" / "urban",

@@ -29,6 +29,8 @@
 
 ## Алгоритм работы и его особенности
 
+`train.pipeline_variant` дополнен object_f1: binary SegFormer B0, quality_metric=objects, фиксированные параметры next-gen2 и отдельная ветвь подготовки/оценки границ. Размер тайла, pretrained и условия остановки изменяемы.
+
 `next_gen2` требует профиль ноутбука: binary, HF B0 или SMP SegFormer B0/B1/B2/B3, 3 или 4 канала,
 тайлы 512/768/1024/1536, шаг в половину тайла, context 0, augmentation_level 3, seed 42,
 batch по архитектуре: B0 — 16/8/4/2, B1 — 8/4/2/1, B2/B3 — 4/2/1/1 соответственно, LR 1e-4,

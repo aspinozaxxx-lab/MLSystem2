@@ -408,6 +408,10 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
     mlflow = _ensure_run_active(run)
     try:
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+        for field, name in (("train_region_loss", "train/region_loss"), ("train_boundary_loss", "train/boundary_loss"), ("val_region_loss", "val/region_loss"), ("val_boundary_loss", "val/boundary_loss")):
+            value = getattr(metrics, field, None)
+            if value is not None:
+                mlflow.log_metric(name, value, step=metrics.epoch)
         if metrics.learning_rate is not None:
             mlflow.log_metric("train/learning_rate", metrics.learning_rate, step=metrics.epoch)
         if hasattr(mlflow, "set_tag"):

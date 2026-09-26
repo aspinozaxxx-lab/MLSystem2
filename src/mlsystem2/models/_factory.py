@@ -158,9 +158,11 @@ def create_model_for_checkpoint(spec: ModelSpec) -> ModelHandle:
 
 
 def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandle:
+    if spec.parameters.get("pipeline_variant") == "object_f1" and spec.name != "smp_segformer_b0":
+        raise ModelsError("object f1 поддерживает только SegFormer B0")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
-    if spec.parameters.get("pipeline_variant") == "next_gen2" and (
+    if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1"} and (
         spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
         or spec.input_channels not in (3, 4)
         or spec.output_channels != 1
@@ -223,7 +225,7 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
         encoder_name=_SMP_ENCODERS[spec.name],
         encoder_weights="imagenet" if pretrained else None,
         in_channels=3 if pretrained else spec.input_channels,
-        classes=2 if notebook else spec.output_channels,
+        classes=3 if spec.parameters.get("pipeline_variant") == "object_f1" else 2 if notebook else spec.output_channels,
         activation=None,
     )
     if pretrained and spec.input_channels == 4:
@@ -428,23 +430,24 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "object_f1"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
         raise ModelsError("next_gen ModelSpec не содержит preprocessing")
     return ModelHandle(
         spec=spec,
-        model=_InputPreprocessingWrapper(model, preprocessing),
+        model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") == "object_f1"),
     )
 
 
 if torch is not None:
 
     class _InputPreprocessingWrapper(torch.nn.Module):
-        def __init__(self, model, preprocessing: dict[str, object]) -> None:
+        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False) -> None:
             super().__init__()
             self.model = model
+            self.object_output = object_output
             self.mode = str(preprocessing.get("mode") or "scale_255")
             self.nodata = float(preprocessing.get("nodata", 0.0))
             self.mask_nodata = bool(preprocessing.get("mask_nodata", True))
@@ -487,6 +490,8 @@ if torch is not None:
                     align_corners=False,
                 )
             if self.mode == "window_minmax":
+                if self.object_output:
+                    return logits
                 if return_two_class_logits:
                     return logits
                 # sigmoid(z1-z0) равен softmax([z0,z1])[:,1]; обе головы обучаются.
@@ -507,7 +512,7 @@ if torch is not None:
 else:
 
     class _InputPreprocessingWrapper:
-        def __init__(self, model, preprocessing: dict[str, object]) -> None:
+        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False) -> None:
             raise ModelsError(
                 "Для создания next_gen модели требуется optional dependency torch."
             )

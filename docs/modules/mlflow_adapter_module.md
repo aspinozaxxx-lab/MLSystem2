@@ -85,6 +85,8 @@
 
 ## Алгоритм работы и его особенности
 
+Для object_f1 журнал эпох дополнен train/region_loss, train/boundary_loss, val/region_loss, val/boundary_loss. Объектовые результаты используют существующие val/object_f1, precision/recall; train/learning_rate сохраняется. Дубли quality_* не добавляются.
+
 Новые next-gen2 runs получают checkpoint_selection_metric=val_loss и читаются по минимуму val/loss.
 Исторические quality_f1 runs продолжают читаться по F1; без тега сохраняется исторический выбор по loss.
 При равенстве выбирается ранняя эпоха. Возвращаемые F1 и threshold относятся к выбранным весам.

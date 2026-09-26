@@ -75,3 +75,13 @@ describe("описание запуска", () => {
     expect(summary).not.toContain("лимит");
   });
 });
+
+
+it("объясняет разделение и выбор checkpoint в описании object f1", () => {
+  const result = trainingSummary({modelName: "SegFormer B0", datasetName: "ОКС500", secondaryPriority: false,
+    runInferenceAfterTraining: false, value: {"train.pipeline_variant": "object_f1", "train.pretrained": true,
+      "tile_preparation.tile_size": 768, "train.batch_size": 8, "train.epochs": 30, "train.early_stopping_patience": 10}});
+  expect(result).toContain("object f1");
+  expect(result).toContain("по независимым снимкам; область и границы");
+  expect(result).toContain("object F1 после выделения объектов");
+});

@@ -16,6 +16,7 @@ dependencies = [
   "numpy",
   "Pillow",
   "scipy",
+  "scikit-image>=0.24,<0.27",
   "albumentations==2.0.8",
   "boto3",
   "rasterio",

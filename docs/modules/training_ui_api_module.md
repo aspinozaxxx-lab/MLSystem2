@@ -232,6 +232,10 @@ auto jobs: queued rows уходят из очередей, running process по�
 
 ## Алгоритм работы и его особенности
 
+Экспорт object f1 содержит ONNX с двумя вероятностями, YAML блока ObjectF1Segmentation и CPU runtime с инструкцией регистрации. Версия кэша экспорта — 4; ID сохраняются до векторизации.
+
+Для SegFormer B0 доступен профиль object_f1 с подробным описанием. В контрактах заданий/результатов сохранён новый pipeline_variant. Ортофото использует ObjectF1Segmentation в Geoalert/Triton с двумя картами вероятностей и общим inference API; нативный путь сохраняет instance ID. Экспорт и кэш отличают object_probabilities от бинарных масок. Новых endpoints и миграций нет.
+
 Все SegFormer каталога допускают `next-gen2` на основе segFormer_train_hlam_main_v2.ipynb для Канопус и RGB-ортофотопланов.
 Профиль задаётся ConfigSchema.pipeline_defaults; подробное описание — pipeline_descriptions.next_gen2.
 Доступны предобученные веса, размер тайла 512/768/1024/1536 (default 512), максимум эпох (20), patience по validation loss (10) и лимит времени (null).

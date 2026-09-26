@@ -141,6 +141,7 @@ def _prepare_binary_dataset(request: DatasetPreparationRequest) -> DatasetPrepar
         validate_rasters(
             selected_scene_to_image,
             expected_band_count=request.expected_band_count,
+            allow_rgb_alpha=request.allow_rgb_alpha,
             expected_dtype=request.expected_dtype,
             expected_band_names=request.expected_band_names,
         )
@@ -267,6 +268,7 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         validate_rasters(
             scene_to_image,
             expected_band_count=request.expected_band_count,
+            allow_rgb_alpha=request.allow_rgb_alpha,
             expected_dtype=request.expected_dtype,
             expected_band_names=request.expected_band_names,
         )
@@ -457,6 +459,7 @@ def _prepare_multiclass_dataset(request: DatasetPreparationRequest) -> DatasetPr
         validate_rasters(
             selected_scene_to_image,
             expected_band_count=request.expected_band_count,
+            allow_rgb_alpha=request.allow_rgb_alpha,
             expected_dtype=request.expected_dtype,
             expected_band_names=request.expected_band_names,
         )

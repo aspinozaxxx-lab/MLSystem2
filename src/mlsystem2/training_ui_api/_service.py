@@ -105,6 +105,7 @@ from ._templates import (
     NEXT_GEN2_DEFAULT_CONFIG,
     NEXT_GEN2_MODEL_BATCH_SIZES,
     next_gen2_train_batch_size,
+    fixed_pipeline_defaults,
     NEXT_GEN2_EDITABLE_KEYS,
     NEXT_GEN2_TRAIN_BATCH_SIZES,
     initial_inference_templates,
@@ -767,7 +768,7 @@ def apply_training_template_field_to_all(
         current = dict(template.default_config)
         if request.key == "train.pipeline_variant":
             preset = template.config_schema.get("pipeline_defaults", {}).get(str(request.value))
-            if request.value == "next_gen2" and preset is None:
+            if request.value in {"next_gen2", "object_f1"} and preset is None:
                 continue
             if preset is not None:
                 pretrained = current.get("train.pretrained", False)
@@ -997,7 +998,7 @@ def create_training_job(
         fallback=template_row.default_config if template_row is not None else None,
         normalize_factors=False,
     )
-    job_config["train.quality_metric"] = dataset.quality_metric
+    job_config["train.quality_metric"] = "objects" if job_config.get("train.pipeline_variant") == "object_f1" else dataset.quality_metric
     job_config["train.input_channels"] = dataset.input_channels or 4
     job_config["dataset.task"] = dataset.task
     job_config["dataset.object_types"] = [
@@ -1042,7 +1043,7 @@ def create_training_job(
             class_display_name=dataset.name,
             architecture=request.architecture,
             model_name=model_name,
-            quality_metric=dataset.quality_metric,
+            quality_metric=job_config["train.quality_metric"],
             task=dataset.task,
             class_schema=[item.model_dump(mode="json") for item in dataset.object_types],
             status=ResultStatus.RUNNING.value,
@@ -1057,11 +1058,13 @@ def _validate_training_pipeline_variant(
     job_config: dict[str, Any], architecture: str
 ) -> None:
     variant = str(job_config.get("train.pipeline_variant") or "legacy")
-    if variant not in {"legacy", "next_gen2"}:
+    if variant not in {"legacy", "next_gen2", "object_f1"}:
         raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
     if variant == "legacy":
         return
-    if variant == "next_gen2":
+    if variant == "object_f1" and architecture != "smp_segformer_b0":
+        raise TrainingUIAPIError("object f1 доступен только для SegFormer B0")
+    if variant in {"next_gen2", "object_f1"}:
         if architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2 поддерживает только архитектуры SegFormer.")
         tile_size = job_config.get("tile_preparation.tile_size")
@@ -1072,7 +1075,7 @@ def _validate_training_pipeline_variant(
             raise TrainingUIAPIError("next-gen2 поддерживает Канопус и RGB-ортофотопланы.")
         required = {
             "dataset.task": "binary", "train.input_channels": 3 if imagery_type == "ortho" else 4,
-            **{key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS},
+            **{key: value for key, value in fixed_pipeline_defaults(variant).items() if key not in NEXT_GEN2_EDITABLE_KEYS},
             "tile_preparation.stride": tile_size // 2,
             "train.batch_size": next_gen2_train_batch_size(tile_size, architecture),
         }
@@ -2692,7 +2695,7 @@ def _job_input_channels(job: JobRow | None) -> int:
 
 def _job_pipeline_variant(job: JobRow | None) -> str:
     value = (job.config or {}).get("train.pipeline_variant") if job is not None else None
-    return str(value) if value in {"next_gen", "next_gen2"} else "legacy"
+    return str(value) if value in {"next_gen", "next_gen2", "object_f1"} else "legacy"
 
 
 def _job_validation_fold(job: JobRow | None) -> int:

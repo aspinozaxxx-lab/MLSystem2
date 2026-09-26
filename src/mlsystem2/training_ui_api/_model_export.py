@@ -80,7 +80,8 @@ def build_triton_model_export_zip(
         metadata = loaded.artifact.metadata
         parameters = getattr(loaded.model.spec, "parameters", None) or {}
         next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "next_gen2"
-        if next_gen2 and task != "binary":
+        object_f1 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "object_f1"
+        if (next_gen2 or object_f1) and task != "binary":
             raise TrainingUIAPIError("Экспорт next_gen2 поддерживает только бинарную модель.")
         class_schema = _export_class_schema_override(
             task,
@@ -107,9 +108,9 @@ def build_triton_model_export_zip(
             parsed_context,
         )
         input_channels = int(loaded.model.spec.input_channels)
-        if next_gen2 and parsed_context != 0:
+        if (next_gen2 or object_f1) and parsed_context != 0:
             raise TrainingUIAPIError("Профиль next_gen2 требует context=0.")
-        if next_gen2 and resolution_m is not None:
+        if (next_gen2 or object_f1) and resolution_m is not None:
             raise TrainingUIAPIError("Профиль next_gen2 использует исходную сетку без resolution_m.")
 
         export_root = temp_root / "export"
@@ -123,7 +124,7 @@ def build_triton_model_export_zip(
         service_zip_dir.mkdir(parents=True)
 
         onnx_path = version_dir / "model.onnx"
-        if next_gen2:
+        if next_gen2 or object_f1:
             _export_segmentation_mask_onnx(
                 model=loaded.model.model,
                 input_channels=input_channels,
@@ -132,6 +133,7 @@ def build_triton_model_export_zip(
                 threshold=effective_threshold,
                 onnx_path=onnx_path,
                 probability_output=True,
+                object_output=object_f1,
             )
         elif task == "binary":
             _export_binary_mask_onnx(
@@ -155,9 +157,9 @@ def build_triton_model_export_zip(
             _triton_config(
                 parsed_model_name,
                 input_channels,
-                foreground_channels=(len(class_schema) if task == "multiclass" else 1),
+                foreground_channels=(2 if object_f1 else len(class_schema) if task == "multiclass" else 1),
                 instance_kind=parsed_instance_kind,
-                probability_output=next_gen2,
+                probability_output=next_gen2 or object_f1,
             ),
         )
         _write_text(
@@ -170,10 +172,13 @@ def build_triton_model_export_zip(
                 context=parsed_context,
                 postprocess_config=normalized_postprocess_config,
                 resolution_m=resolution_m,
-                probability_output=next_gen2,
+                probability_output=next_gen2 or object_f1,
                 threshold=effective_threshold,
+                object_output=object_f1,
             ),
         )
+        if object_f1:
+            _write_object_runtime(export_root)
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
         _zip_directory(service_root, service_zip_path)
         _write_json(
@@ -196,10 +201,13 @@ def build_triton_model_export_zip(
                     "request" if threshold is not None else
                     "next_gen2_eval_notebook" if next_gen2 else "checkpoint_metadata"
                 ),
-                "output_kind": "probabilities" if next_gen2 else "binary_masks",
-                "inference_merge": "gaussian_probabilities" if next_gen2 else "drop",
-                "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 else inference_core_size,
-                "requires_inference_brick": "SlidingWindowSegmentation" if next_gen2 else "Segmentation",
+                "output_kind": "object_probabilities" if object_f1 else "probabilities" if next_gen2 else "binary_masks",
+                "pipeline_variant": "object_f1" if object_f1 else "next_gen2" if next_gen2 else "legacy",
+                "output_channels": ["foreground", "boundary"] if object_f1 else None,
+                "object_separation": parameters.get("object_separation") if object_f1 else None,
+                "inference_merge": "gaussian_probabilities" if next_gen2 or object_f1 else "drop",
+                "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 or object_f1 else inference_core_size,
+                "requires_inference_brick": "ObjectF1Segmentation" if object_f1 else "SlidingWindowSegmentation" if next_gen2 else "Segmentation",
                 "task": task,
                 "class_schema": class_schema,
                 "onnx_opset": ONNX_OPSET,
@@ -312,6 +320,7 @@ def build_geoalert_pipeline_yaml(
     resolution_m: float | None = None,
     external_manifest: ExternalModelManifest | None = None,
     probability_output: bool = False,
+    object_output: bool = False,
     threshold: float = 0.9,
 ) -> str:
     """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
@@ -328,6 +337,7 @@ def build_geoalert_pipeline_yaml(
         postprocess_config=postprocess_config,
         resolution_m=resolution_m,
         probability_output=probability_output,
+        object_output=object_output,
         threshold=threshold,
     )
 
@@ -799,6 +809,7 @@ def _export_segmentation_mask_onnx(
     threshold: float,
     onnx_path: Path,
     probability_output: bool = False,
+    object_output: bool = False,
 ) -> None:
     if probability_output and output_channels != 1:
         raise TrainingUIAPIError("Выход вероятностей поддерживается для бинарной модели.")
@@ -828,6 +839,8 @@ def _export_segmentation_mask_onnx(
                     mode="bilinear",
                     align_corners=False,
                 )
+            if object_output:
+                return torch.cat((torch.softmax(logits[:, :2], dim=1)[:, 1:2], torch.sigmoid(logits[:, 2:3])), dim=1)
             if output_channels == 1:
                 probability = torch.sigmoid(logits)
                 if probability_output:
@@ -876,7 +889,7 @@ def _export_segmentation_mask_onnx(
         raise TrainingUIAPIError("Не удалось экспортировать checkpoint в ONNX.") from exc
     if not onnx_path.is_file():
         raise TrainingUIAPIError("ONNX exporter не создал model.onnx.")
-    foreground_channels = 1 if output_channels == 1 else output_channels - 1
+    foreground_channels = 2 if object_output else 1 if output_channels == 1 else output_channels - 1
     _normalize_onnx_for_triton(
         onnx_path,
         foreground_channels=foreground_channels,
@@ -991,6 +1004,7 @@ def _pipeline_yaml(
     postprocess_config: dict[str, object] | None = None,
     resolution_m: float | None = None,
     probability_output: bool = False,
+    object_output: bool = False,
     threshold: float = 0.5,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
@@ -1065,6 +1079,22 @@ config:
 {vector_outputs_yaml}
 {vectorize_options_yaml}{vector_postprocess_yaml}
 """
+    if object_output:
+        import yaml
+
+        document = yaml.safe_load(result)
+        adapter = document["config"]["bricks"][1]["adapter"]
+        adapter["output_dtype"] = "float32"
+        document["config"]["bricks"] = [
+            {"_class": "ObjectF1Segmentation", "input_raster": "input", "input_channels": input_channels,
+             "window_size": sample_size, "threshold": threshold, "output_raster": "object_instances", "adapter": adapter},
+            {"_class": "VectorizeMasks", "input_rasters": ["object_instances"], "output_fcs": ["output"],
+             "value_property_name": "instance_id"},
+        ]
+        # Геометрические фильтры применяются отдельно к каждому instance.
+        extra = yaml.safe_load("bricks:\n" + vector_postprocess_yaml) if vector_postprocess_yaml.strip() else {}
+        document["config"]["bricks"].extend(extra.get("bricks", []))
+        return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
     if probability_output:
         # Сохранить штатную композицию и явную постобработку. Legacy YAML
         # остаётся прежним; порог нового профиля применяется к итоговой мозаике.
@@ -1284,6 +1314,37 @@ def _vector_postprocess_yaml(
         + "\n".join(nested)
         for label in labels
     )
+
+
+def _write_object_runtime(export_root: Path) -> None:
+    """Включить тот же CPU-код в переносимый экспорт, без копии алгоритма."""
+    package_root = Path(__file__).resolve().parent.parent
+    files = ["__init__.py", "inference/__init__.py", "inference/api.py", "inference/contracts.py",
+             "inference/_objects.py", "models/__init__.py", "models/contracts.py",
+             "training_ui_api/__init__.py", "training_ui_api/_geoalert_notebook.py",
+             "training_ui_api/_object_inference.py"]
+    for relative in files:
+        target = export_root / "runtime" / "mlsystem2" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(package_root / relative, target)
+    _write_text(export_root / "runtime" / "requirements.txt",
+                "numpy\nscipy\nscikit-image>=0.24,<0.27\npydantic>=2\nrasterio\n")
+    _write_text(export_root / "README.md", """# Экспорт object f1
+
+ONNX возвращает два канала вероятностей: область и граница. Их нельзя обрабатывать как обычную бинарную маску.
+
+Модель размещается в штатном репозитории Triton. Для Geoalert добавьте каталог `runtime` этого архива
+в `PYTHONPATH`, установите `runtime/requirements.txt` в его окружение и перед `Compose.load` вызовите:
+
+```python
+from mlsystem2.training_ui_api._geoalert_notebook import register_notebook_bricks
+register_notebook_bricks()
+```
+
+В Гровике блок регистрируется автоматически. `ObjectF1Segmentation` объединяет окна Gaussian-весами,
+учитывает alpha/nodata и выделяет ID через watershed. `VectorizeMasks` сохраняет отдельные полигоны
+и поле `instance_id`. Геометрические фильтры применяются к каждому объекту отдельно.
+""")
 
 
 def _write_text(path: Path, content: str) -> None:

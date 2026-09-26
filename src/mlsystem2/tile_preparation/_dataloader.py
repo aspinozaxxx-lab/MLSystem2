@@ -62,13 +62,14 @@ def create_tile_dataloader(
             include_object_instances=request.include_object_instances,
             pipeline_variant=request.pipeline_variant,
             collect_band_histogram=request.collect_band_histogram,
+            input_channels=getattr(request, "input_channels", None),
         )
     except TilePreparationError:
         raise
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
-    if request.pipeline_variant == "next_gen2":
+    if request.pipeline_variant in {"next_gen2", "object_f1"}:
         # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
         sampler = (
             WeightedRandomSampler(dataset.sampling_weights(), num_samples=len(dataset), replacement=True)
@@ -87,9 +88,9 @@ def create_tile_dataloader(
             kwargs["prefetch_factor"] = 2
         loader = DataLoader(**kwargs)
         LOGGER.info(
-            "Загрузчик next-gen2 (%s): workers=%s, prefetch_factor=%s, "
+            "Загрузчик %s (%s): workers=%s, prefetch_factor=%s, "
             "persistent_workers=%s, pin_memory=%s, batch_size=%s",
-            request.mode, loader.num_workers, loader.prefetch_factor,
+            request.pipeline_variant, request.mode, loader.num_workers, loader.prefetch_factor,
             loader.persistent_workers, loader.pin_memory, loader.batch_size,
         )
         return loader
@@ -595,6 +596,10 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
         batch_meta["scene_ids"] = [str(meta["scene_id"]) for meta in metas]
         batch_meta["windows"] = [dict(meta["window"]) for meta in metas]
         batch_meta["scene_shapes"] = [dict(meta["scene_shape"]) for meta in metas]
+    if any("boundary_target" in meta for meta in metas):
+        for key, dtype in (("boundary_target", torch.float32), ("boundary_valid", torch.bool)):
+            batch_meta[key] = torch.stack([torch.as_tensor(meta[key], dtype=dtype) for meta in metas])
+        batch_meta["overlap_pixels"] = sum(int(meta.get("overlap_pixels", 0)) for meta in metas)
     if any("object_instances" in meta for meta in metas):
         if not all("object_instances" in meta for meta in metas):
             raise TilePreparationError("В batch присутствуют неполные маски объектов.")

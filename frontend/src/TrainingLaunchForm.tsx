@@ -54,8 +54,9 @@ export function TrainingLaunchForm({
 }: TrainingLaunchFormProps) {
   const [openSection, setOpenSection] = useState<TrainingSection | null>("model");
   const variant = String(value["train.pipeline_variant"] || "legacy");
-  const variantLabel = variant.replace("_", "-");
-  const nextGen2 = variant === "next_gen2";
+  const variantLabel = variant === "object_f1" ? "object f1" : variant.replace("_", "-");
+  const nextGen2 = ["next_gen2", "object_f1"].includes(variant);
+  const objectF1 = variant === "object_f1";
   const modelName = models.find((model) => model.architecture === architecture)?.display_name.replace(" (next-gen)", "") || "Модель не выбрана";
   const dataset = datasets.find((item) => item.key === datasetKey);
   const datasetName = dataset?.name || "Датасет не выбран";
@@ -200,7 +201,7 @@ export function TrainingLaunchForm({
                 <p className="training-help">Patience — эпохи без улучшения. Лимит времени проверяется после завершения эпохи.</p>
               </div>
               <div><h3>Валидация и оценка качества</h3>{renderFields(groupKeys("stopping").filter((key) => !STOP_FIELDS.includes(key)))}
-                {nextGen2 ? <p className="training-note">Валидация каждую эпоху. Лучшие веса и ранняя остановка определяются по минимуму validation loss.</p> : null}
+                {nextGen2 ? <p className="training-note">Валидация каждую эпоху. Лучшие веса и ранняя остановка определяются {objectF1 ? "по максимальному object F1 после разделения объектов." : "по минимуму validation loss."}</p> : null}
               </div>
             </div>)}
         </div>
@@ -215,10 +216,10 @@ export function TrainingLaunchForm({
         </div>
       </fieldset>
 
-      {nextGen2 ? <section className="training-pipeline-description" aria-label="Описание next-gen2">
-        <h2>Особенности next-gen2 <span>Профиль для выбранной SegFormer и размера тайла</span></h2>
+      {nextGen2 ? <section className="training-pipeline-description" aria-label={`Описание ${variantLabel}`}>
+        <h2>Особенности {variantLabel} <span>Профиль для выбранной SegFormer и размера тайла</span></h2>
         <div className="training-pipeline-details">
-          <div>{(schema?.pipeline_descriptions?.next_gen2 || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</div>
+          <div>{(schema?.pipeline_descriptions?.[variant] || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</div>
           {tilePreview}
         </div>
       </section> : null}

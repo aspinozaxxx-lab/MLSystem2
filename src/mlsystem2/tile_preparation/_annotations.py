@@ -20,6 +20,23 @@ class AnnotationIndex:
     def __init__(self, geometries: list[Polygon | MultiPolygon]) -> None:
         self._geometries = geometries
         self._tree = STRtree(geometries) if geometries else None
+        self._instance_parts = None
+
+    def query_instances(self, bounds):
+        """Стабильный номер части, независимый от окна и порядка STRtree."""
+        if self._instance_parts is None:
+            self._instance_parts = [part for geometry in self._geometries
+                                    for part in (geometry.geoms if isinstance(geometry, MultiPolygon) else [geometry])]
+            self._instance_tree = STRtree(self._instance_parts)
+        return [(int(index) + 1, self._instance_parts[int(index)])
+                for index in sorted(self._instance_tree.query(box(*bounds), predicate="intersects"))]
+
+    def instance_diagnostics(self, bounds):
+        parts = self.query_instances(bounds)
+        overlaps = sum(1 for key, geometry in parts
+                       for other, candidate in self.query_instances(geometry.bounds)
+                       if other > key and geometry.intersection(candidate).area > 0)
+        return {"polygon_parts": len(parts), "overlapping_polygon_pairs": overlaps}
 
     def query_bounds(self, bounds: tuple[float, float, float, float]) -> list[Polygon | MultiPolygon]:
         if self._tree is None:

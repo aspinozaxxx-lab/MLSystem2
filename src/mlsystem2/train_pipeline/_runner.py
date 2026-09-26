@@ -186,8 +186,9 @@ def run_train_pipeline(
                         "train",
                         _tile_split_request(settings),
                         max_batches_per_epoch=settings.train.max_train_batches_per_epoch,
-                        include_object_instances=False,
+                        include_object_instances=settings.train.pipeline_variant == "object_f1",
                         pipeline_variant=settings.train.pipeline_variant,
+                        input_channels=settings.train.input_channels,
                         collect_band_histogram=(
                             settings.train.pipeline_variant == "next_gen"
                             and settings.next_gen.normalization == "robust_percentile"
@@ -203,6 +204,7 @@ def run_train_pipeline(
                         max_batches_per_epoch=settings.train.max_val_batches_per_epoch,
                         include_object_instances=settings.train.task == "binary",
                         pipeline_variant=settings.train.pipeline_variant,
+                        input_channels=settings.train.input_channels,
                     )
                 ),
             ),
@@ -210,12 +212,14 @@ def run_train_pipeline(
         timings.append(timing)
         train_loader, val_loader = loaders
         test_loader = None
-        if settings.train.pipeline_variant == "next_gen2":
+        if settings.train.pipeline_variant in {"next_gen2", "object_f1"}:
             test_loader, test_timing = timed_call(
                 "tile_preparation_test",
                 lambda: deps.create_tile_dataloader(_tile_request(
                     dataset_result.dataset, settings.train.batch_size, "test",
-                    _tile_split_request(settings), pipeline_variant="next_gen2",
+                    _tile_split_request(settings), pipeline_variant=settings.train.pipeline_variant,
+                    input_channels=settings.train.input_channels,
+                    include_object_instances=settings.train.pipeline_variant == "object_f1",
                 )),
             )
             timings.append(test_timing)
@@ -229,7 +233,7 @@ def run_train_pipeline(
                     "positive_factor_used",
                     settings.tile_preparation.positive_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "object_f1"}
                 else None
             ),
             hard_negative_factor_used=(
@@ -238,7 +242,7 @@ def run_train_pipeline(
                     "hard_negative_factor_used",
                     settings.tile_preparation.hard_negative_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "object_f1"}
                 else None
             ),
             background_factor_used=(
@@ -247,7 +251,7 @@ def run_train_pipeline(
                     "background_factor_used",
                     settings.tile_preparation.background_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant != "next_gen2"
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "object_f1"}
                 else None
             ),
         )
@@ -283,7 +287,7 @@ def run_train_pipeline(
         train_result = _expect_train_result(train_result)
 
         tile_report = _tile_preparation_report(settings, train_loader, val_loader, test_loader)
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}:
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "object_f1"}:
             _attach_next_gen_diagnostics(
                 train_result,
                 settings,
@@ -375,8 +379,8 @@ def _mlflow_start_request(
             "class": _mlflow_class_tag(settings),
             "task": settings.train.task,
             "seed": str(settings.tile_preparation.seed),
-            **({"checkpoint_selection_metric": "val_loss"}
-               if settings.train.pipeline_variant == "next_gen2" else {}),
+            **({"checkpoint_selection_metric": "val/object_f1" if settings.train.pipeline_variant == "object_f1" else "val_loss"}
+               if settings.train.pipeline_variant in {"next_gen2", "object_f1"} else {}),
         },
     )
 
@@ -384,7 +388,7 @@ def _mlflow_start_request(
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     expected_band_names = (
         ["RED", "GRN", "BLU", "NIR"][:settings.train.input_channels]
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "object_f1"}
         else []
     )
     if settings.dataset.classes:
@@ -403,6 +407,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
             ],
             val_fraction=settings.dataset.val_fraction,
             expected_band_count=settings.train.input_channels,
+            allow_rgb_alpha=settings.train.pipeline_variant == "object_f1",
             expected_dtype="uint8",
             expected_band_names=expected_band_names,
         )
@@ -414,6 +419,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         annotations_dir=settings.dataset.annotations_dir,
         val_fraction=settings.dataset.val_fraction,
         expected_band_count=settings.train.input_channels,
+        allow_rgb_alpha=settings.train.pipeline_variant == "object_f1",
         expected_dtype="uint8",
         expected_band_names=expected_band_names,
     )
@@ -461,10 +467,10 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
 def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
-        test_fraction=0.2 if settings.train.pipeline_variant == "next_gen2" else 0.0,
+        test_fraction=0.2 if settings.train.pipeline_variant in {"next_gen2", "object_f1"} else 0.0,
         seed=settings.tile_preparation.seed,
         strategy=(
-            "scene_fold"
+            "scene_groups" if settings.train.pipeline_variant == "object_f1" else "scene_fold"
             if settings.train.pipeline_variant == "next_gen"
             else "window_random"
         ),
@@ -482,6 +488,7 @@ def _tile_request(
     include_object_instances: bool = False,
     collect_band_histogram: bool = False,
     pipeline_variant: str = "legacy",
+    input_channels: int | None = None,
 ) -> TileDataloaderRequest:
     scenes = [
         TileSceneSource(
@@ -548,6 +555,7 @@ def _tile_request(
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
         include_object_instances=include_object_instances,
+        input_channels=input_channels if pipeline_variant == "object_f1" else None,
         pipeline_variant=pipeline_variant,
         collect_band_histogram=collect_band_histogram,
     )
@@ -555,10 +563,10 @@ def _tile_request(
 
 def _model_spec(settings: SystemSettings, train_loader: object | None = None) -> ModelSpec:
     parameters: dict[str, object] = {}
-    if settings.train.pipeline_variant == "next_gen2":
+    if settings.train.pipeline_variant in {"next_gen2", "object_f1"}:
         dataset = getattr(train_loader, "dataset", None)
         parameters = {
-            "pipeline_variant": "next_gen2",
+            "pipeline_variant": settings.train.pipeline_variant,
             "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6},
             "band_contract": ["RED", "GRN", "BLU", "NIR"][:settings.train.input_channels],
             "split": getattr(dataset, "tile_split_manifest", {}),
@@ -567,13 +575,18 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
                         "hard_negative_weight": 8.0, "background_weight": 1.0, "replacement": True},
             "scheduler": {"name": "reduce_lr_on_plateau", "mode": "min",
                           "factor": 0.5, "patience": 3, "min_lr": 0.0},
-            "checkpoint_selection_metric": "val_loss",
+            "checkpoint_selection_metric": "val/object_f1" if settings.train.pipeline_variant == "object_f1" else "val_loss",
             "threshold_policy": {"mode": "fixed", "configured_threshold": 0.5},
             "source_notebook": {
                 "name": "segFormer_train_hlam_main_v2.ipynb",
                 "sha256": "ed6b8494e5202c9fa3a6690a835ee74ad62c584cddb067dd07a7fbe343a2416f",
             },
         }
+    if settings.train.pipeline_variant == "object_f1":
+        parameters.update(output_layout="background_foreground_boundary", boundary_width=2, boundary_loss_weight=0.5,
+                          object_separation={"foreground_threshold": 0.5, "boundary_threshold": 0.5, "min_marker_pixels": 4},
+                          input_channel_policy="rgb_alpha_mask" if settings.train.input_channels == 3 else "rgb_nir",
+                          instance_parts="polygon", merge="gaussian_full_coverage", export_contract=4)
     if settings.train.pipeline_variant == "next_gen":
         dataset = getattr(train_loader, "dataset", None)
         histogram = getattr(dataset, "band_histogram", None)
@@ -634,7 +647,7 @@ def _load_or_create_model(
                 map_location=settings.train.device,
             )
         )
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2"}:
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "object_f1"}:
             loaded_spec = loaded.model.spec
             if (
                 loaded_spec.name != spec.name
@@ -1159,9 +1172,9 @@ def _tile_preparation_report(
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
-    if settings.train.pipeline_variant in {"next_gen", "next_gen2"} and _loader_attr(loader, "cache_mode"):
+    if settings.train.pipeline_variant in {"next_gen", "next_gen2", "object_f1"} and _loader_attr(loader, "cache_mode"):
         return "full_natural_validation"
-    if settings.train.pipeline_variant == "next_gen2":
+    if settings.train.pipeline_variant in {"next_gen2", "object_f1"}:
         return "weighted_positive_15" if _uses_weighted_sampler(loader) else "full_natural_validation"
     cache_mode = _loader_attr(loader, "cache_mode")
     if cache_mode == "memory":
@@ -1255,7 +1268,7 @@ def _train_request(
             pipeline_variant=settings.train.pipeline_variant,
             class_weights=(
                 list(getattr(getattr(train_loader, "dataset", None), "notebook_class_weights", []))
-                if settings.train.pipeline_variant == "next_gen2" else []
+                if settings.train.pipeline_variant in {"next_gen2", "object_f1"} else []
             ),
             validation_interval_epochs=(
                 settings.next_gen.validation_interval_epochs
@@ -1265,7 +1278,7 @@ def _train_request(
             threshold_mode=(
                 settings.next_gen.threshold_mode
                 if settings.train.pipeline_variant == "next_gen"
-                else "fixed" if settings.train.pipeline_variant == "next_gen2" else "optimize"
+                else "fixed" if settings.train.pipeline_variant in {"next_gen2", "object_f1"} else "optimize"
             ),
             evaluate_gaussian_blend=(
                 settings.next_gen.evaluate_gaussian_blend
@@ -1328,7 +1341,7 @@ def _train_request(
                 "dataset_revision": _dataset_revision(dataset),
                 "code_revision": _code_revision(settings.runtime.project_root),
             }
-            if settings.train.pipeline_variant in {"next_gen", "next_gen2"}
+            if settings.train.pipeline_variant in {"next_gen", "next_gen2", "object_f1"}
             else {}
         ),
     )

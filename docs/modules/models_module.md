@@ -27,6 +27,8 @@
 
 ## Алгоритм работы и его особенности
 
+`object_f1` разрешён только smp_segformer_b0: общий decoder и три сырых logits (фон, объект, граница). Внешний forward сохраняет все три канала; логическое output_channels=1 описывает единственный семантический класс. Нормализация и предобучение как next-gen2; параметры layout/разделения входят в checkpoint.
+
 HF использует transformers, SMP — Segformer с MiT B0/B1/B2/B3.
 В legacy HF делит raw на 255; SMP без предобучения получает raw, с предобучением —
 raw/255 и ImageNet mean/std (NIR как RED), без маски nodata. Режим задан ModelSpec.pretrained.

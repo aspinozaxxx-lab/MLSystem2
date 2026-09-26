@@ -12,8 +12,8 @@
 
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
-- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два вычисленных веса для next-gen2, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
-- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
+- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два вычисленных веса для next-gen2/object_f1, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
+- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
@@ -25,9 +25,12 @@
 - `models.contracts` - публичный контракт модели, которую нужно обучить.
 - `models.api` - сохранить best/final checkpoint через публичный API.
 - `metrics.api` - сопоставить объекты один к одному и рассчитать объектовую F1.
+- `inference.api/contracts` — общая сборка вероятностей и выделение ID для object_f1.
 - `torch` - выполнить обучение, optimizer, scheduler, losses и tensor operations; импортируется лениво.
 
 ## Алгоритм работы и его особенности
+
+`object_f1` получает три logits, сохраняет loss области next-gen2 и добавляет половину BCE/Dice границ. `EpochMetrics` дополняется train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss. Validation/test использует общий `inference.api`: Gaussian сборку полных сцен и watershed. Best/early stopping — максимум object F1, scheduler — минимум суммарного val_loss. Пороги 0.5; компоненты loss и объектовая test-метрика сохраняются.
 
 `next_gen2` получает два logits, использует 25% weighted CrossEntropy + 75% SMP multiclass
 Tversky (alpha/beta 0.75/0.25), AdamW без clipping и ReduceLROnPlateau(min, patience=3, factor=0.5).

@@ -2753,7 +2753,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2" | "object_f1";
             /**
              * Validation Fold
              * @default 0
@@ -2873,7 +2873,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2" | "object_f1";
             /**
              * Validation Fold
              * @default 0
@@ -4290,7 +4290,7 @@ export interface components {
              * @default legacy
              * @enum {string}
              */
-            pipeline_variant: "legacy" | "next_gen" | "next_gen2";
+            pipeline_variant: "legacy" | "next_gen" | "next_gen2" | "object_f1";
             /**
              * Validation Fold
              * @default 0
