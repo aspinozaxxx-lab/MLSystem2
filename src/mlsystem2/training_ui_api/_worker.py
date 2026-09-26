@@ -698,6 +698,7 @@ def _build_training_config(
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
     if pipeline_variant == "next_gen2":
+        flat.setdefault("train.pretrained", True)
         flat.update({key: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512)
         flat["tile_preparation.stride"] = tile_size // 2

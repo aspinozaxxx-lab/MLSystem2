@@ -229,7 +229,7 @@ def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
         if dataset is None or not dataset.version:
             continue
         _cancel_stale_automation_jobs(session, rule, dataset.version, config)
-        if rule.training_enabled:
+        if rule.training_enabled and rule.architecture in UI_ARCHITECTURES:
             _ensure_training_for_rule(session, rule, dataset, config)
         if rule.pseudo_markup_enabled:
             _ensure_pseudo_markup_for_rule(session, rule, dataset, config)

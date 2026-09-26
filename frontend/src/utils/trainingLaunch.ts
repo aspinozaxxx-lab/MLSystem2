@@ -84,6 +84,7 @@ export function trainingSummary({
     patience % 100 >= 11 && patience % 100 <= 14 ? many : patience % 10 === 1 ? one : patience % 10 >= 2 && patience % 10 <= 4 ? few : many;
   const patienceUnit = checks ? ending("проверки", "проверок", "проверок") : ending("эпохи", "эпох", "эпох");
   return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${variant}. `
+    + (modelName.toLowerCase().includes("segformer") ? `${value["train.pretrained"] ? "Предобученные веса ImageNet" : "Случайная инициализация весов"}. ` : "")
     + `Тайлы ${trainingNumber(tile.size)} × ${trainingNumber(tile.size)} px, центр ${trainingNumber(tile.core)} × ${trainingNumber(tile.core)} px; `
     + (variant === "next-gen2" ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
     + `Batch size ${trainingNumber(value["train.batch_size"])}, LR ${value["train.learning_rate"] ?? "—"}. `

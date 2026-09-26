@@ -1,4 +1,4 @@
-"""Проверки новых архитектур next-gen2 и совместимости сохранённых моделей."""
+"""Проверки SegFormer с весами и без них в обоих конвейерах."""
 
 from types import SimpleNamespace
 
@@ -12,8 +12,10 @@ from mlsystem2.training_ui_api._templates import next_gen2_train_batch_size
 
 @pytest.mark.parametrize("architecture", [f"smp_segformer_b{index}" for index in range(4)])
 @pytest.mark.parametrize("channels", [3, 4])
-def test_smp_next_gen2_trains_both_heads_and_restores_without_pretrained_download(
-    tmp_path, monkeypatch, architecture, channels,
+@pytest.mark.parametrize("variant", ["legacy", "next_gen2"])
+@pytest.mark.parametrize("pretrained", [True, False])
+def test_smp_trains_and_restores_without_pretrained_download(
+    tmp_path, monkeypatch, architecture, channels, variant, pretrained,
 ):
     torch = pytest.importorskip("torch")
     smp = pytest.importorskip("segmentation_models_pytorch")
@@ -32,50 +34,97 @@ def test_smp_next_gen2_trains_both_heads_and_restores_without_pretrained_downloa
 
     monkeypatch.setattr(smp, "Segformer", build)
     handle = create_model(ModelSpec(
-        name=architecture, input_channels=channels, output_channels=1, pretrained=True,
-        parameters={"pipeline_variant": "next_gen2",
-                    "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}},
+        name=architecture, input_channels=channels, output_channels=1, pretrained=pretrained,
+        parameters=({"pipeline_variant": "next_gen2",
+                    "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}
+                    if variant == "next_gen2" else {}),
     ))
-    input_weights = handle.model.model.encoder.patch_embed1.proj.weight
-    torch.testing.assert_close(input_weights[:, :3], rgb_weights[0], rtol=0, atol=0)
-    if channels == 4:
-        torch.testing.assert_close(input_weights[:, 3], rgb_weights[0][:, 0], rtol=0, atol=0)
+    core = handle.model.model if pretrained or variant == "next_gen2" else handle.model
+    input_weights = core.encoder.patch_embed1.proj.weight
+    if pretrained:
+        torch.testing.assert_close(input_weights[:, :3], rgb_weights[0], rtol=0, atol=0)
+        if channels == 4:
+            torch.testing.assert_close(input_weights[:, 3], rgb_weights[0][:, 0], rtol=0, atol=0)
     images = torch.rand(1, channels, 64, 64) * 255
+    images[:, :, 0, 0] = 0
     masks = torch.randint(0, 2, (1, 64, 64))
     optimizer = torch.optim.AdamW(handle.model.parameters(), lr=1e-4)
-    logits = handle.model(images, return_two_class_logits=True)
-    assert logits.shape == (1, 2, 64, 64)
-    loss = 0.25 * torch.nn.functional.cross_entropy(logits, masks) + 0.75 * smp.losses.TverskyLoss(
-        mode="multiclass", alpha=0.75, beta=0.25,
-    )(logits, masks)
+    inputs = []
+    hook = core.register_forward_pre_hook(lambda module, args: inputs.append(args[0].detach().clone()))
+    logits = handle.model(images, return_two_class_logits=True) if variant == "next_gen2" else handle.model(images)
+    hook.remove()
+    if variant == "next_gen2":
+        assert logits.shape == (1, 2, 64, 64)
+        loss = 0.25 * torch.nn.functional.cross_entropy(logits, masks) + 0.75 * smp.losses.TverskyLoss(
+            mode="multiclass", alpha=0.75, beta=0.25,
+        )(logits, masks)
+        expected_input = images / images.amax(dim=(-2, -1), keepdim=True)
+    else:
+        assert logits.shape == (1, 1, 64, 64)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, masks[:, None].float())
+        expected_input = images
+        if pretrained:
+            mean = torch.tensor([0.485, 0.456, 0.406, 0.485][:channels]).view(1, -1, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225, 0.229][:channels]).view(1, -1, 1, 1)
+            expected_input = (images / 255 - mean) / std
+        assert not (logits[:, :, 0, 0] == -1000).any()
+    torch.testing.assert_close(inputs[0], expected_input)
     loss.backward()
-    gradient = handle.model.model.segmentation_head[0].weight.grad
-    assert torch.isfinite(loss) and all(gradient[index].abs().sum() > 0 for index in (0, 1))
+    gradient = core.segmentation_head[0].weight.grad
+    assert torch.isfinite(loss) and all(gradient[index].abs().sum() > 0 for index in range(logits.shape[1]))
     optimizer.step()
     handle.model.eval()
     with torch.no_grad():
-        logits = handle.model(images, return_two_class_logits=True)
         expected = handle.model(images)
-        torch.testing.assert_close(torch.sigmoid(expected), logits.softmax(dim=1)[:, 1:2])
+        if variant == "next_gen2":
+            logits = handle.model(images, return_two_class_logits=True)
+            torch.testing.assert_close(torch.sigmoid(expected), logits.softmax(dim=1)[:, 1:2])
     path = str(tmp_path / "checkpoint.pt")
     save_checkpoint(SaveCheckpointRequest(model=handle, checkpoint_uri=path, metadata={}))
-    restored = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=path, map_location="cpu"))
+    restored = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=path, map_location="cpu", model_spec=handle.spec))
     restored.model.model.eval()
     with torch.no_grad():
         torch.testing.assert_close(restored.model.model(images), expected, rtol=0, atol=0)
-    assert initialization == ["imagenet", None]
+    assert initialization == ["imagenet" if pretrained else None, None]
+
+
+def test_pretrained_legacy_keeps_multiclass_head_and_raw_checkpoint_contract(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    smp = pytest.importorskip("segmentation_models_pytorch")
+    torch.set_num_threads(2)
+    constructor = smp.Segformer
+    monkeypatch.setattr(smp, "Segformer", lambda **kwargs: constructor(**{**kwargs, "encoder_weights": None}))
+    spec = ModelSpec(name="smp_segformer_b2", input_channels=3, output_channels=3, pretrained=True)
+    handle = create_model(spec)
+    images = torch.rand(1, 3, 64, 64) * 255
+    logits = handle.model(images)
+    assert logits.shape == (1, 3, 64, 64)
+    loss = torch.nn.functional.cross_entropy(logits, torch.randint(0, 3, (1, 64, 64)))
+    loss.backward()
+    assert torch.isfinite(loss)
+    path = str(tmp_path / "multiclass.pt")
+    save_checkpoint(SaveCheckpointRequest(model=handle, checkpoint_uri=path))
+    restored = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=path, model_spec=spec))
+    handle.model.eval()
+    restored.model.model.eval()
+    with torch.no_grad():
+        torch.testing.assert_close(restored.model.model(images), handle.model(images), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("architecture,channels", [("smp_segformer_b0", 3), ("smp_segformer_b3", 4)])
-def test_smp_next_gen2_exports_probabilities_for_geoalert(tmp_path, architecture, channels):
+@pytest.mark.parametrize("variant", ["legacy", "next_gen2"])
+def test_smp_exports_probabilities_for_geoalert(tmp_path, monkeypatch, architecture, channels, variant):
     torch = pytest.importorskip("torch")
-    pytest.importorskip("segmentation_models_pytorch")
+    smp = pytest.importorskip("segmentation_models_pytorch")
+    constructor = smp.Segformer
+    monkeypatch.setattr(smp, "Segformer", lambda **kwargs: constructor(**{**kwargs, "encoder_weights": None}))
     onnx = pytest.importorskip("onnx")
     torch.set_num_threads(2)
     handle = create_model(ModelSpec(
-        name=architecture, input_channels=channels, output_channels=1,
-        parameters={"pipeline_variant": "next_gen2",
-                    "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}},
+        name=architecture, input_channels=channels, output_channels=1, pretrained=variant == "legacy",
+        parameters=({"pipeline_variant": "next_gen2",
+                    "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}
+                    if variant == "next_gen2" else {}),
     ))
     path = tmp_path / "model.onnx"
     _model_export._export_segmentation_mask_onnx(
@@ -84,7 +133,12 @@ def test_smp_next_gen2_exports_probabilities_for_geoalert(tmp_path, architecture
     )
     exported = onnx.load(str(path))
     onnx.checker.check_model(exported)
-    assert {"ReduceMin", "ReduceMax", "Sigmoid"} <= {node.op_type for node in exported.graph.node}
+    operations = {node.op_type for node in exported.graph.node}
+    assert "Sigmoid" in operations
+    if variant == "next_gen2":
+        assert {"ReduceMin", "ReduceMax"} <= operations
+    else:
+        assert {"Div", "Sub"} <= operations
     output = exported.graph.output[0]
     assert output.name == "probabilities"
     assert output.type.tensor_type.elem_type == onnx.TensorProto.FLOAT

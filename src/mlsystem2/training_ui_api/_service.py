@@ -38,7 +38,7 @@ from ._automation import (
     sync_automation_once,
     update_automation_rule,
 )
-from ._catalog import MODEL_DISPLAY_NAMES, ui_model_infos
+from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
 from ._dataset_catalog import (
     create_dataset_class as _create_dataset_class,
@@ -472,6 +472,8 @@ def ensure_seed_templates(session: Session) -> None:
     }
     # Обновляем только настройки будущих запусков; история jobs и MLflow неизменна.
     for template in existing.values():
+        if template.architecture not in UI_ARCHITECTURES:
+            continue
         changed = False
         for attribute in ("default_config", "baseline_default_config"):
             previous = dict(getattr(template, attribute) or {})
@@ -633,7 +635,7 @@ def _resolve_inference_seed_dataset(
 def training_templates(session: Session) -> TrainingTemplateListResponse:
     ensure_seed_templates(session)
     rows = session.scalars(
-        select(TrainingTemplateRow).order_by(
+        select(TrainingTemplateRow).where(TrainingTemplateRow.architecture.in_(UI_ARCHITECTURES)).order_by(
             TrainingTemplateRow.display_name,
             TrainingTemplateRow.dataset_name,
         )
@@ -758,13 +760,19 @@ def apply_training_template_field_to_all(
     if request.key not in {str(field["key"]) for field in row.config_schema.get("fields", [])}:
         raise TrainingUIAPIError(f"Параметр шаблона не найден: {request.key}")
     for template in session.scalars(select(TrainingTemplateRow)).all():
+        if template.architecture not in UI_ARCHITECTURES:
+            continue
+        if request.key == "train.pretrained" and template.architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
+            continue
         current = dict(template.default_config)
         if request.key == "train.pipeline_variant":
             preset = template.config_schema.get("pipeline_defaults", {}).get(str(request.value))
             if request.value == "next_gen2" and preset is None:
                 continue
             if preset is not None:
+                pretrained = current.get("train.pretrained", False)
                 current.update(preset)
+                current["train.pretrained"] = pretrained
         current[request.key] = request.value
         template.default_config = sanitize_template_config(
             current, fallback=template.default_config, architecture=template.architecture
@@ -976,6 +984,8 @@ def create_training_job(
     request: TrainingJobCreate,
     config: TrainingUIAPIConfig,
 ) -> JobDetail:
+    if request.architecture not in UI_ARCHITECTURES:
+        raise TrainingUIAPIError("Архитектура снята с запуска. Выберите SegFormer B0–B3 или другую сеть из каталога.")
     ensure_seed_templates(session)
     dataset = _resolve_dataset_name(session, request.dataset_key, request.custom_dataset_id, config)
     model_name = MODEL_DISPLAY_NAMES.get(request.architecture, request.architecture)
@@ -2305,6 +2315,8 @@ def inference_template_row_for_dataset(
 
 
 def _base_template_row(session: Session, architecture: str) -> TrainingTemplateRow | None:
+    if architecture not in UI_ARCHITECTURES:
+        return None
     return session.scalar(
         select(TrainingTemplateRow).where(
             TrainingTemplateRow.architecture == architecture,

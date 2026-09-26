@@ -530,8 +530,15 @@ best checkpoint с threshold либо внешний ZIP без вымышлен
 
 ## Конвейер Обучения
 
-В Гровике сначала выбирается архитектура, затем `legacy` или `next_gen2`. Все пять доступных
-SegFormer (HF B0 и SMP B0/B1/B2/B3) поддерживают оба конвейера. У остальных сетей доступен `legacy`.
+В Гровике выбираются архитектура, `legacy` или `next_gen2` и галочка «Предобученные веса».
+Четыре SegFormer B0/B1/B2/B3 используют SMP и поддерживают оба конвейера; у остальных сетей доступен `legacy`.
+Галочка управляет `train.pretrained`: включённая загружает ImageNet-веса соответствующего MiT encoder,
+выключенная оставляет случайную инициализацию всей сети. Голова создаётся заново в обоих случаях.
+Выбор весов сохраняется при смене конвейера, SegFormer и датасета. В legacy с предобученными весами
+модель делит raw-вход на 255 и нормализует RGB по ImageNet mean/std; NIR использует параметры RED.
+Эта обёртка определяется сохранённым ModelSpec.pretrained, работает в checkpoint и ONNX и не маскирует nodata.
+Прежний legacy без предобучения сохраняет raw-вход. HF не предлагается для новых ручных и автоматических
+обучений; его исторические задания, результаты, checkpoint, шаблоны инференса, псевдоразметка и экспорт сохраняются.
 Явный выбор конвейера сохраняется при смене архитектуры или датасета, если он поддерживается;
 для multiclass форма использует `legacy`. Профиль берётся из шаблона выбранной архитектуры.
 `next_gen` снят с новых ручных и автоматических запусков: его поля убраны из схемы формы,
@@ -568,8 +575,10 @@ Geoalert metadata.
 `next_gen2` использует профиль `segFormer_train_hlam_main_v2.ipynb` внутри существующих модулей.
 Он поддерживает бинарные датасеты Канопус (RED, GRN, BLU, NIR) и ортофотопланов (RED, GRN, BLU),
 HF SegFormer B0 или SMP SegFormer B0/B1/B2/B3 с двумя logits.
-HF B0 сохраняет закреплённые веса ADE20K; SMP использует соответствующий MiT encoder с весами
-ImageNet из smp-hub и новую двухклассовую голову. Для Канопус RGB-ядра копируются, NIR получает RED,
+Исторический HF B0 сохраняет закреплённые веса ADE20K; SMP с включённым предобучением использует
+соответствующий MiT encoder с весами ImageNet из smp-hub и новую двухклассовую голову.
+Без предобучения сеть инициализируется случайно, остальные параметры конвейера не меняются.
+При предобучении для Канопус RGB-ядра копируются, NIR получает RED,
 bias новой свёртки остаётся случайным; RGB сохраняет исходную предобученную входную свёртку целиком. Внешний бинарный выход
 и ONNX сохраняют разность logits; прежние checkpoint загружаются без обращения к Hub.
 Размер полного окна выбирается из 512, 768, 1024, 1536 (default 512); шаг всегда равен половине размера.
@@ -598,7 +607,7 @@ Tversky (alpha 0.75, beta 0.25). Полная validation каждую эпоху
 при пороге 0.5; результаты пишутся в MLflow как `test/*` и `reports/test_metrics.json`.
 Новые runs получают `checkpoint_selection_metric=val_loss`; исторические теги `quality_f1` продолжают
 читаться по F1. История запусков и сохранённые модели не изменяются.
-В UI изменяемы размер тайла, максимум эпох (default 20), early stopping patience (10) и максимальная
+В UI изменяемы предобученные веса, размер тайла, максимум эпох (default 20), early stopping patience (10) и максимальная
 длительность (без лимита). Остальной профиль закреплён в интерфейсе, обработке шаблонов, worker и settings;
 старые шаблоны next-gen2 однократно получают новые defaults, последующие изменения размера и условий сохраняются.
 Подсказка объясняет особенности кратко, подробное описание с визуализацией тайла находится внизу формы.
@@ -620,7 +629,7 @@ worker_seed, ограничивает OpenCV одним потоком и отк
    завершает конвейер с ошибкой.
 5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON вместе с manifest в `dataset/`.
 6. `train_pipeline` вызывает `tile_preparation.create_tile_dataloader` для train и val со списком сцен и одинаковым `tile_split`. В `legacy` split детерминирован по `scene_id+x+y`, train использует прежний category-aware sampling, а val — фиксированный balanced subset. В `next_gen` split выполняется по сценам со spatial purge, train sampler зависит от epoch/draw, а val всегда полный и несбалансированный. Binary mask: `-1/0/1`, multiclass: `-1/0/1..N`; геометрические аугментации синхронно преобразуют image, target и valid-mask.
-7. `train_pipeline` создаёт одну из десяти UI-архитектур: прежние девять SMP-вариантов и отдельный `segformer_b0` «SegFormer B0 HF (next-gen)». Спецификация checkpoint обязана совпадать с запросом, поэтому варианты, preprocessing и число каналов нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
+7. `train_pipeline` создаёт одну из девяти UI-архитектур SMP. Для SegFormer B0/B1/B2/B3 предобученные веса выбираются независимо от конвейера; HF остаётся для исполнения и чтения исторических заданий. Спецификация checkpoint обязана совпадать с запросом, поэтому варианты, preprocessing и число каналов нельзя перепутать. Для multiclass `train.output_channels` строго равен числу manifest-классов плюс background.
 8. `train` выполняет PyTorch обучение segmentation-модели, validation, early stopping и best/final checkpoints. `legacy` сохраняет AdamW с cosine scheduler и прежние binary/multiclass loss и пороги; `next_gen` использует AdamW с `ReduceLROnPlateau`, полную validation и scene-macro pixel F1. Для binary рассчитываются пиксельная и объектовая F1; `train.quality_metric` выбирает метрику best checkpoint и early stopping в `legacy` и `next_gen`; `next_gen2` использует минимум validation loss. Объекты сопоставляются один к одному при `IoU ≥ 0,5`. Для multiclass основной score — macro pixel F1 по типам. В `legacy` nodata представлен target background `0` и входит в loss и TP/FP/FN; в `next_gen` valid-mask полностью исключает его из этих расчётов. `background_weight`, `pos_weight` и `hard_negative_weight` сохраняют прежнюю семантику на valid pixels. Binary checkpoint остаются совместимыми; next-gen metadata дополнительно содержит variant, preprocessing, band contract, split/fold, scheduler, threshold policy, pretrained provenance и dataset/code revision.
 9. `train_pipeline` передает в `train` progress sink. Train-loss пишется для каждой завершённой эпохи; val-метрики `next_gen` существуют только для эпох с полной validation.
 10. `mlflow_adapter` записывает итоговые метрики, checkpoint, SHA-256, resolved JSON, split manifest, preprocessing, runtime/CUDA/packages/dataset revision, per-scene validation, optional Gaussian comparison, tile/timing и итоговый отчёты.

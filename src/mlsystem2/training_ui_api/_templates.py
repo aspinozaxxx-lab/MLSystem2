@@ -65,15 +65,15 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 NEXT_GEN2_EDITABLE_KEYS = {
-    "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+    "train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
 }
 NEXT_GEN2_DESCRIPTION = (
     "Профиль на основе segFormer_train_hlam_main_v2.ipynb для выбранной архитектуры SegFormer. "
-    "HF B0 использует предобученную модель nvidia/segformer-b0-finetuned-ade-512-512; "
-    "SMP B0/B1/B2/B3 — соответствующий encoder MiT с весами ImageNet и новую голову SegFormer. "
+    "SegFormer B0/B1/B2/B3 использует соответствующий encoder MiT и новую голову. "
+    "Галочка «Предобученные веса» загружает веса ImageNet для encoder; без неё вся сеть инициализируется случайно. "
     "Во всех случаях два класса: фон и объект. "
     "Каналы определяются датасетом: RED, GRN, BLU, NIR для Канопус или RED, GRN, BLU для ортофотопланов. "
-    "Для NIR копируются начальные веса RED; у RGB-модели сохраняется исходная предобученная входная свёртка.\n\n"
+    "При включённых предобученных весах для NIR копируются веса RED; у RGB-модели сохраняется исходная входная свёртка.\n\n"
     "Размер тайла на выбор: 512, 768, 1024 или 1536 px, по умолчанию 512. "
     "Шаг равен половине размера тайла: перекрытие 50%, без контекста и дополнения краёв. "
     "Каждый канал каждого тайла нормализуется min-max; постоянный канал становится нулевым. Nodata входит в расчёты. "
@@ -98,7 +98,7 @@ NEXT_GEN2_DESCRIPTION = (
     "Полная validation — каждую эпоху; лучший checkpoint и early stopping — по минимуму validation loss. "
     "После обучения лучшие веса один раз оцениваются на test при пороге 0,5; метрики и LR по эпохам сохраняются в MLflow.\n\n"
     "По умолчанию: максимум 20 эпох, early stopping patience 10 эпох, без лимита времени. "
-    "Изменять можно размер тайла и эти три условия остановки. Лимит времени проверяется после завершения эпохи."
+    "Изменять можно предобученные веса, размер тайла и эти три условия остановки. Лимит времени проверяется после завершения эпохи."
 )
 
 
@@ -192,7 +192,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pretrained",
             "label": "Предобученные веса",
             "value_type": "boolean",
-            "tooltip": "В next-gen2 используются pretrained-веса выбранной архитектуры: ADE20K для HF B0, ImageNet для encoder SMP.",
+            "tooltip": "Загрузить веса ImageNet для encoder выбранной SegFormer. Без галочки сеть обучается со случайной инициализацией. Доступно в legacy и next-gen2.",
         },
         {
             "key": "train.learning_rate",
@@ -684,7 +684,6 @@ def sanitize_template_config(
         result["tile_preparation.context"] = 128 if tile_size == 768 else 0
     if result.get("train.pipeline_variant") == "legacy" and result.get("train.loss") == "cross_entropy_tversky":
         result["train.loss"] = BASE_DEFAULT_CONFIG["train.loss"]
-        result["train.pretrained"] = False
     _resolve_legacy_tile_factors(result, config or {})
     if normalize_factors:
         normalize_tile_factors(result)
@@ -762,12 +761,6 @@ def initial_templates() -> list[dict[str, Any]]:
             "smp_segformer_b0",
             "segformer b0",
             source="analogy",
-        ),
-        _template(
-            "segformer_b0",
-            "SegFormer B0 HF",
-            source="manual",
-            overrides=NEXT_GEN2_DEFAULT_CONFIG,
         ),
         _template(
             "smp_segformer_b1",

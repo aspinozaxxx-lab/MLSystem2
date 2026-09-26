@@ -239,9 +239,8 @@ class SystemSettings(BaseModel):
                 self.train.model_name not in batch_sizes
                 or self.train.input_channels not in (3, 4)
                 or self.train.output_channels != 1
-                or not self.train.pretrained
             ):
-                raise ValueError("next-gen2 требует предобученную SegFormer с входом 3 или 4 и выходом 1")
+                raise ValueError("next-gen2 требует SegFormer с входом 3 или 4 и выходом 1")
             if self.tile_preparation.tile_size not in (512, 768, 1024, 1536):
                 raise ValueError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
             fixed = (
@@ -256,7 +255,7 @@ class SystemSettings(BaseModel):
                 (self.train.initial_checkpoint_uri, None),
             )
             if any(actual != expected for actual, expected in fixed):
-                raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны размер тайла, эпохи, patience и лимит времени")
+                raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны предобученные веса, размер тайла, эпохи, patience и лимит времени")
             if (
                 self.train.max_train_batches_per_epoch is not None
                 or self.train.max_val_batches_per_epoch is not None

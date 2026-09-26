@@ -14,7 +14,7 @@ const TRAIN_FIELDS = ["train.batch_size", "train.learning_rate", "train.weight_d
 const STOP_FIELDS = ["train.epochs", "train.early_stopping_patience", "train.max_training_time_sec"];
 const FIELD_PRESENTATION: Record<string, FieldPresentation> = {
   "train.pipeline_variant": { label: "Конвейер" },
-  "train.pretrained": { label: "Pretrained weights" },
+  "train.pretrained": { label: "Предобученные веса" },
   "dataset.val_fraction": { label: "Доля валидации", unit: "%", scale: 100 },
   "tile_preparation.tile_size": { unit: "px" },
   "tile_preparation.stride": { label: "Шаг", unit: "px" },

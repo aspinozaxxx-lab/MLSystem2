@@ -169,6 +169,15 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("next-gen2 требует SegFormer с входом 3 или 4, выходом 1 и оконной min-max нормализацией")
     if spec.name in _SMP_ENCODERS:
         model = _create_smp_segformer(spec, initialize_pretrained=initialize_pretrained)
+        if spec.pretrained and spec.parameters.get("pipeline_variant", "legacy") == "legacy":
+            # Ранее legacy SMP допускал только случайные веса и raw-вход.
+            # Новый режим определён флагом в spec, поэтому восстановление автономно.
+            preprocessing = {
+                "mode": "imagenet_rgb_red_nir", "mask_nodata": False,
+                "mean": [0.485, 0.456, 0.406, 0.485][:spec.input_channels],
+                "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
+            }
+            return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
         if spec.parameters.get("pipeline_variant") == "next_gen2":
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
@@ -207,9 +216,9 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
     smp = _import_smp()
     _ensure_torch_for_smp()
     notebook = spec.parameters.get("pipeline_variant") == "next_gen2"
-    if spec.pretrained and not notebook:
-        raise ModelsError("SMP SegFormer в MLSystem2 поддерживает только encoder_weights=None.")
-    pretrained = notebook and spec.pretrained and initialize_pretrained
+    if spec.pretrained and spec.input_channels not in (3, 4):
+        raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
+    pretrained = spec.pretrained and initialize_pretrained
     model = smp.Segformer(
         encoder_name=_SMP_ENCODERS[spec.name],
         encoder_weights="imagenet" if pretrained else None,
@@ -438,6 +447,7 @@ if torch is not None:
             self.model = model
             self.mode = str(preprocessing.get("mode") or "scale_255")
             self.nodata = float(preprocessing.get("nodata", 0.0))
+            self.mask_nodata = bool(preprocessing.get("mask_nodata", True))
             mean = preprocessing.get("mean") or [0.0, 0.0, 0.0, 0.0]
             std = preprocessing.get("std") or [1.0, 1.0, 1.0, 1.0]
             low = preprocessing.get("low") or [0.0, 0.0, 0.0, 0.0]
@@ -462,7 +472,7 @@ if torch is not None:
                 normalized = raw / 255.0
                 if self.mode == "imagenet_rgb_red_nir":
                     normalized = (normalized - self.preprocess_mean) / self.preprocess_std
-            if self.mode != "window_minmax":
+            if self.mode != "window_minmax" and self.mask_nodata:
                 valid = torch.any(raw != self.nodata, dim=1, keepdim=True)
                 normalized = torch.where(valid, normalized, torch.zeros_like(normalized))
             output = self.model(normalized)
@@ -481,7 +491,9 @@ if torch is not None:
                     return logits
                 # sigmoid(z1-z0) равен softmax([z0,z1])[:,1]; обе головы обучаются.
                 return logits[:, 1:2] - logits[:, 0:1]
-            return torch.where(valid, logits, torch.full_like(logits, -1000.0))
+            if self.mask_nodata:
+                return torch.where(valid, logits, torch.full_like(logits, -1000.0))
+            return logits
 
     class _SegFormerRawInputWrapper(torch.nn.Module):
         def __init__(self, model, input_scale: float = 255.0) -> None:

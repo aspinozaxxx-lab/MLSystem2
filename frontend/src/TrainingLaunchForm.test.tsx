@@ -6,6 +6,7 @@ import { TrainingLaunchForm } from "./TrainingLaunchForm";
 const schema: ConfigSchema = {
   pipeline_descriptions: { next_gen2: "Фиксированный профиль. Train/validation/test 60/20/20.\n\nВыбор весов по validation loss." },
   fields: [
+    { key: "train.pretrained", label: "Предобученные веса", value_type: "boolean", required: true, tooltip: "" },
     ...["train.pipeline_variant", "train.loss"].map((key) => ({ key, label: key === "train.loss" ? "Loss" : "Конвейер", value_type: "select", required: true, tooltip: "", options: key === "train.loss" ? ["bce_dice", "focal_tversky"] : ["legacy", "next_gen2"] })),
     ...["tile_preparation.tile_size", "tile_preparation.stride", "tile_preparation.context", "train.batch_size", "train.epochs", "train.early_stopping_patience"].map((key) => ({ key, label: key, value_type: "integer", required: true, tooltip: "" })),
     ...["tile_preparation.positive_factor", "tile_preparation.hard_negative_factor", "tile_preparation.background_factor", "dataset.val_fraction", "train.learning_rate", "train.focal_alpha", "train.tversky_alpha"].map((key) => ({ key, label: key, value_type: "number", required: true, tooltip: "" })),
@@ -20,11 +21,11 @@ const value: JsonRecord = {
   "train.epochs": 60, "train.early_stopping_patience": 4, "train.max_training_time_sec": 3300,
 };
 const dataset = { key: "forest", name: "Вырубки / Основной", task: "binary", imagery_type: "kanopus", input_channels: 4 } as DatasetInfo;
-const template = { id: "base", display_name: "SegFormer B0 HF", version: 1, config_schema: schema, default_config: value } as TrainingTemplate;
+const template = { id: "base", display_name: "segformer b0", version: 1, config_schema: schema, default_config: value } as TrainingTemplate;
 const ignore = () => {};
-function render(config = value, architecture = "segformer_b0") {
+function render(config = value, architecture = "smp_segformer_b0") {
   return renderToStaticMarkup(<TrainingLaunchForm
-    models={[{ architecture: "segformer_b0", display_name: "SegFormer B0 HF", input_channels: 4, output_channels: 1, pretrained: true }]}
+    models={[0, 1, 2, 3].map((index) => ({ architecture: `smp_segformer_b${index}`, display_name: `segformer b${index}`, input_channels: 4, output_channels: 1, pretrained: false }))}
     datasets={[dataset]} architecture={architecture} datasetKey="forest" template={template} schema={schema} value={config}
     onArchitectureChange={ignore} onDatasetChange={ignore} onChange={ignore}
     runInferenceAfterTraining={false} onRunInferenceChange={ignore} secondaryPriority={false} onSecondaryPriorityChange={ignore}
@@ -33,7 +34,7 @@ function render(config = value, architecture = "segformer_b0") {
 }
 
 describe("форма запуска обучения", () => {
-  it.each(["segformer_b0", "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"])("для %s открывает выбор модели первым и оставляет две опции вне сворачиваемых разделов", (architecture) => {
+  it.each(["smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"])("для %s открывает выбор модели первым и оставляет две опции вне сворачиваемых разделов", (architecture) => {
     const html = render(value, architecture);
     expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);
     expect(html.match(/id="training-model-heading"[^>]+/g)?.[0]).toContain('aria-expanded="true"');
@@ -49,6 +50,19 @@ describe("форма запуска обучения", () => {
     expect(pipeline).toContain('value="legacy"');
     expect(pipeline).toContain('value="next_gen2"');
     expect(pipeline).not.toContain("disabled");
+    expect(html).not.toContain(" HF");
+  });
+
+  it.each(["legacy", "next_gen2"])("в %s показывает независимую галочку весов и отражает её в описании", (variant) => {
+    for (const pretrained of [true, false]) {
+      const html = render({ ...value, "train.pipeline_variant": variant, "train.pretrained": pretrained });
+      const checkbox = html.match(/<input[^>]+name="train.pretrained"[^>]*>/)?.[0] || "";
+      expect(checkbox).toContain('type="checkbox"');
+      expect(checkbox).not.toContain("disabled");
+      expect(checkbox.includes("checked")).toBe(pretrained);
+      expect(html).toContain("Предобученные веса");
+      expect(html).toContain(pretrained ? "Предобученные веса ImageNet" : "Случайная инициализация весов");
+    }
   });
 
   it("относит максимум эпох к остановке и сохраняет три редактируемые доли", () => {

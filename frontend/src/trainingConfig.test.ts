@@ -29,7 +29,8 @@ const schema: ConfigSchema = {
 
 describe("trainingConfigSchema", () => {
   it("сохраняет выбранный конвейер при смене датасета или архитектуры", () => {
-    const template: Pick<TrainingTemplate, "default_config" | "config_schema"> = {
+    const template: Pick<TrainingTemplate, "architecture" | "default_config" | "config_schema"> = {
+      architecture: "smp_segformer_b0",
       default_config: { "train.pipeline_variant": "legacy", "train.batch_size": 9 },
       config_schema: { ...schema, pipeline_defaults: {
         legacy: { "train.pipeline_variant": "legacy", "train.loss": "bce_dice" },
@@ -69,7 +70,27 @@ describe("trainingConfigSchema", () => {
 
   it("не показывает настройки снятого с запуска next-gen", () => {
     expect(trainingConfigFieldVisible("next_gen.normalization", "legacy", "segformer_b0")).toBe(false);
-    expect(trainingConfigFieldVisible("train.pretrained", "next_gen2", "smp_segformer_b3")).toBe(false);
+    expect(trainingConfigFieldVisible("train.pretrained", "legacy", "smp_unet_resnet34")).toBe(false);
+  });
+
+  it.each([true, false])("сохраняет выбор предобученных весов %s во всех SegFormer и конвейерах", (pretrained) => {
+    const defaults = {
+      legacy: { "train.pipeline_variant": "legacy", "train.pretrained": false },
+      next_gen2: { "train.pipeline_variant": "next_gen2", "train.pretrained": true, "tile_preparation.tile_size": 512 },
+    };
+    for (const architecture of ["smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"]) {
+      for (const variant of ["legacy", "next_gen2"]) {
+        expect(trainingConfigFieldVisible("train.pretrained", variant, architecture)).toBe(true);
+        const changed = configWithField({ "train.pipeline_variant": variant }, "train.pretrained", pretrained, defaults);
+        expect(changed["train.pretrained"]).toBe(pretrained);
+        const switched = configWithField(changed, "train.pipeline_variant", variant === "legacy" ? "next_gen2" : "legacy", defaults);
+        expect(switched["train.pretrained"]).toBe(pretrained);
+        const template = { architecture, default_config: defaults.legacy, config_schema: { ...schema, pipeline_defaults: defaults } };
+        expect(trainingConfigForTemplate(template, "binary", variant, pretrained)["train.pretrained"]).toBe(pretrained);
+        expect(trainingConfigForTemplate(template, "multiclass", variant, pretrained)["train.pretrained"]).toBe(pretrained);
+        expect(trainingConfigForTemplate({ ...template, architecture: "smp_unet_resnet34" }, "binary", "legacy", pretrained)["train.pretrained"]).toBe(false);
+      }
+    }
   });
 
   it.each([16, 8, 4])("учитывает серверный batch архитектуры %i при изменении тайла", (baseBatch) => {

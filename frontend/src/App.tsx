@@ -589,6 +589,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   const [runInferenceAfterTraining, setRunInferenceAfterTraining] = useState(false);
   const [secondaryPriority, setSecondaryPriority] = useState(false);
   const pipelineChoice = useRef<string | null>(null);
+  const pretrainedChoice = useRef<boolean | null>(null);
 
   const template = useMemo(
     () => templateFor(bootstrap.training_templates, architecture, datasetKey),
@@ -604,7 +605,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   );
 
   useEffect(() => {
-    setConfig(trainingConfigForTemplate(template, selectedDataset?.task || "binary", pipelineChoice.current));
+    setConfig(trainingConfigForTemplate(template, selectedDataset?.task || "binary", pipelineChoice.current, pretrainedChoice.current));
   }, [datasetKey, selectedDataset?.task, template?.id]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -681,6 +682,9 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
         value={config}
         onChange={(next) => {
           pipelineChoice.current = String(next["train.pipeline_variant"] || "legacy");
+          if (next["train.pretrained"] !== config["train.pretrained"]) {
+            pretrainedChoice.current = Boolean(next["train.pretrained"]);
+          }
           setConfig(next);
         }}
         runInferenceAfterTraining={runInferenceAfterTraining}
@@ -3214,7 +3218,7 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
       body: (
         <CreateTemplateForm
           mode={mode}
-          models={bootstrap.models}
+          models={mode === "training" ? bootstrap.models : templates.filter((item) => !item.dataset_key)}
           datasets={bootstrap.datasets}
           templates={templates}
           run={run}
@@ -3966,7 +3970,7 @@ function CreateTemplateForm({
   reloadBootstrap,
 }: {
   mode: "training" | "inference";
-  models: ModelInfo[];
+  models: Pick<ModelInfo, "architecture" | "display_name">[];
   datasets: DatasetInfo[];
   templates: AnyTemplate[];
   run: Runner;

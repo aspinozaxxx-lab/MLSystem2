@@ -19,7 +19,8 @@ MODEL_DISPLAY_NAMES = {
     "smp_unet_resnet101": "unet + resnet101",
     "smp_unet_resnet152": "unet + resnet152",
 }
-UI_ARCHITECTURES = tuple(MODEL_DISPLAY_NAMES)
+# HF остаётся в названиях исторических результатов, но не в новых запусках.
+UI_ARCHITECTURES = tuple(name for name in MODEL_DISPLAY_NAMES if name != "segformer_b0")
 
 
 def ui_model_infos() -> list[ModelInfo]:

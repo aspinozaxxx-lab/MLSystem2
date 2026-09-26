@@ -69,6 +69,7 @@ export function ConfigEditor({
             <label className="field checkbox-field" key={field.key} title={tooltip || field.label}>
               <input
                 type="checkbox"
+                name={field.key}
                 checked={Boolean(current)}
                 disabled={readonly || fixedPipelineVariant}
                 onChange={(event) => setField(field, event.target.checked)}

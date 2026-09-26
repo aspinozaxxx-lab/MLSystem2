@@ -27,13 +27,13 @@
 
 ## Алгоритм работы и его особенности
 
-HF SegFormer строится через transformers, SMP — через Segformer с MiT B0/B1/B2/B3.
-В legacy сохраняются raw-input ABI и прежние головы; HF делит вход на 255, SMP получает raw.
-Next-gen2 поддерживает обе реализации: вход RGB или RGB+NIR, два внутренних logits, внешний выход —
-разность foreground/background. Каналы каждого окна нормализуются min-max, постоянный канал даёт нули.
-HF B0 сохраняет закреплённые веса ноутбука; SMP использует encoder ImageNet и новую голову.
-Для четырёх каналов копируются RGB и RED→NIR, смещение новой свёртки случайное.
+HF использует transformers, SMP — Segformer с MiT B0/B1/B2/B3.
+В legacy HF делит raw на 255; SMP без предобучения получает raw, с предобучением —
+raw/255 и ImageNet mean/std (NIR как RED), без маски nodata. Режим задан ModelSpec.pretrained.
+Next-gen2 принимает RGB/RGB+NIR: два внутренних logits, снаружи разность foreground/background.
+Нормализация каналов окна — min-max; постоянный канал даёт нули.
+HF B0 сохраняет веса ноутбука; SMP с pretrained=true — encoder ImageNet и новую голову,
+с false — случайные веса. При предобучении копируются RGB и RED→NIR, смещение новой свёртки случайное.
 `return_two_class_logits=True` возвращает оба logits для CrossEntropy + Tversky.
-Checkpoint хранит spec, веса и metadata; восстановление любой модели не загружает pretrained-веса.
-Сохранённые next_gen совместимы. DeepLabV3Plus и UNet сохраняют прежнее поведение.
-Подробные параметры и правила вариантов описаны в разделе конвейера обучения архитектуры.
+Checkpoint хранит spec, веса и metadata; восстановление не загружает pretrained-веса.
+Сохранённые next_gen совместимы. DeepLabV3Plus и UNet не меняются.
