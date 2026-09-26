@@ -315,3 +315,29 @@ def test_masked_pixels_have_no_gradient_in_either_output():
     loss.backward()
     assert not logits.grad[:,:,0:5].any()
     assert logits.grad[:,:,6:].abs().sum()>0
+
+
+def test_object_workers_have_independent_repeatable_augmentation_rng(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import cv2
+    from types import SimpleNamespace
+    from mlsystem2.tile_preparation._dataloader import _seed_tile_worker
+    dataset = _dataset(_scenes(tmp_path), augmentation=3)
+    threads, opencl = cv2.getNumThreads(), cv2.ocl.useOpenCL()
+    monkeypatch.setattr(torch.utils.data, "get_worker_info", lambda: SimpleNamespace(dataset=dataset))
+    monkeypatch.setenv("MLSYSTEM2_TILE_WORKER", "0")
+    try:
+        batches = []
+        for seed in (17, 48, 17):
+            monkeypatch.setattr(torch, "initial_seed", lambda: seed)
+            _seed_tile_worker(0)
+            assert cv2.getNumThreads() == 1 and not cv2.ocl.useOpenCL()
+            batches.append([dataset[0] for _ in range(4)])
+        for a, b in zip(batches[0], batches[2], strict=True):
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[2]["object_instances"], b[2]["object_instances"])
+        assert any(not np.array_equal(a[0], b[0]) for a,b in zip(batches[0],batches[1],strict=True))
+    finally:
+        cv2.setNumThreads(threads)
+        cv2.ocl.setUseOpenCL(opencl)
+        dataset.close()

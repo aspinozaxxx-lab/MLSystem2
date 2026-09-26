@@ -649,7 +649,7 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):
         worker_info.dataset.close()
-    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) == "next_gen2":
+    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "object_f1"}:
         import cv2
 
         cv2.setNumThreads(1)
