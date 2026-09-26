@@ -705,6 +705,13 @@ class TileDataset:
             self._annotation_indexes[key] = index
         return index
 
+    def _needs_boundless_read(self, dataset, window) -> bool:
+        return self._pipeline_variant != "object_f1" or (
+            window.col_off < 0 or window.row_off < 0
+            or window.col_off + window.width > dataset.width
+            or window.row_off + window.height > dataset.height
+        )
+
     def _read_image_raw(
         self,
         dataset: DatasetReader,
@@ -717,7 +724,7 @@ class TileDataset:
         return dataset.read(
             indexes=list(range(1, self.channel_count + 1)) if self._pipeline_variant == "object_f1" else None,
             window=window,
-            boundless=True,
+            boundless=self._needs_boundless_read(dataset, window),
             fill_value=nodata,
             out_shape=(self.channel_count, self._tile_size, self._tile_size),
             masked=False,
@@ -730,7 +737,7 @@ class TileDataset:
     ) -> np.ndarray:
         valid_mask = dataset.dataset_mask(
             window=window,
-            boundless=True,
+            boundless=self._needs_boundless_read(dataset, window),
             out_shape=(self._tile_size, self._tile_size),
         )
         return valid_mask == 0

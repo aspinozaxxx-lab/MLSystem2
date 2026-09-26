@@ -341,3 +341,18 @@ def test_object_workers_have_independent_repeatable_augmentation_rng(tmp_path, m
         cv2.setNumThreads(threads)
         cv2.ocl.setUseOpenCL(opencl)
         dataset.close()
+
+
+def test_object_loader_pads_only_images_smaller_than_tile(tmp_path):
+    from rasterio.windows import Window
+    scenes = _scenes(tmp_path)
+    dataset = _dataset(scenes, "val")
+    try:
+        with rasterio.open(scenes[0].image_path) as source:
+            window = Window(0,0,64,64)
+            assert not dataset._needs_boundless_read(source,window)
+            np.testing.assert_array_equal(dataset._read_image_raw(source,window,0),source.read((1,2,3),window=window,boundless=True))
+            np.testing.assert_array_equal(dataset._read_invalid_data_pixels(source,window),source.dataset_mask(window=window,boundless=True)==0)
+            assert dataset._needs_boundless_read(source,Window(0,0,128,128))
+    finally:
+        dataset.close()
