@@ -139,7 +139,7 @@ def train_model(
     model = request.model.model
     config = request.config
     device = torch.device(config.device)
-    if config.pipeline_variant == "next_gen" and str(device).startswith("cuda"):
+    if config.pipeline_variant in {"next_gen", "object_f1"} and str(device).startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(device)
     model.to(device)
 
@@ -359,7 +359,7 @@ def train_model(
             }
             test_model.to(torch.device("cpu"))
             _release_training_cuda(torch, device)
-        if config.pipeline_variant == "next_gen":
+        if config.pipeline_variant in {"next_gen", "object_f1"}:
             diagnostics["peak_vram_bytes"] = (
                 int(torch.cuda.max_memory_allocated(device))
                 if str(device).startswith("cuda")

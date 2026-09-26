@@ -217,7 +217,7 @@ def _run_pseudo_markup(config: dict[str, Any], run_root: Path) -> dict[str, Any]
     features = _collect_features(config, child_result.get("reports") or [])
     feature_count_before_merge = len(features)
     if config.get("pipeline_variant") == "object_f1":
-        features = merge_external_instance_features(features)
+        features = merge_external_instance_features(features, cross_scene_only=True)
     if prepared.is_aoi:
         features = _finalize_aoi_features(
             features,

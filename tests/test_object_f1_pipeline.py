@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
-from shapely.geometry import MultiPolygon, box, mapping
+from shapely.geometry import MultiPolygon, box, mapping, shape
 
 from mlsystem2.inference.api import create_object_scene, object_window_origins, separate_objects
 from mlsystem2.inference.contracts import ObjectSceneRequest, ObjectWindowPrediction
@@ -356,3 +356,33 @@ def test_object_loader_pads_only_images_smaller_than_tile(tmp_path):
             assert dataset._needs_boundless_read(source,Window(0,0,128,128))
     finally:
         dataset.close()
+
+
+def test_object_deduplication_only_compares_intersecting_scenes(monkeypatch):
+    from mlsystem2.training_ui_api import _external_models as module
+    features = [{"type": "Feature", "properties": {"scene_id": scene, "instance_id": number}, "geometry": mapping(geometry)}
+        for number, (scene, geometry) in enumerate([("a",box(0,0,10,10)),("a",box(10,0,20,10)),
+                                                   ("b",box(0,0,10,10)),("c",box(50,0,60,10))],1)]
+    expected = module.merge_external_instance_features(features)
+    actual = module.merge_external_instance_features(features,cross_scene_only=True)
+    assert all(any(shape(a["geometry"]).equals(shape(b["geometry"])) for b in expected) for a in actual)
+    assert len(actual) == 3
+    def unexpected(*args,**kwargs):
+        pytest.fail("Независимые снимки не должны проходить через unary_union")
+    monkeypatch.setattr(module,"unary_union",unexpected)
+    assert module.merge_external_instance_features([features[0],features[1],features[3]],cross_scene_only=True) == [features[0],features[1],features[3]]
+
+
+def test_object_mlflow_summary_has_no_quality_duplicates(monkeypatch):
+    from types import SimpleNamespace
+    from mlsystem2.mlflow_adapter import _client
+    from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
+    from mlsystem2.train.contracts import EpochMetrics, TrainResult
+    logged = {}
+    monkeypatch.setattr(_client, "_ensure_run_active", lambda run: SimpleNamespace(log_metric=lambda name,value,**kwargs: logged.update({name:value})))
+    run = MLflowRunRef(run_id="проверка",experiment_name="проверка",tracking_uri="local",active=True)
+    _client.log_training_metrics(run,TrainResult(history=[EpochMetrics(epoch=1,train_loss=1,val_loss=1,
+        val_quality_f1=.7,val_best_threshold_pixel_f1=.8,epoch_time_sec=1)],epochs_total=1,training_time_sec=1,
+        diagnostics={"checkpoint_selection":{"metric":"val/object_f1","object_f1":.7}}))
+    assert logged["train/best_object_f1"] == .7
+    assert not any("quality_" in name for name in logged)

@@ -415,12 +415,33 @@ def _postprocess_prediction_geometries(
     return _GeometryPrediction(geometries=output, crs=prediction.crs)
 
 
-def merge_external_instance_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_external_instance_features(features: list[dict[str, Any]], *, cross_scene_only: bool = False) -> list[dict[str, Any]]:
     """Убрать дубли instance-полигонов разных снимков, не объединяя соседние объекты."""
 
     if len(features) < 2:
         return features
     geometries = [make_valid(shape(item["geometry"])) for item in features]
+    if cross_scene_only:
+        # Независимые объекты не требуют NMS и дорогого накопления unary_union.
+        scene_ids = [str((item.get("properties") or {}).get("scene_id") or "") for item in features]
+        tree = STRtree(geometries)
+        parent = list(range(len(features)))
+        def root(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+        for i, geometry in enumerate(geometries):
+            for j in _tree_indexes(tree, geometry):
+                if j <= i or (scene_ids[i] and scene_ids[i] == scene_ids[j]):
+                    continue
+                if geometry.intersection(geometries[j]).area > 0:
+                    parent[root(j)] = root(i)
+        groups = {}
+        for i in range(len(features)):
+            groups.setdefault(root(i), []).append(features[i])
+        return [item for group in groups.values()
+                for item in (group if len(group) == 1 else merge_external_instance_features(group))]
     scores = [float((item.get("properties") or {}).get("confidence") or 0.0) for item in features]
     keep = _nms_keep_indexes(geometries, scores, iou_threshold=0.75, relative_threshold=0.75)
     occupied: BaseGeometry = GeometryCollection()

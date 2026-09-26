@@ -531,8 +531,8 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         if validation_history:
             selected = result.diagnostics.get("checkpoint_selection", {})
             mlflow.log_metric(
-                "train/best_quality_f1",
-                selected.get("quality_f1", max(item.val_quality_f1 for item in validation_history)),
+                "train/best_object_f1" if selected.get("metric") == "val/object_f1" else "train/best_quality_f1",
+                selected.get("object_f1", selected.get("quality_f1", max(item.val_quality_f1 for item in validation_history))),
             )
             mlflow.log_metric(
                 "train/best_threshold_pixel_f1",
