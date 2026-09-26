@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   configWithField,
+  trainingConfigForTemplate,
   trainingConfigFieldVisible,
   trainingConfigSchema,
 } from "./utils/trainingConfig";
-import type { ConfigSchema } from "./api/types";
+import type { ConfigSchema, TrainingTemplate } from "./api/types";
 
 const schema: ConfigSchema = {
   fields: [
@@ -27,6 +28,24 @@ const schema: ConfigSchema = {
 };
 
 describe("trainingConfigSchema", () => {
+  it("сохраняет выбранный конвейер при смене датасета или архитектуры", () => {
+    const template: Pick<TrainingTemplate, "default_config" | "config_schema"> = {
+      default_config: { "train.pipeline_variant": "legacy", "train.batch_size": 9 },
+      config_schema: { ...schema, pipeline_defaults: {
+        legacy: { "train.pipeline_variant": "legacy", "train.loss": "bce_dice" },
+        next_gen2: { "train.pipeline_variant": "next_gen2", "train.batch_size": 4 },
+      } },
+    };
+    expect(trainingConfigForTemplate(template, "binary", null)["train.batch_size"]).toBe(9);
+    const chosen = trainingConfigForTemplate(template, "binary", "next_gen2");
+    expect(chosen["train.pipeline_variant"]).toBe("next_gen2");
+    expect(chosen["train.batch_size"]).toBe(4);
+    expect(trainingConfigForTemplate({ ...template, default_config: chosen }, "binary", "legacy")["train.loss"]).toBe("bce_dice");
+    expect(trainingConfigForTemplate(template, "multiclass", "next_gen2")["train.pipeline_variant"]).toBe("legacy");
+    const unsupported = { ...template, config_schema: { ...schema, pipeline_defaults: {} } };
+    expect(trainingConfigForTemplate(unsupported, "binary", "next_gen2")["train.pipeline_variant"]).toBe("legacy");
+  });
+
   it("shows only multiclass losses for a multiclass dataset", () => {
     expect(trainingConfigSchema(schema, "multiclass")?.fields[0].options).toEqual([
       "cross_entropy",

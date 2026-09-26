@@ -117,7 +117,7 @@ import {
 
 import { ConfigEditor } from "./ConfigEditor";
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
-import { configFieldTooltip, trainingConfigSchema } from "./utils/trainingConfig";
+import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
 const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
@@ -588,6 +588,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   const [busy, setBusy] = useState(false);
   const [runInferenceAfterTraining, setRunInferenceAfterTraining] = useState(false);
   const [secondaryPriority, setSecondaryPriority] = useState(false);
+  const pipelineChoice = useRef<string | null>(null);
 
   const template = useMemo(
     () => templateFor(bootstrap.training_templates, architecture, datasetKey),
@@ -603,13 +604,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
   );
 
   useEffect(() => {
-    const next = { ...(template?.default_config || {}) };
-    if (selectedDataset?.task === "multiclass") {
-      Object.assign(next, template?.config_schema.pipeline_defaults?.legacy || {});
-      next["train.pipeline_variant"] = "legacy";
-      next["train.loss"] = "cross_entropy_dice";
-    }
-    setConfig(next);
+    setConfig(trainingConfigForTemplate(template, selectedDataset?.task || "binary", pipelineChoice.current));
   }, [datasetKey, selectedDataset?.task, template?.id]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -684,7 +679,10 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
         template={template}
         schema={trainingSchema}
         value={config}
-        onChange={setConfig}
+        onChange={(next) => {
+          pipelineChoice.current = String(next["train.pipeline_variant"] || "legacy");
+          setConfig(next);
+        }}
         runInferenceAfterTraining={runInferenceAfterTraining}
         onRunInferenceChange={setRunInferenceAfterTraining}
         secondaryPriority={secondaryPriority}

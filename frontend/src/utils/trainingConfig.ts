@@ -1,4 +1,20 @@
-import type { ConfigField, ConfigSchema, DatasetInfo, JsonRecord } from "../api/types";
+import type { ConfigField, ConfigSchema, DatasetInfo, JsonRecord, TrainingTemplate } from "../api/types";
+
+export function trainingConfigForTemplate(
+  template: Pick<TrainingTemplate, "default_config" | "config_schema"> | undefined,
+  task: DatasetInfo["task"],
+  pipelineChoice: string | null,
+): JsonRecord {
+  const next = { ...(template?.default_config || {}) };
+  const variant = task === "multiclass" ? "legacy" : pipelineChoice;
+  const preset = variant ? template?.config_schema.pipeline_defaults?.[variant] : undefined;
+  if (preset && next["train.pipeline_variant"] !== variant) Object.assign(next, preset);
+  if (task === "multiclass") {
+    next["train.pipeline_variant"] = "legacy";
+    next["train.loss"] = "cross_entropy_dice";
+  }
+  return next;
+}
 
 export function trainingConfigSchema(
   schema: ConfigSchema | undefined,
