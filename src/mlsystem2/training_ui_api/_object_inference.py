@@ -4,12 +4,15 @@ import time
 
 import numpy as np
 from rasterio.windows import Window
+from rasterio.enums import ColorInterp
 
 from mlsystem2.inference.api import create_object_scene, object_window_origins
 from mlsystem2.inference.contracts import ObjectSceneRequest, ObjectSeparationConfig, ObjectWindowPrediction
 
 
 def predict_instances(dataset, predict, *, input_indexes, tile_size, batch_size=1, threshold=0.5, metrics=None):
+    if any(dataset.colorinterp[index - 1] == ColorInterp.alpha for index in input_indexes):
+        raise RuntimeError("Alpha используется как valid mask и не может заменять канал NIR")
     performance = metrics if metrics is not None else {}
     accumulator = create_object_scene(ObjectSceneRequest(width=dataset.width, height=dataset.height, tile_size=tile_size,
         separation=ObjectSeparationConfig(foreground_threshold=threshold)))

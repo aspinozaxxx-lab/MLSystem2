@@ -1390,7 +1390,9 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             or (external_manifest is not None
             and external_manifest.adapter == "detectron2_instances")
         ):
-            merged_features = merge_external_instance_features(all_features)
+            merged_features = merge_external_instance_features(
+                all_features, cross_scene_only=config.get("pipeline_variant") == "object_f1"
+            )
         else:
             merged_features = (
                 _merge_connected_features(all_features)

@@ -386,3 +386,11 @@ def test_object_mlflow_summary_has_no_quality_duplicates(monkeypatch):
         diagnostics={"checkpoint_selection":{"metric":"val/object_f1","object_f1":.7}}))
     assert logged["train/best_object_f1"] == .7
     assert not any("quality_" in name for name in logged)
+
+
+def test_object_inference_rejects_alpha_as_nir(tmp_path):
+    from mlsystem2.training_ui_api._object_inference import predict_instances
+    scenes = _scenes(tmp_path)
+    with rasterio.open(scenes[0].image_path) as source:
+        with pytest.raises(RuntimeError, match="Alpha"):
+            predict_instances(source, lambda images: None,input_indexes=(1,2,3,4),tile_size=64)
