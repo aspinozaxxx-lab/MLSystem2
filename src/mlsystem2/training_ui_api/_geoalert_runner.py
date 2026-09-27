@@ -552,7 +552,11 @@ def _ensure_runtime_export(
                 external_manifest=external_manifest,
                 probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
                 object_output=model_marker.get("output_kind") == "object_probabilities",
-                threshold=float(model_marker.get("threshold", 0.9)),
+                threshold=(
+                    float(model_marker["threshold"])
+                    if model_marker.get("threshold") is not None
+                    else 0.9
+                ),
             )
             _install_pipeline_cache(
                 pipeline_path,
@@ -633,7 +637,11 @@ def _ensure_runtime_export(
                 "class_schema": list(metadata.get("class_schema") or []),
                 "task": str(metadata.get("task") or "binary"),
                 "output_kind": str(metadata.get("output_kind") or "binary_masks"),
-                "threshold": float(metadata.get("threshold", 0.9)),
+                "threshold": (
+                    float(metadata["threshold"])
+                    if metadata.get("threshold") is not None
+                    else None
+                ),
             },
         )
         bricks = _pipeline_bricks(yaml.safe_load(pipeline_bytes.decode("utf-8")))

@@ -16,6 +16,7 @@ from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
 
+from mlsystem2.training_ui_api import _geoalert_runner
 from mlsystem2.training_ui_api._external_models import (
     ExternalModelError,
     ExternalModelManifest,
@@ -220,6 +221,47 @@ def test_external_export_renames_root_and_config(tmp_path: Path) -> None:
             assert 'name: "sample"' not in config
     finally:
         result.cleanup()
+
+
+@pytest.mark.parametrize("manifest_factory", [_oks_manifest, _zu_manifest], ids=["oks", "zu"])
+def test_external_runtime_cache_preserves_optional_threshold(
+    tmp_path: Path,
+    monkeypatch,
+    manifest_factory,
+) -> None:
+    archive_path = tmp_path / "model.zip"
+    manifest = manifest_factory(_archive(archive_path))
+    config = {
+        "geoalert_model_repository": str(tmp_path / "models"),
+        "geoalert_pipeline_root": str(tmp_path / "pipelines"),
+        "tile_size": manifest.tile_size,
+        "context": manifest.context,
+        "external_model": manifest.model_dump(mode="json"),
+    }
+    first = _geoalert_runner._ensure_runtime_export(
+        config, archive_path, external_manifest=manifest, postprocess_config={},
+    )
+    marker_path = tmp_path / "pipelines" / f"{first.model_name}.model.json"
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["threshold"] == manifest.score_threshold
+    expected_pipeline = first.pipeline_path.read_bytes()
+
+    def unexpected_export(**kwargs):
+        pytest.fail("Повторная упаковка закешированной внешней модели не требуется")
+
+    monkeypatch.setattr(_geoalert_runner, "build_external_triton_model_export_zip", unexpected_export)
+    cached = _geoalert_runner._ensure_runtime_export(
+        config, archive_path, external_manifest=manifest, postprocess_config={},
+    )
+    assert cached == first
+
+    first.pipeline_path.unlink()
+    rebuilt = _geoalert_runner._ensure_runtime_export(
+        config, archive_path, external_manifest=manifest, postprocess_config={},
+    )
+    assert rebuilt == first
+    assert rebuilt.pipeline_path.read_bytes() == expected_pipeline
+    assert (rebuilt.model_dir / "1" / "model.pt").read_bytes() == b"torchscript"
+    assert sha256(archive_path.read_bytes()).hexdigest() == manifest.archive_sha256
 
 
 def test_zu_external_export_connects_python_backend_to_shared_torch(tmp_path: Path) -> None:
