@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import io
 from pathlib import Path
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 import threading
 import time
 import zipfile
@@ -91,6 +92,44 @@ def test_ortho_uses_geoalert_backend_and_kanopus_keeps_compatible_backend() -> N
     assert inference_backend_for_imagery("ortho") == GEOALERT_INFERENCE_BACKEND
     assert inference_backend_for_imagery("kanopus") == PYTORCH_INFERENCE_BACKEND
     assert inference_backend_for_imagery(None) == PYTORCH_INFERENCE_BACKEND
+
+
+@pytest.mark.parametrize("blocked", [False, True], ids=["plain", "required_blocks"])
+def test_compose_runner_supports_required_blocks(tmp_path: Path, monkeypatch, blocked: bool) -> None:
+    from mlsystem2.training_ui_api import _geoalert_notebook
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        yaml.safe_dump({"config": {"blocks" if blocked else "bricks": []}}), encoding="utf-8",
+    )
+    spec_path = tmp_path / "spec.json"
+    result_path = tmp_path / "result.json"
+    spec_path.write_text(json.dumps({
+        "pipeline_path": str(pipeline_path),
+        "compose_root": str(tmp_path / "compose"),
+        "progress_path": str(tmp_path / "progress.json"),
+        "result_path": str(result_path),
+        "scenes": [],
+    }), encoding="utf-8")
+    loaded = []
+
+    def load(path, enable_blocks=None):
+        config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))["config"]
+        if "blocks" in config and not isinstance(enable_blocks, dict):
+            raise ValueError("Geoalert требует словарь выбора необязательных блоков")
+        if "bricks" in config and enable_blocks:
+            raise ValueError("Конвейер без блоков не принимает их выбор")
+        loaded.append(path)
+        return lambda _workdir: None
+
+    urban = ModuleType("urban")
+    urban.Compose = SimpleNamespace(load=load)
+    monkeypatch.setitem(sys.modules, "urban", urban)
+    monkeypatch.setattr(_geoalert_notebook, "register_notebook_bricks", lambda: None)
+
+    assert _geoalert_compose_runner.main(["--spec", str(spec_path)]) == 0
+    assert loaded == [str(pipeline_path)]
+    assert json.loads(result_path.read_text(encoding="utf-8"))["status"] == "ok"
 
 
 def test_worker_launches_geoalert_runner_for_ortho_job(tmp_path: Path) -> None:

@@ -33,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         from _geoalert_notebook import register_notebook_bricks
 
     register_notebook_bricks()
-    pipeline = Compose.load(str(spec["pipeline_path"]))
+    # Geoalert требует словарь даже для конвейера только с обязательными блоками.
+    pipeline = Compose.load(str(spec["pipeline_path"]), enable_blocks={})
     compose_root = Path(spec["compose_root"]).resolve()
     compose_root.mkdir(parents=True, exist_ok=True)
     progress_path = Path(spec["progress_path"])

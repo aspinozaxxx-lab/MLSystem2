@@ -15,7 +15,12 @@ from typing import Any
 
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
 
-from ._external_models import ExternalModelManifest, validate_external_archive
+from ._external_models import (
+    ExternalModelError,
+    ExternalModelManifest,
+    _oks_torchscript_with_input_device,
+    validate_external_archive,
+)
 from ._templates import (
     COMPACT_FILTER_KEEP,
     COMPACT_FILTER_MODES,
@@ -263,6 +268,9 @@ def build_external_triton_model_export_zip(
             source_root=manifest.model_root,
             target_root=parsed_model_name,
             python_site_packages=effective_python_site_packages,
+            oks_model_member=(
+                manifest.model_member if manifest.adapter == "oks_multiclass_footprints" else None
+            ),
         )
         _write_text(
             pipeline_dir / f"{parsed_model_name}_triton.yaml",
@@ -349,6 +357,7 @@ def _rewrite_external_model_archive(
     source_root: str,
     target_root: str,
     python_site_packages: str | None = None,
+    oks_model_member: str | None = None,
 ) -> None:
     config_name = f"{source_root}/config.pbtxt"
     with zipfile.ZipFile(source_archive) as source, zipfile.ZipFile(
@@ -366,6 +375,11 @@ def _rewrite_external_model_archive(
             content = source.read(item)
             if normalized == config_name:
                 content = _renamed_triton_config(content, target_root)
+            elif normalized == oks_model_member:
+                try:
+                    content = _oks_torchscript_with_input_device(content)
+                except ExternalModelError as exc:
+                    raise TrainingUIAPIError(str(exc)) from exc
             elif python_site_packages is not None and relative == "1/model.py":
                 content = _python_backend_model_with_site_packages(
                     content,
@@ -484,7 +498,7 @@ config:
           sample_size: [{manifest.stride}, {manifest.stride}]
           vectorize: false
           input_rasters: [RED, GRN, BLU]
-          output_labels: [shadow, wall, markers, contour]
+          output_labels: [markers, contour, shadow, wall]
           crs: utm
           res: [{manifest.target_resolution_m}, {manifest.target_resolution_m}]
           adapter:

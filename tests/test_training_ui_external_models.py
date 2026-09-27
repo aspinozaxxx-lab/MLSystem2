@@ -12,6 +12,7 @@ import zipfile
 import numpy as np
 import pytest
 import rasterio
+import yaml
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
 from shapely.geometry import box, shape
@@ -21,6 +22,7 @@ from mlsystem2.training_ui_api._external_models import (
     ExternalModelError,
     ExternalModelManifest,
     LoadedExternalModel,
+    _oks_torchscript_with_input_device,
     _open_resampled_dataset,
     load_external_model,
     merge_external_instance_features,
@@ -34,8 +36,17 @@ def _archive(
     path: Path,
     *,
     unsafe_name: str | None = None,
-    model_bytes: bytes = b"torchscript",
+    model_bytes: bytes | None = None,
 ) -> str:
+    if model_bytes is None:
+        model = BytesIO()
+        with zipfile.ZipFile(model, "w") as archive:
+            archive.writestr(
+                "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py",
+                b'skip = torch.empty([1, 0, 1, 1], device=torch.device("cpu"))\n',
+            )
+            archive.writestr("model/data/0", b"weights")
+        model_bytes = model.getvalue()
     with zipfile.ZipFile(path, mode="w") as archive:
         archive.writestr(
             "sample/config.pbtxt",
@@ -175,7 +186,7 @@ def test_oks_model_patches_only_scratch_copy_for_cuda(
         calls["map_location"] = map_location.type
         with zipfile.ZipFile(path) as archive:
             code = archive.read(code_entry)
-        assert b'torch.device("cuda:0")' in code
+        assert b"device=ops.prim.device(x)" in code
         assert b'torch.device("cpu")' not in code
         return _Model()
 
@@ -210,6 +221,12 @@ def test_external_export_renames_root_and_config(tmp_path: Path) -> None:
             assert "SimplifyAsShapes" not in outer.read(
                 "pipelines/imported_oks_triton.yaml"
             ).decode("utf-8")
+            pipeline = yaml.safe_load(outer.read("pipelines/imported_oks_triton.yaml"))
+            segmentation = pipeline["config"]["blocks"][0]["bricks"][1]
+            class_map = [int(item) for item in segmentation["postprocessors"][0]["class_map"].split(",")]
+            assert dict(zip(segmentation["output_labels"], class_map)) == {
+                "markers": 1, "contour": 2, "shadow": 3, "wall": 4,
+            }
             service_archive = tmp_path / "service.zip"
             service_archive.write_bytes(
                 outer.read("models-serving-service/imported_oks.zip")
@@ -219,6 +236,13 @@ def test_external_export_renames_root_and_config(tmp_path: Path) -> None:
             config = model_zip.read("imported_oks/config.pbtxt").decode("utf-8")
             assert 'name: "imported_oks"' in config
             assert 'name: "sample"' not in config
+            with zipfile.ZipFile(BytesIO(model_zip.read("imported_oks/1/model.pt"))) as model:
+                assert model.read("model/data/0") == b"weights"
+                code = model.read(
+                    "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py"
+                )
+                assert b"device=ops.prim.device(x)" in code
+        assert sha256(archive_path.read_bytes()).hexdigest() == manifest.archive_sha256
     finally:
         result.cleanup()
 
@@ -260,8 +284,51 @@ def test_external_runtime_cache_preserves_optional_threshold(
     )
     assert rebuilt == first
     assert rebuilt.pipeline_path.read_bytes() == expected_pipeline
-    assert (rebuilt.model_dir / "1" / "model.pt").read_bytes() == b"torchscript"
+    with zipfile.ZipFile(rebuilt.model_dir / "1" / "model.pt") as model:
+        assert model.read("model/data/0") == b"weights"
     assert sha256(archive_path.read_bytes()).hexdigest() == manifest.archive_sha256
+
+
+def test_oks_device_patch_keeps_torchscript_executable() -> None:
+    torch = pytest.importorskip("torch")
+
+    class EmptySkip(torch.nn.Module):
+        def forward(self, x):
+            skip = torch.empty([x.shape[0], 0, x.shape[2], x.shape[3]], device="cpu")
+            return torch.cat([x, skip], dim=1)
+
+    EmptySkip.__module__ = "segmentation_models_pytorch.encoders.mix_transformer"
+    image = torch.ones(1, 3, 4, 4)
+    traced = BytesIO()
+    torch.jit.save(torch.jit.trace(EmptySkip(), image), traced)
+    model_archive = BytesIO()
+    with zipfile.ZipFile(traced) as archive, zipfile.ZipFile(model_archive, "w") as target:
+        for item in archive.infolist():
+            target.writestr("model/" + item.filename.split("/", 1)[1], archive.read(item))
+    source = model_archive.getvalue()
+    patched = _oks_torchscript_with_input_device(source)
+    with zipfile.ZipFile(BytesIO(source)) as before, zipfile.ZipFile(BytesIO(patched)) as after:
+        assert before.namelist() == after.namelist()
+        changed = [name for name in before.namelist() if before.read(name) != after.read(name)]
+        assert changed == [
+            "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py"
+        ]
+    devices = ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]
+    for device in devices:
+        model = torch.jit.load(BytesIO(patched), map_location=device)
+        assert torch.equal(model(image.to(device)), image.to(device))
+
+
+@pytest.mark.parametrize("cpu_expressions", [0, 2])
+def test_oks_device_patch_rejects_unexpected_code(cpu_expressions: int) -> None:
+    model = BytesIO()
+    with zipfile.ZipFile(model, "w") as archive:
+        archive.writestr(
+            "model/code/__torch__/segmentation_models_pytorch/encoders/mix_transformer.py",
+            b'device=torch.device("cpu")\n' * cpu_expressions,
+        )
+    with pytest.raises(ExternalModelError, match="неожиданное описание"):
+        _oks_torchscript_with_input_device(model.getvalue())
 
 
 def test_zu_external_export_connects_python_backend_to_shared_torch(tmp_path: Path) -> None:

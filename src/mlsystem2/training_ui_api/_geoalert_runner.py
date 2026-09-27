@@ -486,9 +486,12 @@ def _ensure_runtime_export(
     postprocess_config: dict[str, object],
 ) -> _RuntimeExport:
     checkpoint_sha = _sha256_file(checkpoint)
+    external_oks = (
+        external_manifest is not None and external_manifest.adapter == "oks_multiclass_footprints"
+    )
     model_identity = json.dumps(
         {
-            "runtime_contract": 4,
+            "runtime_contract": 5 if external_oks else 4,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -502,7 +505,7 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 4,
+            "pipeline_contract": 5 if external_oks else 4,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
