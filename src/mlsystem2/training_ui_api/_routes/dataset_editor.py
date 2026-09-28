@@ -57,7 +57,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorUserDraftListResponse,
 )
 
-from .._raster_http import raster_response
+from mlsystem2.training_ui_api._raster_http import raster_response
 from .common import RouteContext
 
 

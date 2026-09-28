@@ -29,8 +29,8 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from .common import RouteContext
-from .._pseudo_viewer import pseudo_markup_raster, pseudo_markup_view
-from .._raster_http import raster_response
+from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_raster, pseudo_markup_view
+from mlsystem2.training_ui_api._raster_http import raster_response
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
