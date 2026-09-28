@@ -1984,6 +1984,30 @@ def test_pseudo_viewer_distinguishes_nir_from_alpha_and_reports_missing_images(e
     assert env.client.get(f"/api/v1/results/pseudo-markup/{result}/view").status_code == 400
 
 
+def test_pseudo_viewer_versions_raster_ranges_and_rejects_changed_files(editor_environment):
+    env = editor_environment
+    image = get_config().images_root / "kanopus/batch/versioned.tif"
+    _write_raster(image, value=80, channels=3)
+    result, _ = _create_viewer_result(env, _create_primary_training_result(env), [image], "snapshot")
+    view_url = f"/api/v1/results/pseudo-markup/{result}/view"
+    old_url = env.client.get(view_url).json()["scenes"][0]["raster_url"]
+    first = env.client.get(old_url, headers={"Range": "bytes=0-15"})
+    assert first.status_code == 206 and len(first.content) == 16
+    assert first.headers["etag"] == f'"{old_url.split("?v=")[1]}"'
+    assert first.headers["cache-control"] == "private, no-store"
+    _write_raster(image, value=120, channels=3)
+    new_url = env.client.get(view_url).json()["scenes"][0]["raster_url"]
+    assert new_url != old_url
+    stale = env.client.get(old_url, headers={"Range": "bytes=16-31"})
+    assert stale.status_code == 412
+    assert "Снимок изменился" in stale.json()["detail"]
+    assert env.client.get(new_url, headers={"Range": "bytes=16-31"}).status_code == 206
+    # Старые ссылки без версии остаются доступны после проверки входа.
+    assert env.client.get(old_url.split("?")[0], headers={"Range": "bytes=0-15"}).status_code == 206
+    env.client.cookies.clear()
+    assert env.client.get(new_url, headers={"Range": "bytes=0-15"}).status_code == 401
+
+
 def test_pseudo_viewer_resolves_historical_ortho_list_without_job(editor_environment):
     env = editor_environment
     result_id = _create_primary_training_result(env)

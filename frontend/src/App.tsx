@@ -232,6 +232,7 @@ export function App() {
     await run(() => apiJson<{ status: string }>("/auth/logout", { method: "POST" }));
     setUser(null);
     setBootstrap(null);
+    void import("./utils/rasterCache").then(({ rasterCache }) => rasterCache.clear());
   };
 
   const showJobLog = useCallback(
@@ -267,6 +268,7 @@ export function App() {
   const page = bootstrap ? (
     <RoutedPage
       route={route}
+      username={user}
       bootstrap={bootstrap}
       run={run}
       reloadBootstrap={loadBootstrap}
@@ -289,6 +291,7 @@ export function App() {
 
 function RoutedPage(props: {
   route: string[];
+  username: string;
   bootstrap: BootstrapInfo;
   run: Runner;
   reloadBootstrap: () => Promise<void>;
@@ -299,7 +302,7 @@ function RoutedPage(props: {
 }) {
   const [head, second] = props.route;
   if (head === "news") return <NewsPage slug={second} />;
-  if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} /></Suspense>;
+  if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;

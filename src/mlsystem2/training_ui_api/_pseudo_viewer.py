@@ -22,6 +22,7 @@ from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._datasets import RASTER_SUFFIXES, imagery_images_dir
 from ._models import JobRow, PseudoMarkupResultRow
+from ._raster_http import raster_revision
 from .contracts import PseudoMarkupSceneInfo, PseudoMarkupViewInfo, TrainingUIAPIError
 
 
@@ -37,7 +38,7 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
             scene_id = _scene_id(path)
             scenes.append(PseudoMarkupSceneInfo(
                 id=scene_id, name=path.relative_to(config.images_root.resolve()).as_posix(),
-                raster_url=f"/api/v1/results/pseudo-markup/{result.id}/raster/{scene_id}",
+                raster_url=f"/api/v1/results/pseudo-markup/{result.id}/raster/{scene_id}?v={raster_revision(path)}",
                 bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,
             ))
         except (OSError, ValueError, rasterio.errors.RasterioError) as exc:

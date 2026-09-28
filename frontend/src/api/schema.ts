@@ -7915,7 +7915,9 @@ export interface operations {
     };
     get_pseudo_markup_raster_api_v1_results_pseudo_markup__result_id__raster__scene_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                v?: string | null;
+            };
             header?: {
                 Range?: string | null;
             };

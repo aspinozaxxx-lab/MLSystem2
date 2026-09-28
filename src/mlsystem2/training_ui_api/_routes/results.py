@@ -45,11 +45,12 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
     @app.get("/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}")
     def get_pseudo_markup_raster(
         result_id: uuid.UUID, scene_id: str,
+        v: str | None = None,
         range_header: str | None = Header(default=None, alias="Range"),
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> StreamingResponse:
-        return raster_response(pseudo_markup_raster(db, ctx.config, result_id, scene_id), range_header)
+        return raster_response(pseudo_markup_raster(db, ctx.config, result_id, scene_id), range_header, v)
 
     @app.get("/api/v1/results/classes", response_model=ResultClassListResponse)
     def get_result_classes(

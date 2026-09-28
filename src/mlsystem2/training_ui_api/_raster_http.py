@@ -9,11 +9,22 @@ from fastapi.responses import StreamingResponse
 _STREAM_CHUNK_SIZE = 1024 * 1024
 
 
-def raster_response(path: Path, range_header: str | None) -> StreamingResponse:
+def raster_revision(path: Path) -> str:
+    stat = path.stat()
+    return f"{stat.st_mtime_ns:x}-{stat.st_ctime_ns:x}-{stat.st_size:x}"
+
+
+def raster_response(path: Path, range_header: str | None, version: str | None = None) -> StreamingResponse:
+    revision = raster_revision(path)
+    if version is not None and version != revision:
+        raise HTTPException(status_code=412, detail="Снимок изменился. Обновите страницу просмотра.")
     size = path.stat().st_size
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Type": "image/tiff",
+        "ETag": f'"{revision}"',
+        # Фрагменты хранит ограниченный кэш приложения после проверки входа.
+        "Cache-Control": "private, no-store",
     }
     if range_header is None:
         headers["Content-Length"] = str(size)

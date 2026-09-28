@@ -102,3 +102,5 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     paths = get_openapi_schema()["paths"]
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/view"]) == {"get"}
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]) == {"get"}
+    raster_parameters = paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]["get"]["parameters"]
+    assert any(item["name"] == "v" and item["in"] == "query" and item["required"] is False for item in raster_parameters)
