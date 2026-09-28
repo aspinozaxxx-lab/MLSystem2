@@ -8725,6 +8725,11 @@
             "title": "Has Alpha",
             "default": false
           },
+          "has_nir": {
+            "type": "boolean",
+            "title": "Has Nir",
+            "default": false
+          },
           "nodata": {
             "anyOf": [
               {

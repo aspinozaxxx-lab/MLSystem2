@@ -51,6 +51,7 @@ class PseudoMarkupSceneInfo(BaseModel):
     raster_url: str
     bounds: tuple[float, float, float, float]
     has_alpha: bool = False
+    has_nir: bool = False
     nodata: float | None = None
 
 

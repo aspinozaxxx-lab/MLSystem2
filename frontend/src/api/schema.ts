@@ -3234,6 +3234,11 @@ export interface components {
              * @default false
              */
             has_alpha: boolean;
+            /**
+             * Has Nir
+             * @default false
+             */
+            has_nir: boolean;
             /** Nodata */
             nodata?: number | null;
         };

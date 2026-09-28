@@ -8,6 +8,12 @@ export type SortDirection = "ascending" | "descending";
 
 export const RASTER_MAX_SCALE = 10;
 export const RASTER_CONTRAST = 0.15;
+export type BandMode = "RGB" | "NRG" | "NGB";
+export const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
+  RGB: [1, 2, 3],
+  NRG: [4, 1, 2],
+  NGB: [4, 2, 3],
+};
 
 export function isCurrentDatasetScene(
   requestedDatasetKey: string,

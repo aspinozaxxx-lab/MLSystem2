@@ -92,7 +92,7 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import PseudoMarkupSceneInfo, PseudoMarkupViewInfo
 
-    assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "bounds", "has_alpha", "nodata"}
+    assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "bounds", "has_alpha", "has_nir", "nodata"}
     assert set(PseudoMarkupViewInfo.model_fields) == {
         "id", "training_result_id", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
         "geojson_url", "object_count", "expected_image_count", "scenes", "warnings",

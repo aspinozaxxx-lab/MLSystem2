@@ -2,6 +2,8 @@ import { ArrowLeft, Download, Maximize, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
+import { defaults as defaultControls } from "ol/control/defaults";
+import { defaults as defaultInteractions } from "ol/interaction/defaults";
 import GeoJSON from "ol/format/GeoJSON";
 import { createEmpty, extend, intersects, isEmpty, type Extent } from "ol/extent";
 import VectorImageLayer from "ol/layer/VectorImage";
@@ -12,8 +14,8 @@ import { Fill, Stroke, Style } from "ol/style";
 import { apiJson } from "./api/client";
 import type { PseudoMarkupViewInfo } from "./api/types";
 import { formatDateTime } from "./utils/format";
-import { RASTER_CONTRAST } from "./utils/datasetEditor";
-import { pseudoClass, pseudoClasses, type PseudoProperties } from "./utils/pseudoViewer";
+import { BAND_CHANNELS, type BandMode } from "./utils/datasetEditor";
+import { pseudoClass, pseudoClasses, pseudoRasterStyle, type PseudoProperties } from "./utils/pseudoViewer";
 import "ol/ol.css";
 import "./styles/pseudoViewer.css";
 
@@ -48,6 +50,7 @@ function PseudoMap({ info, geojson }: LoadedView) {
   const target = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
   const rasterLayers = useRef<WebGLTileLayer[]>([]);
+  const nirLayer = useRef<WebGLTileLayer | null>(null);
   const markupLayer = useRef<VectorImageLayer | null>(null);
   const allBounds = useRef<Extent>(createEmpty());
   const hiddenClasses = useRef(new Set<string>());
@@ -56,9 +59,11 @@ function PseudoMap({ info, geojson }: LoadedView) {
   const [markupVisible, setMarkupVisible] = useState(true);
   const [opacity, setOpacity] = useState(0.8);
   const [query, setQuery] = useState("");
+  const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [rasterErrors, setRasterErrors] = useState<string[]>([]);
   const classes = useMemo(() => pseudoClasses(geojson.features), [geojson]);
   const scenes = info.scenes.filter((scene) => scene.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const hasNir = info.scenes.some((scene) => scene.has_nir && !scene.has_alpha);
 
   useEffect(() => {
     if (!target.current) return;
@@ -68,15 +73,16 @@ function PseudoMap({ info, geojson }: LoadedView) {
     const reportRasterError = (name: string) => {
       if (active) setRasterErrors((old) => old.includes(name) ? old : [...old, name]);
     };
-    // Два слоя сохраняют одинаковый набор каналов внутри каждой группы источников.
-    // NIR не участвует в RGB, четвёртый канал RGBA задаёт прозрачность.
-    const rasters = [false, true].map((hasAlpha) => new WebGLTileLayer({
+    // RGB, RGBA и RGB+NIR требуют разных правил цвета и прозрачности.
+    const layouts = [{ alpha: false, nir: false }, { alpha: true, nir: false }, { alpha: false, nir: true }];
+    const rasters = layouts.map(({ alpha, nir }) => new WebGLTileLayer({
       cacheSize: 128,
-      sources: (extent) => info.scenes.filter((scene) => scene.has_alpha === hasAlpha && intersects(extent, scene.bounds)).map((scene) => {
+      sources: (extent) => info.scenes.filter((scene) => Boolean(scene.has_alpha) === alpha
+        && Boolean(scene.has_nir && !scene.has_alpha) === nir && intersects(extent, scene.bounds)).map((scene) => {
         let source = sources.get(scene.id);
         if (!source) {
           source = new GeoTIFF({
-            sources: [{ url: scene.raster_url, bands: hasAlpha ? [1, 2, 3, 4] : [1, 2, 3], nodata: scene.nodata ?? NaN }],
+            sources: [{ url: scene.raster_url, bands: alpha || nir ? [1, 2, 3, 4] : [1, 2, 3], nodata: scene.nodata ?? NaN }],
             sourceOptions: { credentials: "same-origin", maxRanges: 1, cacheSize: 32 },
             normalize: true, interpolate: false, transition: 0,
           });
@@ -86,11 +92,7 @@ function PseudoMap({ info, geojson }: LoadedView) {
         }
         return source;
       }),
-      style: {
-        color: ["color", ["*", ["band", 1], 255], ["*", ["band", 2], 255], ["*", ["band", 3], 255],
-          hasAlpha ? ["*", ["band", 4], ["band", 5]] : ["band", 4]],
-        contrast: RASTER_CONTRAST,
-      },
+      style: pseudoRasterStyle("RGB", alpha, nir),
     }));
     const vector = new VectorSource({ features: new GeoJSON().readFeatures(geojson, { featureProjection: "EPSG:3857" }) });
     const markup = new VectorImageLayer({
@@ -107,9 +109,14 @@ function PseudoMap({ info, geojson }: LoadedView) {
       },
     });
     const view = new View({ projection: "EPSG:3857", center: [0, 0], zoom: 2, maxZoom: 26 });
-    const map = new OLMap({ target: target.current, layers: [...rasters, markup], view });
+    const map = new OLMap({
+      target: target.current, layers: [...rasters, markup], view,
+      controls: defaultControls({ zoom: false }),
+      interactions: defaultInteractions({ onFocusOnly: false }),
+    });
     mapRef.current = map;
     rasterLayers.current = rasters;
+    nirLayer.current = rasters[2];
     markupLayer.current = markup;
     const bounds = createEmpty();
     info.scenes.forEach((scene) => extend(bounds, scene.bounds));
@@ -136,6 +143,7 @@ function PseudoMap({ info, geojson }: LoadedView) {
       sources.forEach((source) => source.dispose());
       sources.clear();
       mapRef.current = null;
+      nirLayer.current = null;
     };
   }, [info, geojson]);
 
@@ -157,6 +165,13 @@ function PseudoMap({ info, geojson }: LoadedView) {
     <div className="pseudo-model"><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span><span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span></div>
     <div className="pseudo-toolbar">
       <button type="button" className="secondary compact-action" onClick={() => fit(allBounds.current)}><Maximize size={15} /> Все снимки</button>
+      {hasNir ? <label title="Как в редакторе датасета: RGB, NRG или NGB. Снимки без NIR остаются в RGB.">Каналы
+        <select aria-label="Сочетание каналов" value={bandMode} onChange={(event) => {
+          const mode = event.target.value as BandMode;
+          setBandMode(mode);
+          nirLayer.current?.setStyle(pseudoRasterStyle(mode, false, true));
+        }}>{Object.keys(BAND_CHANNELS).map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
+      </label> : null}
       <label><input type="checkbox" checked={imagesVisible} onChange={(event) => { setImagesVisible(event.target.checked); rasterLayers.current.forEach((layer) => layer.setVisible(event.target.checked)); }} /> Снимки</label>
       <label><input type="checkbox" checked={markupVisible} onChange={(event) => { setMarkupVisible(event.target.checked); markupLayer.current?.setVisible(event.target.checked); }} /> Псевдоразметка</label>
       <label>Непрозрачность <input aria-label="Непрозрачность псевдоразметки" type="range" min="0.1" max="1" step="0.05" value={opacity} onChange={(event) => { const value = Number(event.target.value); setOpacity(value); markupLayer.current?.setOpacity(value); }} /></label>
@@ -176,6 +191,6 @@ function PseudoMap({ info, geojson }: LoadedView) {
         {!geojson.features.length ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">Колесо — масштаб, перетаскивание — перемещение. Нажмите на название снимка, чтобы приблизить его. Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">Наведите курсор на карту: колесо — масштаб, перетаскивание — перемещение. Нажмите на название снимка, чтобы приблизить его.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </>;
 }

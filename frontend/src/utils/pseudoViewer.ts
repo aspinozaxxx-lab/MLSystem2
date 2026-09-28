@@ -1,4 +1,16 @@
+import type { Style as WebGLTileStyle } from "ol/layer/WebGLTile";
+import { BAND_CHANNELS, RASTER_CONTRAST, type BandMode } from "./datasetEditor";
+
 export type PseudoProperties = Record<string, unknown>;
+
+export function pseudoRasterStyle(mode: BandMode, hasAlpha: boolean, hasNir: boolean): WebGLTileStyle {
+  const [red, green, blue] = BAND_CHANNELS[hasNir && !hasAlpha ? mode : "RGB"];
+  return {
+    color: ["color", ["*", ["band", red], 255], ["*", ["band", green], 255], ["*", ["band", blue], 255],
+      hasAlpha ? ["*", ["band", 4], ["band", 5]] : ["band", hasNir ? 5 : 4]],
+    contrast: RASTER_CONTRAST,
+  };
+}
 
 export function pseudoClass(value?: PseudoProperties | null) {
   const properties = value ?? {};

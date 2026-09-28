@@ -1947,6 +1947,7 @@ def test_pseudo_viewer_uses_exact_images_including_empty_predictions(editor_envi
     assert data["warnings"] == []
     assert {scene["name"] for scene in data["scenes"]} == {"kanopus/Olskij/SCN01.part.tif", "kanopus/batch/SCN02.tif"}
     assert all(scene["has_alpha"] is False for scene in data["scenes"])
+    assert all(scene["has_nir"] is False for scene in data["scenes"])
     assert env.client.get(data["geojson_url"]).json()["features"] == []
     raster = env.client.get(data["scenes"][0]["raster_url"], headers={"Range": "bytes=0-15"})
     assert raster.status_code == 206 and len(raster.content) == 16
@@ -1957,7 +1958,8 @@ def test_pseudo_viewer_uses_exact_images_including_empty_predictions(editor_envi
     assert env.client.get(f"/api/v1/results/pseudo-markup/{result}/view").status_code == 401
 
 
-def test_pseudo_viewer_preserves_alpha_and_reports_missing_images(editor_environment):
+@pytest.mark.parametrize("has_alpha", [False, True])
+def test_pseudo_viewer_distinguishes_nir_from_alpha_and_reports_missing_images(editor_environment, has_alpha):
     env = editor_environment
     result_id = _create_primary_training_result(env)
     config = get_config()
@@ -1965,13 +1967,16 @@ def test_pseudo_viewer_preserves_alpha_and_reports_missing_images(editor_environ
     _write_raster(image, value=80, channels=4)
     with rasterio.open(image, "r+") as raster:
         raster.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
-                              rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.alpha)
+                              rasterio.enums.ColorInterp.blue,
+                              rasterio.enums.ColorInterp.alpha if has_alpha else rasterio.enums.ColorInterp.undefined)
     selected = [image, config.images_root / "missing.tif", config.images_root.parent / "outside.tif"]
     result, _ = _create_viewer_result(env, result_id, selected, "snapshot")
     response = env.client.get(f"/api/v1/results/pseudo-markup/{result}/view")
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len(data["scenes"]) == 1 and data["scenes"][0]["has_alpha"] is True
+    assert len(data["scenes"]) == 1
+    assert data["scenes"][0]["has_alpha"] is has_alpha
+    assert data["scenes"][0]["has_nir"] is not has_alpha
     assert len(data["warnings"]) == 2
     with create_session_factory(config)() as session:
         session.get(PseudoMarkupResultRow, result).status = "error"

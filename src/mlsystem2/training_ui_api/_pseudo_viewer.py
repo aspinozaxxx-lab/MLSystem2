@@ -33,12 +33,12 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
     for path in paths:
         try:
             stat = path.stat()
-            bounds, has_alpha, nodata = _raster_metadata(str(path), stat.st_mtime_ns, stat.st_size)
+            bounds, has_alpha, has_nir, nodata = _raster_metadata(str(path), stat.st_mtime_ns, stat.st_size)
             scene_id = _scene_id(path)
             scenes.append(PseudoMarkupSceneInfo(
                 id=scene_id, name=path.relative_to(config.images_root.resolve()).as_posix(),
                 raster_url=f"/api/v1/results/pseudo-markup/{result.id}/raster/{scene_id}",
-                bounds=bounds, has_alpha=has_alpha, nodata=nodata,
+                bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,
             ))
         except (OSError, ValueError, rasterio.errors.RasterioError) as exc:
             warnings.append(f"Снимок {path.name} недоступен для просмотра: {exc}")
@@ -165,4 +165,5 @@ def _raster_metadata(path, mtime_ns, size):
             raise ValueError("Некорректная привязка снимка")
         nodata = float(source.nodata) if source.nodata is not None and math.isfinite(source.nodata) else None
         has_alpha = source.count >= 4 and source.colorinterp[3] == ColorInterp.alpha
-        return bounds, has_alpha, nodata
+        has_nir = source.count >= 4 and not has_alpha
+        return bounds, has_alpha, has_nir, nodata

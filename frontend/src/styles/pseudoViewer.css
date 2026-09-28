@@ -9,6 +9,7 @@
 .pseudo-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
 .pseudo-toolbar input[type="checkbox"] { width: auto; margin: 0; }
 .pseudo-toolbar input[type="range"] { width: 110px; padding: 0; accent-color: #6d28d9; }
+.pseudo-toolbar select { width: auto; min-height: 32px; padding: 5px 26px 5px 8px; font-size: 12px; }
 .pseudo-viewer-body { display: grid; grid-template-columns: 245px minmax(0, 1fr); gap: 14px; }
 .pseudo-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: max(480px, calc(100vh - 310px)); }
 .pseudo-sidebar h2 { font-size: 15px; margin: 0 0 12px; }
@@ -19,7 +20,6 @@
 .pseudo-scene-list button:hover, .pseudo-scene-list button:focus-visible { background: var(--surface-soft); }
 .pseudo-map-area { position: relative; min-width: 0; }
 .pseudo-map { height: max(480px, calc(100vh - 310px)); background: #111827; border-radius: 10px; overflow: hidden; }
-.pseudo-map .ol-zoom button { width: 28px; height: 28px; }
 .pseudo-map-legend { position: absolute; left: 12px; bottom: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .pseudo-map-legend button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: auto; }
 .pseudo-map-legend button[aria-pressed="false"] { opacity: 0.55; text-decoration: line-through; }

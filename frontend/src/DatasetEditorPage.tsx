@@ -47,6 +47,7 @@ import "ol/ol.css";
 import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import {
   appendHistory,
+  BAND_CHANNELS,
   cloneSnapshot,
   deleteEditableVertices,
   datasetObjectTotals,
@@ -69,6 +70,7 @@ import {
   snapshotsEqual,
   sortEditorScenes,
   undoDraft,
+  type BandMode,
   type DraftSnapshot,
   type DraftState,
   type EditableVertex,
@@ -79,7 +81,6 @@ import {
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
 type EditMode = "select" | "draw" | "pseudo";
-type BandMode = "RGB" | "NRG" | "NGB";
 type ClassDisplayState = {
   hiddenClasses: ReadonlySet<string>;
   highlightedClass: string | null;
@@ -240,11 +241,6 @@ const CLASS_PROPERTY = "_mlsystem2_class";
 const SOURCE_ORIGIN_KEY_PROPERTY = "_mlsystem2_source_origin_key";
 const POSITIVE_COLOR = "#F3C623";
 const HARD_NEGATIVE_COLOR = "#EF4444";
-const BAND_CHANNELS: Record<BandMode, [number, number, number]> = {
-  RGB: [1, 2, 3],
-  NRG: [4, 1, 2],
-  NGB: [4, 2, 3],
-};
 const styleCache = new Map<string, Style>();
 const pseudoStyleCache = new Map<string, Style>();
 const selectedPseudoStyleCache = new Map<string, Style>();
