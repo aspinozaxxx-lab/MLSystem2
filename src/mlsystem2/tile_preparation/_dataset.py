@@ -764,7 +764,12 @@ class TileDataset:
         outside = geometry_mask([geometry], out_shape=dimensions,
                                 transform=dataset.window_transform(window), all_touched=False)
         boundless = window.col_off < 0 or window.row_off < 0 or window.col_off + window.width > dataset.width or window.row_off + window.height > dataset.height
-        return outside | (dataset.dataset_mask(window=window, boundless=boundless, out_shape=dimensions) == 0)
+        invalid = outside | (dataset.dataset_mask(window=window, boundless=boundless, out_shape=dimensions) == 0)
+        # GDAL может предпочесть nodata и проигнорировать alpha: оба ограничения обязательны.
+        if rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+            alpha_index = dataset.colorinterp.index(rasterio.enums.ColorInterp.alpha) + 1
+            invalid |= dataset.read(alpha_index, window=window, boundless=boundless, out_shape=dimensions, fill_value=0) == 0
+        return invalid
 
     def _read_image_raw(
         self,

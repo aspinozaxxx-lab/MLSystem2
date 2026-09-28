@@ -44,6 +44,9 @@ def prepare_fixture(tmp_path, zones=None, channels=3, alpha=False):
         if alpha:
             target.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
                                   rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.alpha)
+        elif channels == 4:
+            target.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
+                                  rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.undefined)
     markup = annotations / "images_scene.geojson"
     markup.write_text(json.dumps(payload([feature("object", box(5, 14, 13, 25), "positive"), *(zones or [])])), encoding="utf-8")
     result = prepare_dataset(DatasetPreparationRequest(images_dir=str(images), annotations_dir=str(annotations),
@@ -81,11 +84,11 @@ def test_preparation_preserves_source_and_independent_zones(tmp_path):
     assert result.report.scenes[0].annotation_zone_count == 2
 
 
-@pytest.mark.parametrize("pipeline", ["legacy", "next_gen2", "object_f1"])
-def test_masked_tiles_do_not_depend_on_outside_image_or_objects(tmp_path, pipeline):
+@pytest.mark.parametrize("pipeline,context,channels", [("legacy", 0, 3), ("legacy", 4, 4), ("next_gen2", 0, 3), ("next_gen2", 0, 4), ("object_f1", 0, 3)])
+def test_masked_tiles_do_not_depend_on_outside_image_or_objects(tmp_path, pipeline, context, channels):
     zone = Polygon([(4, 12), (14, 12), (14, 26), (4, 26)], holes=[[(7, 17), (10, 17), (10, 20), (7, 20)]])
-    result, raster, markup = prepare_fixture(tmp_path, [feature("zone", zone)])
-    first = loader(result.dataset.scenes, pipeline, mode="train")
+    result, raster, markup = prepare_fixture(tmp_path, [feature("zone", zone)], channels=channels)
+    first = loader(result.dataset.scenes, pipeline, mode="train", context=context)
     before = [first[i] for i in range(len(first))]
     old_ratios = first._notebook_positive_ratios
     first.close()
@@ -97,7 +100,7 @@ def test_masked_tiles_do_not_depend_on_outside_image_or_objects(tmp_path, pipeli
     annotations = json.loads(markup.read_text())
     annotations["features"].append(feature("outside", box(20, 20, 30, 30), "positive"))
     markup.write_text(json.dumps(annotations), encoding="utf-8")
-    second = loader(result.dataset.scenes, pipeline, mode="train")
+    second = loader(result.dataset.scenes, pipeline, mode="train", context=context)
     assert len(second) == len(before)
     for (image, mask, meta), index in zip(before, range(len(second))):
         actual_image, actual_mask, actual_meta = second[index]
@@ -153,10 +156,24 @@ def test_multipolygon_and_rgba_use_alpha_validity(tmp_path):
     dataset.close()
 
 
+def test_alpha_is_honoured_when_nodata_is_also_set(tmp_path):
+    result, raster, _ = prepare_fixture(tmp_path, [feature("zone", box(4, 12, 14, 26))], channels=4, alpha=True)
+    with rasterio.open(raster, "r+") as target:
+        values = target.read()
+        values[:3, 8:10, 6:8] = 80
+        values[3, 8:10, 6:8] = 0
+        target.write(values)
+    dataset = loader(result.dataset.scenes, "object_f1", tile=32)
+    image, _, meta = dataset[0]
+    assert meta["valid_pixels"].sum() == 132
+    assert not image[:, ~meta["valid_pixels"]].any()
+    dataset.close()
+
+
 @pytest.mark.parametrize("pipeline,loss,channels", [("legacy", "bce_dice", 1), ("legacy", "focal_tversky", 1),
                                                      ("next_gen2", "cross_entropy_tversky", 2), ("legacy", "cross_entropy_dice", 3)])
 def test_invalid_predictions_have_no_loss_or_gradient(pipeline, loss, channels):
-    import torch
+    torch = pytest.importorskip("torch")
     from mlsystem2.train._trainer import _loss
 
     config = SimpleNamespace(pipeline_variant=pipeline, task="multiclass" if channels == 3 else "binary",
@@ -200,6 +217,7 @@ def test_reference_tiles_stay_inside_a_zone(tmp_path):
 
 
 def test_mixed_batch_and_raster_handles(tmp_path):
+    pytest.importorskip("torch")
     from mlsystem2.tile_preparation._dataloader import _collate_tile_batch
 
     result, _, _ = prepare_fixture(tmp_path, [feature("zone", box(4, 12, 14, 26))])
@@ -235,7 +253,7 @@ def test_scene_groups_keep_all_zones_of_parent_together(tmp_path):
 
 @pytest.mark.parametrize("pipeline,channels", [("legacy", 1), ("next_gen2", 2), ("legacy", 3), ("object_f1", 3)])
 def test_validation_ignores_predictions_outside_zone(pipeline, channels):
-    import torch
+    torch = pytest.importorskip("torch")
     from mlsystem2.train._trainer import _validate_epoch
     from mlsystem2.train.contracts import TrainConfig
 
@@ -267,7 +285,7 @@ def test_validation_ignores_predictions_outside_zone(pipeline, channels):
 
 @pytest.mark.parametrize("pipeline", ["next_gen2", "object_f1"])
 def test_zone_augmentations_are_reproducible_in_workers(tmp_path, pipeline):
-    import torch
+    torch = pytest.importorskip("torch")
     from mlsystem2.tile_preparation._dataloader import _collate_tile_batch, _seed_tile_worker
 
     result, _, _ = prepare_fixture(tmp_path, [feature("zone", box(4, 12, 14, 26))])
