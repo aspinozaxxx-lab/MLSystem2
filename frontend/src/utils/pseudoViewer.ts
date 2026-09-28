@@ -1,7 +1,21 @@
 import type { Style as WebGLTileStyle } from "ol/layer/WebGLTile";
+import { intersects, type Extent } from "ol/extent";
 import { BAND_CHANNELS, RASTER_CONTRAST, type BandMode } from "./datasetEditor";
 
 export type PseudoProperties = Record<string, unknown>;
+
+export function pseudoRasterCacheSizes(sceneCounts: number[]) {
+  const total = sceneCounts.reduce((sum, count) => sum + count, 0);
+  const base = sceneCounts.map((count) => count ? 32 : 2);
+  const remaining = 256 - base.reduce((sum, size) => sum + size, 0);
+  // OpenLayers использует половину cacheSize как длину массива старых ключей.
+  // Поэтому каждый бюджет должен быть чётным, включая пока пустые слои.
+  return sceneCounts.map((count, index) => base[index] + (total ? 2 * Math.floor(remaining * count / total / 2) : 0));
+}
+
+export function pseudoRasterScenes<T extends { bounds: Extent }>(scenes: T[], extent: Extent, resolution: number): T[] {
+  return resolution === Number.MAX_SAFE_INTEGER ? scenes.slice(0, 1) : scenes.filter((scene) => intersects(extent, scene.bounds));
+}
 
 export function pseudoRasterStyle(mode: BandMode, hasAlpha: boolean, hasNir: boolean): WebGLTileStyle {
   const [red, green, blue] = BAND_CHANNELS[hasNir && !hasAlpha ? mode : "RGB"];

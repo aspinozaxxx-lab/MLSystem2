@@ -1,7 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { pseudoClass, pseudoClasses, pseudoRasterStyle } from "./pseudoViewer";
+import WebGLTileLayer from "ol/layer/WebGLTile";
+import DataTile from "ol/source/DataTile";
+import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle } from "./pseudoViewer";
 
 describe("слои просмотра псевдоразметки", () => {
+  it.each([[4, 25, 0], [4, 2, 1], [1, 1, 1], [0, 1, 0], [0, 0, 0]])(
+    "сохраняет ограниченный кэш и не роняет OpenLayers при смене снимков (%i/%i/%i)", (...counts) => {
+      const sizes = pseudoRasterCacheSizes(counts);
+      expect(sizes.reduce((sum, size) => sum + size, 0)).toBeLessThanOrEqual(256);
+      for (const cacheSize of sizes) {
+        const layer = new WebGLTileLayer({ cacheSize });
+        const renderer = layer.getRenderer()!;
+        try {
+          // Реальный путь OpenLayers, на котором падала мозаика ОКС500 после накопления ключей.
+          expect(() => {
+            for (let index = 0; index < 300; index += 1) renderer.prependStaleKey(`снимок-${index % 29}`);
+          }).not.toThrow();
+          expect(renderer.getStaleKeys().length).toBeLessThanOrEqual(cacheSize / 2);
+        } finally { layer.dispose(); }
+      }
+    },
+  );
+  it("читает схему каналов по одному снимку, а для карты выбирает только видимые", () => {
+    const scenes = [
+      { id: "первый", bounds: [0, 0, 10, 10], source: new DataTile({ bandCount: 4 }) },
+      { id: "второй", bounds: [20, 0, 30, 10], source: new DataTile({ bandCount: 4 }) },
+    ];
+    const selected: string[][] = [];
+    const layer = new WebGLTileLayer({ sources: (extent, resolution) => {
+      const visible = pseudoRasterScenes(scenes, extent, resolution);
+      selected.push(visible.map((scene) => scene.id));
+      return visible.map((scene) => scene.source);
+    } });
+    try {
+      layer.getRenderer();
+      expect(selected.length).toBeGreaterThan(0);
+      expect(selected.every((ids) => ids.length === 1 && ids[0] === "первый")).toBe(true);
+      expect(layer.getSources([21, 1, 29, 9], 1)).toEqual([scenes[1].source]);
+      expect(layer.getSources([40, 0, 50, 10], 1)).toEqual([]);
+    } finally {
+      layer.dispose();
+      scenes.forEach((scene) => scene.source.dispose());
+    }
+  });
   it("сохраняет классы, цвета и отдельные объекты в общей мозаике", () => {
     const groups = pseudoClasses([
       { properties: { object_type_slug: "river", object_type_name: "Реки", object_type_color: "#22aaff" } },

@@ -16,7 +16,7 @@ import { apiJson } from "./api/client";
 import type { PseudoMarkupViewInfo } from "./api/types";
 import { formatDateTime } from "./utils/format";
 import { BAND_CHANNELS, type BandMode } from "./utils/datasetEditor";
-import { pseudoClass, pseudoClasses, pseudoRasterStyle, type PseudoProperties } from "./utils/pseudoViewer";
+import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle, type PseudoProperties } from "./utils/pseudoViewer";
 import { rasterCache } from "./utils/rasterCache";
 import { rasterBackdrop } from "./utils/rasterBackdrop";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
@@ -85,18 +85,19 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
     };
     // RGB, RGBA и RGB+NIR требуют разных правил цвета и прозрачности.
     const layouts = [{ alpha: false, nir: false }, { alpha: true, nir: false }, { alpha: false, nir: true }];
-    const activeLayouts = new Set(info.scenes.map((scene) => scene.has_alpha ? "alpha" : scene.has_nir ? "nir" : "rgb")).size;
-    const rasters = layouts.map(({ alpha, nir }) => {
-      const scenes = info.scenes.filter((scene) => Boolean(scene.has_alpha) === alpha
-        && Boolean(scene.has_nir && !scene.has_alpha) === nir);
+    const layoutScenes = layouts.map(({ alpha, nir }) => info.scenes.filter((scene) => Boolean(scene.has_alpha) === alpha
+      && Boolean(scene.has_nir && !scene.has_alpha) === nir));
+    const cacheSizes = pseudoRasterCacheSizes(layoutScenes.map((scenes) => scenes.length));
+    const rasters = layouts.map(({ alpha, nir }, index) => {
+      const scenes = layoutScenes[index];
       if (scenes[0]) pinned.add(scenes[0].id);
       return new WebGLTileLayer({
         className: "ol-layer pseudo-raster",
-        cacheSize: scenes.length ? 32 + Math.floor((256 - 32 * activeLayouts) * scenes.length / info.scenes.length) : 1,
+        cacheSize: cacheSizes[index],
         preload: 2,
         sources: (extent, resolution) => {
           // OpenLayers запрашивает весь мир для определения схемы каналов; достаточно первого снимка.
-          const selected = resolution === Number.MAX_VALUE ? scenes.slice(0, 1) : scenes.filter((scene) => intersects(extent, scene.bounds));
+          const selected = pseudoRasterScenes(scenes, extent, resolution);
           return selected.map((scene) => {
             let source = sources.get(scene.id);
             if (!source) {
