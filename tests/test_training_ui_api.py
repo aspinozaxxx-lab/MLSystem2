@@ -199,9 +199,11 @@ def test_pseudo_report_success_requires_processed_scene() -> None:
     )
 
 
-def test_partial_pseudo_markup_is_not_published(
+@pytest.mark.parametrize("complete", [False, True])
+def test_pseudo_markup_publishes_only_complete_result_with_exact_images(
     tmp_path: Path,
     monkeypatch,
+    complete: bool,
 ) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -246,10 +248,14 @@ def test_partial_pseudo_markup_is_not_published(
         (scratch / "report.json").write_text(
             json.dumps(
                 {
-                    "status": "partial",
-                    "processed": 1,
+                    "status": "ok" if complete else "partial",
+                    "processed": 2 if complete else 1,
                     "unique_image_count": 2,
-                    "failed": 1,
+                    "failed": 0 if complete else 1,
+                    "scenes": [
+                        {"status": "ok", "image": "/images/first.tif", "feature_count": 0},
+                        {"status": "ok" if complete else "error", "image": "/images/second.tif"},
+                    ],
                     "failures": [
                         {
                             "scene_id": "failed-scene",
@@ -264,6 +270,14 @@ def test_partial_pseudo_markup_is_not_published(
         _worker._finish_inference_job(session, job, config, succeeded=True)
         session.flush()
 
+        if complete:
+            assert job.status == JobStatus.COMPLETED.value
+            assert result.status == ResultStatus.OK.value
+            assert result.geojson_file_id is not None
+            session.commit()
+            session.expire_all()
+            assert job.config["pseudo_processed_images"] == ["/images/first.tif", "/images/second.tif"]
+            return
         assert job.status == JobStatus.FAILED.value
         assert job.error is not None
         assert "1 из 2" in job.error

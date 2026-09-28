@@ -291,6 +291,39 @@ def primary_training_result(
     )
 
 
+def dataset_training_result(
+    session: Session,
+    dataset_key: str,
+) -> TrainingResultRow | None:
+    """Вернуть явно выбранную либо последнюю успешную сеть конкретного датасета."""
+
+    class_row = dataset_class_row(session, dataset_key)
+    if class_row is not None and class_row.primary_training_result_id is not None:
+        selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
+        if (
+            selected is not None
+            and selected.status == "ok"
+            and (selected.dataset_key or selected.class_key) == dataset_key
+        ):
+            return selected
+    return session.scalar(
+        select(TrainingResultRow)
+        .where(
+            (
+                (TrainingResultRow.dataset_key == dataset_key)
+                | (TrainingResultRow.dataset_key.is_(None) & (TrainingResultRow.class_key == dataset_key))
+            ),
+            TrainingResultRow.status == "ok",
+        )
+        .order_by(
+            TrainingResultRow.trained_at.desc().nullslast(),
+            TrainingResultRow.created_at.desc(),
+            TrainingResultRow.id.desc(),
+        )
+        .limit(1)
+    )
+
+
 def dataset_class_row(
     session: Session,
     class_or_dataset_key: str,

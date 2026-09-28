@@ -13,6 +13,7 @@ import {
   Layers3,
   ListChecks,
   LogOut,
+  Map as MapIcon,
   PencilLine,
   Play,
   Plus,
@@ -137,6 +138,7 @@ type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 const DatasetEditorPage = lazy(() =>
   import("./DatasetEditorPage").then((module) => ({ default: module.DatasetEditorPage })),
 );
+const PseudoMarkupPage = lazy(() => import("./PseudoMarkupPage").then((module) => ({ default: module.PseudoMarkupPage })));
 
 type TestSampleBatchFormRow = {
   dataset: TestSampleBatchDatasetOption;
@@ -297,6 +299,7 @@ function RoutedPage(props: {
 }) {
   const [head, second] = props.route;
   if (head === "news") return <NewsPage slug={second} />;
+  if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;
@@ -452,7 +455,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${route[0] === "dataset-editor" ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
     </div>
   );
 }
@@ -4353,7 +4356,10 @@ function ResultsTable({
                           {sourceBadge(item.source)}
                         </span>
                       </td>
-                      <td title="GeoJSON">{item.geojson_file ? geojsonDownloadLink(item.geojson_file) : "—"}</td>
+                      <td title="GeoJSON">{item.geojson_file ? <span className="pseudo-download-actions">
+                        {geojsonDownloadLink(item.geojson_file)}
+                        {item.status === "ok" ? <a className="secondary icon-button" href={`#/pseudo-markup/${item.id}`} title="Посмотреть псевдоразметку на мозаике снимков" aria-label="Посмотреть псевдоразметку на мозаике снимков"><MapIcon size={15} /></a> : null}
+                      </span> : "—"}</td>
                       <td title="Создано">{pseudoCreatedLabel(item)}</td>
                       <td className="action-cell">
                         {item.job_id ? (

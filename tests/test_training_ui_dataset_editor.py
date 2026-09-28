@@ -1230,8 +1230,10 @@ def test_dataset_editor_returns_primary_network_pseudo_fragment(
         )
 
 
+@pytest.mark.parametrize("foreign_primary", [False, True])
 def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
     editor_environment: _EditorEnvironment,
+    foreign_primary: bool,
 ) -> None:
     env = editor_environment
     local_result_id = _create_primary_training_result(env)
@@ -1285,6 +1287,8 @@ def test_dataset_editor_reuses_latest_dataset_pseudo_without_explicit_primary(
         )
         session.add_all([newer_class_result, scenes_file, pseudo_file])
         session.flush()
+        if foreign_primary:
+            class_row.primary_training_result_id = newer_class_result.id
         session.add(
             PseudoMarkupResultRow(
                 dataset_key=dataset.key,
@@ -1886,6 +1890,150 @@ def test_dataset_editor_queues_one_urgent_scene_inference(
     assert lightweight.json()["job_id"] == str(job_id)
 
 
+def test_editor_never_falls_back_to_another_dataset_model(editor_environment):
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    with create_session_factory(get_config())() as session:
+        result = session.get(TrainingResultRow, result_id)
+        result.dataset_key = env.empty_dataset_key
+        # Даже устаревший class_key не должен перекрыть явный dataset_key.
+        result.class_key = env.dataset_key
+        session.commit()
+    url = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/scenes"
+    listing = env.client.get(url).json()
+    assert listing["dataset"]["primary_training_result_id"] is None
+    response = env.client.post(f"{url}/{quote(listing['scenes'][0]['annotation_name'], safe='')}/pseudo-markup")
+    assert response.status_code == 200
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["training_result_id"] is None
+    with create_session_factory(get_config())() as session:
+        assert not session.scalars(select(JobRow)).all()
+
+
+def test_editor_checkpoint_selection_ignores_primary_dataset(editor_environment, monkeypatch):
+    from mlsystem2.training_ui_api._pseudolabel import _select_model
+
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    monkeypatch.setattr("mlsystem2.training_ui_api._pseudolabel.get_usable_training_checkpoint", lambda *_: SimpleNamespace(
+        artifact_path="checkpoints/best.pt", artifact_uri="s3://artifacts/best.pt", threshold=0.5, f1_score=0.8, epoch=1))
+    with create_session_factory(get_config())() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        class_row = session.get(DatasetClassRow, dataset.class_id)
+        class_row.primary_dataset_id = None
+        session.flush()
+        selected = _select_model(session, get_config(), class_row.key, required=False, preferred_training_result_id=result_id)
+        assert selected is not None
+        assert selected.dataset_key == env.dataset_key
+        assert selected.result.id == result_id
+
+
+@pytest.mark.parametrize("source", ["snapshot", "report", "list"])
+def test_pseudo_viewer_uses_exact_images_including_empty_predictions(editor_environment, source):
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    config = get_config()
+    images = config.images_root / "kanopus"
+    selected = [images / "Olskij" / "SCN01.part.tif", images / "batch" / "SCN02.tif"]
+    for image in selected:
+        _write_raster(image, value=80, channels=3)
+    result, job = _create_viewer_result(env, result_id, selected, source)
+    response = env.client.get(f"/api/v1/results/pseudo-markup/{result}/view")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["training_result_id"] == str(result_id)
+    assert data["object_count"] == 0
+    assert data["expected_image_count"] == 2
+    assert data["warnings"] == []
+    assert {scene["name"] for scene in data["scenes"]} == {"kanopus/Olskij/SCN01.part.tif", "kanopus/batch/SCN02.tif"}
+    assert all(scene["has_alpha"] is False for scene in data["scenes"])
+    assert env.client.get(data["geojson_url"]).json()["features"] == []
+    raster = env.client.get(data["scenes"][0]["raster_url"], headers={"Range": "bytes=0-15"})
+    assert raster.status_code == 206 and len(raster.content) == 16
+    invalid = env.client.get(f"/api/v1/results/pseudo-markup/{result}/raster/not-in-result")
+    assert invalid.status_code == 400
+    env.client.cookies.clear()
+    assert env.client.get(data["scenes"][0]["raster_url"]).status_code == 401
+    assert env.client.get(f"/api/v1/results/pseudo-markup/{result}/view").status_code == 401
+
+
+def test_pseudo_viewer_preserves_alpha_and_reports_missing_images(editor_environment):
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    config = get_config()
+    image = config.images_root / "kanopus/batch/SCN02.tif"
+    _write_raster(image, value=80, channels=4)
+    with rasterio.open(image, "r+") as raster:
+        raster.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
+                              rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.alpha)
+    selected = [image, config.images_root / "missing.tif", config.images_root.parent / "outside.tif"]
+    result, _ = _create_viewer_result(env, result_id, selected, "snapshot")
+    response = env.client.get(f"/api/v1/results/pseudo-markup/{result}/view")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["scenes"]) == 1 and data["scenes"][0]["has_alpha"] is True
+    assert len(data["warnings"]) == 2
+    with create_session_factory(config)() as session:
+        session.get(PseudoMarkupResultRow, result).status = "error"
+        session.commit()
+    assert env.client.get(f"/api/v1/results/pseudo-markup/{result}/view").status_code == 400
+
+
+def test_pseudo_viewer_resolves_historical_ortho_list_without_job(editor_environment):
+    env = editor_environment
+    result_id = _create_primary_training_result(env)
+    config = get_config()
+    image = config.images_root / "orto" / "old.tif"
+    image.parent.mkdir()
+    _write_raster(image, value=80, channels=3)
+    result_id, _ = _create_viewer_result(env, result_id, [image], "list")
+    with create_session_factory(config)() as session:
+        result = session.get(PseudoMarkupResultRow, result_id)
+        result.job_id = None
+        Path(result.scenes_file.path).write_text("old.tif", encoding="utf-8")
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        session.get(DatasetClassRow, dataset.class_id).imagery_type = "ortho"
+        session.commit()
+    response = env.client.get(f"/api/v1/results/pseudo-markup/{result_id}/view")
+    assert response.status_code == 200, response.text
+    assert [scene["name"] for scene in response.json()["scenes"]] == ["orto/old.tif"]
+    assert response.json()["warnings"] == []
+
+
+def _create_viewer_result(env, training_result_id, images, source):
+    config = get_config()
+    config.stored_files_root.mkdir(parents=True, exist_ok=True)
+    geojson = config.stored_files_root / "viewer.geojson"
+    geojson.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    scenes = config.stored_files_root / "viewer.txt"
+    scenes.write_text("\n".join(path.relative_to(config.images_root).as_posix().removeprefix("kanopus/")
+                              for path in images if path.is_relative_to(config.images_root)), encoding="utf-8")
+    job_config = {"images_root": str(config.images_root / "kanopus")}
+    if source == "snapshot":
+        job_config["pseudo_processed_images"] = [str(path) for path in images]
+    report_dir = config.scratch_root / "viewer" / "scratch"
+    if source == "report":
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "report.json").write_text(json.dumps({"scenes": [
+            {"status": "ok", "image": str(path), "feature_count": 0} for path in images]}), encoding="utf-8")
+    with create_session_factory(config)() as session:
+        markup_file = StoredFileRow(kind="pseudo_markup_geojson", original_name=geojson.name,
+                                   path=str(geojson), size_bytes=geojson.stat().st_size, object_count=0)
+        scenes_file = StoredFileRow(kind="scenes_txt", original_name=scenes.name,
+                                   path=str(scenes), size_bytes=scenes.stat().st_size)
+        job = JobRow(type="inference", source="manual", status="completed", dataset_key=env.dataset_key,
+                     dataset_name="Реки / test", model_name="Тестовая сеть", architecture="smp_segformer_b0",
+                     config=job_config, queue_position=1, tmp_path=str(report_dir.parent) if source == "report" else None)
+        session.add_all([markup_file, scenes_file, job])
+        session.flush()
+        result = PseudoMarkupResultRow(dataset_key=env.dataset_key, training_result_id=training_result_id,
+                                      class_key=env.dataset_key, source_dataset_name="Реки / test", image_count=len(images),
+                                      scenes_file_id=scenes_file.id, geojson_file_id=markup_file.id, job_id=job.id, status="ok")
+        session.add(result)
+        session.commit()
+        return result.id, job.id
+
+
 def _create_primary_training_result(env: _EditorEnvironment):
     with create_session_factory(get_config())() as session:
         dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
@@ -1945,8 +2093,9 @@ def _write_raster(
     value: int,
     nodata_corner: bool = False,
     crs: str = "EPSG:3857",
+    channels: int = 1,
 ) -> None:
-    data = np.full((1, 8, 8), value, dtype=np.uint16)
+    data = np.full((channels, 8, 8), value, dtype=np.uint16)
     if nodata_corner:
         data[:, 6:, 6:] = 0
     with rasterio.open(
@@ -1955,7 +2104,7 @@ def _write_raster(
         driver="GTiff",
         width=8,
         height=8,
-        count=1,
+        count=channels,
         dtype="uint16",
         crs=crs,
         transform=from_origin(0, 8, 1, 1),

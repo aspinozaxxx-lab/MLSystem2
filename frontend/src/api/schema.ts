@@ -1551,6 +1551,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/pseudo-markup/{result_id}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pseudo Markup View */
+        get: operations["get_pseudo_markup_view_api_v1_results_pseudo_markup__result_id__view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pseudo Markup Raster */
+        get: operations["get_pseudo_markup_raster_api_v1_results_pseudo_markup__result_id__raster__scene_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/classes": {
         parameters: {
             query?: never;
@@ -3179,6 +3213,60 @@ export interface components {
             }[];
             /** By Type Download Url */
             by_type_download_url?: string | null;
+        };
+        /** PseudoMarkupSceneInfo */
+        PseudoMarkupSceneInfo: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Raster Url */
+            raster_url: string;
+            /** Bounds */
+            bounds: [
+                number,
+                number,
+                number,
+                number
+            ];
+            /**
+             * Has Alpha
+             * @default false
+             */
+            has_alpha: boolean;
+            /** Nodata */
+            nodata?: number | null;
+        };
+        /** PseudoMarkupViewInfo */
+        PseudoMarkupViewInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Training Result Id */
+            training_result_id?: string | null;
+            /** Model Name */
+            model_name: string;
+            /** Source Dataset Name */
+            source_dataset_name: string;
+            /** Training Dataset Name */
+            training_dataset_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Geojson Url */
+            geojson_url: string;
+            /** Object Count */
+            object_count?: number | null;
+            /** Expected Image Count */
+            expected_image_count?: number | null;
+            /** Scenes */
+            scenes: components["schemas"]["PseudoMarkupSceneInfo"][];
+            /** Warnings */
+            warnings: string[];
         };
         /**
          * PseudolabelClassInfo
@@ -7776,6 +7864,71 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pseudo_markup_view_api_v1_results_pseudo_markup__result_id__view_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudoMarkupViewInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pseudo_markup_raster_api_v1_results_pseudo_markup__result_id__raster__scene_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                Range?: string | null;
+            };
+            path: {
+                result_id: string;
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

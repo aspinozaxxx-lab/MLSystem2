@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
@@ -21,15 +22,35 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetResultsResponse,
     JobDetail,
     PseudoMarkupResultInfo,
+    PseudoMarkupViewInfo,
     ResultClassListResponse,
     ResultChangesResponse,
     TrainingResultInfo,
 )
 
 from .common import RouteContext
+from .._pseudo_viewer import pseudo_markup_raster, pseudo_markup_view
+from .._raster_http import raster_response
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get("/api/v1/results/pseudo-markup/{result_id}/view", response_model=PseudoMarkupViewInfo)
+    def get_pseudo_markup_view(
+        result_id: uuid.UUID,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> PseudoMarkupViewInfo:
+        return pseudo_markup_view(db, ctx.config, result_id)
+
+    @app.get("/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}")
+    def get_pseudo_markup_raster(
+        result_id: uuid.UUID, scene_id: str,
+        range_header: str | None = Header(default=None, alias="Range"),
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> StreamingResponse:
+        return raster_response(pseudo_markup_raster(db, ctx.config, result_id, scene_id), range_header)
+
     @app.get("/api/v1/results/classes", response_model=ResultClassListResponse)
     def get_result_classes(
         db: Session = Depends(ctx.get_db),

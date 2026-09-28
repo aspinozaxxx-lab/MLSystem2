@@ -1714,6 +1714,10 @@ def _finish_inference_job(
     has_geojson = output_path is not None and output_path.is_file()
     pseudo_results = _pseudo_markup_results(session, row)
     if succeeded and has_geojson:
+        processed_images = [str(item["image"]) for item in (report or {}).get("scenes", [])
+                            if item.get("status") == "ok" and item.get("image")]
+        if processed_images:
+            row.config = {**(row.config or {}), "pseudo_processed_images": list(dict.fromkeys(processed_images))}
         file_row = _store_generated_geojson(
             session,
             output_path,

@@ -388,7 +388,17 @@ def _select_model(
                 status_code=404,
             )
         return None
-    if not class_info.primary_dataset_key:
+    preferred_result = (
+        session.get(TrainingResultRow, preferred_training_result_id)
+        if preferred_training_result_id is not None else None
+    )
+    model_dataset_key = (
+        (preferred_result.dataset_key or preferred_result.class_key) if preferred_result is not None
+        else class_info.primary_dataset_key
+    )
+    if preferred_training_result_id is not None and preferred_result is None:
+        return None
+    if not model_dataset_key:
         if required:
             raise PseudolabelAPIError(
                 "PRIMARY_DATASET_NOT_FOUND",
@@ -396,9 +406,10 @@ def _select_model(
                 status_code=409,
             )
         return None
-    dataset = find_managed_dataset(session, config, class_info.primary_dataset_key)
+    dataset = find_managed_dataset(session, config, model_dataset_key)
     if (
         dataset is None
+        or dataset.class_key != class_info.key
         or not dataset.source_available
         or dataset.images_dir is None
         or dataset.imagery_type is None
@@ -413,7 +424,6 @@ def _select_model(
         return None
     class_row = dataset_class_row(session, class_info.key)
     if preferred_training_result_id is not None:
-        preferred_result = session.get(TrainingResultRow, preferred_training_result_id)
         rows = [preferred_result] if preferred_result is not None else []
     elif class_row is not None and class_row.primary_training_result_id is not None:
         effective_result = primary_training_result(session, class_info.key)

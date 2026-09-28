@@ -43,6 +43,33 @@ class PseudoMarkupResultInfo(BaseModel):
     by_type_download_url: str | None = None
 
 
+class PseudoMarkupSceneInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    raster_url: str
+    bounds: tuple[float, float, float, float]
+    has_alpha: bool = False
+    nodata: float | None = None
+
+
+class PseudoMarkupViewInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    training_result_id: UUID | None = None
+    model_name: str
+    source_dataset_name: str
+    training_dataset_name: str
+    created_at: datetime
+    geojson_url: str
+    object_count: int | None = None
+    expected_image_count: int | None = None
+    scenes: list[PseudoMarkupSceneInfo]
+    warnings: list[str]
+
+
 class TrainingResultTestF1Info(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -261,6 +288,8 @@ __all__ = [
     "CustomDatasetInfo",
     "PrimaryTestSampleInfo",
     "PseudoMarkupResultInfo",
+    "PseudoMarkupSceneInfo",
+    "PseudoMarkupViewInfo",
     "ResultClassInfo",
     "ResultClassListResponse",
     "ResultChangeInfo",

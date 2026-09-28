@@ -2211,3 +2211,4 @@
     grid-column: 1 / -1;
   }
 }
+.pseudo-download-actions { display: inline-flex; align-items: center; gap: 6px; }

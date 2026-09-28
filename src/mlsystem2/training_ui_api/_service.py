@@ -41,6 +41,7 @@ from ._automation import (
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
 from ._dataset_catalog import (
+    dataset_training_result,
     create_dataset_class as _create_dataset_class,
     create_managed_dataset as _create_managed_dataset,
     dataset_class_row,
@@ -122,7 +123,6 @@ from ._template_selection import (
 from ._test_samples import (
     TEST_SAMPLE_F1_OPERATION,
     dataset_test_sample_pseudo_markup,
-    dataset_test_sample_training_result,
     mark_test_samples_stale_for_pseudo_markup,
     pseudo_markup_covers_dataset,
     primary_test_sample,
@@ -1891,7 +1891,7 @@ def ensure_test_sample_batch_dataset_pseudo_markup_job(
     dataset = find_managed_dataset(session, config, dataset_key)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
-    training_result = dataset_test_sample_training_result(session, dataset.key)
+    training_result = dataset_training_result(session, dataset.key)
     if training_result is None:
         raise TrainingUIAPIError("Для датасета нет успешной обученной сети")
     ready = dataset_test_sample_pseudo_markup(

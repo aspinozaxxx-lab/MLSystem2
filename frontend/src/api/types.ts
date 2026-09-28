@@ -1,5 +1,7 @@
 import type { components } from "./schema";
 
+export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];
+
 export type AppLink = components["schemas"]["AppLink"];
 export type AutomationRuleInfo = components["schemas"]["AutomationRuleInfo"];
 export type AutomationSnapshot = components["schemas"]["AutomationSnapshot"];

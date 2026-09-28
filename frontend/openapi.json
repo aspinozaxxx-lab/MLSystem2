@@ -4132,6 +4132,109 @@
         }
       }
     },
+    "/api/v1/results/pseudo-markup/{result_id}/view": {
+      "get": {
+        "summary": "Get Pseudo Markup View",
+        "operationId": "get_pseudo_markup_view_api_v1_results_pseudo_markup__result_id__view_get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudoMarkupViewInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}": {
+      "get": {
+        "summary": "Get Pseudo Markup Raster",
+        "operationId": "get_pseudo_markup_raster_api_v1_results_pseudo_markup__result_id__raster__scene_id__get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/classes": {
       "get": {
         "summary": "Get Result Classes",
@@ -8582,6 +8685,158 @@
           "created_at"
         ],
         "title": "PseudoMarkupResultInfo"
+      },
+      "PseudoMarkupSceneInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "raster_url": {
+            "type": "string",
+            "title": "Raster Url"
+          },
+          "bounds": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds"
+          },
+          "has_alpha": {
+            "type": "boolean",
+            "title": "Has Alpha",
+            "default": false
+          },
+          "nodata": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "raster_url",
+          "bounds"
+        ],
+        "title": "PseudoMarkupSceneInfo"
+      },
+      "PseudoMarkupViewInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Training Result Id"
+          },
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          },
+          "source_dataset_name": {
+            "type": "string",
+            "title": "Source Dataset Name"
+          },
+          "training_dataset_name": {
+            "type": "string",
+            "title": "Training Dataset Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "geojson_url": {
+            "type": "string",
+            "title": "Geojson Url"
+          },
+          "object_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Count"
+          },
+          "expected_image_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Image Count"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/PseudoMarkupSceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "model_name",
+          "source_dataset_name",
+          "training_dataset_name",
+          "created_at",
+          "geojson_url",
+          "scenes",
+          "warnings"
+        ],
+        "title": "PseudoMarkupViewInfo"
       },
       "PseudolabelClassInfo": {
         "properties": {

@@ -86,3 +86,19 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
     assert TileSplitRequest.model_json_schema()["properties"]["test_fraction"]["default"] == 0.0
     assert TileDataloaderRequest.model_json_schema()["properties"]["mode"]["enum"] == ["train", "val", "test"]
     assert TrainConfig.model_fields["class_weights"].default_factory() == []
+
+
+def test_pseudo_markup_view_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import PseudoMarkupSceneInfo, PseudoMarkupViewInfo
+
+    assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "bounds", "has_alpha", "nodata"}
+    assert set(PseudoMarkupViewInfo.model_fields) == {
+        "id", "training_result_id", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
+        "geojson_url", "object_count", "expected_image_count", "scenes", "warnings",
+    }
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    assert set(paths["/api/v1/results/pseudo-markup/{result_id}/view"]) == {"get"}
+    assert set(paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]) == {"get"}

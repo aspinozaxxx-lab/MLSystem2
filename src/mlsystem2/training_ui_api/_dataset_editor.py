@@ -48,7 +48,7 @@ from ._combined_dataset import (
     tree_revision,
 )
 from ._dataset_catalog import (
-    dataset_class_row,
+    dataset_training_result,
     find_managed_dataset,
     list_managed_datasets,
 )
@@ -73,7 +73,6 @@ from ._managed_datasets import (
 )
 from ._pseudolabel import _select_model
 from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
-from ._test_samples import current_primary_training_result
 from .contracts import (
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
@@ -221,10 +220,9 @@ def list_editor_datasets(
                             "materialization_error": str(exc),
                         }
                     )
-                primary = _editor_effective_training_result(
+                primary = dataset_training_result(
                     session,
                     dataset.key,
-                    dataset.class_key or dataset.key,
                 )
                 result.append(
                     _editor_dataset_info(
@@ -246,10 +244,9 @@ def list_editor_datasets(
                 continue
             if dataset.annotations_dir is None and not geojson_files:
                 continue
-            primary = _editor_effective_training_result(
+            primary = dataset_training_result(
                 session,
                 dataset.key,
-                dataset.class_key or dataset.key,
             )
             result.append(
                 _editor_dataset_info(
@@ -335,10 +332,9 @@ def list_editor_scenes(
             _scene_infos(config, dataset, source_dir),
             username,
         )
-        primary = _editor_effective_training_result(
+        primary = dataset_training_result(
             session,
             dataset.key,
-            dataset.class_key or dataset.key,
         )
         return DatasetEditorSceneListResponse(
             dataset=_editor_dataset_info(
@@ -521,11 +517,11 @@ def editor_scene_pseudo_markup(
         image_path = _matched_image_path(dataset, source_dir, annotation_name).resolve()
 
     class_key = dataset.class_key or dataset.key
-    primary = _editor_effective_training_result(session, dataset.key, class_key)
+    primary = dataset_training_result(session, dataset.key)
     if primary is None:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
-            message="Для класса нет успешной сети.",
+            message="На этом датасете ещё нет успешной сети. Обучите сеть на выбранном датасете.",
         )
     compatibility_error = _editor_pseudo_compatibility_error(dataset, primary)
     if compatibility_error is not None:
@@ -729,10 +725,9 @@ def editor_pseudo_job_info(
             job_id=row.id,
             message="Основная сеть задания больше недоступна.",
         )
-    current_primary = _editor_effective_training_result(
+    current_primary = dataset_training_result(
         session,
         str(row.dataset_key or ""),
-        str(state.get("class_id") or ""),
     )
     if current_primary is None or current_primary.id != training_result.id:
         return DatasetEditorPseudoMarkupInfo(
@@ -2147,39 +2142,6 @@ def _editor_pseudo_compatibility_error(
         if actual != expected:
             return "Схема типов основной сети не совпадает со схемой датасета."
     return None
-
-
-def _editor_effective_training_result(
-    session: Session,
-    dataset_key: str,
-    class_key: str,
-) -> TrainingResultRow | None:
-    """Выбрать сеть для подсказки редактора без неявного назначения звезды."""
-
-    class_row = dataset_class_row(session, class_key or dataset_key)
-    if class_row is not None and class_row.primary_training_result_id is not None:
-        selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
-        if selected is not None and selected.status == ResultStatus.OK.value:
-            return selected
-    local_result = session.scalar(
-        select(TrainingResultRow)
-        .where(
-            (
-                (TrainingResultRow.dataset_key == dataset_key)
-                | (TrainingResultRow.class_key == dataset_key)
-            ),
-            TrainingResultRow.status == ResultStatus.OK.value,
-        )
-        .order_by(
-            TrainingResultRow.trained_at.desc().nullslast(),
-            TrainingResultRow.created_at.desc(),
-            TrainingResultRow.id.desc(),
-        )
-        .limit(1)
-    )
-    if local_result is not None:
-        return local_result
-    return current_primary_training_result(session, class_key or dataset_key)
 
 
 def _latest_covering_pseudo_result(

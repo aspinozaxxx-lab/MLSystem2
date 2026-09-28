@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import (
     dataset_class_row,
+    dataset_training_result,
     find_managed_dataset,
     list_managed_datasets,
     primary_training_result,
@@ -334,7 +335,7 @@ def test_sample_batch_options(
             continue
         class_key = dataset.class_key or dataset.key
         class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
-        training_result = dataset_test_sample_training_result(session, dataset.key)
+        training_result = dataset_training_result(session, dataset.key)
         option = _test_sample_batch_dataset_option(
             session,
             dataset,
@@ -503,7 +504,7 @@ def create_test_sample_batch(
                 f"{dataset.name}: исключать объекты на границе тайла можно только "
                 "для объектовой метрики F1."
             )
-        training_result = dataset_test_sample_training_result(session, dataset.key)
+        training_result = dataset_training_result(session, dataset.key)
         if training_result is None:
             raise TrainingUIAPIError(f"{dataset.name}: для датасета нет успешной обученной сети.")
         if item.training_result_id is not None and item.training_result_id != training_result.id:
@@ -2731,7 +2732,7 @@ def latest_pseudo_markup(
     """
 
     del class_key, dataset_version
-    training_result = dataset_test_sample_training_result(session, dataset_key)
+    training_result = dataset_training_result(session, dataset_key)
     if training_result is None:
         return None
     return dataset_test_sample_pseudo_markup(
@@ -2740,46 +2741,6 @@ def latest_pseudo_markup(
         training_result.id,
         config=config,
     )
-
-
-def dataset_test_sample_training_result(
-    session: Session,
-    dataset_key: str,
-) -> TrainingResultRow | None:
-    """Вернуть явно выбранную либо последнюю успешную сеть конкретного датасета."""
-
-    class_row = dataset_class_row(session, dataset_key)
-    if class_row is not None and class_row.primary_training_result_id is not None:
-        selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
-        if (
-            selected is not None
-            and selected.status == "ok"
-            and _training_result_belongs_to_dataset(selected, dataset_key)
-        ):
-            return selected
-    return session.scalar(
-        select(TrainingResultRow)
-        .where(
-            (
-                (TrainingResultRow.dataset_key == dataset_key)
-                | (TrainingResultRow.class_key == dataset_key)
-            ),
-            TrainingResultRow.status == "ok",
-        )
-        .order_by(
-            TrainingResultRow.trained_at.desc().nullslast(),
-            TrainingResultRow.created_at.desc(),
-            TrainingResultRow.id.desc(),
-        )
-        .limit(1)
-    )
-
-
-def _training_result_belongs_to_dataset(
-    result: TrainingResultRow,
-    dataset_key: str,
-) -> bool:
-    return result.dataset_key == dataset_key or result.class_key == dataset_key
 
 
 def dataset_test_sample_pseudo_markup(
@@ -2829,7 +2790,7 @@ def test_sample_source_training_result(
         if result is not None and result.status == "ok":
             return result
         return None
-    return dataset_test_sample_training_result(session, row.dataset_key)
+    return dataset_training_result(session, row.dataset_key)
 
 
 def test_sample_source_pseudo_markup(
@@ -4661,7 +4622,6 @@ __all__ = [
     "create_test_sample_batch",
     "current_primary_training_result",
     "dataset_test_sample_pseudo_markup",
-    "dataset_test_sample_training_result",
     "delete_test_sample",
     "evaluate_test_sample_by_id",
     "evaluate_test_sample_preview",

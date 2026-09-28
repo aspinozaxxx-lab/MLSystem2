@@ -2435,11 +2435,11 @@ export function DatasetEditorPage({
                       className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
                       disabled={pseudoRequestPending}
-                      aria-label={pseudoVisible ? "Скрыть псевдоразметку основной сети" : "Показать псевдоразметку основной сети"}
+                      aria-label={pseudoVisible ? "Скрыть псевдоразметку сети датасета" : "Показать псевдоразметку сети датасета"}
                       aria-pressed={pseudoVisible}
                       title={pseudoVisible
-                        ? "Скрыть псевдоразметку текущей основной сети"
-                        : "Показать псевдоразметку текущей основной сети; если её нет, запустить срочный инференс по снимку"}
+                        ? "Скрыть псевдоразметку сети этого датасета"
+                        : "Основная сеть, обученная на этом датасете, или его последняя успешная сеть. Если готовой псевдоразметки нет, запустить распознавание снимка"}
                       onClick={togglePseudoMarkup}
                     >
                       <Layers size={17} />

@@ -1,0 +1,36 @@
+.pseudo-viewer { padding: 22px; }
+.pseudo-back { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.pseudo-viewer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.pseudo-viewer-heading h1 { font-size: 25px; margin: 0 0 6px; }
+.pseudo-viewer-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+.pseudo-model { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; margin: 14px 0; color: var(--muted); }
+.pseudo-model strong { color: var(--text); font-weight: 500; }
+.pseudo-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 14px 0; font-size: 13px; }
+.pseudo-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
+.pseudo-toolbar input[type="checkbox"] { width: auto; margin: 0; }
+.pseudo-toolbar input[type="range"] { width: 110px; padding: 0; accent-color: #6d28d9; }
+.pseudo-viewer-body { display: grid; grid-template-columns: 245px minmax(0, 1fr); gap: 14px; }
+.pseudo-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: max(480px, calc(100vh - 310px)); }
+.pseudo-sidebar h2 { font-size: 15px; margin: 0 0 12px; }
+.pseudo-sidebar h2 span { color: var(--muted); font-weight: 400; }
+.pseudo-sidebar input { font-size: 12px; min-height: 34px; }
+.pseudo-scene-list { overflow-y: auto; margin-top: 8px; }
+.pseudo-scene-list button { display: block; width: 100%; text-align: left; font-size: 11px; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); overflow-wrap: anywhere; }
+.pseudo-scene-list button:hover, .pseudo-scene-list button:focus-visible { background: var(--surface-soft); }
+.pseudo-map-area { position: relative; min-width: 0; }
+.pseudo-map { height: max(480px, calc(100vh - 310px)); background: #111827; border-radius: 10px; overflow: hidden; }
+.pseudo-map .ol-zoom button { width: 28px; height: 28px; }
+.pseudo-map-legend { position: absolute; left: 12px; bottom: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+.pseudo-map-legend button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; pointer-events: auto; }
+.pseudo-map-legend button[aria-pressed="false"] { opacity: 0.55; text-decoration: line-through; }
+.pseudo-map-legend button span { width: 9px; height: 9px; border-radius: 50%; }
+.pseudo-map-legend small, .pseudo-hint { color: var(--muted); }
+.pseudo-hint { font-size: 12px; margin-bottom: 0; }
+.pseudo-empty { position: absolute; top: 12px; right: 12px; padding: 8px 12px; border-radius: 6px; background: var(--surface); font-size: 13px; }
+@media (max-width: 800px) {
+  .pseudo-viewer { padding: 14px; }
+  .pseudo-viewer-body { grid-template-columns: 1fr; }
+  .pseudo-sidebar { max-height: 150px; }
+  .pseudo-viewer-heading { align-items: flex-start; }
+  .pseudo-viewer-heading h1 { font-size: 21px; }
+}
