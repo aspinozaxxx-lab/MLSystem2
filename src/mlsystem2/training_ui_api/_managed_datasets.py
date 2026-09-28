@@ -44,7 +44,7 @@ from .contracts import ManagedDatasetSourceInfo, TrainingUIAPIError
 SOURCE_MANAGED = "managed"
 _MANAGED_CACHE_FOLDER = "managed-datasets"
 _MANAGED_DATASET_VERSION_ALGORITHM = 2
-_MANAGED_MATERIALIZATION_ALGORITHM = 4
+_MANAGED_MATERIALIZATION_ALGORITHM = 5
 _MATERIALIZATION_SUMMARY = ".mlsystem2-materialization.json"
 _MATERIALIZATION_REQUESTS = "_requests"
 _MATERIALIZATION_LOCK_TIMEOUT_SECONDS = 2 * 60 * 60
@@ -716,7 +716,7 @@ def _scan_materialization_counts(
             properties = feature.get("properties") or {}
             if properties.get("_mlsystem2_role") == "hard_negative":
                 hard_negative_count += 1
-            else:
+            elif properties.get("_mlsystem2_role", "positive") == "positive":
                 slug = properties.get("_mlsystem2_class")
                 if slug in class_counts:
                     class_counts[str(slug)] += 1

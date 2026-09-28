@@ -43,6 +43,10 @@ class TileSceneSource(BaseModel):
     image_path: str | Path
     annotation_file: str | Path | None = None
     footprint_file: str | Path | None = None
+    parent_scene_id: str | None = None
+    zone_id: str | None = None
+    region_geometry: dict | None = None
+    region_window: tuple[int, int, int, int] | None = None
 
 
 class TileSplitRequest(BaseModel):

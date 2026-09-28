@@ -2110,6 +2110,11 @@ export interface components {
             positive_count: number;
             /** Hard Negative Count */
             hard_negative_count: number;
+            /**
+             * Annotation Zone Count
+             * @default 0
+             */
+            annotation_zone_count: number;
             /** Class Counts */
             class_counts?: {
                 [key: string]: number;
@@ -2146,6 +2151,11 @@ export interface components {
             positive_count: number;
             /** Hard Negative Count */
             hard_negative_count: number;
+            /**
+             * Annotation Zone Count
+             * @default 0
+             */
+            annotation_zone_count: number;
             /** Class Counts */
             class_counts?: {
                 [key: string]: number;
@@ -2402,6 +2412,11 @@ export interface components {
             positive_count: number;
             /** Hard Negative Count */
             hard_negative_count: number;
+            /**
+             * Annotation Zone Count
+             * @default 0
+             */
+            annotation_zone_count: number;
             /** Revision */
             revision: string;
             /** Class Counts */

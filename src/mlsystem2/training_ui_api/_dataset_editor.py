@@ -107,7 +107,7 @@ from .contracts import (
 
 _ROLE_PROPERTY = "_mlsystem2_role"
 _CLASS_PROPERTY = "_mlsystem2_class"
-_ROLES = {"positive", "hard_negative"}
+_ROLES = {"positive", "hard_negative", "annotation_zone"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40,64}")
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
@@ -2753,7 +2753,7 @@ def _publish_managed_editor_scenes(
                 [old_source]
                 if old_source is not None
                 else (
-                    source_specs if old_feature is not None and old_role == "hard_negative" else []
+                    source_specs if old_feature is not None and old_role in {"hard_negative", "annotation_zone"} else []
                 )
             )
             new_sources = []
@@ -3093,8 +3093,9 @@ def _scene_info_for_annotation(
             revision = _blob_revision(config, "HEAD", relative_annotation)
     if revision is None:
         raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {annotation_path.name}")
+    payload = _read_geojson(annotation_path)
     positive, hard_negative, class_counts = _editor_counts(
-        _read_geojson(annotation_path),
+        payload,
         dataset,
     )
     root = _dataset_images_root(dataset)
@@ -3113,6 +3114,7 @@ def _scene_info_for_annotation(
         hard_negative_count=hard_negative,
         revision=revision,
         class_counts=class_counts,
+        annotation_zone_count=_zone_count(payload),
     )
 
 
@@ -3213,6 +3215,7 @@ def _draft_summary(
         hard_negative_count=hard_negative,
         class_counts=class_counts,
         updated_at=row.updated_at,
+        annotation_zone_count=_zone_count(dict(row.geojson)),
     )
 
 
@@ -3397,7 +3400,7 @@ def _validate_editor_geojson(
         properties = feature.get("properties")
         if not isinstance(properties, dict) or properties.get(_ROLE_PROPERTY) not in _ROLES:
             raise TrainingUIAPIError(
-                f"У объекта {index} должна быть явная роль positive или hard_negative"
+                f"У объекта {index} должна быть роль positive, hard_negative или annotation_zone"
             )
         role = str(properties[_ROLE_PROPERTY])
         class_slug = properties.get(_CLASS_PROPERTY)
@@ -3406,7 +3409,7 @@ def _validate_editor_geojson(
                 raise TrainingUIAPIError(
                     f"У positive-объекта {index} должен быть один из классов датасета"
                 )
-        elif dataset.task == "multiclass" and role == "hard_negative" and dataset.managed:
+        elif dataset.task == "multiclass" and role in {"hard_negative", "annotation_zone"} and dataset.managed:
             if class_slug is not None and class_slug not in known_slugs:
                 raise TrainingUIAPIError(
                     f"У hard negative объекта {index} указан неизвестный исходный класс"
@@ -3548,6 +3551,8 @@ def _clip_geojson_to_footprint(
                 f"Не удалось обрезать геометрию объекта {index}: {exc}"
             ) from exc
         if geometry.is_empty:
+            if (feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone":
+                raise TrainingUIAPIError(f"Размеченная зона {index} не содержит территории снимка. Измените её границы или явно удалите зону.")
             continue
         clipped_features.append({**feature, "geometry": dict(mapping(geometry))})
     return {**payload, "features": clipped_features}
@@ -3645,9 +3650,16 @@ def _role_counts(payload: dict[str, Any]) -> tuple[int, int]:
             positive += 1
         elif role == "hard_negative":
             hard_negative += 1
+        elif role == "annotation_zone":
+            continue
         else:
             raise TrainingUIAPIError(f"Неизвестная роль объекта: {role}")
     return positive, hard_negative
+
+
+def _zone_count(payload: dict[str, Any]) -> int:
+    return sum((feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone"
+               for feature in payload.get("features", []) if isinstance(feature, dict))
 
 
 def _editor_counts(
@@ -3731,7 +3743,7 @@ def _normalize_editor_geojson(
         else:
             properties.setdefault("_mlsystem2_origin_key", f"manual:{feature_id}")
             properties.setdefault("_mlsystem2_source_path", "manual")
-        if properties.get(_ROLE_PROPERTY) == "hard_negative" and not dataset.managed:
+        if properties.get(_ROLE_PROPERTY) in {"hard_negative", "annotation_zone"} and not dataset.managed:
             properties.pop(_CLASS_PROPERTY, None)
         feature["properties"] = properties
         features.append(feature)

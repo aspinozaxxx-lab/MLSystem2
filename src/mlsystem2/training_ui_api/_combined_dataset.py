@@ -206,7 +206,7 @@ def build_combined_dataset(
                     class_counts[item.class_slug] += 1
                 else:
                     properties.pop("_mlsystem2_class", None)
-                    hard_negative_count += 1
+                    hard_negative_count += item.role == "hard_negative"
                 target = {
                     "type": "Feature",
                     "id": target_id,
@@ -345,6 +345,8 @@ def _build_per_image_combined_dataset(
                 transformed = transform_geometry(transformer.transform, item.geometry_wgs84)
                 clipped = _polygonal(transformed.intersection(footprint))
                 if clipped.is_empty or clipped.area <= 0:
+                    if item.role == "annotation_zone":
+                        raise TrainingUIAPIError(f"Размеченная зона вне фактического снимка: {annotation_name}")
                     continue
                 transformed_features.append((item, clipped))
             if manifest.managed:
@@ -393,7 +395,7 @@ def _build_per_image_combined_dataset(
                         properties["_mlsystem2_class"] = item.class_slug
                     else:
                         properties.pop("_mlsystem2_class", None)
-                    hard_negative_count += 1
+                    hard_negative_count += item.role == "hard_negative"
                 target = {
                     "type": "Feature",
                     "id": target_id,
@@ -465,16 +467,20 @@ def _load_per_image_source_features(
         except Exception:  # noqa: BLE001
             geometry = Polygon()
         if geometry.is_empty or geometry.area <= 0:
+            if (feature.get("properties") or {}).get("_mlsystem2_role") == "annotation_zone":
+                raise TrainingUIAPIError(f"Пустая размеченная зона: {relative}#{index}")
             warnings_list.append(f"Пропущена пустая геометрия {relative}#{index}")
             continue
         geometry_wgs84 = _polygonal(transform_geometry(transformer.transform, geometry))
         if geometry_wgs84.is_empty or geometry_wgs84.area <= 0:
+            if (feature.get("properties") or {}).get("_mlsystem2_role") == "annotation_zone":
+                raise TrainingUIAPIError(f"Размеченная зона потеряна при преобразовании CRS: {relative}#{index}")
             warnings_list.append(f"Пропущена геометрия после преобразования {relative}#{index}")
             continue
         raw_properties = feature.get("properties")
         properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
         role = str(properties.get("_mlsystem2_role") or "positive")
-        if role not in {"positive", "hard_negative"}:
+        if role not in {"positive", "hard_negative", "annotation_zone"}:
             warnings_list.append(f"Пропущена неизвестная роль {relative}#{index}: {role}")
             continue
         clean_properties = {
@@ -704,7 +710,7 @@ def _apply_target_priorities(
             hard_negatives.append((feature, geometry))
 
     occupied: BaseGeometry = Polygon()
-    output: list[tuple[_SourceFeature, BaseGeometry]] = []
+    output: list[tuple[_SourceFeature, BaseGeometry]] = [item for item in features if item[0].role == "annotation_zone"]
     for _group, group_features in sorted(
         positive_groups.items(),
         key=lambda item: (-item[0][0], item[0][1]),
@@ -733,14 +739,14 @@ def _collapse_managed_hard_negatives(
     features: list[tuple[_SourceFeature, BaseGeometry]],
     class_slugs: set[str],
 ) -> list[tuple[_SourceFeature, BaseGeometry]]:
-    positives = [item for item in features if item[0].role != "hard_negative"]
+    positives = [item for item in features if item[0].role not in {"hard_negative", "annotation_zone"}]
     groups: dict[str, list[tuple[_SourceFeature, BaseGeometry]]] = {}
     for feature, geometry in features:
-        if feature.role != "hard_negative":
+        if feature.role not in {"hard_negative", "annotation_zone"}:
             continue
         key = hashlib.sha256(
             (
-                f"{feature.source_origin_key or feature.origin_key}:"
+                f"{feature.role}:{feature.source_origin_key or feature.origin_key}:"
                 f"{hashlib.sha256(geometry.wkb).hexdigest()}"
             ).encode("utf-8")
         ).hexdigest()

@@ -8,6 +8,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 `npm run generate:api --prefix frontend`, production static собирается в `frontend/dist`, а сервер Node.js
 на проде не нужен.
 
+Главная показывает новости пользовательского функционала из `frontend/src/News.tsx`; статья открывается
+по `#/news/<slug>` и поддерживает шаги, пояснения и изображения из `frontend/public/news/`. Статьи обязательны
+при изменении функционала и выходят с кодом. Таблица последних событий сохраняется только в результатах.
+
 ## Публичный интерфейс
 
 - `create_app() -> Any` - создает FastAPI-приложение.
@@ -16,6 +20,8 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `worker_main() -> None` - отдельно запускает исполнителей общей очереди и batch-задач тестовых разметок.
 
 ## Публичные контракты
+
+`DatasetEditorSceneInfo`, `DatasetEditorDraftSummary` и унаследованный `DatasetEditorDraftInfo` содержат `annotation_zone_count=0`. В GeoJSON редактора поддержана служебная роль `annotation_zone`, optional `_mlsystem2_class` задаёт исходный класс управляемого датасета. Отсутствие класса означает все источники. Зоны проходят штатные черновики, публикацию, копирование и пересборку, отдельно отображаются и считаются; новые endpoints и таблицы не вводятся. `dataset_preparing.api.annotation_regions` ограничивает создаваемые эталонные тайлы размеченной территорией; обычная псевдоразметка остаётся поснимочной.
 
 `ConfigSchema.pipeline_descriptions` содержит подробные описания профилей.
 `ConfigSchema.pipeline_defaults` содержит серверные наборы параметров при переключении конвейера;

@@ -117,6 +117,7 @@ import {
 
 import { ConfigEditor } from "./ConfigEditor";
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
+import { NewsPage, NewsSection } from "./News";
 import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
@@ -295,6 +296,7 @@ function RoutedPage(props: {
   registerRouteGuard: (guard: (() => boolean) | null) => void;
 }) {
   const [head, second] = props.route;
+  if (head === "news") return <NewsPage slug={second} />;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;
@@ -524,15 +526,8 @@ function LoadingPage({ text, branded = false }: { text: string; branded?: boolea
   return <section className="panel">{status}</section>;
 }
 
-function HomePage({ bootstrap, run, showJobLog }: RoutedPageProps) {
-  const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
+function HomePage({ bootstrap }: RoutedPageProps) {
   const links = useMemo(() => Object.fromEntries(bootstrap.links.map((item) => [item.key, item])), [bootstrap.links]);
-
-  useEffect(() => {
-    void run(() => apiJson<ResultChangesResponse>("/results/changes")).then((payload) => {
-      if (payload) setChanges(payload.changes || []);
-    });
-  }, [run]);
 
   return (
     <>
@@ -555,10 +550,7 @@ function HomePage({ bootstrap, run, showJobLog }: RoutedPageProps) {
           </span>
         </a>
       </section>
-      <section className="panel">
-        <PanelHeader title="Последние изменения" subtitle="Training и pseudo-markup события" />
-        <ResultChangesTable changes={changes} showJobLog={showJobLog} />
-      </section>
+      <NewsSection />
     </>
   );
 }

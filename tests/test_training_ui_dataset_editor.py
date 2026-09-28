@@ -1382,8 +1382,10 @@ def test_dataset_editor_reuses_migrated_pseudo_when_legacy_scene_list_is_deleted
         )
 
 
+@pytest.mark.parametrize("new_role", ["positive", "annotation_zone"])
 def test_managed_dataset_publication_writes_new_object_to_selected_source(
     editor_environment: _EditorEnvironment,
+    new_role: str,
 ) -> None:
     env = editor_environment
     annotation_name = env.live_annotation.name
@@ -1489,7 +1491,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
             "type": "Feature",
             "id": "new-lake",
             "properties": {
-                "_mlsystem2_role": "positive",
+                "_mlsystem2_role": new_role,
                 "_mlsystem2_class": lake_type["slug"],
             },
             "geometry": {
@@ -1514,7 +1516,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     saved = json.loads((editor_second / annotation_name).read_text(encoding="utf-8"))
     assert (
         sum(feature["properties"]["_mlsystem2_role"] == "positive" for feature in saved["features"])
-        == 2
+        == (2 if new_role == "positive" else 1)
     )
     assert any(feature.get("id") == "new-lake" for feature in saved["features"])
     assert not (env.editor_root / "Реки и озера" / "main").exists()
@@ -1564,6 +1566,11 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     added_payload = added_detail.json()["geojson"]
     added_payload["features"] = [
         {
+            "type": "Feature", "id": "shared-annotation-zone",
+            "properties": {"_mlsystem2_role": "annotation_zone"},
+            "geometry": mapping(box(0.5, 0.5, 7, 7)),
+        },
+        {
             "type": "Feature",
             "id": "managed-lake",
             "properties": {
@@ -1612,10 +1619,11 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert published_added.status_code == 200, published_added.text
     river_features = json.loads(river_target.read_text(encoding="utf-8"))["features"]
     lake_features = json.loads(lake_target.read_text(encoding="utf-8"))["features"]
-    assert [item["properties"]["_mlsystem2_role"] for item in river_features] == ["hard_negative"]
+    assert {item["properties"]["_mlsystem2_role"] for item in river_features} == {"hard_negative", "annotation_zone"}
     assert {item["properties"]["_mlsystem2_role"] for item in lake_features} == {
         "positive",
         "hard_negative",
+        "annotation_zone",
     }
     assert (
         sum(item["properties"]["_mlsystem2_role"] == "hard_negative" for item in lake_features) == 2
@@ -1626,6 +1634,9 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         assert process_next_managed_materialization(session, get_config()) is True
         session.commit()
     refreshed_added = env.client.get(added_detail_url).json()
+    assert refreshed_added["scene"]["annotation_zone_count"] == 1
+    common_zone = next(item for item in refreshed_added["geojson"]["features"] if item["properties"]["_mlsystem2_role"] == "annotation_zone")
+    assert "_mlsystem2_class" not in common_zone["properties"]
     assert refreshed_added["scene"]["positive_count"] == 1
     assert refreshed_added["scene"]["hard_negative_count"] == 2
     materialized_negatives = [

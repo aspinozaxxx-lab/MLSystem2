@@ -33,7 +33,7 @@ from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from sqlalchemy.orm import Session
 
-from mlsystem2.dataset_preparing.api import resolve_scene_images
+from mlsystem2.dataset_preparing.api import annotation_regions, resolve_scene_images
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from ._config import TrainingUIAPIConfig
@@ -897,6 +897,8 @@ def _annotations_from_payload(
         properties = raw_feature.get("properties")
         normalized_properties = dict(properties) if isinstance(properties, dict) else {}
         role = normalized_properties.get("_mlsystem2_role", "positive")
+        if role == "annotation_zone":
+            continue
         if role not in {"positive", "hard_negative"}:
             raise TrainingUIAPIError(
                 f"Неизвестная роль объекта _mlsystem2_role: {role}"
@@ -1070,6 +1072,11 @@ def _build_candidates(
                     raster_crs,
                     transformed_cache,
                 )
+                zones = annotation_regions(source_annotations.payload, [item["slug"] for item in source_annotations.payload.get("_mlsystem2_classes", [])])
+                training_regions = None if zones is None else [
+                    _transform_between_crs(shape(zone.geometry), source_annotations.crs, raster_crs)
+                    for zone in zones
+                ]
                 image_footprint = box(*dataset.bounds)
                 feature_indices = transformed.tree.query(
                     image_footprint,
@@ -1094,6 +1101,8 @@ def _build_candidates(
                             continue
                         window = Window(column, row, tile_width, tile_height)
                         raster_footprint = box(*window_bounds(window, dataset.transform))
+                        if training_regions is not None and not any(region.covers(raster_footprint) for region in training_regions):
+                            continue
                         if clipped_to_image.intersection(raster_footprint).area <= 0.0:
                             continue
                         if not _window_is_fully_valid(dataset, window):

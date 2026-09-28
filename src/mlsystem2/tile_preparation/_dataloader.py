@@ -654,8 +654,8 @@ def _seed_tile_worker(worker_id: int) -> None:
 
         cv2.setNumThreads(1)
         cv2.ocl.setUseOpenCL(False)
-        transform = worker_info.dataset._notebook_transform
-        if transform is not None:
+        for transform in (worker_info.dataset._notebook_transform, getattr(worker_info.dataset, "_zone_transform", None)):
             # Compose хранит собственные генераторы и не использует np.random.seed.
             # PyTorch назначает новые worker seeds при каждом создании итератора эпохи.
-            transform.set_random_seed(worker_seed)
+            if transform is not None:
+                transform.set_random_seed(worker_seed)

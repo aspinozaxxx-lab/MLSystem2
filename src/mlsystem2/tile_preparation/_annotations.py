@@ -88,6 +88,8 @@ def load_annotation_index(
 
     geometries: list[Polygon | MultiPolygon] = []
     for feature_index, feature in enumerate(payload.get("features", []), start=1):
+        if isinstance(feature, dict) and (feature.get("properties") or {}).get("_mlsystem2_role") == "annotation_zone":
+            continue
         if role is not None:
             feature_role = _feature_role(feature, path, feature_index)
             if feature_role != role:

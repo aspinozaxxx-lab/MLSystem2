@@ -9,6 +9,26 @@ import {
   isEditorFeatureVisible,
   pseudoMarkupStyle,
 } from "./DatasetEditorPage";
+import { featureCounts, featureClassCounts } from "./utils/datasetEditor";
+
+
+describe("размеченные зоны", () => {
+  it("не считает зоны объектами класса", () => {
+    const geojson = { features: [
+      { properties: { _mlsystem2_role: "annotation_zone", _mlsystem2_class: "water" } },
+      { properties: { _mlsystem2_role: "positive", _mlsystem2_class: "water" } },
+    ] };
+    expect(featureCounts(geojson)).toEqual({ total: 1, positive: 1, hardNegative: 0 });
+    expect(featureClassCounts(geojson)).toEqual({ water: 1 });
+  });
+
+  it("переключает видимость зоны независимо от объектов и не превращает прогноз в зону", () => {
+    const zone = new Feature({ _mlsystem2_role: "annotation_zone", geometry: new Polygon([[[0, 0], [1, 0], [1, 1], [0, 0]]]) });
+    expect(isEditorFeatureVisible(zone, [], { hiddenClasses: new Set(["positive"]), highlightedClass: null })).toBe(true);
+    expect(isEditorFeatureVisible(zone, [], { hiddenClasses: new Set(["annotation_zone"]), highlightedClass: null })).toBe(false);
+    expect(clonePseudoFeatureForDraft(zone, "annotation_zone", { task: "binary", object_types: [] })).toBeNull();
+  });
+});
 
 
 describe("стиль псевдоразметки редактора датасета", () => {

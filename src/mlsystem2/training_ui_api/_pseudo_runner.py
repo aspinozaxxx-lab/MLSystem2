@@ -826,7 +826,7 @@ def _test_tile_class_instance_masks(
             continue
         properties = feature.get("properties")
         properties = properties if isinstance(properties, dict) else {}
-        if properties.get("_mlsystem2_role") == "hard_negative":
+        if properties.get("_mlsystem2_role", "positive") != "positive":
             continue
         slug = (
             properties.get("_mlsystem2_class")

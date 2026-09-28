@@ -29,6 +29,8 @@
 
 ## Алгоритм работы и его особенности
 
+Оркестратор передаёт описание виртуальных зон из PreparedScene в TileSceneSource. Родительская сцена, ID, геометрия и пиксельное окно входят в идентичность датасета и артефакты разбиения; исторические незональные ревизии сохраняют прежний расчёт.
+
 `object_f1` использует профиль next-gen2, но scene_groups 60/20/20 и instance masks во всех loaders. Подготовка разрешает RGB+alpha, loader получает число модельных каналов. ModelSpec содержит output_layout, object_separation, boundary_width, input_channel_policy и версию экспорта; metric tag — val/object_f1. Split manifest и метрики по полным снимкам сохраняются.
 
 Для `next_gen2` оркестратор создаёт train/val/test loaders: полные окна 512/768/1024/1536 с шагом в половину окна, случайное

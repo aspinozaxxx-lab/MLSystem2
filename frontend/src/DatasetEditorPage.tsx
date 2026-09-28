@@ -386,6 +386,9 @@ export function DatasetEditorPage({
     [scenes],
   );
   const activeDraft = annotationName ? drafts[annotationName] : undefined;
+  const zoneMode = isZoneSelection(role);
+  const activeZoneCount = ((activeDraft?.current.geojson.features || []) as JsonObject[])
+    .filter((feature) => (feature.properties as JsonObject | undefined)?.[ROLE_PROPERTY] === "annotation_zone").length;
   const objectTypeChoices = useMemo(
     () => selectedDataset?.object_types || [],
     [selectedDataset],
@@ -1130,7 +1133,8 @@ export function DatasetEditorPage({
     });
     const select = new Select({
       layers: [vectorLayer],
-      filter: (feature) => visibleMarkup(feature as Feature<Geometry>),
+      filter: (feature) => visibleMarkup(feature as Feature<Geometry>)
+        && (feature.get(ROLE_PROPERTY) === "annotation_zone") === isZoneSelection(roleRef.current),
       style: (feature) => displayedClassStyles(
         feature as Feature<Geometry>,
         objectTypeChoices,
@@ -1254,7 +1258,9 @@ export function DatasetEditorPage({
       const selectedClass = typeof selected.get(CLASS_PROPERTY) === "string"
         ? String(selected.get(CLASS_PROPERTY))
         : null;
-      const selectedRole = selected.get(ROLE_PROPERTY) === "hard_negative"
+      const selectedRole = selected.get(ROLE_PROPERTY) === "annotation_zone"
+        ? selectedClass ? `annotation_zone:${selectedClass}` : "annotation_zone"
+        : selected.get(ROLE_PROPERTY) === "hard_negative"
         ? selectedDataset?.managed && selectedClass
           ? hardNegativeSelection(selectedClass)
           : "hard_negative"
@@ -1547,6 +1553,16 @@ export function DatasetEditorPage({
     }
     roleRef.current = nextRole;
     setRole(nextRole);
+  };
+
+  const switchAnnotationTool = (zones: boolean) => {
+    selectRef.current?.getFeatures().clear();
+    selectedVerticesRef.current = [];
+    const next = zones ? "annotation_zone" : selectedDataset?.object_types[0]?.slug || "positive";
+    roleRef.current = next;
+    setRole(next);
+    setEditMode(zones ? "draw" : "select");
+    setHiddenClasses((current) => new Set([...current].filter((slug) => slug !== "annotation_zone")));
   };
 
   const clearPseudoSelection = useCallback(() => {
@@ -2261,7 +2277,16 @@ export function DatasetEditorPage({
                         </button>
                       ) : null}
                     </div>
-                    {selectedDataset?.task === "multiclass" ? (
+                    <div className="dataset-editor-object-switch" role="group" aria-label="Объекты или зоны разметки" style={{ "--object-color": "#A855F7" } as CSSProperties}>
+                      <button type="button" className={!zoneMode ? "active" : ""} aria-pressed={!zoneMode} onClick={() => switchAnnotationTool(false)}>Объекты</button>
+                      <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию, внутри которой разметка считается полной">Размеченная зона</button>
+                    </div>
+                    {zoneMode ? (
+                      selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
+                        <option value="annotation_zone">Все классы</option>
+                        {objectTypeChoices.map((item) => <option key={item.slug} value={`annotation_zone:${item.slug}`}>{item.name}</option>)}
+                      </select> : <span className="muted">Территория обучения</span>
+                    ) : selectedDataset?.task === "multiclass" ? (
                       <div className="dataset-editor-object-switch" role="group" aria-label="Тип объекта">
                         {objectTypeChoices.map((item) => (
                           <button
@@ -2360,6 +2385,15 @@ export function DatasetEditorPage({
                   <MousePointer2 size={14} /> {editMode === "pseudo"
                     ? "Клик — выбрать объект сети, Shift+клик — выбрать несколько; укажите назначение и добавьте их в черновик. Del снимает выбор."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
+                </div>
+                <div className="dataset-editor-legend dataset-editor-zone-legend" role="group" aria-label="Размеченные зоны">
+                  <button type="button" className={`dataset-editor-class-chip${hiddenClasses.has("annotation_zone") ? " is-hidden" : ""}`}
+                    style={{ "--object-color": "#A855F7" } as CSSProperties}
+                    aria-label="Показывать размеченные зоны" aria-pressed={!hiddenClasses.has("annotation_zone")}
+                    onClick={() => toggleClassVisibility("annotation_zone")}>
+                    <i aria-hidden="true" /><span>Зоны разметки</span><strong>{activeZoneCount}</strong>
+                  </button>
+                  <span className="muted">{activeZoneCount ? "Обучение только внутри зон" : "Используется весь снимок"}</span>
                 </div>
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" role="group" aria-label="Видимость классов на карте">
@@ -2831,6 +2865,9 @@ function matchesObjectSelection(
   feature: Feature<Geometry>,
   selection: ObjectSelection,
 ): boolean {
+  if (isZoneSelection(selection)) return feature.get(ROLE_PROPERTY) === "annotation_zone"
+    && (feature.get(CLASS_PROPERTY) || "") === selection.slice("annotation_zone".length).replace(/^:/, "");
+  if (feature.get(ROLE_PROPERTY) === "annotation_zone") return false;
   const negativeClass = hardNegativeClass(selection);
   if (selection === "hard_negative") {
     return feature.get(ROLE_PROPERTY) === "hard_negative"
@@ -2849,6 +2886,13 @@ function applyObjectSelection(
   selection: ObjectSelection,
   dataset: ObjectSelectionDataset | null,
 ): void {
+  if (isZoneSelection(selection)) {
+    feature.set(ROLE_PROPERTY, "annotation_zone", true);
+    const slug = selection.slice("annotation_zone:".length);
+    if (dataset?.managed && dataset.object_types.some((item) => item.slug === slug)) feature.set(CLASS_PROPERTY, slug, true);
+    else feature.unset(CLASS_PROPERTY, true);
+    return;
+  }
   const negativeClass = hardNegativeClass(selection);
   if (selection === "hard_negative" || negativeClass) {
     feature.set(ROLE_PROPERTY, "hard_negative", true);
@@ -2879,12 +2923,17 @@ export function clonePseudoFeatureForDraft(
   selection: ObjectSelection,
   dataset: ObjectSelectionDataset,
 ): Feature<Geometry> | null {
+  if (isZoneSelection(selection)) return null;
   const geometry = pseudoFeature.getGeometry();
   if (!geometry) return null;
   const feature = new Feature<Geometry>({ geometry: geometry.clone() });
   feature.setId(crypto.randomUUID());
   applyObjectSelection(feature, selection, dataset);
   return feature;
+}
+
+function isZoneSelection(selection: string): boolean {
+  return selection === "annotation_zone" || selection.startsWith("annotation_zone:");
 }
 
 function hardNegativeSelection(classSlug: string): ObjectSelection {
@@ -2923,6 +2972,7 @@ function editorFeatureDisplayClass(
   objectTypes: EditorObjectType[],
   pseudo: boolean,
 ): string {
+  if (feature.get(ROLE_PROPERTY) === "annotation_zone") return "annotation_zone";
   if (feature.get(ROLE_PROPERTY) === "hard_negative") return "hard_negative";
   if (pseudo) return pseudoFeatureType(feature, objectTypes)?.slug || "";
   return String(feature.get(CLASS_PROPERTY) || "positive");
@@ -3033,9 +3083,9 @@ function featureStyle(
   newFeatures: WeakSet<Feature<Geometry>>,
   objectTypes: EditorObjectType[],
 ): Style {
-  const role = feature.get(ROLE_PROPERTY) === "hard_negative" ? "hard_negative" : "positive";
+  const role = feature.get(ROLE_PROPERTY) || "positive";
   const classSlug = typeof feature.get(CLASS_PROPERTY) === "string" ? String(feature.get(CLASS_PROPERTY)) : "";
-  const semanticColor = role === "hard_negative"
+  const semanticColor = role === "annotation_zone" ? "#A855F7" : role === "hard_negative"
     ? HARD_NEGATIVE_COLOR
     : objectTypes.find((item) => item.slug === classSlug)?.color || POSITIVE_COLOR;
   const isNew = newFeatures.has(feature);
@@ -3043,10 +3093,11 @@ function featureStyle(
   const cached = styleCache.get(key);
   if (cached) return cached;
   const strokeColor = selected ? "#38BDF8" : semanticColor;
-  const fillColor = hexToRgba(semanticColor, selected ? 0.28 : 0.22);
+  const fillColor = hexToRgba(semanticColor, role === "annotation_zone" ? 0.07 : selected ? 0.28 : 0.22);
   const style = new Style({
-    stroke: new Stroke({ color: strokeColor, width: selected ? 4 : 3, lineDash: isNew ? [8, 5] : undefined }),
+    stroke: new Stroke({ color: strokeColor, width: selected ? 4 : role === "annotation_zone" ? 2 : 3, lineDash: isNew ? [8, 5] : role === "annotation_zone" ? [10, 4] : undefined }),
     fill: filled ? new Fill({ color: fillColor }) : undefined,
+    zIndex: selected ? 10 : role === "annotation_zone" ? 0 : 1,
   });
   styleCache.set(key, style);
   return style;

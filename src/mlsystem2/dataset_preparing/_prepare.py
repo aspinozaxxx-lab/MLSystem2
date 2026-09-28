@@ -18,6 +18,7 @@ from ._object_counts import (
 )
 from ._per_image import resolve_per_image_annotations
 from ._raster_validation import RasterValidationResult, validate_rasters
+from ._zones import expand_annotation_scenes
 from ._scene_matching import (
     expand_scene_entries,
     filter_existing_scenes,
@@ -311,6 +312,16 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
             ),
         )
 
+    zone_warnings: list[str] = []
+    zone_counts = {}
+    if dataset is not None:
+        try:
+            dataset.scenes, zone_counts = expand_annotation_scenes(
+                dataset.scenes, [item.slug for item in dataset.classes], zone_warnings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Не удалось подготовить размеченные зоны: {exc}")
+            dataset = None
     report = _build_report(
         scenes=scenes,
         positive_rows=positive_rows,
@@ -321,6 +332,9 @@ def _prepare_per_image_dataset(request: DatasetPreparationRequest) -> DatasetPre
         validation=validation,
         class_counts_by_scene=class_counts_by_scene,
     )
+    report.warnings.extend(zone_warnings)
+    for scene in report.scenes:
+        scene.annotation_zone_count, scene.training_scene_count = zone_counts.get(scene.scene_id, (0, 1))
     return DatasetPreparationResult(dataset=dataset, report=report)
 
 

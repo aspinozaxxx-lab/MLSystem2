@@ -1741,6 +1741,18 @@
   flex-wrap: wrap;
 }
 
+.dataset-editor-zone-target {
+  width: auto;
+  max-width: 220px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.dataset-editor-zone-legend {
+  gap: 8px;
+}
+
 .dataset-editor-object-switch button {
   display: inline-flex;
   align-items: center;

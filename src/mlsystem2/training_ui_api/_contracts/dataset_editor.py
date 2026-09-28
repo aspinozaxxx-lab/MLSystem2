@@ -82,6 +82,7 @@ class DatasetEditorDraftSummary(BaseModel):
     total_count: int = Field(ge=0)
     positive_count: int = Field(ge=0)
     hard_negative_count: int = Field(ge=0)
+    annotation_zone_count: int = Field(default=0, ge=0)
     class_counts: dict[str, int] = Field(default_factory=dict)
     updated_at: datetime
 
@@ -102,6 +103,7 @@ class DatasetEditorSceneInfo(BaseModel):
     total_count: int = Field(ge=0)
     positive_count: int = Field(ge=0)
     hard_negative_count: int = Field(ge=0)
+    annotation_zone_count: int = Field(default=0, ge=0)
     revision: str
     class_counts: dict[str, int] = Field(default_factory=dict)
     draft: DatasetEditorDraftSummary | None = None

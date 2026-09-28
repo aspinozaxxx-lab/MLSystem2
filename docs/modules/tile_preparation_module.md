@@ -16,7 +16,7 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `HARD_NEGATIVE_LABEL=-1` — служебная метка hard-negative пикселя.
 - `TileClassAnnotation` — `class_id`, `slug`, `name`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
-- `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file` и `footprint_file`.
+- `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file`, `footprint_file`, `parent_scene_id`, `zone_id`, `region_geometry` в CRS TIFF, `region_window=(x,y,width,height)` в пикселях TIFF.
 - `TileSplitRequest` — `val_fraction`, `test_fraction` (default 0), `seed`, `strategy=window_random|scene_fold|scene_groups`, `validation_fold`, `spatial_purge`.
 - `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant`, optional `input_channels` (3/4 для object_f1), optional сбор histogram.
 
@@ -29,6 +29,8 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `torch.utils.data` — sampler, DataLoader и фиксированный val subset.
 
 ## Алгоритм работы и его особенности
+
+Зональные сцены используют локальную сетку с полным покрытием и дополнением nodata; чтение и растеризация выполняются в координатах исходного TIFF. Вход, контекст и supervision ограничены зоной и raster mask; полностью пустые окна исключены. Для всех профилей batch с зонами содержит valid_pixels, синхронные аугментации сохраняют nodata. В смешанных batch незональные legacy/next-gen2 получают единичную маску совместимости. Статистика и sampling учитывают только допустимую часть. LRU разделяется по пути TIFF; metadata и split manifest сохраняют зону и исходную сцену, поснимочный split не разносит зоны одного TIFF.
 
 `object_f1` добавляет `input_channels`, постоянные instance ID во всех loaders, boundary_target, boundary_valid, valid_pixels и координаты окон в batch_meta. `scene_groups` делит независимые группы 60/20/20; общая сетка полного покрытия получена через `inference.api`. RGBA читается как RGB + valid mask. Части MultiPolygon разделяются; конфликтные пиксели исключаются из границ. При аугментации все маски преобразуются совместно; sampler и workers наследуются из next-gen2.
 

@@ -5641,6 +5641,12 @@
             "minimum": 0.0,
             "title": "Hard Negative Count"
           },
+          "annotation_zone_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Annotation Zone Count",
+            "default": 0
+          },
           "class_counts": {
             "additionalProperties": {
               "type": "integer"
@@ -5706,6 +5712,12 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Hard Negative Count"
+          },
+          "annotation_zone_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Annotation Zone Count",
+            "default": 0
           },
           "class_counts": {
             "additionalProperties": {
@@ -6417,6 +6429,12 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Hard Negative Count"
+          },
+          "annotation_zone_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Annotation Zone Count",
+            "default": 0
           },
           "revision": {
             "type": "string",

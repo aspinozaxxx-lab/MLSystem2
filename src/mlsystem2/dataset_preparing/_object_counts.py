@@ -102,6 +102,8 @@ def count_per_image_annotation_roles(
             positive += 1
         elif role == PER_IMAGE_HARD_NEGATIVE_ROLE:
             hard_negative += 1
+        elif role == "annotation_zone":
+            pass
         else:
             raise ValueError(
                 f"Feature #{index} содержит неизвестную роль {role!r}: {annotation_path}"
@@ -275,6 +277,8 @@ def _load_features(payload: Any) -> list[LoadedFeature]:
             continue
         raw_properties = raw_feature.get("properties") or {}
         properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
+        if properties.get(PER_IMAGE_ROLE_PROPERTY) == "annotation_zone":
+            continue
         geometry_payload = raw_feature.get("geometry")
         geometry = None
         if geometry_payload:

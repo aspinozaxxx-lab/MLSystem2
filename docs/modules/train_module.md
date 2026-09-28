@@ -30,6 +30,8 @@
 
 ## Алгоритм работы и его особенности
 
+Все профили принимают optional `batch_meta.valid_pixels` для размеченных зон. Маска исключает пиксели из каждого компонента loss и метрик, включая multiclass и class-specific hard negative; нормализация loss использует допустимые пиксели. Полностью пустая маска даёт конечный нулевой loss и нулевые градиенты. При отсутствии зон сохраняются прежние правила профиля. Object f1 собирает виртуальные сцены и игнорирует искусственную границу зоны.
+
 `object_f1` получает три logits, сохраняет loss области next-gen2 и добавляет половину BCE/Dice границ. `EpochMetrics` дополняется train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss. Validation/test использует общий `inference.api`: Gaussian сборку полных сцен и watershed. Best/early stopping — максимум object F1, scheduler — минимум суммарного val_loss. Пороги 0.5; компоненты loss и объектовая test-метрика сохраняются.
 
 `next_gen2` получает два logits, использует 25% weighted CrossEntropy + 75% SMP multiclass

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -145,6 +145,14 @@ class DatasetManifest(BaseModel):
         return self
 
 
+class AnnotationRegion(BaseModel):
+    """Территория одной зоны после учёта покрытий классов, в CRS GeoJSON."""
+
+    model_config = ConfigDict(extra="forbid")
+    zone_id: str
+    geometry: dict[str, Any]
+
+
 class PreparedScene(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -152,6 +160,10 @@ class PreparedScene(BaseModel):
     image_path: str
     annotation_file: str | None = None
     footprint_file: str | None = None
+    parent_scene_id: str | None = None
+    zone_id: str | None = None
+    region_geometry: dict[str, Any] | None = None
+    region_window: tuple[int, int, int, int] | None = None
 
 
 class PreparedDataset(BaseModel):
@@ -180,6 +192,8 @@ class DatasetSceneReport(BaseModel):
     hard_negative_objects: int = Field(ge=0)
     object_count: int = Field(ge=0)
     class_counts: dict[str, int] = Field(default_factory=dict)
+    annotation_zone_count: int = Field(default=0, ge=0)
+    training_scene_count: int = Field(default=1, ge=0)
 
 
 class DatasetPreparationReport(BaseModel):

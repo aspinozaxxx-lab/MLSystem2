@@ -15,6 +15,7 @@ EXPECTED_API = {
         "per_image_footprint_name",
         "resolve_per_image_annotations",
         "load_dataset_manifest",
+        "annotation_regions",
     ],
     "tile_preparation.api": ["create_tile_dataloader"],
     "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],

@@ -14,10 +14,12 @@ from ._per_image import (
     resolve_per_image_annotations as _resolve_per_image_annotations,
 )
 from ._scene_resolution import resolve_scene_images as _resolve_scene_images
+from ._zones import annotation_regions as _annotation_regions
 from .contracts import (
     DatasetPreparationRequest,
     DatasetPreparationResult,
     DatasetManifest,
+    AnnotationRegion,
     SceneImageResolution,
     SceneImageResolutionRequest,
 )
@@ -62,6 +64,11 @@ def load_dataset_manifest(annotations_dir_or_file: str) -> DatasetManifest | Non
     return _load_dataset_manifest(annotations_dir_or_file)
 
 
+def annotation_regions(payload: dict, class_slugs: list[str] | None = None) -> list[AnnotationRegion] | None:
+    """Получить независимые зоны; None означает отсутствие ограничений снимка."""
+    return _annotation_regions(payload, class_slugs)
+
+
 __all__ = [
     "prepare_dataset",
     "resolve_scene_images",
@@ -72,4 +79,5 @@ __all__ = [
     "per_image_footprint_name",
     "resolve_per_image_annotations",
     "load_dataset_manifest",
+    "annotation_regions",
 ]

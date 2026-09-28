@@ -313,7 +313,7 @@ export function featureCounts(geojson: JsonObject): {
         ? (properties as JsonObject)._mlsystem2_role
         : undefined;
     if (role === "hard_negative") hardNegative += 1;
-    else positive += 1;
+    else if (role !== "annotation_zone") positive += 1;
   }
   return { total: positive + hardNegative, positive, hardNegative };
 }
@@ -326,7 +326,7 @@ export function featureClassCounts(geojson: JsonObject): Record<string, number> 
     const properties = (feature as JsonObject).properties;
     if (!properties || typeof properties !== "object") continue;
     const values = properties as JsonObject;
-    if (values._mlsystem2_role === "hard_negative") continue;
+    if (values._mlsystem2_role === "hard_negative" || values._mlsystem2_role === "annotation_zone") continue;
     const slug = values._mlsystem2_class;
     if (typeof slug === "string" && slug) result[slug] = (result[slug] || 0) + 1;
   }

@@ -40,7 +40,12 @@ def boundary_targets(instances, valid, ambiguous):
 
 def scene_group_split(scenes, request):
     footprints = []
+    cached = {}
     for scene in scenes:
+        key = (str(scene.image_path), str(scene.footprint_file))
+        if key in cached:
+            footprints.append(cached[key])
+            continue
         with rasterio.open(scene.image_path) as source:
             if scene.footprint_file is not None and Path(scene.footprint_file).is_file():
                 data = json.loads(Path(scene.footprint_file).read_text(encoding="utf-8"))
@@ -56,6 +61,7 @@ def scene_group_split(scenes, request):
             if source.crs is not None:
                 geometry = transform(Transformer.from_crs(source.crs, "EPSG:4326", always_xy=True).transform, geometry)
             footprints.append(geometry)
+            cached[key] = geometry
     parent = list(range(len(scenes)))
     def root(i):
         while parent[i] != i:
@@ -64,7 +70,8 @@ def scene_group_split(scenes, request):
         return i
     for i, geometry in enumerate(footprints):
         for j in range(i):
-            if geometry.intersects(footprints[j]) and geometry.intersection(footprints[j]).area > 0:
+            same_parent = (scenes[i].parent_scene_id or scenes[i].scene_id) == (scenes[j].parent_scene_id or scenes[j].scene_id)
+            if same_parent or (geometry.intersects(footprints[j]) and geometry.intersection(footprints[j]).area > 0):
                 parent[root(i)] = root(j)
     groups = {}
     for i, scene in enumerate(scenes):

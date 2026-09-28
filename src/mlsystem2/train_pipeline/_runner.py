@@ -496,6 +496,10 @@ def _tile_request(
             image_path=item.image_path,
             annotation_file=item.annotation_file,
             footprint_file=item.footprint_file,
+            parent_scene_id=item.parent_scene_id,
+            zone_id=item.zone_id,
+            region_geometry=item.region_geometry,
+            region_window=item.region_window,
         )
         for item in dataset.scenes
     ]
@@ -795,6 +799,9 @@ def _dataset_revision(dataset: PreparedDataset | None) -> dict[str, object]:
             "annotation_sha256": annotation_hash,
             "footprint_sha256": footprint_hash,
         }
+        if scene.zone_id is not None:
+            payload.update(parent_scene_id=scene.parent_scene_id, zone_id=scene.zone_id,
+                           region_geometry=scene.region_geometry, region_window=scene.region_window)
         digest.update(repr(sorted(payload.items())).encode("utf-8"))
         scenes.append(payload)
     for path in (
