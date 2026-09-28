@@ -1,5 +1,6 @@
 .news-list { display: grid; gap: 16px; }
 .news-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 38%); gap: 28px; align-items: center; padding: 20px; color: var(--text); border: 1px solid var(--border); border-radius: var(--grovika-radius-panel); text-decoration: none; background: var(--surface-soft); }
+.news-card-text { grid-template-columns: 1fr; }
 .news-card:hover { border-color: #a855f7; }
 .news-card:focus-visible { outline: 3px solid #a855f7; outline-offset: 3px; }
 .news-card time, .news-article time { color: var(--muted); font-size: 12px; }

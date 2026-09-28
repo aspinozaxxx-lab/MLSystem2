@@ -343,10 +343,8 @@ def _build_per_image_combined_dataset(
             transformed_features: list[tuple[_SourceFeature, BaseGeometry]] = []
             for item in features_by_annotation.get(annotation_name, []):
                 transformed = transform_geometry(transformer.transform, item.geometry_wgs84)
-                clipped = _polygonal(transformed.intersection(footprint))
+                clipped = transformed if item.role == "annotation_zone" else _polygonal(transformed.intersection(footprint))
                 if clipped.is_empty or clipped.area <= 0:
-                    if item.role == "annotation_zone":
-                        raise TrainingUIAPIError(f"Размеченная зона вне фактического снимка: {annotation_name}")
                     continue
                 transformed_features.append((item, clipped))
             if manifest.managed:

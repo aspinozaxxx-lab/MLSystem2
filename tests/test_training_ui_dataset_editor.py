@@ -505,6 +505,16 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
                 "positive",
                 [[20, 20], [21, 20], [21, 21], [20, 21], [20, 20]],
             ),
+            _feature(
+                103,
+                "annotation_zone",
+                [[-5, -5], [12, -5], [12, 12], [-5, 12], [-5, -5]],
+            ),
+            _feature(
+                104,
+                "annotation_zone",
+                [[20, 20], [21, 20], [21, 21], [20, 21], [20, 20]],
+            ),
         ]
     )
 
@@ -524,8 +534,19 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
         assert footprint.covers(shape(saved_by_id[feature_id]["geometry"]))
     assert shape(saved_by_id[100]["geometry"]).bounds == pytest.approx((0, 3, 2, 5))
     assert shape(saved_by_id[101]["geometry"]).area < 4
+    original_zones = {item["id"]: item["geometry"] for item in payload["features"] if item["id"] in (103, 104)}
+    assert {key: saved_by_id[key]["geometry"] for key in original_zones} == original_zones
     reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
     assert reopened["draft"]["geojson"] == saved_payload
+    published = env.client.put(
+        f"{scenes_url}/{annotation_path}",
+        json={"revision": scene["revision"], "geojson": saved_payload},
+    )
+    assert published.status_code == 200, published.text
+    reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
+    assert reopened["scene"]["annotation_zone_count"] == 2
+    assert {item["id"]: item["geometry"] for item in reopened["geojson"]["features"]
+            if item["id"] in original_zones} == original_zones
 
 
 def test_dataset_editor_repairs_stale_crs_and_companion_footprint(
@@ -1486,6 +1507,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         for item in scenes_response.json()["dataset"]["object_types"]
         if item["name"] == "Озера"
     )
+    new_geometry = box(-2 if new_role == "annotation_zone" else 0.5, 4, 1.5, 5)
     payload["features"].append(
         {
             "type": "Feature",
@@ -1494,10 +1516,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
                 "_mlsystem2_role": new_role,
                 "_mlsystem2_class": lake_type["slug"],
             },
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[[0.5, 4], [1.5, 4], [1.5, 5], [0.5, 5], [0.5, 4]]],
-            },
+            "geometry": mapping(new_geometry),
         }
     )
     publish = env.client.put(
@@ -1519,11 +1538,21 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         == (2 if new_role == "positive" else 1)
     )
     assert any(feature.get("id") == "new-lake" for feature in saved["features"])
+    saved_feature = next(feature for feature in saved["features"] if feature.get("id") == "new-lake")
+    assert shape(saved_feature["geometry"]).bounds == pytest.approx(new_geometry.bounds)
     assert not (env.editor_root / "Реки и озера" / "main").exists()
 
     with session_factory() as session:
         assert process_next_managed_materialization(session, get_config()) is True
         session.commit()
+
+    if new_role == "annotation_zone":
+        refreshed = env.client.get(
+            f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes/{quote(annotation_name, safe='')}"
+        ).json()
+        rebuilt_zone = next(item for item in refreshed["geojson"]["features"]
+                            if item["properties"]["_mlsystem2_role"] == "annotation_zone")
+        assert shape(rebuilt_zone["geometry"]).bounds == pytest.approx(new_geometry.bounds)
 
     added_image = env.editor_root.parent / "images" / "kanopus" / "batch" / "MANAGED04.tif"
     _write_raster(added_image, value=44)
@@ -1568,7 +1597,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         {
             "type": "Feature", "id": "shared-annotation-zone",
             "properties": {"_mlsystem2_role": "annotation_zone"},
-            "geometry": mapping(box(0.5, 0.5, 7, 7)),
+            "geometry": mapping(box(-2, -2, 12, 12)),
         },
         {
             "type": "Feature",
@@ -1619,6 +1648,9 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert published_added.status_code == 200, published_added.text
     river_features = json.loads(river_target.read_text(encoding="utf-8"))["features"]
     lake_features = json.loads(lake_target.read_text(encoding="utf-8"))["features"]
+    for source_features in (river_features, lake_features):
+        source_zone = next(item for item in source_features if item["properties"]["_mlsystem2_role"] == "annotation_zone")
+        assert shape(source_zone["geometry"]).bounds == pytest.approx((-2, -2, 12, 12))
     assert {item["properties"]["_mlsystem2_role"] for item in river_features} == {"hard_negative", "annotation_zone"}
     assert {item["properties"]["_mlsystem2_role"] for item in lake_features} == {
         "positive",
@@ -1637,6 +1669,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert refreshed_added["scene"]["annotation_zone_count"] == 1
     common_zone = next(item for item in refreshed_added["geojson"]["features"] if item["properties"]["_mlsystem2_role"] == "annotation_zone")
     assert "_mlsystem2_class" not in common_zone["properties"]
+    assert shape(common_zone["geometry"]).bounds == pytest.approx((-2, -2, 12, 12))
     assert refreshed_added["scene"]["positive_count"] == 1
     assert refreshed_added["scene"]["hard_negative_count"] == 2
     materialized_negatives = [

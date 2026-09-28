@@ -21,7 +21,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 
 ## Публичные контракты
 
-`DatasetEditorSceneInfo`, `DatasetEditorDraftSummary` и унаследованный `DatasetEditorDraftInfo` содержат `annotation_zone_count=0`. В GeoJSON редактора поддержана служебная роль `annotation_zone`, optional `_mlsystem2_class` задаёт исходный класс управляемого датасета. Отсутствие класса означает все источники. Зоны проходят штатные черновики, публикацию, копирование и пересборку, отдельно отображаются и считаются; новые endpoints и таблицы не вводятся. `dataset_preparing.api.annotation_regions` ограничивает создаваемые эталонные тайлы размеченной территорией; обычная псевдоразметка остаётся поснимочной.
+`DatasetEditorSceneInfo`, `DatasetEditorDraftSummary` и унаследованный `DatasetEditorDraftInfo` содержат `annotation_zone_count=0`. В GeoJSON редактора поддержана служебная роль `annotation_zone`, optional `_mlsystem2_class` задаёт исходный класс управляемого датасета. Отсутствие класса означает все источники. Зоны проходят штатные черновики, публикацию, копирование и пересборку, отдельно отображаются и считаются; новые endpoints и таблицы не вводятся. Контуры зон сохраняются целиком, включая части за границами TIFF/valid footprint; проверки типа, валидности геометрии и CRS остаются обязательными. Ограничение зон снимком выполняет подготовка обучения. `dataset_preparing.api.annotation_regions` ограничивает создаваемые эталонные тайлы размеченной территорией; обычная псевдоразметка остаётся поснимочной.
 
 `ConfigSchema.pipeline_descriptions` содержит подробные описания профилей.
 `ConfigSchema.pipeline_defaults` содержит серверные наборы параметров при переключении конвейера;

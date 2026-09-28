@@ -1316,7 +1316,7 @@ export function DatasetEditorPage({
       setDrawingState(false);
       if (event.feature.getId() === undefined) event.feature.setId(crypto.randomUUID());
       applyObjectSelection(event.feature, roleRef.current, selectedDataset);
-      if (!geometryInsideFootprint(event.feature.getGeometry(), rasterFootprintRef.current)) {
+      if (!isEditorFeatureWithinBounds(event.feature, rasterFootprintRef.current)) {
         drawBefore = null;
         window.setTimeout(() => vectorSource.removeFeature(event.feature), 0);
         window.alert("Полигон должен целиком находиться внутри снимка.");
@@ -1341,7 +1341,7 @@ export function DatasetEditorPage({
     });
     modify.on("modifyend", (event) => {
       const outside = event.features.getArray().some((feature) =>
-        !geometryInsideFootprint(feature.getGeometry(), rasterFootprintRef.current),
+        !isEditorFeatureWithinBounds(feature, rasterFootprintRef.current),
       );
       if (outside) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
@@ -2279,7 +2279,7 @@ export function DatasetEditorPage({
                     </div>
                     <div className="dataset-editor-object-switch" role="group" aria-label="Объекты или зоны разметки" style={{ "--object-color": "#A855F7" } as CSSProperties}>
                       <button type="button" className={!zoneMode ? "active" : ""} aria-pressed={!zoneMode} onClick={() => switchAnnotationTool(false)}>Объекты</button>
-                      <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию, внутри которой разметка считается полной">Размеченная зона</button>
+                      <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур может выходить за край снимка: используется только пересечение со снимком">Размеченная зона</button>
                     </div>
                     {zoneMode ? (
                       selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
@@ -2935,6 +2935,12 @@ export function clonePseudoFeatureForDraft(
 
 function isZoneSelection(selection: string): boolean {
   return selection === "annotation_zone" || selection.startsWith("annotation_zone:");
+}
+
+export function isEditorFeatureWithinBounds(feature: Feature<Geometry>, footprint: Geometry | null): boolean {
+  const geometry = feature.getGeometry();
+  return Boolean(geometry) && (feature.get(ROLE_PROPERTY) === "annotation_zone"
+    || geometryInsideFootprint(geometry, footprint));
 }
 
 function hardNegativeSelection(classSlug: string): ObjectSelection {

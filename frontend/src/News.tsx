@@ -12,6 +12,26 @@ type NewsArticle = {
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly NewsArticle[] = [{
+  slug: "annotation-zones-outside-image",
+  date: "2026-09-28",
+  title: "Зону разметки можно рисовать за краем снимка",
+  summary: "Больше не нужно точно повторять край снимка. Выносите вершины зоны за его пределы — для обучения Гровика возьмёт только ту часть зоны, где есть изображение.",
+  sections: [
+    {
+      title: "Как пользоваться",
+      steps: [
+        "В редакторе датасетов выберите снимок и инструмент «Размеченная зона».",
+        "Обведите размеченную территорию. Вершины можно ставить за краем снимка и переносить туда при редактировании — в обычном и полноэкранном режиме.",
+        "Дождитесь сохранения черновика и нажмите «Опубликовать». Полный контур сохранится и после повторного открытия датасета.",
+      ],
+    },
+    {
+      title: "Что попадёт в обучение",
+      paragraphs: ["Используется пересечение зоны со снимком. Часть контура за его краем не увеличивает снимок и не создаёт дополнительных тайлов. Внутренние пропуски данных и территория вне зоны остаются nodata и не участвуют в обучении.",
+        "Если зона целиком находится за снимком, при подготовке она будет пропущена с пояснением. Если пригодных зон не осталось, обучение остановится с понятной ошибкой. Чтобы снова использовать весь снимок, удалите его зоны."],
+    },
+  ],
+}, {
   slug: "annotation-zones",
   date: "2026-09-28",
   title: "Размечайте часть снимка — обучайте только на ней",
@@ -65,7 +85,7 @@ function articleDate(value: string): string {
 export function NewsSection() {
   return <section className="panel news-section" aria-labelledby="news-heading">
     <div className="panel-header"><div><h2 id="news-heading">Новости</h2><p>Что появилось в Гровике и как этим пользоваться</p></div></div>
-    <div className="news-list">{newsArticles.map((article) => <a className="news-card" key={article.slug} href={`#/news/${article.slug}`}>
+    <div className="news-list">{newsArticles.map((article) => <a className={`news-card${article.image ? "" : " news-card-text"}`} key={article.slug} href={`#/news/${article.slug}`}>
       <div className="news-card-copy">
         <time dateTime={article.date}>{articleDate(article.date)}</time>
         <h3>{article.title}</h3><p>{article.summary}</p>

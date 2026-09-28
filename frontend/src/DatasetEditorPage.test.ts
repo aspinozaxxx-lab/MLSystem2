@@ -7,12 +7,25 @@ import {
   clonePseudoFeatureForDraft,
   displayedClassStyles,
   isEditorFeatureVisible,
+  isEditorFeatureWithinBounds,
   pseudoMarkupStyle,
 } from "./DatasetEditorPage";
 import { featureCounts, featureClassCounts } from "./utils/datasetEditor";
 
 
 describe("размеченные зоны", () => {
+  it("разрешает рисовать и изменять зону за краем снимка, сохраняя ограничения для объектов", () => {
+    const footprint = new Polygon([[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]);
+    const feature = new Feature({ _mlsystem2_role: "annotation_zone", geometry: new Polygon([[[-2, -2], [12, -2], [12, 12], [-2, 12], [-2, -2]]]) });
+    expect(isEditorFeatureWithinBounds(feature, footprint)).toBe(true);
+    feature.getGeometry()?.translate(20, 20);
+    expect(isEditorFeatureWithinBounds(feature, footprint)).toBe(true);
+    for (const role of ["positive", "hard_negative"]) {
+      feature.set("_mlsystem2_role", role);
+      expect(isEditorFeatureWithinBounds(feature, footprint)).toBe(false);
+    }
+  });
+
   it("не считает зоны объектами класса", () => {
     const geojson = { features: [
       { properties: { _mlsystem2_role: "annotation_zone", _mlsystem2_class: "water" } },

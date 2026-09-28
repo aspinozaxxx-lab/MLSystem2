@@ -3426,7 +3426,7 @@ def _validate_editor_geojson(
             raise TrainingUIAPIError(f"Объект {index} должен быть Polygon или MultiPolygon")
         if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
             raise TrainingUIAPIError(f"Геометрия объекта {index} пуста или невалидна")
-        if not _footprint_covers_geometry(footprint, geometry):
+        if role != "annotation_zone" and not _footprint_covers_geometry(footprint, geometry):
             raise TrainingUIAPIError(
                 f"Геометрия объекта {index} выходит за реальный footprint TIFF"
             )
@@ -3541,6 +3541,10 @@ def _clip_geojson_to_footprint(
     for index, feature in enumerate(features, start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
+        if (feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone":
+            # Полный контур нужен редактору; пересечение с TIFF строится при подготовке обучения.
+            clipped_features.append(feature)
+            continue
         try:
             geometry = shape(feature.get("geometry"))
             if isinstance(geometry, (Polygon, MultiPolygon)):
@@ -3551,8 +3555,6 @@ def _clip_geojson_to_footprint(
                 f"Не удалось обрезать геометрию объекта {index}: {exc}"
             ) from exc
         if geometry.is_empty:
-            if (feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone":
-                raise TrainingUIAPIError(f"Размеченная зона {index} не содержит территории снимка. Измените её границы или явно удалите зону.")
             continue
         clipped_features.append({**feature, "geometry": dict(mapping(geometry))})
     return {**payload, "features": clipped_features}

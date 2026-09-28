@@ -194,12 +194,56 @@ def test_invalid_predictions_have_no_loss_or_gradient(pipeline, loss, channels):
     assert torch.isfinite(empty) and empty.item() == 0
 
 
-def test_empty_clipped_zone_is_not_silently_removed():
+def test_editor_preserves_zone_outside_footprint():
     from mlsystem2.training_ui_api._dataset_editor import _clip_geojson_to_footprint
-    from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 
-    with pytest.raises(TrainingUIAPIError, match="Размеченная зона"):
-        _clip_geojson_to_footprint(payload([feature("zone", box(20, 20, 30, 30))]), box(0, 0, 10, 10))
+    original = payload([feature("zone", box(20, 20, 30, 30))])
+    assert _clip_geojson_to_footprint(original, box(0, 0, 10, 10)) == original
+
+
+@pytest.mark.parametrize("pipeline", ["legacy", "next_gen2", "object_f1"])
+@pytest.mark.parametrize("zone", [box(-100, -100, 10, 100), MultiPolygon([box(-5, -5, 10, 32), box(80, 80, 90, 90)])])
+def test_external_zone_parts_do_not_expand_scene_or_tiles(tmp_path, pipeline, zone):
+    result, raster, markup = prepare_fixture(tmp_path, [feature("zone", zone)])
+    scene = result.dataset.scenes[0]
+    assert len(result.dataset.scenes) == 1
+    assert scene.region_window == (0, 0, 10, 32)
+    assert shape(scene.region_geometry).equals(box(0, 0, 10, 32))
+    outside_dataset = loader(result.dataset.scenes, pipeline)
+    before = [outside_dataset[i] for i in range(len(outside_dataset))]
+    outside_dataset.close()
+
+    annotations = json.loads(markup.read_text(encoding="utf-8"))
+    assert shape(annotations["features"][-1]["geometry"]).equals(zone)
+    annotations["features"][-1]["geometry"] = mapping(zone.intersection(box(0, 0, 32, 32)))
+    markup.write_text(json.dumps(annotations), encoding="utf-8")
+    clipped = prepare_dataset(DatasetPreparationRequest(images_dir=str(raster.parent),
+                              annotations_dir=str(markup.parent), val_fraction=0.2, expected_band_count=3))
+    assert clipped.report.status == "ok", clipped.report.errors
+    clipped_dataset = loader(clipped.dataset.scenes, pipeline)
+    assert len(clipped_dataset) == len(before)
+    for index, (image, mask, meta) in enumerate(before):
+        actual_image, actual_mask, actual_meta = clipped_dataset[index]
+        np.testing.assert_array_equal(image, actual_image)
+        np.testing.assert_array_equal(mask, actual_mask)
+        np.testing.assert_array_equal(meta["valid_pixels"], actual_meta["valid_pixels"])
+        assert not image[:, ~meta["valid_pixels"]].any()
+    clipped_dataset.close()
+
+
+def test_wholly_external_zones_are_skipped_without_full_image_fallback(tmp_path):
+    result, raster, markup = prepare_fixture(tmp_path, [feature("inside", box(4, 12, 14, 26)),
+                                                      feature("outside", box(40, 40, 50, 50))])
+    assert [scene.zone_id for scene in result.dataset.scenes] == ["inside"]
+    assert any("пустые пересечения пропущены" in warning for warning in result.report.warnings)
+    annotations = json.loads(markup.read_text(encoding="utf-8"))
+    annotations["features"] = [item for item in annotations["features"] if item["id"] != "inside"]
+    markup.write_text(json.dumps(annotations), encoding="utf-8")
+    empty = prepare_dataset(DatasetPreparationRequest(images_dir=str(raster.parent),
+                            annotations_dir=str(markup.parent), val_fraction=0.2, expected_band_count=3))
+    assert empty.dataset is None
+    assert empty.report.status == "error"
+    assert any("пригодной для обучения" in error for error in empty.report.errors)
 
 
 def test_reference_tiles_stay_inside_a_zone(tmp_path):
