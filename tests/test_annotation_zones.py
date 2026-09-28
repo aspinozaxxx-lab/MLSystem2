@@ -293,6 +293,7 @@ def test_zone_augmentations_are_reproducible_in_workers(tmp_path, pipeline):
         dataset = loader(result.dataset.scenes, pipeline, augmentation=3, mode="train")
         batches = list(torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=2,
                        worker_init_fn=_seed_tile_worker, collate_fn=_collate_tile_batch,
+                       multiprocessing_context="spawn", timeout=60,
                        generator=torch.Generator().manual_seed(42)))
         dataset.close()
         return batches
