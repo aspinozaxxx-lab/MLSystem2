@@ -45,6 +45,7 @@ import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, 
 import "ol/ol.css";
 
 import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
+import { useMapFullscreen } from "./utils/useMapFullscreen";
 import {
   appendHistory,
   BAND_CHANNELS,
@@ -297,7 +298,6 @@ export function DatasetEditorPage({
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [drawInProgress, setDrawInProgress] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
@@ -307,6 +307,7 @@ export function DatasetEditorPage({
   const mapTargetRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
+  const { fullscreen, toggleFullscreen } = useMapFullscreen(workspaceRef, mapRef);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const snapFeaturesRef = useRef<Collection<Feature<Geometry>> | null>(null);
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
@@ -1753,58 +1754,6 @@ export function DatasetEditorPage({
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [clearPseudoSelection, deleteSelected, deleteSelectedVertices, editMode, undoCurrent]);
-
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setFullscreen(document.fullscreenElement === workspaceRef.current);
-      window.requestAnimationFrame(() => mapRef.current?.updateSize());
-    };
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    if (!fullscreen || document.fullscreenElement === workspaceRef.current) return;
-    const previousOverflow = document.body.style.overflow;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setFullscreen(false);
-      window.requestAnimationFrame(() => mapRef.current?.updateSize());
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [fullscreen]);
-
-  const toggleFullscreen = useCallback(async () => {
-    const workspace = workspaceRef.current;
-    if (!workspace) return;
-    if (fullscreen && document.fullscreenElement !== workspace) {
-      setFullscreen(false);
-      window.requestAnimationFrame(() => mapRef.current?.updateSize());
-      return;
-    }
-    try {
-      if (document.fullscreenElement === workspace) {
-        await document.exitFullscreen();
-        return;
-      }
-      if (!workspace.requestFullscreen) {
-        setFullscreen(true);
-        window.requestAnimationFrame(() => mapRef.current?.updateSize());
-        return;
-      }
-      if (document.fullscreenElement) await document.exitFullscreen();
-      await workspace.requestFullscreen();
-    } catch {
-      setFullscreen(true);
-      window.requestAnimationFrame(() => mapRef.current?.updateSize());
-    }
-  }, [fullscreen]);
 
   const toggleFill = () => {
     const next = !fillEnabledRef.current;

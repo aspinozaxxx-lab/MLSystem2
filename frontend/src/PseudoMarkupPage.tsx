@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, Maximize, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
@@ -19,6 +19,7 @@ import { BAND_CHANNELS, type BandMode } from "./utils/datasetEditor";
 import { pseudoClass, pseudoClasses, pseudoRasterStyle, type PseudoProperties } from "./utils/pseudoViewer";
 import { rasterCache } from "./utils/rasterCache";
 import { rasterBackdrop } from "./utils/rasterBackdrop";
+import { useMapFullscreen } from "./utils/useMapFullscreen";
 import "ol/ol.css";
 import "./styles/pseudoViewer.css";
 
@@ -50,8 +51,10 @@ export function PseudoMarkupPage({ resultId, username }: { resultId: string; use
 }
 
 function PseudoMap({ info, geojson, username }: LoadedView & { username: string }) {
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const target = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
+  const { fullscreen, toggleFullscreen } = useMapFullscreen(workspaceRef, mapRef);
   const rasterLayers = useRef<BaseLayer[]>([]);
   const resetBackdrop = useRef<() => void>(() => {});
   const nirLayer = useRef<WebGLTileLayer | null>(null);
@@ -191,7 +194,7 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
     setHidden(next);
     markupLayer.current?.changed();
   };
-  return <>
+  return <div ref={workspaceRef} className={`pseudo-workspace${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
       <div><h1>Просмотр псевдоразметки</h1><p>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p></div>
       <a className="secondary compact-action" href={info.geojson_url}><Download size={16} /> Скачать GeoJSON</a>
@@ -222,10 +225,20 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
       </aside>
       <div className="pseudo-map-area">
         <div className="pseudo-map" ref={target} aria-label="Мозаика снимков с псевдоразметкой" tabIndex={0} />
+        <div className="dataset-editor-map-controls">
+          <button
+            className={`${fullscreen ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
+            type="button"
+            aria-label={fullscreen ? "Выйти из полноэкранного режима" : "Открыть просмотр на весь экран"}
+            aria-pressed={fullscreen}
+            title={fullscreen ? "Выйти из полноэкранного режима (Esc)" : "Открыть просмотр на весь экран"}
+            onClick={() => void toggleFullscreen()}
+          >{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
+        </div>
         <div className="pseudo-map-legend">{classes.map((item) => <button type="button" key={item.key} aria-pressed={!hidden.has(item.key)} onClick={() => toggleClass(item.key)}><span style={{ backgroundColor: item.color }} />{item.name} <small>{item.count.toLocaleString("ru-RU")}</small></button>)}</div>
         {!geojson.features.length ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
       </div>
     </div>
     <p className="pseudo-hint">Наведите курсор на карту: колесо — масштаб, перетаскивание — перемещение. Нажмите на название снимка, чтобы приблизить его.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
-  </>;
+  </div>;
 }
