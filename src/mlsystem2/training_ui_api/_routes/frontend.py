@@ -32,15 +32,15 @@ def register_frontend_routes(app: FastAPI, config: TrainingUIAPIConfig) -> None:
 
     @app.get("/", include_in_schema=False)
     def frontend_index() -> FileResponse:
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers={"Cache-Control": "no-store"})
 
     @app.get("/{frontend_path:path}", include_in_schema=False)
     def frontend_fallback(frontend_path: str) -> FileResponse:
         if frontend_path.startswith(("api/", "docs", "redoc", "openapi.json")):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
         if path := frontend_file(frontend_path):
-            return FileResponse(path)
-        return FileResponse(index_path)
+            return FileResponse(path, headers={"Cache-Control": "no-store"} if path == index_path else None)
+        return FileResponse(index_path, headers={"Cache-Control": "no-store"})
 
 
 __all__ = ["register_frontend_routes"]

@@ -3048,6 +3048,8 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert health.headers["server-timing"].startswith("app;dur=")
         assert float(health.headers["x-process-time-ms"]) >= 0
         assert client.get("/").text.startswith("<!doctype html>")
+        assert client.get("/").headers["cache-control"] == "no-store"
+        assert client.get("/index.html").headers["cache-control"] == "no-store"
         app_js = client.get("/assets/index-test.js")
         assert app_js.text == "console.log('MLSystem2')"
         assert app_js.headers["content-type"].split(";")[0] in {
@@ -3056,6 +3058,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         }
         assert client.get("/assets/index-test.css").text == "body{margin:0}"
         assert client.get("/not-a-real-frontend-route").text.startswith("<!doctype html>")
+        assert client.get("/not-a-real-frontend-route").headers["cache-control"] == "no-store"
         unauthorized = client.get("/api/v1/datasets")
         assert unauthorized.status_code == 401
         assert client.get("/auth/proxy-check").status_code == 401

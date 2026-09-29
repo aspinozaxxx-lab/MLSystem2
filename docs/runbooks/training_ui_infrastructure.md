@@ -160,8 +160,18 @@ train loop и DataLoader workers ждут снятия `pause.request`, посл
 
 ## 6. Frontend static
 
-CI/CD копирует `frontend/dist` в путь из `MLSYSTEM2_FRONTEND_DIST_PATH`, по умолчанию
-`/opt/mlsystem2/frontend`.
+CI/CD доставляет `frontend/dist` через `frontend/deploy.py` в путь из `MLSYSTEM2_FRONTEND_DIST_PATH`,
+по умолчанию `/opt/mlsystem2/frontend`. Для ручной доставки применяется тот же путь:
+
+```bash
+python3 frontend/deploy.py --source frontend/dist --target /opt/mlsystem2/frontend
+```
+
+Сначала копируются зависимости, затем атомарно заменяется `index.html`. Нельзя применять `rsync --delete`
+к опубликованному каталогу `assets`: открытые вкладки продолжают запрашивать старые хешированные модули,
+стили и декодеры TIFF. Скрипт сохраняет их до семи суток, а при превышении общего целевого размера
+128 МиБ удаляет старейшие неактуальные файлы. Текущая сборка защищена от очистки. Публичные иллюстрации
+новостей сохраняются. HTML не кэшируется; ошибки `/assets/*.js` с кодом 404 проверяются отдельно от TIFF.
 
 Reverse proxy должен:
 
