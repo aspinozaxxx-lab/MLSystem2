@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, Eye, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
@@ -16,7 +16,7 @@ import { apiJson } from "./api/client";
 import type { PseudoMarkupViewInfo } from "./api/types";
 import { formatDateTime } from "./utils/format";
 import { BAND_CHANNELS, type BandMode } from "./utils/datasetEditor";
-import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle, type PseudoProperties } from "./utils/pseudoViewer";
+import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle, pseudoViewportScenes, type PseudoProperties } from "./utils/pseudoViewer";
 import { rasterCache } from "./utils/rasterCache";
 import { rasterBackdrop } from "./utils/rasterBackdrop";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
@@ -68,6 +68,7 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
   const [query, setQuery] = useState("");
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
   const [rasterErrors, setRasterErrors] = useState<string[]>([]);
+  const [viewportSceneIds, setViewportSceneIds] = useState(new Set<string>());
   const classes = useMemo(() => pseudoClasses(geojson.features), [geojson]);
   const scenes = info.scenes.filter((scene) => scene.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const hasNir = info.scenes.some((scene) => scene.has_nir && !scene.has_alpha);
@@ -153,6 +154,15 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
     if (isEmpty(bounds) && vectorBounds) extend(bounds, vectorBounds);
     allBounds.current = bounds;
     if (!isEmpty(bounds)) view.fit(bounds, { padding: [32, 32, 32, 32], maxZoom: 20 });
+    let previousVisible: Set<string> | null = null;
+    map.on("postrender", ({ frameState }) => {
+      if (!active || !frameState) return;
+      const visible = new Set(pseudoViewportScenes(info.scenes, frameState.viewState, frameState.size).map((scene) => scene.id));
+      // Следим за текущим кадром, включая анимацию и полный экран; список не перерисовывается без смены состава.
+      if (previousVisible?.size === visible.size && [...visible].every((id) => previousVisible!.has(id))) return;
+      previousVisible = visible;
+      setViewportSceneIds(visible);
+    });
     map.on("moveend", () => {
       const extent = view.calculateExtent(map.getSize());
       // Сохраняем недавно просмотренные источники при небольших перемещениях.
@@ -220,8 +230,16 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
     <div className="pseudo-viewer-body">
       <aside className="pseudo-sidebar">
         <h2>Снимки <span>{info.scenes.length}{info.expected_image_count != null && info.expected_image_count !== info.scenes.length ? ` из ${info.expected_image_count}` : ""}</span></h2>
+        <p className="pseudo-scene-count"><Eye size={14} aria-hidden="true" />{imagesVisible ? `На экране: ${viewportSceneIds.size}` : "Снимки скрыты"}</p>
         <input type="search" placeholder="Найти снимок" aria-label="Найти снимок" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <div className="pseudo-scene-list">{scenes.map((scene) => <button type="button" key={scene.id} title={`Приблизить ${scene.name}`} onClick={() => fit(scene.bounds)}>{scene.name}</button>)}</div>
+        <div className="pseudo-scene-list">{scenes.map((scene) => {
+          const visible = imagesVisible && viewportSceneIds.has(scene.id);
+          return <button type="button" key={scene.id} className={visible ? "in-view" : undefined}
+            aria-label={`${scene.name}${visible ? " · На экране" : ""}`}
+            title={`${visible ? "На экране. " : ""}Приблизить ${scene.name}`} onClick={() => fit(scene.bounds)}>
+            <Eye className="pseudo-scene-visibility" size={14} aria-hidden="true" /><span>{scene.name}</span>
+          </button>;
+        })}</div>
         {!info.scenes.length ? <p>Исходные снимки недоступны. Слой псевдоразметки можно просматривать отдельно.</p> : null}
       </aside>
       <div className="pseudo-map-area">
@@ -240,6 +258,6 @@ function PseudoMap({ info, geojson, username }: LoadedView & { username: string 
         {!geojson.features.length ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">Наведите курсор на карту: колесо — масштаб, перетаскивание — перемещение. Нажмите на название снимка, чтобы приблизить его.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">Наведите курсор на карту: колесо — масштаб, перетаскивание — перемещение. Видимые в области карты снимки подсвечены в списке. Нажмите на название снимка, чтобы приблизить его.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </div>;
 }

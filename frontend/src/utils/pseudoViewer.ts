@@ -1,5 +1,6 @@
 import type { Style as WebGLTileStyle } from "ol/layer/WebGLTile";
-import { intersects, type Extent } from "ol/extent";
+import { getRotatedViewport, intersects, type Extent } from "ol/extent";
+import Polygon from "ol/geom/Polygon";
 import { BAND_CHANNELS, RASTER_CONTRAST, type BandMode } from "./datasetEditor";
 
 export type PseudoProperties = Record<string, unknown>;
@@ -15,6 +16,16 @@ export function pseudoRasterCacheSizes(sceneCounts: number[]) {
 
 export function pseudoRasterScenes<T extends { bounds: Extent }>(scenes: T[], extent: Extent, resolution: number): T[] {
   return resolution === Number.MAX_SAFE_INTEGER ? scenes.slice(0, 1) : scenes.filter((scene) => intersects(extent, scene.bounds));
+}
+
+export function pseudoViewportScenes<T extends { bounds: Extent }>(
+  scenes: T[],
+  view: { center: number[]; resolution: number; rotation: number },
+  size: number[],
+): T[] {
+  const corners = getRotatedViewport(view.center, view.resolution, view.rotation, size);
+  const viewport = new Polygon([Array.from({ length: corners.length / 2 }, (_, index) => corners.slice(index * 2, index * 2 + 2))]);
+  return scenes.filter((scene) => viewport.intersectsExtent(scene.bounds));
 }
 
 export function pseudoRasterStyle(mode: BandMode, hasAlpha: boolean, hasNir: boolean): WebGLTileStyle {

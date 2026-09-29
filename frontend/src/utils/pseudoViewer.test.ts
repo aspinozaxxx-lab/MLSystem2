@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 import WebGLTileLayer from "ol/layer/WebGLTile";
 import DataTile from "ol/source/DataTile";
-import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle } from "./pseudoViewer";
+import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle, pseudoViewportScenes } from "./pseudoViewer";
 
 describe("слои просмотра псевдоразметки", () => {
+  it("отмечает частично видимые и перекрывающиеся снимки при перемещении и приближении карты", () => {
+    const scenes = [
+      { id: "слева", bounds: [0, 0, 10, 10] },
+      { id: "перекрытие", bounds: [8, 0, 18, 10] },
+      { id: "справа", bounds: [30, 0, 40, 10] },
+    ];
+    const visible = (center: number[], resolution: number, size = [20, 20]) =>
+      pseudoViewportScenes(scenes, { center, resolution, rotation: 0 }, size).map((scene) => scene.id);
+    expect(visible([20, 5], 3)).toEqual(["слева", "перекрытие", "справа"]);
+    expect(visible([9, 5], 0.1)).toEqual(["слева", "перекрытие"]);
+    expect(visible([35, 5], 0.1)).toEqual(["справа"]);
+    expect(visible([25, 5], 0.1)).toEqual([]);
+    expect(visible([25, 5], 0.1, [160, 20])).toEqual(["перекрытие", "справа"]);
+  });
+  it("не отмечает снимок за углом повёрнутой карты, даже если он входит в её bounding box", () => {
+    const scenes = [
+      { id: "в центре", bounds: [-1, -1, 1, 1] },
+      { id: "за углом", bounds: [11, 11, 13, 13] },
+      { id: "частично", bounds: [12, -1, 16, 1] },
+    ];
+    expect(pseudoViewportScenes(scenes, { center: [0, 0], resolution: 1, rotation: Math.PI / 4 }, [20, 20])
+      .map((scene) => scene.id)).toEqual(["в центре", "частично"]);
+    expect(pseudoViewportScenes([], { center: [0, 0], resolution: 1, rotation: 0 }, [20, 20])).toEqual([]);
+  });
   it.each([[4, 25, 0], [4, 2, 1], [1, 1, 1], [0, 1, 0], [0, 0, 0]])(
     "сохраняет ограниченный кэш и не роняет OpenLayers при смене снимков (%i/%i/%i)", (...counts) => {
       const sizes = pseudoRasterCacheSizes(counts);
