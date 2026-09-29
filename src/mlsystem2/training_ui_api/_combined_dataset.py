@@ -32,6 +32,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 
 from ._markup_export import find_intersecting_images
+from ._raster_valid_data import valid_data_footprint
 from .contracts import TrainingUIAPIError
 
 
@@ -171,9 +172,7 @@ def build_combined_dataset(
             if dataset.crs is None:
                 warnings_list.append(f"Пропущен TIFF без CRS: {image.source_id}")
                 continue
-            from ._dataset_editor import _valid_data_footprint
-
-            footprint = _valid_data_footprint(image.path)
+            footprint = valid_data_footprint(image.path)
             transformer = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
             transformed_features: list[tuple[_SourceFeature, BaseGeometry]] = []
             for item in all_features:
@@ -336,9 +335,7 @@ def _build_per_image_combined_dataset(
         with rasterio.open(image_path) as dataset:
             if dataset.crs is None:
                 raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path}")
-            from ._dataset_editor import _valid_data_footprint
-
-            footprint = _valid_data_footprint(image_path)
+            footprint = valid_data_footprint(image_path)
             transformer = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
             transformed_features: list[tuple[_SourceFeature, BaseGeometry]] = []
             for item in features_by_annotation.get(annotation_name, []):

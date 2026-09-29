@@ -12,7 +12,8 @@ from pathlib import Path
 
 import rasterio
 from rasterio.enums import ColorInterp
-from rasterio.warp import transform_bounds
+from rasterio.warp import transform_bounds, transform_geom
+from shapely.geometry import mapping
 from sqlalchemy.orm import Session
 
 from mlsystem2.dataset_preparing.api import resolve_scene_images
@@ -23,6 +24,7 @@ from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._datasets import RASTER_SUFFIXES, imagery_images_dir
 from ._models import JobRow, PseudoMarkupResultRow
 from ._raster_http import raster_revision
+from ._raster_valid_data import valid_data_footprint
 from .contracts import PseudoMarkupSceneInfo, PseudoMarkupViewInfo, TrainingUIAPIError
 
 
@@ -39,6 +41,7 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
             scenes.append(PseudoMarkupSceneInfo(
                 id=scene_id, name=path.relative_to(config.images_root.resolve()).as_posix(),
                 raster_url=f"/api/v1/results/pseudo-markup/{result.id}/raster/{scene_id}?v={raster_revision(path)}",
+                footprint_url=f"/api/v1/results/pseudo-markup/{result.id}/footprint/{scene_id}?v={raster_revision(path)}",
                 bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,
             ))
         except (OSError, ValueError, rasterio.errors.RasterioError) as exc:
@@ -72,6 +75,14 @@ def _ready_result(session: Session, result_id: uuid.UUID) -> PseudoMarkupResultR
     if not Path(result.geojson_file.path).is_file():
         raise TrainingUIAPIError("Файл псевдоразметки больше недоступен")
     return result
+
+
+def pseudo_markup_footprint(path: Path) -> dict:
+    """Контур фактических данных; общий с редактором ограниченный кэш масок TIFF."""
+    geometry = valid_data_footprint(path)
+    with rasterio.open(path) as source:
+        geometry = transform_geom(source.crs, "EPSG:3857", mapping(geometry))
+    return {"type": "Feature", "properties": {}, "geometry": geometry}
 
 
 def _scene_id(path: Path) -> str:

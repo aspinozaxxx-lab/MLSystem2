@@ -17,12 +17,18 @@
 .pseudo-scene-count { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 12px; color: var(--accent-strong); }
 .pseudo-sidebar input { font-size: 12px; min-height: 34px; }
 .pseudo-scene-list { overflow-y: auto; margin-top: 8px; }
-.pseudo-scene-list button { display: flex; align-items: flex-start; gap: 6px; width: 100%; text-align: left; font-size: 11px; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); overflow-wrap: anywhere; }
-.pseudo-scene-list button > span { min-width: 0; }
-.pseudo-scene-list button:hover, .pseudo-scene-list button:focus-visible { background: var(--surface-soft); }
-.pseudo-scene-list button.in-view { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent-strong); }
-.pseudo-scene-visibility { flex-shrink: 0; color: var(--accent-strong); visibility: hidden; }
-.pseudo-scene-list button.in-view .pseudo-scene-visibility { visibility: visible; }
+.pseudo-scene-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+.pseudo-scene-row.in-view { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent-strong); }
+.pseudo-scene-row.selected { outline: 1px solid #fbbf24; outline-offset: -1px; }
+.pseudo-scene-row:hover, .pseudo-scene-row:focus-within { background: var(--surface-soft); }
+.pseudo-scene-row.in-view:hover, .pseudo-scene-row.in-view:focus-within { background: var(--accent-soft); }
+.pseudo-scene-row button { display: flex; align-items: flex-start; text-align: left; font-size: 11px; padding: 10px 8px; border: 0; border-radius: 0; background: transparent; color: var(--text); }
+.pseudo-scene-row .pseudo-scene-name { flex: 1; min-width: 0; padding-left: 0; overflow-wrap: anywhere; }
+.pseudo-scene-name > span { min-width: 0; }
+.pseudo-scene-row .pseudo-scene-toggle { flex-shrink: 0; color: var(--muted); padding-top: 11px; }
+.pseudo-scene-row .pseudo-scene-toggle:hover, .pseudo-scene-row .pseudo-scene-toggle:focus-visible { color: var(--accent-strong); }
+.pseudo-scene-row.hidden-scene .pseudo-scene-name { color: var(--muted); }
+.pseudo-outline-error { position: absolute; top: 12px; left: 12px; max-width: calc(100% - 80px); padding: 8px 12px; background: var(--surface); border-radius: 6px; font-size: 12px; }
 .pseudo-map-area { position: relative; min-width: 0; }
 .pseudo-map { height: max(480px, calc(100vh - 310px)); background: #111827; border-radius: 10px; overflow: hidden; }
 .pseudo-map-legend { position: absolute; left: 12px; bottom: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }

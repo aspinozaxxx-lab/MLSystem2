@@ -14,8 +14,9 @@ export function pseudoRasterCacheSizes(sceneCounts: number[]) {
   return sceneCounts.map((count, index) => base[index] + (total ? 2 * Math.floor(remaining * count / total / 2) : 0));
 }
 
-export function pseudoRasterScenes<T extends { bounds: Extent }>(scenes: T[], extent: Extent, resolution: number): T[] {
-  return resolution === Number.MAX_SAFE_INTEGER ? scenes.slice(0, 1) : scenes.filter((scene) => intersects(extent, scene.bounds));
+export function pseudoRasterScenes<T extends { id: string; bounds: Extent }>(scenes: T[], extent: Extent, resolution: number, hidden = new Set<string>()): T[] {
+  return resolution === Number.MAX_SAFE_INTEGER ? scenes.slice(0, 1)
+    : scenes.filter((scene) => !hidden.has(scene.id) && intersects(extent, scene.bounds));
 }
 
 export function pseudoViewportScenes<T extends { bounds: Extent }>(

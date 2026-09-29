@@ -62,6 +62,10 @@ describe("слои просмотра псевдоразметки", () => {
       expect(selected.every((ids) => ids.length === 1 && ids[0] === "первый")).toBe(true);
       expect(layer.getSources([21, 1, 29, 9], 1)).toEqual([scenes[1].source]);
       expect(layer.getSources([40, 0, 50, 10], 1)).toEqual([]);
+      expect(pseudoRasterScenes(scenes, [0, 0, 30, 10], 1, new Set(["первый"]))).toEqual([scenes[1]]);
+      expect(pseudoRasterScenes(scenes, [0, 0, 30, 10], 1, new Set(["первый", "второй"]))).toEqual([]);
+      expect(pseudoRasterScenes(scenes, [0, 0, 30, 10], Number.MAX_SAFE_INTEGER,
+        new Set(["первый", "второй"]))).toEqual([scenes[0]]);
     } finally {
       layer.dispose();
       scenes.forEach((scene) => scene.source.dispose());

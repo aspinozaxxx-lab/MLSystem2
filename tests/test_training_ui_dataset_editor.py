@@ -1995,9 +1995,12 @@ def test_pseudo_viewer_versions_raster_ranges_and_rejects_changed_files(editor_e
     assert first.status_code == 206 and len(first.content) == 16
     assert first.headers["etag"] == f'"{old_url.split("?v=")[1]}"'
     assert first.headers["cache-control"] == "private, no-store"
+    footprint_url = env.client.get(view_url).json()["scenes"][0]["footprint_url"]
+    assert env.client.get(footprint_url).status_code == 200
     _write_raster(image, value=120, channels=3)
     new_url = env.client.get(view_url).json()["scenes"][0]["raster_url"]
     assert new_url != old_url
+    assert env.client.get(footprint_url).status_code == 412
     stale = env.client.get(old_url, headers={"Range": "bytes=16-31"})
     assert stale.status_code == 412
     assert "Снимок изменился" in stale.json()["detail"]
@@ -2006,6 +2009,46 @@ def test_pseudo_viewer_versions_raster_ranges_and_rejects_changed_files(editor_e
     assert env.client.get(old_url.split("?")[0], headers={"Range": "bytes=0-15"}).status_code == 206
     env.client.cookies.clear()
     assert env.client.get(new_url, headers={"Range": "bytes=0-15"}).status_code == 401
+
+
+@pytest.mark.parametrize("layout", ["rgb", "rgba", "rgba_nodata", "nir", "mask"])
+def test_pseudo_viewer_footprint_excludes_nodata_and_holes(editor_environment, layout):
+    env = editor_environment
+    image = get_config().images_root / f"kanopus/batch/contour_{layout}.tif"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    channels = 3 if layout in {"rgb", "mask"} else 4
+    pixels = np.full((channels, 64, 64), 80, dtype="uint8")
+    valid = np.ones((64, 64), dtype="uint8") * 255
+    valid[:, :16] = 0
+    valid[24:40, 24:40] = 0
+    if layout.startswith("rgba"):
+        pixels[3] = valid
+    elif layout != "mask":
+        pixels[:, valid == 0] = 0
+    with rasterio.open(image, "w", driver="GTiff", width=64, height=64, count=channels,
+                       dtype="uint8", crs="EPSG:3857", transform=from_origin(0, 64, 1, 1),
+                       nodata=None if layout in {"rgba", "mask"} else 0) as raster:
+        raster.write(pixels)
+        if layout.startswith("rgba"):
+            raster.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
+                                  rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.alpha)
+        elif layout == "nir":
+            raster.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
+                                  rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.undefined)
+        if layout == "mask":
+            raster.write_mask(valid)
+    result, _ = _create_viewer_result(env, _create_primary_training_result(env), [image], "snapshot")
+    scene = env.client.get(f"/api/v1/results/pseudo-markup/{result}/view").json()["scenes"][0]
+    response = env.client.get(scene["footprint_url"])
+    assert response.status_code == 200, response.text
+    contour = shape(response.json()["geometry"])
+    assert contour.bounds == (16, 0, 64, 64)
+    assert contour.area == (48 * 64 - 16 * 16)
+    assert not contour.intersects(box(25, 25, 39, 39))
+    assert contour.covers(box(17, 1, 23, 20))
+    assert env.client.get(f"/api/v1/results/pseudo-markup/{result}/footprint/foreign").status_code == 400
+    env.client.cookies.clear()
+    assert env.client.get(scene["footprint_url"]).status_code == 401
 
 
 def test_pseudo_viewer_resolves_historical_ortho_list_without_job(editor_environment):

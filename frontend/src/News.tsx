@@ -9,9 +9,19 @@ type NewsArticle = {
   image?: NewsImage;
   sections: { title: string; paragraphs?: string[]; steps?: string[]; image?: NewsImage }[];
 };
+type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: string[] };
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
-export const newsArticles: readonly NewsArticle[] = [{
+export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "pseudo-markup-viewer-improvements",
+  date: "2026-09-29",
+  title: "Улучшения просмотра псевдоразметки",
+  updates: [
+    "Временные сбои загрузки снимков повторяются автоматически; отменённые при перемещении тайлы больше не вызывают ложных сообщений об ошибке.",
+    "Глаз рядом со снимком скрывает или возвращает его подложку; попадание в область карты обозначается подсветкой строки.",
+    "Наведение на снимок выделяет на карте контур его данных без nodata; нажатие на название приближает снимок и сохраняет выделение.",
+  ],
+}, {
   slug: "pseudo-markup-visible-scenes",
   date: "2026-09-29",
   title: "В просмотре псевдоразметки видно, какие снимки сейчас на экране",
@@ -170,7 +180,11 @@ function articleDate(value: string): string {
 export function NewsSection() {
   return <section className="panel news-section" aria-labelledby="news-heading">
     <div className="panel-header"><div><h2 id="news-heading">Новости</h2><p>Что появилось в Гровике и как этим пользоваться</p></div></div>
-    <div className="news-list">{newsArticles.map((article) => <a className={`news-card${article.image ? "" : " news-card-text"}`} key={article.slug} href={`#/news/${article.slug}`}>
+    <div className="news-list">{newsArticles.map((article) => "updates" in article ? <article className="news-updates" key={article.slug}>
+      <time dateTime={article.date}>{articleDate(article.date)}</time>
+      <h3><a href={`#/news/${article.slug}`}>{article.title}</a></h3>
+      <ul>{article.updates.map((text) => <li key={text}>{text}</li>)}</ul>
+    </article> : <a className={`news-card${article.image ? "" : " news-card-text"}`} key={article.slug} href={`#/news/${article.slug}`}>
       <div className="news-card-copy">
         <time dateTime={article.date}>{articleDate(article.date)}</time>
         <h3>{article.title}</h3><p>{article.summary}</p>
@@ -185,6 +199,11 @@ export function NewsPage({ slug }: { slug?: string }) {
   const article = newsArticles.find((item) => item.slug === slug);
   if (!slug) return <NewsSection />;
   if (!article) return <section className="panel"><h1>Новость не найдена</h1><a href="#/">На главную</a></section>;
+  if ("updates" in article) return <article className="panel news-article news-updates">
+    <a className="news-back" href="#/"><ArrowLeft size={16} /> Все новости на главной</a>
+    <header><time dateTime={article.date}>{articleDate(article.date)}</time><h1>{article.title}</h1></header>
+    <ul>{article.updates.map((text) => <li key={text}>{text}</li>)}</ul>
+  </article>;
   return <article className="panel news-article">
     <a className="news-back" href="#/"><ArrowLeft size={16} /> Все новости на главной</a>
     <header><time dateTime={article.date}>{articleDate(article.date)}</time><h1>{article.title}</h1><p className="news-lead">{article.summary}</p></header>

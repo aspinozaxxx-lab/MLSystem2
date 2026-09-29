@@ -12,7 +12,6 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
 from typing import Any, BinaryIO, Iterator
@@ -20,10 +19,7 @@ from urllib.parse import quote
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import rasterio
-from affine import Affine
 from pyproj import CRS as PyprojCRS, Transformer
-from rasterio.enums import Resampling
-from rasterio.features import shapes
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
@@ -72,6 +68,7 @@ from ._managed_datasets import (
     managed_sources,
 )
 from ._pseudolabel import _select_model
+from ._raster_valid_data import valid_data_footprint
 from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
 from .contracts import (
     DatasetEditorDatasetInfo,
@@ -108,8 +105,6 @@ _ROLE_PROPERTY = "_mlsystem2_role"
 _CLASS_PROPERTY = "_mlsystem2_class"
 _ROLES = {"positive", "hard_negative", "annotation_zone"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40,64}")
-_VALID_FOOTPRINT_MAX_SIDE = 4096
-_VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 _URGENT_PRIORITY = "urgent"
 _EDITOR_SYNC_TTL_SECONDS = 60.0
 _EDITOR_PSEUDO_ALGORITHM_VERSION = 1
@@ -370,7 +365,7 @@ def editor_scene_detail(
             published_geojson = _reproject_editor_geojson(
                 _read_geojson(_annotation_path(source_dir, annotation_name)), image_path,
             )
-        footprint = _valid_data_footprint(image_path)
+        footprint = valid_data_footprint(image_path)
         return DatasetEditorSceneDetail(
             scene=scene,
             geojson=_clip_geojson_to_footprint(published_geojson, footprint),
@@ -497,7 +492,7 @@ def save_editor_draft(
         )
         normalized_geojson = _clip_geojson_to_footprint(
             normalized_geojson,
-            _valid_data_footprint(image_path),
+            valid_data_footprint(image_path),
         )
         _validate_editor_geojson(normalized_geojson, image_path, dataset)
         _validate_preserved_properties(previous_payload, normalized_geojson)
@@ -2524,7 +2519,7 @@ def _pseudo_geojson_for_image(path: Path, image_path: Path) -> dict[str, Any]:
             raster_crs = PyprojCRS.from_user_input(source.crs)
     except rasterio.errors.RasterioError as exc:
         raise TrainingUIAPIError(f"Не удалось открыть TIFF: {exc}") from exc
-    footprint = _valid_data_footprint(image_path)
+    footprint = valid_data_footprint(image_path)
     to_wgs84 = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
     footprint_wgs84 = transform_geometry(to_wgs84.transform, footprint)
     raw_crs = payload.get("crs")
@@ -3397,7 +3392,7 @@ def _footprint_geojson_payload(image_path: Path) -> dict[str, Any]:
             {
                 "type": "Feature",
                 "properties": {"_mlsystem2_type": "valid_data_footprint"},
-                "geometry": dict(mapping(_valid_data_footprint(image_path))),
+                "geometry": dict(mapping(valid_data_footprint(image_path))),
             }
         ],
     }
@@ -3463,7 +3458,7 @@ def _validate_editor_geojson(
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
     geojson_crs = _geojson_crs(payload)
     raster_crs = _editor_raster_crs(image_path)
-    footprint = _valid_data_footprint(image_path)
+    footprint = valid_data_footprint(image_path)
     if geojson_crs != raster_crs:
         raise TrainingUIAPIError(
             f"CRS GeoJSON ({geojson_crs.to_string()}) не совпадает с CRS TIFF "
@@ -3517,18 +3512,6 @@ def _validate_editor_geojson(
             )
 
 
-def _valid_data_footprint(image_path: Path) -> BaseGeometry:
-    try:
-        status = image_path.stat()
-    except OSError as exc:
-        raise TrainingUIAPIError(f"Не удалось прочитать TIFF {image_path.name}: {exc}") from exc
-    return _cached_valid_data_footprint(
-        str(image_path.resolve()),
-        status.st_mtime_ns,
-        status.st_size,
-    )
-
-
 def _footprint_covers_geometry(
     footprint: BaseGeometry,
     geometry: BaseGeometry,
@@ -3540,79 +3523,6 @@ def _footprint_covers_geometry(
     return outside_area <= numerical_tolerance
 
 
-@lru_cache(maxsize=64)
-def _cached_valid_data_footprint(
-    image_path: str,
-    _modified_ns: int,
-    _size_bytes: int,
-) -> BaseGeometry:
-    try:
-        with rasterio.open(image_path) as source:
-            if source.width <= 0 or source.height <= 0:
-                raise TrainingUIAPIError(f"TIFF не содержит пикселей: {Path(image_path).name}")
-            scale = min(
-                1.0,
-                _VALID_FOOTPRINT_MAX_SIDE / max(source.width, source.height),
-            )
-            sample_width = max(1, int(round(source.width * scale)))
-            sample_height = max(1, int(round(source.height * scale)))
-            valid_mask = (
-                source.dataset_mask(
-                    out_shape=(sample_height, sample_width),
-                    resampling=Resampling.nearest,
-                )
-                > 0
-            )
-            if not bool(valid_mask.any()):
-                raise TrainingUIAPIError(
-                    f"TIFF не содержит валидных пикселей: {Path(image_path).name}"
-                )
-            mask_transform = source.transform * Affine.scale(
-                source.width / sample_width,
-                source.height / sample_height,
-            )
-            if bool(valid_mask.all()):
-                footprint: BaseGeometry = Polygon(
-                    (
-                        source.transform * (0, 0),
-                        source.transform * (source.width, 0),
-                        source.transform * (source.width, source.height),
-                        source.transform * (0, source.height),
-                    )
-                )
-            else:
-                parts = [
-                    shape(geometry)
-                    for geometry, value in shapes(
-                        valid_mask.astype("uint8", copy=False),
-                        mask=valid_mask,
-                        transform=mask_transform,
-                    )
-                    if int(value) == 1
-                ]
-                footprint = _polygonal_geometry(unary_union(parts))
-                tolerance = (
-                    max(
-                        abs(mask_transform.a),
-                        abs(mask_transform.b),
-                        abs(mask_transform.d),
-                        abs(mask_transform.e),
-                    )
-                    * _VALID_FOOTPRINT_SIMPLIFY_CELLS
-                )
-                if tolerance > 0:
-                    footprint = _polygonal_geometry(
-                        footprint.simplify(tolerance, preserve_topology=True)
-                    )
-    except TrainingUIAPIError:
-        raise
-    except (OSError, rasterio.errors.RasterioError) as exc:
-        raise TrainingUIAPIError(f"Не удалось открыть TIFF {Path(image_path).name}: {exc}") from exc
-    if footprint.is_empty or footprint.area <= 0:
-        raise TrainingUIAPIError(
-            f"Не удалось построить footprint валидных данных: {Path(image_path).name}"
-        )
-    return footprint
 
 
 def _clip_geojson_to_footprint(

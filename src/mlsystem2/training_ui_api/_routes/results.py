@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
@@ -29,8 +29,8 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from .common import RouteContext
-from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_raster, pseudo_markup_view
-from mlsystem2.training_ui_api._raster_http import raster_response
+from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, pseudo_markup_raster, pseudo_markup_view
+from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
@@ -51,6 +51,21 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> StreamingResponse:
         return raster_response(pseudo_markup_raster(db, ctx.config, result_id, scene_id), range_header, v)
+
+    @app.get("/api/v1/results/pseudo-markup/{result_id}/footprint/{scene_id}")
+    def get_pseudo_markup_footprint(
+        result_id: uuid.UUID, scene_id: str,
+        v: str | None = None,
+        db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> JSONResponse:
+        path = pseudo_markup_raster(db, ctx.config, result_id, scene_id)
+        revision = raster_revision(path)
+        if v is not None and v != revision:
+            raise HTTPException(412, "Снимок изменился. Откройте просмотр заново.")
+        return JSONResponse(pseudo_markup_footprint(path), headers={
+            "ETag": f'"{revision}"', "Cache-Control": "private, no-store",
+        })
 
     @app.get("/api/v1/results/classes", response_model=ResultClassListResponse)
     def get_result_classes(

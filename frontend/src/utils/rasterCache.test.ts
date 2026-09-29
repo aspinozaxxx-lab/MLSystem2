@@ -73,12 +73,31 @@ describe("Кэш фрагментов TIFF", () => {
     db.close();
   });
 
-  it.each([200, 401, 403, 412, 500])("не сохраняет ответ со статусом %s", async (status) => {
+  it.each([200, 401, 403, 404, 412])("не сохраняет ответ со статусом %s", async (status) => {
     fetcher.mockImplementation(async () => new Response("TIFF", { status }));
     const store = cache();
     await store.load("oleg", url, headers);
     await store.load("oleg", url, headers);
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("восстанавливает запрос после обрыва и временного ответа сервера", async () => {
+    fetcher.mockRejectedValueOnce(new TypeError("Обрыв сети"))
+      .mockResolvedValueOnce(new Response("Временно недоступно", { status: 503 }));
+    const store = cache();
+    expect(await (await store.load("oleg", url, headers)).text()).toBe("TIFF");
+    await store.load("oleg", url, headers);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("останавливает повторы при устойчивой ошибке и при отмене запроса", async () => {
+    fetcher.mockResolvedValue(new Response("Временно недоступно", { status: 503 }));
+    expect((await cache().load("oleg", url, headers)).status).toBe(503);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    const abort = new AbortController();
+    fetcher.mockImplementationOnce(async () => { abort.abort(); throw abort.signal.reason; });
+    await expect(cache().load("oleg", url, headers, abort.signal)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it("не сохраняет чужой ETag, неполные байты и неправильный диапазон", async () => {

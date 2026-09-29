@@ -2,6 +2,7 @@
 export const RASTER_CACHE_BYTES = 512 * 1024 * 1024;
 export const RASTER_CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+const TRANSIENT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 type CachedRange = { key: string; data: ArrayBuffer; headers: [string, string][]; size: number; expires: number; used: number };
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
@@ -132,7 +133,31 @@ export class RasterRangeCache {
     const cached = cacheable ? await this.get(key) : undefined;
     signal?.throwIfAborted();
     if (cached && generation === this.generation) return new Response(cached.data, { status: 206, headers: cached.headers });
-    const response = await fetch(url, { headers, signal, credentials: "same-origin", cache: "no-store" });
+    // Повторяем обрыв сети и временный ответ сервера, но не отмену, отсутствие файла или смену версии.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await fetch(url, { headers, signal, credentials: "same-origin", cache: "no-store" });
+        if (TRANSIENT_STATUSES.has(response.status) && attempt < 2) {
+          await response.body?.cancel();
+        } else {
+          await this.cacheResponse(response, cacheable, version, range, key, generation, signal);
+          return response;
+        }
+      } catch (error) {
+        if (signal?.aborted || attempt >= 2) throw error;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal!.reason); };
+        const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, attempt ? 600 : 200);
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+      signal?.throwIfAborted();
+    }
+  }
+
+  private async cacheResponse(response: Response, cacheable: string | boolean | null, version: string | null,
+    range: string | null, key: string, generation: number, signal?: AbortSignal): Promise<void> {
     const size = Number(response.headers.get("content-length"));
     const actual = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("content-range") ?? "");
     const requested = /^bytes=(\d+)-(\d+)$/.exec(range ?? "");
@@ -146,7 +171,6 @@ export class RasterRangeCache {
           used: this.now(), expires: this.now() + RASTER_CACHE_TTL }, generation);
       }
     }
-    return response;
   }
 }
 

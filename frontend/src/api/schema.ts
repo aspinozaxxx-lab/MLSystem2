@@ -1602,6 +1602,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/pseudo-markup/{result_id}/footprint/{scene_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pseudo Markup Footprint */
+        get: operations["get_pseudo_markup_footprint_api_v1_results_pseudo_markup__result_id__footprint__scene_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/classes": {
         parameters: {
             query?: never;
@@ -3253,6 +3270,8 @@ export interface components {
             name: string;
             /** Raster Url */
             raster_url: string;
+            /** Footprint Url */
+            footprint_url: string;
             /** Bounds */
             bounds: [
                 number,
@@ -7987,6 +8006,40 @@ export interface operations {
             header?: {
                 Range?: string | null;
             };
+            path: {
+                result_id: string;
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pseudo_markup_footprint_api_v1_results_pseudo_markup__result_id__footprint__scene_id__get: {
+        parameters: {
+            query?: {
+                v?: string | null;
+            };
+            header?: never;
             path: {
                 result_id: string;
                 scene_id: string;

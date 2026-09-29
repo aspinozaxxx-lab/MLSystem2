@@ -49,6 +49,7 @@ class PseudoMarkupSceneInfo(BaseModel):
     id: str
     name: str
     raster_url: str
+    footprint_url: str
     bounds: tuple[float, float, float, float]
     has_alpha: bool = False
     has_nir: bool = False

@@ -107,7 +107,7 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import PseudoMarkupSceneInfo, PseudoMarkupViewInfo
 
-    assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "bounds", "has_alpha", "has_nir", "nodata"}
+    assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "footprint_url", "bounds", "has_alpha", "has_nir", "nodata"}
     assert set(PseudoMarkupViewInfo.model_fields) == {
         "id", "training_result_id", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
         "geojson_url", "object_count", "expected_image_count", "scenes", "warnings",
@@ -117,5 +117,6 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     paths = get_openapi_schema()["paths"]
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/view"]) == {"get"}
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]) == {"get"}
+    assert set(paths["/api/v1/results/pseudo-markup/{result_id}/footprint/{scene_id}"]) == {"get"}
     raster_parameters = paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]["get"]["parameters"]
     assert any(item["name"] == "v" and item["in"] == "query" and item["required"] is False for item in raster_parameters)
