@@ -26,6 +26,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     list_editor_datasets,
     list_editor_scenes,
     list_editor_user_drafts,
+    import_editor_drafts,
     publish_editor_drafts,
     publish_editor_scenes,
     preview_editor_dataset_rebuild,
@@ -42,6 +43,7 @@ from mlsystem2.training_ui_api.contracts import (
     DatasetEditorDeleteSceneRequest,
     DatasetEditorDiscardDraftsResult,
     DatasetEditorDraftInfo,
+    DatasetEditorImportRequest,
     DatasetEditorMutationResult,
     DatasetEditorPublishRequest,
     DatasetEditorPublicationInfo,
@@ -178,6 +180,23 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             annotation_name,
+            username=username,
+        )
+
+    @app.post(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import",
+        response_model=DatasetEditorSceneListResponse,
+        summary="Загрузить GeoJSON новых снимков в черновики",
+    )
+    def import_drafts(
+        dataset_key: str,
+        request: DatasetEditorImportRequest,
+        db: Session = Depends(ctx.get_db),
+        username: str = Depends(ctx.authenticated),
+    ) -> DatasetEditorSceneListResponse:
+        return _git_call(
+            import_editor_drafts, db, ctx.config, dataset_key,
+            scenes=[(scene.annotation_name, scene.geojson) for scene in request.scenes],
             username=username,
         )
 

@@ -1423,11 +1423,20 @@
 }
 
 .dataset-editor-selectors {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 14px;
   margin-bottom: 16px;
+}
+
+.dataset-editor-selectors > .field {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.dataset-editor-selectors > button {
+  flex: 0 0 auto;
 }
 
 .dataset-editor-layout {

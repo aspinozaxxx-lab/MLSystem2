@@ -115,6 +115,7 @@ _EDITOR_SYNC_TTL_SECONDS = 60.0
 _EDITOR_PSEUDO_ALGORITHM_VERSION = 1
 _MANAGED_OWNER_PROPERTY = "_mlsystem2_managed_dataset_key"
 _EDITOR_RASTER_CRS = PyprojCRS.from_epsg(3857)
+_NEW_SCENE_REVISION = "new"
 
 
 class DatasetEditorConflict(RuntimeError):
@@ -355,21 +356,21 @@ def editor_scene_detail(
     username: str,
 ) -> DatasetEditorSceneDetail:
     with _editor_lock(config):
-        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
-        scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
-        annotation_path = _annotation_path(source_dir, annotation_name)
-        image_path = _matched_image_path(dataset, source_dir, annotation_name)
-        published_geojson = _reproject_editor_geojson(
-            _read_geojson(annotation_path),
-            image_path,
-        )
-        footprint = _valid_data_footprint(image_path)
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
         draft_row = _editor_draft_row(
-            session,
-            dataset.key,
-            scene.annotation_name,
-            username,
+            session, dataset.key, _safe_annotation_name(annotation_name), username,
         )
+        if not (source_dir / annotation_name).is_file() and draft_row is not None and draft_row.base_revision == _NEW_SCENE_REVISION:
+            image_path = _image_path_for_annotation(dataset, annotation_name)
+            published_geojson = _empty_annotation_payload(image_path, dataset)
+            scene = _scene_info_from_payload(dataset, annotation_name, image_path, published_geojson, _NEW_SCENE_REVISION)
+        else:
+            scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+            image_path = _matched_image_path(dataset, source_dir, annotation_name)
+            published_geojson = _reproject_editor_geojson(
+                _read_geojson(_annotation_path(source_dir, annotation_name)), image_path,
+            )
+        footprint = _valid_data_footprint(image_path)
         return DatasetEditorSceneDetail(
             scene=scene,
             geojson=_clip_geojson_to_footprint(published_geojson, footprint),
@@ -390,6 +391,76 @@ def editor_scene_detail(
         )
 
 
+def import_editor_drafts(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset_key: str,
+    *,
+    scenes: list[tuple[str, dict[str, Any]]],
+    username: str,
+) -> DatasetEditorSceneListResponse:
+    """Проверить весь пакет, затем сохранить новые сцены только в личных черновиках."""
+    if len(json.dumps(scenes, ensure_ascii=False).encode("utf-8")) > 50 * 1024 * 1024:
+        raise TrainingUIAPIError("Общий размер GeoJSON не должен превышать 50 МиБ")
+    with _editor_lock(config):
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
+        existing = {path.name.casefold() for path in _direct_annotation_files(source_dir)}
+        own_drafts = {name.casefold() for name in session.scalars(select(DatasetEditorDraftRow.annotation_name).where(
+            DatasetEditorDraftRow.dataset_key == dataset.key,
+            DatasetEditorDraftRow.username == username,
+        )).all()}
+        prepared: dict[str, dict[str, Any]] = {}
+        for annotation_name, raw in scenes:
+            try:
+                safe_name = _safe_annotation_name(annotation_name)
+                image_path = _image_path_for_annotation(dataset, safe_name)
+                safe_name = per_image_annotation_name(image_path)
+                if safe_name.casefold() in existing or safe_name.casefold() in own_drafts:
+                    raise DatasetEditorConflict(f"Снимок уже есть в датасете или ваших черновиках: {safe_name}")
+                if safe_name in prepared:
+                    raise TrainingUIAPIError("Несколько файлов относятся к одному снимку")
+                if raw.get("type") != "FeatureCollection" or not isinstance(raw.get("features"), list):
+                    raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
+                if dataset.task == "binary" and raw.get("_mlsystem2_task", "binary") != "binary":
+                    raise TrainingUIAPIError("Многоклассовая разметка не подходит бинарному датасету")
+                candidate = {key: value for key, value in raw.items() if not key.startswith("_mlsystem2_")
+                             or key in {"_mlsystem2_schema_version", "_mlsystem2_task", "_mlsystem2_classes"}}
+                candidate["features"] = []
+                ids: set[str] = set()
+                for feature in raw["features"]:
+                    if not isinstance(feature, dict) or not isinstance(feature.get("properties", {}), (dict, type(None))):
+                        raise TrainingUIAPIError("Некорректный Feature или properties")
+                    feature_id = feature.get("id")
+                    if feature_id is not None:
+                        if not isinstance(feature_id, (str, int, float)) or str(feature_id) in ids:
+                            raise TrainingUIAPIError("ID объектов должны быть уникальными строками или числами")
+                        ids.add(str(feature_id))
+                    properties = {key: value for key, value in (feature.get("properties") or {}).items()
+                                  if not key.startswith("_mlsystem2_") or key in {_ROLE_PROPERTY, _CLASS_PROPERTY}}
+                    if dataset.task == "binary":
+                        properties.setdefault(_ROLE_PROPERTY, "positive")
+                    candidate["features"].append({**feature, "properties": properties})
+                # Сначала проверяем исходную схему и геометрию: импорт не должен молча исправлять чужой формат.
+                _validate_editor_geojson(candidate, image_path, dataset)
+                prepared[safe_name] = _normalize_editor_geojson(
+                    candidate, _empty_annotation_payload(image_path, dataset), dataset, image_path=image_path,
+                )
+            except TrainingUIAPIError as exc:
+                raise TrainingUIAPIError(f"{annotation_name}: {exc}") from exc
+        now = datetime.now(timezone.utc)
+        for annotation_name, payload in prepared.items():
+            session.add(DatasetEditorDraftRow(
+                dataset_key=dataset.key, annotation_name=annotation_name, username=username,
+                base_revision=_NEW_SCENE_REVISION, geojson=payload, deleted=False,
+                created_at=now, updated_at=now,
+            ))
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise DatasetEditorConflict("Черновик одного из снимков уже создан. Обновите список снимков.") from exc
+    return list_editor_scenes(session, config, dataset_key, username=username)
+
+
 def save_editor_draft(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -404,14 +475,20 @@ def save_editor_draft(
     """Сохранить проверенный черновик в БД без Git-коммита и инференса."""
 
     with _editor_lock(config):
-        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
-        scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
-        annotation_path = _annotation_path(source_dir, scene.annotation_name)
-        image_path = _matched_image_path(dataset, source_dir, scene.annotation_name)
-        previous_payload = _reproject_editor_geojson(
-            _read_geojson(annotation_path),
-            image_path,
-        )
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
+        annotation_name = _safe_annotation_name(annotation_name)
+        row = _editor_draft_row(session, dataset.key, annotation_name, username)
+        if base_revision == _NEW_SCENE_REVISION:
+            previous_payload, image_path = _new_scene_draft(session, dataset, source_dir, annotation_name, username)
+            scene = _scene_info_from_payload(dataset, annotation_name, image_path, previous_payload, _NEW_SCENE_REVISION)
+        else:
+            if row is not None and row.base_revision == _NEW_SCENE_REVISION:
+                raise DatasetEditorConflict("Новый снимок ещё не опубликован")
+            scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+            image_path = _matched_image_path(dataset, source_dir, scene.annotation_name)
+            previous_payload = _reproject_editor_geojson(
+                _read_geojson(_annotation_path(source_dir, scene.annotation_name)), image_path,
+            )
         normalized_geojson = _normalize_editor_geojson(
             geojson,
             previous_payload,
@@ -424,7 +501,6 @@ def save_editor_draft(
         )
         _validate_editor_geojson(normalized_geojson, image_path, dataset)
         _validate_preserved_properties(previous_payload, normalized_geojson)
-        row = _editor_draft_row(session, dataset.key, scene.annotation_name, username)
         if row is None:
             created_at = datetime.now(timezone.utc)
             row = DatasetEditorDraftRow(
@@ -486,18 +562,30 @@ def publish_editor_drafts(
     ).all()
     if not rows:
         raise TrainingUIAPIError("Нет сохранённых черновиков для публикации")
-    return publish_editor_scenes(
-        session,
-        config,
-        dataset_key,
-        scenes=[
-            (row.annotation_name, row.base_revision, dict(row.geojson))
-            for row in rows
-            if not row.deleted
-        ],
-        deletions=[(row.annotation_name, row.base_revision) for row in rows if row.deleted],
-        username=username,
-    )
+    discarded = [row for row in rows if row.deleted and row.base_revision == _NEW_SCENE_REVISION]
+    active = [row for row in rows if row not in discarded]
+    if not active:
+        with _editor_lock(config):
+            _editor_dataset_context(session, config, dataset_key, allow_missing=True)
+            commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+            result = DatasetEditorMutationResult(commit=commit, publication_status=_publication_status(config, commit))
+    else:
+        result = publish_editor_scenes(
+            session,
+            config,
+            dataset_key,
+            scenes=[
+                (row.annotation_name, row.base_revision, dict(row.geojson))
+                for row in active
+                if not row.deleted
+            ],
+            deletions=[(row.annotation_name, row.base_revision) for row in active if row.deleted],
+            username=username,
+        )
+    for row in discarded:
+        session.delete(row)
+    session.flush()
+    return result
 
 
 def editor_scene_pseudo_markup(
@@ -955,7 +1043,7 @@ def publish_editor_scenes(
 
     with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
-        dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+        dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
         if dataset.managed:
             return _publish_managed_editor_scenes(
                 session,
@@ -971,14 +1059,18 @@ def publish_editor_scenes(
         footprint_deletions: list[tuple[PurePosixPath, str | None]] = []
         conflicts: list[str] = []
         for annotation_name, revision, geojson in scenes:
-            scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
-            annotation_path = _annotation_path(source_dir, scene.annotation_name)
+            safe_name = _safe_annotation_name(annotation_name)
+            if revision == _NEW_SCENE_REVISION:
+                _new_scene_draft(session, dataset, source_dir, safe_name, username)
+            else:
+                safe_name = _scene_by_annotation(config, dataset, source_dir, safe_name).annotation_name
+            annotation_path = _annotation_path(source_dir, safe_name)
             relative_path = _repo_relative(config, annotation_path)
             current_revision = _blob_revision(config, "HEAD", relative_path)
-            if current_revision != revision:
-                conflicts.append(scene.annotation_name)
+            if current_revision != (None if revision == _NEW_SCENE_REVISION else revision):
+                conflicts.append(safe_name)
             resolved.append(
-                (scene.annotation_name, revision, geojson, annotation_path, relative_path)
+                (safe_name, revision, geojson, annotation_path, relative_path)
             )
         for annotation_name, revision in deletions:
             scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
@@ -1007,11 +1099,11 @@ def publish_editor_scenes(
         prepared: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         footprint_updates: list[tuple[Path, PurePosixPath, str | None, dict[str, Any]]] = []
         for annotation_name, revision, geojson, annotation_path, relative_path in resolved:
-            image_path = _matched_image_path(dataset, source_dir, annotation_name)
-            previous_payload = _reproject_editor_geojson(
-                _read_geojson(annotation_path),
-                image_path,
-            )
+            if revision == _NEW_SCENE_REVISION:
+                previous_payload, image_path = _new_scene_draft(session, dataset, source_dir, annotation_name, username)
+            else:
+                image_path = _matched_image_path(dataset, source_dir, annotation_name)
+                previous_payload = _reproject_editor_geojson(_read_geojson(annotation_path), image_path)
             normalized_geojson = _normalize_editor_geojson(
                 geojson,
                 previous_payload,
@@ -1051,6 +1143,7 @@ def publish_editor_scenes(
             *footprint_deletion_paths,
         ]
         try:
+            source_dir.mkdir(parents=True, exist_ok=True)
             for _name, _revision, geojson, annotation_path, _relative_path in prepared:
                 _write_geojson_atomic(annotation_path, geojson)
             for footprint_path, _relative, _revision, payload in footprint_updates:
@@ -1083,24 +1176,14 @@ def publish_editor_scenes(
             commit = _push_with_retry(
                 config,
                 expected_revisions={
-                    **{item[4]: item[1] for item in prepared},
+                    **{item[4]: None if item[1] == _NEW_SCENE_REVISION else item[1] for item in prepared},
                     **{item[1]: item[2] for item in footprint_updates},
                     **{item[3]: item[1] for item in resolved_deletions},
                     **dict(footprint_deletions),
                 },
             )
         except Exception:
-            _git_optional(
-                config,
-                "restore",
-                "--staged",
-                "--worktree",
-                "--",
-                *(path.as_posix() for path in all_relative_paths),
-            )
-            for footprint_path, _relative, revision, _payload in footprint_updates:
-                if revision is None:
-                    footprint_path.unlink(missing_ok=True)
+            _restore_editor_paths(config, all_relative_paths)
             raise
         updated_scenes = {
             item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
@@ -1141,6 +1224,12 @@ def delete_editor_scene(
 ) -> DatasetEditorDraftInfo:
     """Пометить снимок на удаление в пользовательском черновике."""
 
+    if revision == _NEW_SCENE_REVISION:
+        row = _editor_draft_row(session, dataset_key, _safe_annotation_name(annotation_name), username)
+        if row is None or row.base_revision != _NEW_SCENE_REVISION:
+            raise TrainingUIAPIError("Черновик нового снимка не найден")
+        return save_editor_draft(session, config, dataset_key, annotation_name,
+                                 base_revision=revision, geojson=dict(row.geojson), deleted=True, username=username)
     with _editor_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
@@ -2634,23 +2723,30 @@ def _publish_managed_editor_scenes(
     source_by_slug = {item.relation.object_type_slug: item for item in source_specs}
 
     normalized: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    new_images: dict[str, Path] = {}
     conflicts: list[str] = []
     for annotation_name, revision, geojson in scenes:
         safe_name = _safe_annotation_name(annotation_name)
         current_path = materialized_dir / safe_name
-        if _file_revision(current_path) != revision:
-            conflicts.append(safe_name)
-            continue
-        image_path = _matched_image_path(dataset, materialized_dir, safe_name)
-        previous = _reproject_editor_geojson(_read_geojson(current_path), image_path)
+        if revision == _NEW_SCENE_REVISION:
+            imported, image_path = _new_scene_draft(session, dataset, materialized_dir, safe_name, username)
+            previous = _empty_annotation_payload(image_path, dataset)
+            new_images[safe_name] = image_path
+        else:
+            if _file_revision(current_path) != revision:
+                conflicts.append(safe_name)
+                continue
+            image_path = _matched_image_path(dataset, materialized_dir, safe_name)
+            previous = _reproject_editor_geojson(_read_geojson(current_path), image_path)
+            imported = previous
         candidate = _normalize_editor_geojson(
             geojson,
-            previous,
+            imported,
             dataset,
             image_path=image_path,
         )
         _validate_editor_geojson(candidate, image_path, dataset)
-        _validate_preserved_properties(previous, candidate)
+        _validate_preserved_properties(imported, candidate)
         normalized.append((safe_name, previous, candidate))
     for annotation_name, revision in deletions:
         safe_name = _safe_annotation_name(annotation_name)
@@ -2662,7 +2758,6 @@ def _publish_managed_editor_scenes(
         )
 
     mutations: dict[tuple[str, str], tuple[Path, dict[str, Any], str | None]] = {}
-    created_paths: list[Path] = []
 
     def source_payload(
         source_key: str, annotation_name: str
@@ -2688,7 +2783,6 @@ def _publish_managed_editor_scenes(
             folder.mkdir(parents=True, exist_ok=True)
             payload = _empty_annotation_payload(image_path, source_info)
             payload[_MANAGED_OWNER_PROPERTY] = dataset.key
-            created_paths.append(path)
         mutations[cache_key] = (path, payload, revision)
         return mutations[cache_key]
 
@@ -2833,13 +2927,12 @@ def _publish_managed_editor_scenes(
                 footprint_relative = _repo_relative(config, footprint)
                 expected_revisions[footprint_relative] = None
                 written_paths.append(footprint_relative)
-                created_paths.append(footprint)
         if written_paths:
             _git(config, "add", "--", *(path.as_posix() for path in written_paths))
         if deletion_paths:
             _git(config, "rm", "--", *(path.as_posix() for path in deletion_paths))
             expected_revisions.update(deletion_paths)
-        if not written_paths and not deletion_paths and not explicit_deletion_names:
+        if not written_paths and not deletion_paths and not explicit_deletion_names and not new_images:
             raise TrainingUIAPIError("В публикации нет фактических изменений исходных датасетов.")
         if written_paths or deletion_paths:
             commit = _commit(
@@ -2851,23 +2944,15 @@ def _publish_managed_editor_scenes(
         else:
             commit = _git(config, "rev-parse", "HEAD").stdout.strip()
     except Exception:
-        for path in created_paths:
-            if _repo_relative(config, path) in {
-                relative for relative, revision in expected_revisions.items() if revision is None
-            }:
-                path.unlink(missing_ok=True)
-        restore_paths = [*written_paths, *deletion_paths]
-        if restore_paths:
-            _git_optional(
-                config,
-                "restore",
-                "--staged",
-                "--worktree",
-                "--",
-                *(path.as_posix() for path in restore_paths),
-            )
+        _restore_editor_paths(config, [*written_paths, *deletion_paths])
         raise
 
+    for annotation_name, image_path in new_images.items():
+        session.add(ManagedDatasetSceneRow(
+            managed_dataset_id=row.id,
+            annotation_name=annotation_name,
+            image_relative_path=image_path.relative_to(_dataset_images_root(dataset)).as_posix(),
+        ))
     if explicit_deletion_names:
         session.execute(
             delete(ManagedDatasetSceneRow).where(
@@ -2875,6 +2960,7 @@ def _publish_managed_editor_scenes(
                 ManagedDatasetSceneRow.annotation_name.in_(explicit_deletion_names),
             )
         )
+    if explicit_deletion_names or new_images:
         row.config_revision += 1
         session.flush()
     invalidate_managed_cache(config, dataset.key)
@@ -3056,16 +3142,27 @@ def _scene_info_for_annotation(
     if revision is None:
         raise DatasetEditorGitError(f"GeoJSON не зафиксирован в Git: {annotation_path.name}")
     payload = _read_geojson(annotation_path)
+    image_path = _matched_image_path(dataset, source_dir, annotation_path.name)
+    return _scene_info_from_payload(dataset, annotation_path.name, image_path, payload, revision)
+
+
+def _scene_info_from_payload(
+    dataset: DatasetInfo,
+    annotation_name: str,
+    image_path: Path,
+    payload: dict[str, Any],
+    revision: str,
+) -> DatasetEditorSceneInfo:
     positive, hard_negative, class_counts = _editor_counts(
         payload,
         dataset,
     )
     root = _dataset_images_root(dataset)
-    image_path = _matched_image_path(dataset, source_dir, annotation_path.name).resolve()
+    image_path = image_path.resolve()
     image_relative = image_path.relative_to(root).as_posix()
     return DatasetEditorSceneInfo(
         scene_id=image_path.relative_to(root).with_suffix("").as_posix(),
-        annotation_name=annotation_path.name,
+        annotation_name=annotation_name,
         image_name=image_path.name,
         raster_url=(
             "/api/v1/dataset-editor/datasets/"
@@ -3116,7 +3213,27 @@ def _image_path_for_annotation(
         raise TrainingUIAPIError(f"Для GeoJSON не найден TIFF: {safe_name}")
     if len(candidates) > 1:
         raise TrainingUIAPIError(f"Имя GeoJSON неоднозначно сопоставлено с TIFF: {safe_name}")
-    return candidates[0]
+    image_path = candidates[0].resolve()
+    _ensure_within(image_path, _dataset_images_root(dataset), "TIFF выходит за каталог снимков датасета")
+    return image_path
+
+
+def _new_scene_draft(
+    session: Session,
+    dataset: DatasetInfo,
+    source_dir: Path,
+    annotation_name: str,
+    username: str,
+) -> tuple[dict[str, Any], Path]:
+    """Отсутствующая сцена должна принадлежать импортированному черновику пользователя."""
+    safe_name = _safe_annotation_name(annotation_name)
+    if any(path.name.casefold() == safe_name.casefold() for path in _direct_annotation_files(source_dir)):
+        raise DatasetEditorConflict(f"Снимок уже добавлен другим пользователем: {safe_name}")
+    row = _editor_draft_row(session, dataset.key, safe_name, username)
+    if row is None or row.base_revision != _NEW_SCENE_REVISION:
+        raise TrainingUIAPIError(f"Черновик нового снимка не найден: {safe_name}")
+    image_path = _image_path_for_annotation(dataset, safe_name)
+    return _reproject_editor_geojson(dict(row.geojson), image_path), image_path
 
 
 def _attach_draft_summaries(
@@ -3132,6 +3249,12 @@ def _attach_draft_summaries(
         )
     ).all()
     drafts = {row.annotation_name: row for row in rows}
+    existing = {scene.annotation_name.casefold() for scene in scenes}
+    for row in rows:
+        if row.base_revision == _NEW_SCENE_REVISION and row.annotation_name.casefold() not in existing:
+            image_path = _image_path_for_annotation(dataset, row.annotation_name)
+            scenes.append(_scene_info_from_payload(dataset, row.annotation_name, image_path,
+                                                   _empty_annotation_payload(image_path, dataset), _NEW_SCENE_REVISION))
     return [
         scene.model_copy(
             update={
@@ -4027,6 +4150,35 @@ def _discard_local_commit(config: TrainingUIAPIConfig) -> None:
     _git(config, "switch", "--detach", remote_ref)
     _git(config, "branch", "--force", branch, remote_ref)
     _git(config, "switch", branch)
+
+
+def _restore_editor_paths(
+    config: TrainingUIAPIConfig,
+    relative_paths: list[PurePosixPath],
+) -> None:
+    """Восстановить затронутые файлы из HEAD, включая чужую публикацию после конфликта."""
+
+    paths = list(dict.fromkeys(relative_paths))
+    if not paths:
+        return
+    root = config.mlmarkup_editor_root.resolve()
+    tracked: list[PurePosixPath] = []
+    absent: list[Path] = []
+    for relative in paths:
+        target = root.joinpath(*relative.parts).resolve()
+        _ensure_within(target, root, "Путь восстановления выходит за пределы editor-клона")
+        if _blob_revision(config, "HEAD", relative) is None:
+            absent.append(target)
+        else:
+            tracked.append(relative)
+    _git(config, "reset", "--quiet", "HEAD", "--", *(path.as_posix() for path in paths))
+    if tracked:
+        _git(
+            config, "restore", "--source=HEAD", "--worktree", "--",
+            *(path.as_posix() for path in tracked),
+        )
+    for target in absent:
+        target.unlink(missing_ok=True)
 
 
 def _blob_revision(

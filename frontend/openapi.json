@@ -1081,6 +1081,55 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import": {
+      "post": {
+        "summary": "Загрузить GeoJSON новых снимков в черновики",
+        "operationId": "import_drafts_api_v1_dataset_editor_datasets__dataset_key__drafts_import_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}": {
       "put": {
         "summary": "Save Draft",
@@ -5862,6 +5911,47 @@
           "updated_at"
         ],
         "title": "DatasetEditorDraftSummary"
+      },
+      "DatasetEditorImportRequest": {
+        "properties": {
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetEditorImportSceneRequest"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Scenes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scenes"
+        ],
+        "title": "DatasetEditorImportRequest"
+      },
+      "DatasetEditorImportSceneRequest": {
+        "properties": {
+          "annotation_name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Annotation Name"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "annotation_name",
+          "geojson"
+        ],
+        "title": "DatasetEditorImportSceneRequest"
       },
       "DatasetEditorMutationResult": {
         "properties": {

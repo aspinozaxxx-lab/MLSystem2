@@ -46,6 +46,7 @@ import "ol/ol.css";
 
 import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
+import { NEW_SCENE_REVISION, readAnnotationFiles } from "./utils/datasetEditorImport";
 import {
   appendHistory,
   BAND_CHANNELS,
@@ -300,6 +301,9 @@ export function DatasetEditorPage({
   const [drawInProgress, setDrawInProgress] = useState(false);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
+  const [importMessage, setImportMessage] = useState("");
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -583,6 +587,9 @@ export function DatasetEditorPage({
     resetDrafts();
     setDetail(null);
     setBrowser(null);
+    setImportOpen(false);
+    setImportFiles([]);
+    setImportMessage("");
     setPublication(null);
     setBandMode("RGB");
     bandModeRef.current = "RGB";
@@ -716,7 +723,7 @@ export function DatasetEditorPage({
         snapshotsEqual(draft.current, draft.serverSaved)
       ) return true;
 
-      if (!draftChanged(draft)) {
+      if (!draftChanged(draft) && draft.baseRevision !== NEW_SCENE_REVISION) {
         setDraftSaveStatuses((current) => ({ ...current, [name]: "saving" }));
         try {
           await apiJson<{ deleted_count: number }>(
@@ -1824,6 +1831,7 @@ export function DatasetEditorPage({
     setBusy(false);
     if (!result) return;
     const active = activeAnnotationRef.current;
+    setImportMessage("");
     resetDrafts();
     setDetail(null);
     await loadScenes(datasetKey, active);
@@ -1848,6 +1856,7 @@ export function DatasetEditorPage({
     setBusy(false);
     if (!result) return;
     const active = activeAnnotationRef.current;
+    setImportMessage("");
     resetDrafts();
     setDetail(null);
     setPublication({
@@ -1868,7 +1877,9 @@ export function DatasetEditorPage({
     if (!draft || drawInProgressRef.current) return;
     const deleting = !draft.current.deleted;
     if (deleting && !window.confirm(
-      `Пометить снимок ${draft.scene.image_name} на удаление? Файл останется в MLMarkup до публикации, действие можно отменить.`,
+      draft.baseRevision === NEW_SCENE_REVISION
+        ? `Отменить добавление снимка ${draft.scene.image_name} при публикации? Сейчас это только ваш черновик, действие можно отменить.`
+        : `Пометить снимок ${draft.scene.image_name} на удаление? Файл останется в MLMarkup до публикации, действие можно отменить.`,
     )) return;
     const before = captureActiveSnapshot() || cloneSnapshot(draft.current);
     updateDraft(draft.scene.annotation_name, (current) => ({
@@ -1877,6 +1888,29 @@ export function DatasetEditorPage({
       history: appendHistory(current.history, before),
       normalized: true,
     }));
+  };
+
+  const importAnnotations = async () => {
+    const key = datasetKey;
+    if (!key || !importFiles.length) return;
+    setBusy(true);
+    try {
+      const result = await run(async () => {
+        const uploaded = await readAnnotationFiles(importFiles);
+        if (datasetKeyRef.current !== key) return null;
+        const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
+          `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/import`,
+          { method: "POST", body: { scenes: uploaded } },
+        );
+        return { response, first: uploaded[0].annotation_name, count: uploaded.length };
+      });
+      if (!result || datasetKeyRef.current !== key) return;
+      setImportOpen(false);
+      setImportFiles([]);
+      setImportMessage(`Загружено файлов: ${result.count}. Снимки и разметка сохранены в ваших черновиках. Проверьте их и нажмите «Опубликовать».`);
+      const preferred = result.response.scenes.find((scene) => scene.annotation_name.toLowerCase() === result.first.toLowerCase())?.annotation_name;
+      await loadScenes(key, preferred);
+    } finally { setBusy(false); }
   };
 
   const loadBrowser = async (folder: string) => {
@@ -1964,6 +1998,13 @@ export function DatasetEditorPage({
         <button
           className="secondary"
           type="button"
+          disabled={busy || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
+          onClick={() => { setImportFiles([]); setImportOpen(true); }}
+        ><CloudUpload size={16} /> Загрузить GeoJSON</button>
+        <button
+          className="secondary"
+          type="button"
           disabled={busy || downloading || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
           title="Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"
           onClick={() => void downloadDataset()}
@@ -1985,6 +2026,8 @@ export function DatasetEditorPage({
           </button>
         ) : null}
       </section>
+
+      {importMessage ? <p className="info-box" role="status">{importMessage}</p> : null}
 
       {selectedDataset?.combined && selectedDataset.source_status === "stale" ? (
         <section className="panel dataset-editor-source-warning" role="status">
@@ -2099,6 +2142,7 @@ export function DatasetEditorPage({
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
+                      {scene.revision === NEW_SCENE_REVISION ? <span className="badge warning">новый · черновик</span> : null}
                       {deleted ? <span className="badge warning">к удалению</span> : null}
                       {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
                     </span>
@@ -2379,10 +2423,10 @@ export function DatasetEditorPage({
                     <button
                       className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
-                      disabled={pseudoRequestPending}
+                      disabled={pseudoRequestPending || activeDraft.baseRevision === NEW_SCENE_REVISION}
                       aria-label={pseudoVisible ? "Скрыть псевдоразметку сети датасета" : "Показать псевдоразметку сети датасета"}
                       aria-pressed={pseudoVisible}
-                      title={pseudoVisible
+                      title={activeDraft.baseRevision === NEW_SCENE_REVISION ? "Псевдоразметка будет доступна после публикации нового снимка" : pseudoVisible
                         ? "Скрыть псевдоразметку сети этого датасета"
                         : "Основная сеть, обученная на этом датасете, или его последняя успешная сеть. Если готовой псевдоразметки нет, запустить распознавание снимка"}
                       onClick={togglePseudoMarkup}
@@ -2565,6 +2609,34 @@ export function DatasetEditorPage({
           </section>
         </section>
       )}
+
+      {importOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-card panel" role="dialog" aria-modal="true" aria-labelledby="dataset-import-title">
+            <header className="modal-header">
+              <h2 id="dataset-import-title">Загрузить GeoJSON</h2>
+              <button className="ghost" type="button" disabled={busy} onClick={() => setImportOpen(false)}>Закрыть</button>
+            </header>
+            <div className="modal-body">
+              <p>Выберите один или несколько файлов разметки. TIFF уже должны находиться на сервере, а снимков ещё не должно быть в этом датасете.</p>
+              <p>Имя файла: <code>папка_имя-снимка.geojson</code>. Например, для <code>batch/SCN02.tif</code> — <code>batch_SCN02.geojson</code>.</p>
+              <p>Нужен FeatureCollection с Polygon/MultiPolygon и явно указанным CRS EPSG:3857. Роли: <code>positive</code>, <code>hard_negative</code>, <code>annotation_zone</code>. Для многоклассового датасета схема и классы должны совпадать с его GeoJSON.</p>
+              <label className="field"><span>Файлы разметки · до 100 файлов, всего до 50 МиБ</span>
+                <input type="file" accept=".geojson" multiple disabled={busy}
+                  onChange={(event) => setImportFiles(Array.from(event.target.files || []))} />
+              </label>
+              {importFiles.length ? <p>Выбрано файлов: {importFiles.length}</p> : null}
+              <p className="muted">Весь пакет проходит проверку перед сохранением. После загрузки снимки появятся только в ваших черновиках — для добавления в датасет нужна отдельная публикация.</p>
+            </div>
+            <footer className="modal-footer">
+              <button className="secondary" type="button" disabled={busy} onClick={() => setImportOpen(false)}>Отмена</button>
+              <button className="primary" type="button" disabled={busy || !importFiles.length} onClick={() => void importAnnotations()}>
+                <CloudUpload size={16} /> {busy ? "Проверяем и загружаем…" : "Загрузить в черновики"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {browser ? (
         <section className="panel dataset-editor-browser">

@@ -2098,6 +2098,241 @@ def _annotation_payload(features: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def test_import_geojson_batch_stays_private_until_publication(editor_environment):
+    from mlsystem2.training_ui_api._dataset_editor import list_editor_scenes
+
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    head = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    payload = _annotation_payload([
+        _feature(10, "positive", [[1, 1], [3, 1], [3, 3], [1, 3], [1, 1]], properties={"источник": "ручная разметка"}),
+        _feature(11, "annotation_zone", [[-2, -2], [10, -2], [10, 10], [-2, 10], [-2, -2]]),
+    ])
+    uploaded = env.client.post(f"{base}/drafts/import", json={"scenes": [
+        {"annotation_name": "batch_SCN02.geojson", "geojson": payload},
+        {"annotation_name": "batch_SCN03.geojson", "geojson": _annotation_payload([])},
+    ]})
+    assert uploaded.status_code == 200, uploaded.text
+    assert len(uploaded.json()["scenes"]) == 3
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
+    assert not (env.editor_dataset / "batch_SCN02_footprint.geojson").exists()
+    with create_session_factory(get_config())() as session:
+        assert len(session.scalars(select(DatasetEditorDraftRow)).all()) == 2
+        assert len(list_editor_scenes(session, get_config(), env.dataset_key, username="другой").scenes) == 1
+        assert not session.scalars(select(JobRow)).all()
+    with ZipFile(BytesIO(env.client.get(f"{base}/download").content)) as archive:
+        assert not any("SCN02" in name for name in archive.namelist())
+    detail = env.client.get(f"{base}/scenes/batch_SCN02.geojson").json()
+    assert detail["scene"]["revision"] == "new"
+    assert detail["geojson"]["features"] == []
+    assert detail["draft"]["annotation_zone_count"] == 1
+    assert detail["draft"]["stale"] is False
+    assert detail["draft"]["geojson"]["features"][0]["properties"]["источник"] == "ручная разметка"
+    assert env.client.get(detail["scene"]["raster_url"], headers={"Range": "bytes=0-31"}).status_code == 206
+    candidate = detail["draft"]["geojson"]
+    candidate["features"][0]["geometry"] = mapping(box(1, 1, 4, 4))
+    saved = env.client.put(f"{base}/drafts/batch_SCN02.geojson", json={"base_revision": "new", "geojson": candidate})
+    assert saved.status_code == 200, saved.text
+    assert env.client.get(f"{base}/scenes/batch_SCN02.geojson").json()["draft"]["geojson"] == saved.json()["geojson"]
+    published = env.client.post(f"{base}/drafts/publish")
+    assert published.status_code == 200, published.text
+    assert _git(env.editor_root, "rev-parse", "HEAD~1").stdout.strip() == head
+    for name in ("batch_SCN02", "batch_SCN03"):
+        assert (env.editor_dataset / f"{name}.geojson").is_file()
+        assert (env.editor_dataset / f"{name}_footprint.geojson").is_file()
+        assert env.client.get(f"{base}/scenes/{name}.geojson").json()["draft"] is None
+    assert not (env.live_annotation.parent / "batch_SCN02.geojson").exists()
+    written = json.loads((env.editor_dataset / "batch_SCN02.geojson").read_text(encoding="utf-8"))
+    assert written["features"][0]["id"] == 10
+    assert shape(written["features"][0]["geometry"]).equals(box(1, 1, 4, 4))
+    assert shape(written["features"][1]["geometry"]).bounds == (-2, -2, 10, 10)
+
+
+def test_import_geojson_validates_whole_batch_without_writes(editor_environment):
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    payload = _annotation_payload([_feature(1, "positive", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]])])
+    invalid = [
+        ("missing_SCN02.geojson", payload),
+        ("batch_SCN02_footprint.geojson", payload),
+        ("../batch_SCN03.geojson", payload),
+        ("batch_SCN03.geojson", {**payload, "crs": None}),
+        ("batch_SCN03.geojson", {**payload, "crs": "EPSG:4326"}),
+        ("batch_SCN03.geojson", {**payload, "type": "Polygon"}),
+        ("batch_SCN03.geojson", _annotation_payload([_feature(2, "ошибка", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]])])),
+        ("batch_SCN03.geojson", _annotation_payload([{"type": "Feature", "properties": {}, "geometry": mapping(box(20, 20, 30, 30))}])),
+        ("batch_SCN03.geojson", _annotation_payload([payload["features"][0], payload["features"][0]])),
+    ]
+    head = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    for name, geojson in invalid:
+        response = env.client.post(f"{base}/drafts/import", json={"scenes": [
+            {"annotation_name": "batch_SCN02.geojson", "geojson": payload},
+            {"annotation_name": name, "geojson": geojson},
+        ]})
+        assert response.status_code == 400, response.text
+        assert name in response.json()["detail"]
+        with create_session_factory(get_config())() as session:
+            assert not session.scalars(select(DatasetEditorDraftRow)).all()
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
+    duplicate = env.client.post(f"{base}/drafts/import", json={"scenes": [
+        {"annotation_name": "batch_SCN02.geojson", "geojson": payload},
+        {"annotation_name": "BATCH_SCN02.GEOJSON", "geojson": payload},
+    ]})
+    assert duplicate.status_code == 422
+    existing = env.client.post(f"{base}/drafts/import", json={"scenes": [{"annotation_name": env.live_annotation.name, "geojson": payload}]})
+    assert existing.status_code == 409
+    with TestClient(create_app()) as unauthenticated:
+        assert unauthenticated.post(f"{base}/drafts/import", json={"scenes": [{"annotation_name": "batch_SCN02.geojson", "geojson": payload}]}).status_code == 401
+
+
+def test_import_geojson_discard_delete_and_publish_conflict(editor_environment):
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.empty_dataset_key, safe='')}"
+    body = {"scenes": [{"annotation_name": "batch_SCN02.geojson", "geojson": _annotation_payload([])}]}
+    head = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    assert env.client.post(f"{base}/drafts/import", json=body).status_code == 200
+    assert env.client.post(f"{base}/drafts/import", json=body).status_code == 409
+    assert env.client.delete(f"{base}/drafts").json()["deleted_count"] == 1
+    assert env.client.get(f"{base}/scenes").json()["scenes"] == []
+    assert env.client.post(f"{base}/drafts/import", json=body).status_code == 200
+    removed = env.client.request("DELETE", f"{base}/scenes/batch_SCN02.geojson", json={"revision": "new"})
+    assert removed.status_code == 200, removed.text
+    assert env.client.post(f"{base}/drafts/publish").status_code == 200
+    assert env.client.get(f"{base}/scenes").json()["scenes"] == []
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    assert env.client.post(f"{base}/drafts/import", json=body).status_code == 200
+    # Параллельное добавление снимка не разрешает импортированному черновику затереть опубликованный файл.
+    assert env.client.post(f"{base}/scenes", json={"image_paths": ["batch/SCN02.tif"]}).status_code == 200
+    before = (env.editor_root / "Реки/empty/batch_SCN02.geojson").read_bytes()
+    conflict = env.client.post(f"{base}/drafts/publish")
+    assert conflict.status_code == 409, conflict.text
+    assert (env.editor_root / "Реки/empty/batch_SCN02.geojson").read_bytes() == before
+    assert env.client.get(f"{base}/scenes/batch_SCN02.geojson").json()["draft"]["stale"] is True
+    assert env.client.delete(f"{base}/drafts").json()["deleted_count"] == 1
+    assert len(env.client.get(f"{base}/scenes").json()["scenes"]) == 1
+
+
+def test_import_geojson_remote_conflict_preserves_other_publication(
+    editor_environment, monkeypatch: pytest.MonkeyPatch,
+):
+    from mlsystem2.training_ui_api import _dataset_editor
+
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    response = env.client.post(f"{base}/drafts/import", json={"scenes": [
+        {"annotation_name": f"batch_SCN0{index}.geojson", "geojson": _annotation_payload([])}
+        for index in (2, 3)
+    ]})
+    assert response.status_code == 200, response.text
+    original_push = _dataset_editor._push_with_retry
+    competing = env.editor_root.parent / "competing"
+    winning_payload = _annotation_payload([
+        _feature(42, "positive", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]])
+    ])
+    winning_footprint = _annotation_payload([
+        _feature(1, "positive", [[0, 0], [8, 0], [8, 8], [0, 8], [0, 0]])
+    ])
+
+    def push_after_competing_publication(config, **kwargs):
+        _git(env.editor_root.parent, "clone", str(env.editor_root.parent / "origin.git"), str(competing))
+        _git(competing, "config", "user.name", "Другой редактор")
+        _git(competing, "config", "user.email", "other@example.invalid")
+        folder = competing / env.editor_dataset.relative_to(env.editor_root)
+        for name, payload in (
+            ("batch_SCN02.geojson", winning_payload),
+            ("batch_SCN02_footprint.geojson", winning_footprint),
+        ):
+            (folder / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _git(competing, "add", ".")
+        _git(competing, "commit", "-m", "Опубликовать снимок другим редактором")
+        _git(competing, "push", "origin", "HEAD:main")
+        return original_push(config, **kwargs)
+
+    monkeypatch.setattr(_dataset_editor, "_push_with_retry", push_after_competing_publication)
+    conflict = env.client.post(f"{base}/drafts/publish")
+    assert conflict.status_code == 409, conflict.text
+    for name, payload in (
+        ("batch_SCN02.geojson", winning_payload),
+        ("batch_SCN02_footprint.geojson", winning_footprint),
+    ):
+        assert json.loads((env.editor_dataset / name).read_text(encoding="utf-8")) == payload
+    assert not (env.editor_dataset / "batch_SCN03.geojson").exists()
+    assert not (env.editor_dataset / "batch_SCN03_footprint.geojson").exists()
+    assert not _git(env.editor_root, "status", "--porcelain").stdout.strip()
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout == _git(competing, "rev-parse", "HEAD").stdout
+    with create_session_factory(get_config())() as session:
+        assert len(session.scalars(select(DatasetEditorDraftRow)).all()) == 2
+
+
+def test_import_geojson_managed_sources_and_empty_scene(editor_environment):
+    env = editor_environment
+    for root in (env.live_annotation.parents[2], env.editor_root):
+        folder = root / "Озера/main"
+        folder.mkdir(parents=True)
+        (folder / env.live_annotation.name).write_text(json.dumps(_annotation_payload([])), encoding="utf-8")
+    _git(env.editor_root, "add", ".")
+    _git(env.editor_root, "commit", "-m", "Добавить источник для проверки импорта")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    catalog = env.client.post("/api/v1/dataset-catalog/sync").json()
+    lake = next(item for item in catalog["classes"] if item["name"] == "Озера")
+    target = env.client.post("/api/v1/dataset-classes", json={"name": "Импорт составной", "imagery_type": "kanopus"}).json()
+    target_key = next(item["key"] for item in target["classes"] if item["name"] == "Импорт составной")
+    composed = env.client.post("/api/v1/managed-datasets/compose", json={
+        "class_key": target_key, "name": "main", "sources": [
+            {"dataset_key": env.dataset_key, "priority": 100},
+            {"dataset_key": lake["datasets"][0]["key"], "priority": 0},
+        ],
+    })
+    assert composed.status_code == 200, composed.text
+    managed = next(item for item in composed.json()["classes"] if item["key"] == target_key)["datasets"][0]
+    base = f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}"
+    env.client.get(f"{base}/scenes")
+    with create_session_factory(get_config())() as session:
+        assert process_next_managed_materialization(session, get_config())
+        session.commit()
+    listing = env.client.get(f"{base}/scenes").json()
+    schema = listing["dataset"]["object_types"]
+    lake_type = next(item for item in schema if item["name"] == "Озера")
+    details = env.client.get(f"{base}/scenes/{quote(env.live_annotation.name, safe='')}").json()
+    payload = {key: value for key, value in details["geojson"].items() if key != "features"}
+    payload["features"] = [
+        _feature(500, "positive", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]], properties={"_mlsystem2_class": lake_type["slug"], "заметка": "озеро"}),
+        _feature(501, "annotation_zone", [[-1, -1], [9, -1], [9, 9], [-1, 9], [-1, -1]]),
+    ]
+    wrong = deepcopy(payload)
+    wrong["_mlsystem2_classes"] = []
+    rejected = env.client.post(f"{base}/drafts/import", json={"scenes": [{"annotation_name": "batch_SCN02.geojson", "geojson": wrong}]})
+    assert rejected.status_code == 400, rejected.text
+    assert "Схема классов" in rejected.json()["detail"]
+    uploaded = env.client.post(f"{base}/drafts/import", json={"scenes": [
+        {"annotation_name": "batch_SCN02.geojson", "geojson": payload},
+        {"annotation_name": "batch_SCN03.geojson", "geojson": {**payload, "features": []}},
+    ]})
+    assert uploaded.status_code == 200, uploaded.text
+    with create_session_factory(get_config())() as session:
+        assert not session.scalars(select(ManagedDatasetSceneRow)).all()
+    for folder in (env.editor_dataset, env.editor_root / "Озера/main"):
+        assert not (folder / "batch_SCN02.geojson").exists()
+    published = env.client.post(f"{base}/drafts/publish")
+    assert published.status_code == 200, published.text
+    rivers = json.loads((env.editor_dataset / "batch_SCN02.geojson").read_text(encoding="utf-8"))
+    lakes = json.loads((env.editor_root / "Озера/main/batch_SCN02.geojson").read_text(encoding="utf-8"))
+    assert [feature["properties"]["_mlsystem2_role"] for feature in rivers["features"]] == ["annotation_zone"]
+    assert {feature["properties"]["_mlsystem2_role"] for feature in lakes["features"]} == {"positive", "annotation_zone"}
+    assert next(feature for feature in lakes["features"] if feature["id"] == 500)["properties"]["заметка"] == "озеро"
+    with create_session_factory(get_config())() as session:
+        assert len(session.scalars(select(ManagedDatasetSceneRow)).all()) == 2
+        assert not session.scalars(select(DatasetEditorDraftRow)).all()
+        assert process_next_managed_materialization(session, get_config())
+        session.commit()
+    scenes = env.client.get(f"{base}/scenes")
+    assert scenes.status_code == 200, scenes.text
+    assert len(scenes.json()["scenes"]) == 3
+    assert any(scene["annotation_name"] == "batch_SCN03.geojson" for scene in scenes.json()["scenes"])
+
+
 def _feature(
     feature_id: int,
     role: str,

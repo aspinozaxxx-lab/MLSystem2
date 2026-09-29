@@ -55,6 +55,21 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_dataset_editor_import_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import DatasetEditorImportRequest, DatasetEditorImportSceneRequest
+
+    assert set(DatasetEditorImportRequest.model_fields) == {"scenes"}
+    assert set(DatasetEditorImportSceneRequest.model_fields) == {"annotation_name", "geojson"}
+    assert DatasetEditorImportRequest.model_json_schema()["properties"]["scenes"]["maxItems"] == 100
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    endpoint = schema["paths"]["/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import"]["post"]
+    assert endpoint["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/DatasetEditorImportRequest")
+    assert endpoint["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/DatasetEditorSceneListResponse")
+
+
 def test_test_sample_annotation_merge_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import TestSampleAnnotationsMerge, TestSampleTileMerge

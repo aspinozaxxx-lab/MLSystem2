@@ -149,6 +149,26 @@ class DatasetEditorSaveDraftRequest(BaseModel):
     deleted: bool = False
 
 
+class DatasetEditorImportSceneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_name: str = Field(min_length=1, max_length=512)
+    geojson: dict[str, Any]
+
+
+class DatasetEditorImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenes: list[DatasetEditorImportSceneRequest] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_unique_names(self) -> Self:
+        names = [scene.annotation_name.casefold() for scene in self.scenes]
+        if len(names) != len(set(names)):
+            raise ValueError("Выбраны GeoJSON с одинаковыми именами")
+        return self
+
+
 class DatasetEditorDiscardDraftsResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -313,6 +333,8 @@ __all__ = [
     "DatasetEditorDiscardDraftsResult",
     "DatasetEditorDraftInfo",
     "DatasetEditorDraftSummary",
+    "DatasetEditorImportRequest",
+    "DatasetEditorImportSceneRequest",
     "DatasetEditorObjectType",
     "DatasetEditorMutationResult",
     "DatasetEditorPublishRequest",
