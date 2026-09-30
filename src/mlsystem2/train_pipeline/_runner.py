@@ -407,7 +407,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
             ],
             val_fraction=settings.dataset.val_fraction,
             expected_band_count=settings.train.input_channels,
-            allow_rgb_alpha=settings.train.pipeline_variant == "object_f1",
+            allow_rgb_alpha=settings.train.input_channels == 3,
             expected_dtype="uint8",
             expected_band_names=expected_band_names,
         )
@@ -419,7 +419,7 @@ def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
         annotations_dir=settings.dataset.annotations_dir,
         val_fraction=settings.dataset.val_fraction,
         expected_band_count=settings.train.input_channels,
-        allow_rgb_alpha=settings.train.pipeline_variant == "object_f1",
+        allow_rgb_alpha=settings.train.input_channels == 3,
         expected_dtype="uint8",
         expected_band_names=expected_band_names,
     )
@@ -517,6 +517,7 @@ def _tile_request(
                 )
                 for item in dataset.class_annotations
             ],
+            input_channels=input_channels,
             batch_size=batch_size,
             mode=mode,
             tile_split=tile_split,
@@ -538,6 +539,7 @@ def _tile_request(
                 )
                 for item in dataset.classes
             ],
+            input_channels=input_channels,
             batch_size=batch_size,
             mode=mode,
             tile_split=tile_split,
@@ -559,7 +561,7 @@ def _tile_request(
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
         include_object_instances=include_object_instances,
-        input_channels=input_channels if pipeline_variant == "object_f1" else None,
+        input_channels=input_channels,
         pipeline_variant=pipeline_variant,
         collect_band_histogram=collect_band_histogram,
     )

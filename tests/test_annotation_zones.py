@@ -45,8 +45,9 @@ def prepare_fixture(tmp_path, zones=None, channels=3, alpha=False):
             target.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
                                   rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.alpha)
         elif channels == 4:
-            target.colorinterp = (rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
-                                  rasterio.enums.ColorInterp.blue, rasterio.enums.ColorInterp.undefined)
+            # У четырёхканального GTiff GDAL иначе автоматически назначает alpha вместо NIR.
+            target.colorinterp = (rasterio.enums.ColorInterp.gray, rasterio.enums.ColorInterp.undefined,
+                                  rasterio.enums.ColorInterp.undefined, rasterio.enums.ColorInterp.undefined)
     markup = annotations / "images_scene.geojson"
     markup.write_text(json.dumps(payload([feature("object", box(5, 14, 13, 25), "positive"), *(zones or [])])), encoding="utf-8")
     result = prepare_dataset(DatasetPreparationRequest(images_dir=str(images), annotations_dir=str(annotations),

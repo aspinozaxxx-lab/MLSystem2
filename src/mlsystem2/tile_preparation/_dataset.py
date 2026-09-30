@@ -116,15 +116,12 @@ class TileDataset:
         self._pipeline_variant = pipeline_variant
         self._input_channels = input_channels
         self._has_regions = any(scene.region_geometry is not None for scene in scenes)
+        self._has_rgb_alpha = False
         if pipeline_variant in {"next_gen2", "object_f1"} and context:
             raise TilePreparationError("next-gen2 использует полные окна без контекста")
         self._notebook_transform = (
             build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1")
             if pipeline_variant in {"next_gen2", "object_f1"} and mode == "train" and augmentation_level else None
-        )
-        self._zone_transform = (
-            build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1", masked=True)
-            if self._has_regions and self._notebook_transform is not None else None
         )
         self._notebook_positive_ratios: np.ndarray | None = None
         self._notebook_hard_negatives: np.ndarray | None = None
@@ -160,13 +157,20 @@ class TileDataset:
             try:
                 with rasterio.open(image_path) as dataset:
                     count = dataset.count
-                    if pipeline_variant == "object_f1":
+                    rgb_alpha = (
+                        input_channels == 3 and count == 4
+                        and dataset.colorinterp[3] == rasterio.enums.ColorInterp.alpha
+                    )
+                    if input_channels is not None:
                         if input_channels == 4 and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
                             raise TilePreparationError("Для RGB+NIR нужен канал NIR: alpha используется только как маска валидности RGB")
-                        if input_channels == 3 and dataset.count == 4 and dataset.colorinterp[3] == rasterio.enums.ColorInterp.alpha:
+                        if rgb_alpha:
                             count = 3
                         if count != input_channels:
-                            raise TilePreparationError("Каналы object f1 должны соответствовать RGB или RGB+NIR; alpha не является NIR")
+                            raise TilePreparationError(
+                                f"Ожидается {input_channels} каналов изображения, получено {count}: {image_path}"
+                            )
+                    self._has_rgb_alpha |= rgb_alpha
                     if self._count is None:
                         self._count = count
                     elif count != self._count:
@@ -194,7 +198,7 @@ class TileDataset:
                     if scene.region_geometry is not None:
                         valid_windows = [item for item in candidate_windows if np.any(self._core_array(~self._region_invalid(scene_index, dataset, Window(item.x, item.y, item.width, item.height))))]
                         diagnostics = ValidFootprintDiagnostics(len(candidate_windows), len(valid_windows), len(candidate_windows) - len(valid_windows), 0, 0, 0)
-                    elif pipeline_variant in {"next_gen2", "object_f1"}:
+                    elif pipeline_variant in {"next_gen2", "object_f1"} and not rgb_alpha:
                         valid_windows = candidate_windows
                         diagnostics = ValidFootprintDiagnostics(
                             len(candidate_windows), len(candidate_windows), 0, 0, 0, 0
@@ -249,6 +253,10 @@ class TileDataset:
 
         if self._count is None:
             raise TilePreparationError("Не удалось определить число каналов TIFF.")
+        self._zone_transform = (
+            build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1", masked=True)
+            if (self._has_regions or self._has_rgb_alpha) and self._notebook_transform is not None else None
+        )
         if self._has_regions and not self._windows:
             raise TilePreparationError("Размеченные зоны не содержат допустимых пикселей для обучения")
         self._candidate_window_count = len(self._windows)
@@ -285,16 +293,17 @@ class TileDataset:
         window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
         nodata = self._scene_nodata[scene_window.scene_index]
         zoned = self._scenes[scene_window.scene_index].region_geometry is not None
-        notebook_transform = self._zone_transform if zoned else self._notebook_transform
+        masked = zoned or self._has_rgb_alpha
+        notebook_transform = self._zone_transform if masked else self._notebook_transform
 
         image_raw = self._read_image_raw(dataset, window, nodata)
         if zoned:
             nodata_pixels = self._region_invalid(scene_window.scene_index, dataset, window)
             image_raw[:, nodata_pixels] = nodata
-        elif self._pipeline_variant == "next_gen2":
+        elif self._pipeline_variant == "next_gen2" and not masked:
             # Ноутбук обучается на всех пикселях окна, включая nodata и raster mask.
             nodata_pixels = np.zeros(image_raw.shape[-2:], dtype=bool)
-        elif self._pipeline_variant == "object_f1":
+        elif self._pipeline_variant == "object_f1" or masked:
             nodata_pixels = self._read_invalid_data_pixels(dataset, window)
         else:
             nodata_pixels = np.logical_or(
@@ -303,6 +312,8 @@ class TileDataset:
             )
         # Albumentations получает исходный uint8; float32 нужен только после преобразований.
         image = image_raw if self._notebook_transform is not None else image_raw.astype(np.float32, copy=False)
+        if masked:
+            image[:, nodata_pixels] = nodata
         if self._pipeline_variant not in {"next_gen2", "object_f1"}:
             image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
@@ -335,7 +346,7 @@ class TileDataset:
             object_instances, ambiguous = rasterize_objects(self._positive_index(scene_window.scene_index), dataset, window, self._tile_size, nodata_pixels | (mask[0] < 0))
         augmented = False
         if notebook_transform is not None:
-            extra = {"valid": (~nodata_pixels).astype(np.uint8)} if zoned or object_instances is not None else {}
+            extra = {"valid": (~nodata_pixels).astype(np.uint8)} if masked or object_instances is not None else {}
             if object_instances is not None:
                 extra.update(instances=object_instances.astype(np.float32), ambiguous=ambiguous.astype(np.uint8))
             transformed = notebook_transform(
@@ -345,7 +356,7 @@ class TileDataset:
             image = np.moveaxis(transformed["image"], -1, 0).astype(np.float32)
             mask = transformed["mask"][None, :, :]
             augmented = bool(transformed["applied_transforms"])
-            if zoned or object_instances is not None:
+            if masked or object_instances is not None:
                 nodata_pixels = ~transformed["valid"].astype(bool)
             if object_instances is not None:
                 object_instances = transformed["instances"].astype(np.int32)
@@ -386,9 +397,9 @@ class TileDataset:
                     level=self._augmentation_level,
                     seed=self._seed,
                     sample_index=sample_index,
-                    return_nodata=zoned,
+                    return_nodata=masked,
                 )
-                if zoned:
+                if masked:
                     image, augmentation_mask, nodata_pixels, augmented = transformed
                 else:
                     image, augmentation_mask, augmented = transformed
@@ -398,7 +409,7 @@ class TileDataset:
             else:
                 mask = augmentation_mask
 
-        if zoned:
+        if masked:
             image[:, nodata_pixels] = nodata
             mask[..., nodata_pixels] = 0
             if class_hard_negative_masks is not None:
@@ -420,7 +431,7 @@ class TileDataset:
             augmented,
             object_instances,
             class_hard_negative_masks,
-            valid_pixels=(~nodata_pixels if zoned or self._pipeline_variant in {"next_gen", "object_f1"} else np.ones_like(nodata_pixels) if self._has_regions else None),
+            valid_pixels=(~nodata_pixels if masked or self._pipeline_variant in {"next_gen", "object_f1"} else np.ones_like(nodata_pixels) if self._has_regions else None),
             scene_window=(scene_window if self._pipeline_variant in {"next_gen", "object_f1"} else None),
         )
         if self._pipeline_variant == "object_f1":
@@ -546,7 +557,11 @@ class TileDataset:
             dataset = self._open_dataset(item.scene_index)
             window = Window(item.window.x, item.window.y, self._tile_size, self._tile_size)
             zoned = self._scenes[item.scene_index].region_geometry is not None
-            invalid = self._region_invalid(item.scene_index, dataset, window) if zoned else np.zeros((self._tile_size, self._tile_size), dtype=bool)
+            invalid = (
+                self._region_invalid(item.scene_index, dataset, window) if zoned
+                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha
+                else np.zeros((self._tile_size, self._tile_size), dtype=bool)
+            )
             mask = self._read_supervision_mask(
                 item.scene_index, dataset, window,
                 invalid,
@@ -555,7 +570,7 @@ class TileDataset:
                 valid = ~invalid if zoned else ~self._read_invalid_data_pixels(dataset, window)
                 positive_count = int(((mask[0] == 1) & valid).sum())
                 valid_counts += [int(valid.sum()) - positive_count, positive_count]
-            ratios.append(float(np.count_nonzero((mask[0] == 1) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned else float(np.mean(mask == 1, dtype=np.float32)))
+            ratios.append(float(np.count_nonzero((mask[0] == 1) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha else float(np.mean(mask == 1, dtype=np.float32)))
             hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL)))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
         self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
@@ -779,11 +794,11 @@ class TileDataset:
     ) -> np.ndarray:
         if self._pipeline_variant == "next_gen2" and window.col_off >= 0 and window.row_off >= 0 and window.col_off + window.width <= dataset.width and window.row_off + window.height <= dataset.height:
             # Все окна целиком внутри TIFF: виртуальная подложка boundless не нужна.
-            return dataset.read(window=window, masked=False)
+            return dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
         if self._pipeline_variant == "object_f1" and not self._needs_boundless_read(dataset, window):
             return dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
         return dataset.read(
-            indexes=list(range(1, self.channel_count + 1)) if self._pipeline_variant == "object_f1" else None,
+            indexes=list(range(1, self.channel_count + 1)),
             window=window,
             boundless=self._needs_boundless_read(dataset, window),
             fill_value=nodata,
@@ -801,7 +816,14 @@ class TileDataset:
             boundless=self._needs_boundless_read(dataset, window),
             out_shape=(self._tile_size, self._tile_size),
         )
-        return valid_mask == 0
+        invalid = valid_mask == 0
+        if self._has_rgb_alpha and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+            alpha_index = dataset.colorinterp.index(rasterio.enums.ColorInterp.alpha) + 1
+            invalid |= dataset.read(
+                alpha_index, window=window, boundless=self._needs_boundless_read(dataset, window),
+                out_shape=(self._tile_size, self._tile_size), fill_value=0,
+            ) == 0
+        return invalid
 
     def _read_supervision_mask(
         self,
@@ -829,7 +851,7 @@ class TileDataset:
                 transform=dataset.window_transform(window),
             )
             mask[hard_negative == 1] = HARD_NEGATIVE_LABEL
-            if self._has_regions:
+            if self._has_regions or self._has_rgb_alpha:
                 mask[nodata_pixels] = 0
         if self.uses_multiclass_masks:
             return mask.astype(np.int64, copy=False)
@@ -1301,13 +1323,16 @@ class TileDataset:
                     x, y, width, height = region
                     if window.col_off >= x + width or window.row_off >= y + height or window.col_off + window.width <= x or window.row_off + window.height <= y:
                         continue
-                image = dataset.read(window=window, masked=False)
+                image = dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
                 invalid = np.logical_or(
                     _nodata_pixels(image, nodata),
                     dataset.dataset_mask(window=window) == 0,
                 )
                 if self._scenes[scene_index].region_geometry is not None:
                     invalid |= self._region_invalid(scene_index, dataset, window)
+                elif self._has_rgb_alpha and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+                    alpha_index = dataset.colorinterp.index(rasterio.enums.ColorInterp.alpha) + 1
+                    invalid |= dataset.read(alpha_index, window=window) == 0
                 valid = ~invalid
                 valid_pixel_count += int(np.count_nonzero(valid))
                 for channel in range(self.channel_count):

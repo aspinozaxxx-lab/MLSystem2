@@ -835,6 +835,8 @@ def _write_raster(
         nodata=0,
     ) as dataset:
         dataset.write(data)
+        # NIR не является альфа-маской: отключаем автоматическую RGBA-интерпретацию GTiff.
+        dataset.colorinterp = (rasterio.enums.ColorInterp.gray, *(rasterio.enums.ColorInterp.undefined,) * 3)
         if descriptions is not None:
             for index, description in enumerate(descriptions, start=1):
                 dataset.set_band_description(index, description)

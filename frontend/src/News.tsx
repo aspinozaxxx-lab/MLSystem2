@@ -13,6 +13,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "training-rgb-alpha-and-kanopus",
+  date: "2026-10-01",
+  title: "Обучение на ортофото и снимках Канопуса",
+  updates: [
+    "Исправлен запуск обучения на датасетах со смесью RGB-ортофото и снимков с альфа-маской: сеть получает три цветовых канала, прозрачные пиксели исключаются из обучения и метрик; для Канопуса сохраняются четыре канала RGB+NIR.",
+  ],
+}, {
   slug: "training-loader-stability",
   date: "2026-09-30",
   title: "Стабильность обучения и очереди",

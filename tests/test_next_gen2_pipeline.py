@@ -235,6 +235,9 @@ def _scene(tmp_path: Path, name="SCN01", x_offset=0, channels=4):
         dtype="uint8", crs="EPSG:3857", transform=from_origin(x_offset, 100, 1, 1), nodata=0,
     ) as target:
         target.write(pixels)
+        if channels == 4:
+            # Явно задаём спектральный канал, а не автоматически добавленную GDAL альфа-маску.
+            target.colorinterp = (rasterio.enums.ColorInterp.gray, *(rasterio.enums.ColorInterp.undefined,) * 3)
         target.descriptions = ("RED", "GRN", "BLU", "NIR")[:channels]
         valid = np.full((100, 100), 255, dtype=np.uint8)
         valid[:32, :32] = 0

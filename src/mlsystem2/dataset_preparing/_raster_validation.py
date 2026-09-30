@@ -70,7 +70,7 @@ def validate_rasters(
                     errors.append(f"У снимка нет usable mask или nodata: {path}")
                     continue
 
-                if allow_rgb_alpha and expected_band_count == 4 and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
+                if expected_band_count == 4 and rasterio.enums.ColorInterp.alpha in dataset.colorinterp:
                     errors.append(f"Ожидается RGB+NIR, но alpha является маской валидности: {path}")
                     continue
                 rgb_alpha = allow_rgb_alpha and expected_band_count == 3 and dataset.count == 4 and dataset.colorinterp[3] == rasterio.enums.ColorInterp.alpha

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import math
 
 import numpy as np
+from rasterio.enums import ColorInterp
 from rasterio.io import DatasetReader
 from rasterio.windows import Window
 
@@ -100,6 +101,9 @@ def _read_valid_footprint(dataset: DatasetReader, *, nodata: object) -> np.ndarr
     )
     if data.ndim == 2:
         data = data[None, :, :]
+    if ColorInterp.alpha in dataset.colorinterp:
+        # nodata может затенять alpha в GDAL read_masks; прозрачность проверяем явно.
+        valid_by_mask &= data[dataset.colorinterp.index(ColorInterp.alpha)] > 0
     data_f32 = data.astype(np.float32, copy=False)
     valid_by_value = np.any(np.abs(data_f32) > _VALID_VALUE_EPS, axis=0)
     return np.logical_and(valid_by_mask, valid_by_value)
@@ -231,6 +235,8 @@ def _read_sparse_valid_run(
     )
     if data.ndim == 2:
         data = data[None, :, :]
+    if ColorInterp.alpha in dataset.colorinterp:
+        valid_by_mask &= data[dataset.colorinterp.index(ColorInterp.alpha), 0, local_x_indices] > 0
     data_values = data[:, 0, local_x_indices].astype(np.float32, copy=False)
     valid_by_value = np.any(np.abs(data_values) > _VALID_VALUE_EPS, axis=0)
     return np.logical_and(valid_by_mask, valid_by_value)
