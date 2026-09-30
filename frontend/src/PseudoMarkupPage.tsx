@@ -330,7 +330,8 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
         <div className="pseudo-scene-list">{scenes.map((scene) => {
           const enabled = !hiddenSceneIds.has(scene.id);
           const visible = imagesVisible && enabled && viewportSceneIds.has(scene.id);
-          return <div key={scene.id} className={`pseudo-scene-row${visible ? " in-view" : ""}${selectedSceneId === scene.id ? " selected" : ""}${enabled ? "" : " hidden-scene"}`}
+          const selected = selectedSceneId === scene.id;
+          return <div key={scene.id} className={`pseudo-scene-row${visible ? " in-view" : ""}${selected ? " selected" : ""}${enabled ? "" : " hidden-scene"}`}
             onMouseEnter={() => setHoverSceneId(scene.id)} onMouseLeave={() => setHoverSceneId(null)}
             onFocus={() => setHoverSceneId(scene.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHoverSceneId(null); }}>
             <button type="button" className="pseudo-scene-toggle" aria-label={`${enabled ? "Скрыть" : "Показать"} снимок ${scene.name}`}
@@ -338,8 +339,17 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
               {enabled ? <Eye size={15} /> : <EyeOff size={15} />}
             </button>
             <button type="button" className="pseudo-scene-name" aria-label={`${scene.name}${visible ? " · На экране" : ""}`}
-              aria-pressed={selectedSceneId === scene.id} title={`${visible ? "На экране. " : ""}Приблизить и выделить контур ${scene.name}`}
-              onClick={() => { setSelectedSceneId(scene.id); setOutlineAttempt((value) => value + 1); fit(scene.bounds); }}><span>{scene.name}</span></button>
+              aria-pressed={selected} title={`${visible ? "На экране. " : ""}${selected ? "Снять выделение контура" : "Приблизить и выделить контур"} ${scene.name}`}
+              onClick={() => {
+                if (selected) {
+                  setSelectedSceneId(null);
+                  setHoverSceneId(null);
+                  return;
+                }
+                setSelectedSceneId(scene.id);
+                setOutlineAttempt((value) => value + 1);
+                fit(scene.bounds);
+              }}><span>{scene.name}</span></button>
           </div>;
         })}</div>
         {!info.scenes.length ? <p>Исходные снимки недоступны. Слой псевдоразметки можно просматривать отдельно.</p> : null}
@@ -361,6 +371,6 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
         {outlineError ? <div className="pseudo-outline-error" role="status">{outlineError}</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">Колесо — масштаб, перетаскивание — перемещение. Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">Колесо — масштаб, перетаскивание — перемещение. Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </div>;
 }
