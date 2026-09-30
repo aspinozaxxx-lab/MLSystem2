@@ -650,11 +650,14 @@ def test_counting_loader_counts_observed_tiles_and_augmentations() -> None:
 
 
 def test_tile_preparation_report_exposes_three_train_factors() -> None:
+    import multiprocessing
+
     class SnapshotLoader:
         def __init__(self, split: str) -> None:
             self.split = split
             self.loader = SimpleNamespace(
                 num_workers=8, prefetch_factor=2, persistent_workers=False, pin_memory=True,
+                multiprocessing_context=multiprocessing.get_context("spawn"), timeout=180,
             )
 
         def snapshot(self) -> dict[str, object]:
@@ -676,7 +679,8 @@ def test_tile_preparation_report_exposes_three_train_factors() -> None:
     assert report["splits"]["train"] == {"split": "train"}
     assert report["splits"]["val"] == {"split": "val"}
     assert report["loader_runtime"] == {
-        split: {"num_workers": 8, "prefetch_factor": 2, "persistent_workers": False, "pin_memory": True}
+        split: {"num_workers": 8, "prefetch_factor": 2, "persistent_workers": False,
+                "pin_memory": True, "start_method": "spawn", "timeout": 180}
         for split in ("train", "val")
     }
 
