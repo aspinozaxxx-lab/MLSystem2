@@ -14,6 +14,10 @@
 .pseudo-sidebar { display: flex; flex-direction: column; min-height: 0; max-height: max(480px, calc(100vh - 310px)); }
 .pseudo-sidebar h2 { font-size: 15px; margin: 0 0 12px; }
 .pseudo-sidebar h2 span { color: var(--muted); font-weight: 400; }
+.pseudo-sidebar-heading { display: flex; align-items: center; gap: 8px; }
+.pseudo-sidebar-heading h2 { flex: 1; }
+.pseudo-sidebar-content { display: flex; flex-direction: column; min-height: 0; }
+.pseudo-sidebar-heading .mobile-only { display: none; }
 .pseudo-scene-count { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 12px; color: var(--accent-strong); }
 .pseudo-sidebar input { font-size: 12px; min-height: 34px; }
 .pseudo-scene-list { overflow-y: auto; margin-top: 8px; }
@@ -60,4 +64,41 @@
   .pseudo-viewer-heading { align-items: flex-start; }
   .pseudo-viewer-heading h1 { font-size: 21px; }
   .pseudo-workspace.fullscreen .pseudo-viewer-body { grid-template-rows: minmax(0, 130px) minmax(0, 1fr); }
+}
+
+@media (max-width: 700px), (max-width: 1000px) and (max-height: 500px) {
+  .pseudo-viewer { padding: 10px; }
+  .pseudo-back { margin-bottom: 8px; font-size: 12px; }
+  .pseudo-viewer-heading { gap: 8px; }
+  .pseudo-viewer-heading h1 { font-size: 19px; line-height: 25px; margin-bottom: 3px; }
+  .pseudo-viewer-heading p { font-size: 11px; overflow-wrap: anywhere; }
+  .pseudo-download { width: 38px; min-width: 38px; padding: 0; }
+  .pseudo-download span { display: none; }
+  .pseudo-model { margin: 8px 0; gap: 3px 12px; font-size: 11px; }
+  .pseudo-toolbar { gap: 7px 12px; margin: 8px 0; font-size: 12px; }
+  .pseudo-toolbar select { font-size: 16px; min-height: 36px; padding: 4px 6px; }
+  .pseudo-toolbar label { min-height: 34px; }
+  .pseudo-toolbar input[type="range"] { width: 95px; }
+  .pseudo-viewer-body { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .pseudo-sidebar { max-height: 240px; }
+  .pseudo-sidebar-heading .mobile-only { display: inline-flex; }
+  .pseudo-sidebar-heading h2 { margin: 0; font-size: 13px; }
+  .pseudo-sidebar-heading > span { font-size: 11px; }
+  .pseudo-sidebar-heading button { min-height: 36px; }
+  .pseudo-sidebar.collapsed .pseudo-sidebar-content { display: none; }
+  .pseudo-sidebar input { font-size: 16px; margin-top: 7px; }
+  .pseudo-scene-count { margin: 4px 0; }
+  .pseudo-scene-list { max-height: 145px; overscroll-behavior-y: contain; }
+  .pseudo-scene-row button { padding: 8px 7px; min-height: 40px; font-size: 12px; }
+  .pseudo-scene-row .pseudo-scene-toggle { min-width: 38px; }
+  .pseudo-map { height: clamp(340px, 56dvh, 580px); }
+  .pseudo-map-legend { left: 7px; bottom: 7px; right: 7px; gap: 4px; }
+  .pseudo-map-legend button { padding: 5px 8px; font-size: 11px; min-height: 34px; }
+  .pseudo-hint { font-size: 11px; line-height: 16px; }
+  .pseudo-workspace.fullscreen { height: 100dvh; padding: calc(8px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  .pseudo-workspace.fullscreen .pseudo-viewer-heading h1 { font-size: 17px; }
+  .pseudo-workspace.fullscreen .pseudo-viewer-body { grid-template-rows: auto minmax(0, 1fr); }
+  .pseudo-workspace.fullscreen .pseudo-model { margin-top: 6px; }
+  .pseudo-workspace.fullscreen .pseudo-toolbar { margin: 6px 0; }
+  .pseudo-workspace.fullscreen .pseudo-hint { display: none; }
 }

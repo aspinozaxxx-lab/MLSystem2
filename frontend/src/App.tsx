@@ -374,14 +374,15 @@ function Shell({
       <header className="topbar">
         <a className="brand" href="#/" aria-label="На главную">
           <BrandLogo />
+          <img className="brand-mark" src="/grovika/favicon/01-stepped-g.svg" alt="" width="28" height="28" />
         </a>
-        <nav className="nav">
+        <nav className="nav" aria-label="Основное меню">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
-              <a className={route[0] === item.key ? "active" : ""} href={item.href} key={item.key}>
+              <a className={route[0] === item.key ? "active" : ""} href={item.href} key={item.key} title={item.label} aria-label={item.label} aria-current={route[0] === item.key ? "page" : undefined}>
                 <Icon size={16} />
-                {item.label}
+                <span className="nav-label">{item.label}</span>
                 {item.key === "queue" ? (
                   <span className="nav-queue-count" aria-label={`Активных заданий: ${queueCount}`}>
                     {queueCount}
@@ -401,12 +402,14 @@ function Shell({
             <button
               className={exportRouteActive ? "active" : ""}
               type="button"
+              aria-label="Экспорт"
+              title="Экспорт"
               aria-haspopup="menu"
               aria-expanded={exportMenuOpen}
               onClick={() => setExportMenuOpen((current) => !current)}
             >
               <Download size={16} />
-              Экспорт
+              <span className="nav-label">Экспорт</span>
               <ChevronDown className="nav-dropdown-chevron" size={14} />
             </button>
             <div className="nav-dropdown-menu" role="menu">
@@ -448,13 +451,13 @@ function Shell({
               </a>
             </div>
           </div>
-          <a className={route[0] === "results" ? "active" : ""} href="#/results">
+          <a className={route[0] === "results" ? "active" : ""} href="#/results" aria-label="Результаты" title="Результаты" aria-current={route[0] === "results" ? "page" : undefined}>
             <BarChart3 size={16} />
-            Результаты
+            <span className="nav-label">Результаты</span>
           </a>
-          <button type="button" title={`Выйти: ${user}`} onClick={onLogout}>
+          <button type="button" title={`Выйти: ${user}`} aria-label={`Выйти: ${user}`} onClick={onLogout}>
             <LogOut size={16} />
-            Выйти
+            <span className="nav-label">Выйти</span>
           </button>
         </nav>
       </header>
@@ -956,8 +959,8 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                           <span className="muted">Нет успешной модели</span>
                         )}
                       </td>
-                      <td className="technical-value">{row.result ? formatDateTime(row.result.trained_at || row.result.created_at) : "—"}</td>
-                      <td>
+                      <td className="technical-value" data-label="Обучена">{row.result ? formatDateTime(row.result.trained_at || row.result.created_at) : "—"}</td>
+                      <td data-label="Имя выгрузки">
                         <input
                           value={row.modelName}
                           disabled={!row.result || busy}
@@ -3137,6 +3140,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
 }
 
 function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
+  const [visibleMode, setVisibleMode] = useState<"training" | "inference">("training");
   const [trainingId, setTrainingId] = useState(bootstrap.training_templates[0]?.id || "");
   const [inferenceId, setInferenceId] = useState(bootstrap.inference_templates[0]?.id || "");
   const trainingTemplate = byId(bootstrap.training_templates, trainingId) || bootstrap.training_templates[0];
@@ -3229,10 +3233,14 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
 
   return (
     <>
-      <PageHeader title="Шаблоны" subtitle="Базовые defaults сети и переопределения для конкретных датасетов" />
-      <section className="two-column">
+      <PageHeader title="Шаблоны" subtitle="Базовые defaults сети и переопределения для конкретных датасетов" actions={<div className="mobile-only template-mode-tabs" role="group" aria-label="Тип шаблонов">
+        <button type="button" className={visibleMode === "training" ? "primary" : "secondary"} aria-pressed={visibleMode === "training"} onClick={() => setVisibleMode("training")}>Обучение</button>
+        <button type="button" className={visibleMode === "inference" ? "primary" : "secondary"} aria-pressed={visibleMode === "inference"} onClick={() => setVisibleMode("inference")}>Инференс</button>
+      </div>} />
+      <section className="two-column templates-layout" data-visible-mode={visibleMode}>
         <div className="form-stack">
           <TemplateTree
+            mode="training"
             title="Шаблоны обучения"
             templates={bootstrap.training_templates}
             selectedId={trainingTemplate?.id || ""}
@@ -3240,6 +3248,7 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
             onAdd={() => showCreateModal("training")}
           />
           <TemplateTree
+            mode="inference"
             title="Шаблоны инференса"
             templates={bootstrap.inference_templates}
             selectedId={inferenceTemplate?.id || ""}
@@ -3858,12 +3867,14 @@ function PanelHeader({ title, subtitle, aside }: { title: string; subtitle?: str
 }
 
 function TemplateTree({
+  mode,
   title,
   templates,
   selectedId,
   onSelect,
   onAdd,
 }: {
+  mode: "training" | "inference";
   title: string;
   templates: AnyTemplate[];
   selectedId: string;
@@ -3872,7 +3883,7 @@ function TemplateTree({
 }) {
   const bases = templates.filter((item) => !item.dataset_key);
   return (
-    <section className="panel">
+    <section className="panel template-tree-panel" data-template-mode={mode}>
       <PanelHeader
         title={title}
         aside={
@@ -3882,6 +3893,12 @@ function TemplateTree({
           </button>
         }
       />
+      <label className="field mobile-template-picker">
+        <span>Выбранный шаблон</span>
+        <select value={selectedId} onChange={(event) => onSelect(event.target.value)}>
+          {templates.map((template) => <option key={template.id} value={template.id}>{templateTitle(template)}</option>)}
+        </select>
+      </label>
       <div className="template-tree">
         {bases.map((base) => (
           <div key={base.id}>
@@ -3927,7 +3944,7 @@ function TemplateEditor({
   onApplyField: (key: string, value: unknown) => void;
 }) {
   return (
-    <section className="panel">
+    <section className="panel template-editor-panel" data-template-mode={mode}>
       <PanelHeader
         title={`${mode === "training" ? "Training" : "Inference"}: ${templateTitle(template)}`}
         subtitle={template.dataset_key ? "Шаблон датасета" : "Базовый шаблон сети"}
@@ -4037,7 +4054,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
   if (!jobs.length) return <div className="empty-state">Очередь пуста</div>;
   return (
     <div className="table-wrap">
-      <table>
+      <table className="queue-table">
         <thead>
           <tr>
             <th>#</th>
@@ -4052,7 +4069,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
         <tbody>
           {jobs.map((job) => (
             <tr className="clickable-row" key={job.id} onClick={() => navigate(`jobs/${job.id}`)}>
-              <td className="technical-value">{job.queue_position}</td>
+              <td className="technical-value" data-label="В очереди">{job.queue_position}</td>
               <td>
                 {job.stop_and_save_best_requested && isActiveStatus(job.status)
                   ? <span className="badge warning">сохраняется лучший F1</span>
@@ -4064,9 +4081,9 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
                   {job.secondary_priority ? <span className="badge neutral">второстепенное</span> : null}
                 </span>
               </td>
-              <td>{queueDatasetCell(job)}</td>
-              <td>{queueModelCell(job)}</td>
-              <td className="technical-value">{formatDateTime(job.created_at)}</td>
+              <td data-label="Датасет">{queueDatasetCell(job)}</td>
+              <td data-label="Модель">{queueModelCell(job)}</td>
+              <td className="technical-value" data-label="Создано">{formatDateTime(job.created_at)}</td>
               <td>
                 <div className="inline-row" onClick={(event) => event.stopPropagation()}>
                   <a className="secondary compact-action" href={`#/jobs/${job.id}`}>
@@ -4282,7 +4299,7 @@ function ResultsTable({
                       />
                     </span>
                   </td>
-                  <td title={qualityMetricShort(result.quality_metric)}>
+                  <td title={qualityMetricShort(result.quality_metric)} data-label={result.test_f1?.f1 == null ? `${qualityMetricShort(result.quality_metric)} (тест)` : undefined}>
                     {result.test_f1?.f1 !== null && result.test_f1?.f1 !== undefined ? (
                       <span className="result-score-summary">
                         <span className="result-score-value">
@@ -4300,8 +4317,8 @@ function ResultsTable({
                       <span className="badge neutral">расчёт</span>
                     ) : "—"}
                   </td>
-                  <td className="technical-value" title="Epoch">{result.epoch ?? "—"}</td>
-                  <td className="technical-value" title="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
+                  <td className="technical-value" title="Epoch" data-label="Эпоха">{result.epoch ?? "—"}</td>
+                  <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
                     {result.status === "ok" ? (
                       <>
@@ -4363,7 +4380,7 @@ function ResultsTable({
                         {geojsonDownloadLink(item.geojson_file)}
                         {item.status === "ok" ? <a className="secondary icon-button" href={`#/pseudo-markup/${item.id}`} title="Посмотреть псевдоразметку на мозаике снимков" aria-label="Посмотреть псевдоразметку на мозаике снимков"><MapIcon size={15} /></a> : null}
                       </span> : "—"}</td>
-                      <td title="Создано">{pseudoCreatedLabel(item)}</td>
+                      <td title="Создано" data-label="Создано">{pseudoCreatedLabel(item)}</td>
                       <td className="action-cell">
                         {item.job_id ? (
                           <a className="secondary compact-action" href={`#/jobs/${item.job_id}`} title="Открыть job разметки">

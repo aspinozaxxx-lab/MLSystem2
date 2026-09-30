@@ -2,6 +2,7 @@ import {
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
   Blend,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CloudUpload,
@@ -10,6 +11,7 @@ import {
   EyeOff,
   Folder,
   FolderOpen,
+  Hand,
   Layers,
   Maximize2,
   Minimize2,
@@ -46,6 +48,7 @@ import "ol/ol.css";
 
 import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
+import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
 import { NEW_SCENE_REVISION, readAnnotationFiles } from "./utils/datasetEditorImport";
 import {
   appendHistory,
@@ -82,7 +85,9 @@ import {
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
-type EditMode = "select" | "draw" | "pseudo";
+type EditMode = "view" | "select" | "draw" | "pseudo";
+
+const initialEditMode = (): EditMode => isCompactLayout() ? "view" : "select";
 type ClassDisplayState = {
   hiddenClasses: ReadonlySet<string>;
   highlightedClass: string | null;
@@ -282,7 +287,11 @@ export function DatasetEditorPage({
   const [detail, setDetail] = useState<SceneDetail | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [role, setRole] = useState<ObjectSelection>("positive");
-  const [editMode, setEditMode] = useState<EditMode>("select");
+  const [editMode, setEditMode] = useState<EditMode>(initialEditMode);
+  const compact = useCompactLayout();
+  const [scenesExpanded, setScenesExpanded] = useState(false);
+  const viewModeRef = useRef(editMode === "view");
+  viewModeRef.current = editMode === "view";
   const [sortDirection, setSortDirection] = useState<SortDirection>("descending");
   const [fillEnabled, setFillEnabled] = useState(true);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
@@ -651,7 +660,7 @@ export function DatasetEditorPage({
       }
       const cached = draftsRef.current[name];
       if (cached) {
-        setEditMode("select");
+        setEditMode(initialEditMode());
         setDetail({
           scene: cached.scene,
           geojson: cached.current.geojson,
@@ -700,7 +709,7 @@ export function DatasetEditorPage({
           normalized: Boolean(payload.draft),
         },
       }));
-      setEditMode("select");
+      setEditMode(initialEditMode());
       setDetail({ ...payload, scene });
     },
     [changeDrafts, run],
@@ -925,7 +934,7 @@ export function DatasetEditorPage({
     setPseudoVisible(false);
     setPseudoRequestPending(false);
     setSelectedPseudoCount(0);
-    setEditMode("select");
+    setEditMode(initialEditMode());
     setPseudoMarkup(pseudoCacheRef.current.get(activePseudoCacheKey) || null);
   }, [activePseudoCacheKey]);
 
@@ -1005,7 +1014,7 @@ export function DatasetEditorPage({
     if (pseudoVisible) {
       pseudoSelectRef.current?.getFeatures().clear();
       setSelectedPseudoCount(0);
-      setEditMode("select");
+      setEditMode(initialEditMode());
       setPseudoVisible(false);
       return;
     }
@@ -1191,6 +1200,7 @@ export function DatasetEditorPage({
         const originalEvent = event.originalEvent;
         if (!(originalEvent instanceof PointerEvent)) return false;
         if (originalEvent.pointerType === "touch") return true;
+        if (viewModeRef.current && originalEvent.button === 0) return true;
         return preventMapMiddleButtonDefault(originalEvent);
       },
     });
@@ -1736,7 +1746,7 @@ export function DatasetEditorPage({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isTextInput(event.target)) return;
+      if (isTextInput(event.target) || editMode === "view") return;
       if (isDeleteShortcut(event)) {
         if (editMode === "pseudo" && (pseudoSelectRef.current?.getFeatures().getLength() || 0) > 0) {
           event.preventDefault();
@@ -1990,39 +2000,43 @@ export function DatasetEditorPage({
               && selectedDataset.materialization_status !== "current"
             )
           }
+          aria-label="Добавить снимки"
           title="Открыть список серверных TIFF для добавления в датасет"
           onClick={() => void loadBrowser("")}
         >
-          <Plus size={16} /> Добавить снимки
+          <Plus size={16} /><span className="compact-control-label">Добавить снимки</span>
         </button>
         <button
           className="secondary"
           type="button"
           disabled={busy || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          aria-label="Загрузить GeoJSON"
           title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
           onClick={() => { setImportFiles([]); setImportOpen(true); }}
-        ><CloudUpload size={16} /> Загрузить GeoJSON</button>
+        ><CloudUpload size={16} /><span className="compact-control-label">Загрузить GeoJSON</span></button>
         <button
           className="secondary"
           type="button"
           disabled={busy || downloading || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          aria-label={downloading ? "Скачивание датасета" : "Скачать датасет"}
           title="Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"
           onClick={() => void downloadDataset()}
         >
-          <Download size={16} /> {downloading ? "Скачивание…" : "Скачать датасет"}
+          <Download size={16} /><span className="compact-control-label">{downloading ? "Скачивание…" : "Скачать датасет"}</span>
         </button>
         {selectedDataset?.combined ? (
           <button
             className={selectedDataset.source_status === "stale" ? "danger" : "secondary"}
             type="button"
             disabled={busy || hasDirtyDrafts}
+            aria-label="Пересобрать датасет"
             title={hasDirtyDrafts
               ? "Сначала опубликуйте или отмените черновики"
               : "Сравнить исходные main-датасеты и безопасно пересобрать комбинированный датасет"}
             onClick={() => void previewDatasetRebuild()}
           >
             <RefreshCw size={16} />
-            {selectedDataset.source_status === "stale" ? "Источники изменились" : "Пересобрать"}
+            <span className="compact-control-label">{selectedDataset.source_status === "stale" ? "Источники изменились" : "Пересобрать"}</span>
           </button>
         ) : null}
       </section>
@@ -2057,7 +2071,7 @@ export function DatasetEditorPage({
         </section>
       ) : (
         <section className="dataset-editor-layout">
-          <aside className="panel dataset-editor-scenes">
+          <aside className={`panel dataset-editor-scenes${scenesExpanded ? "" : " collapsed"}${dirtyDraftCount || hasDirtyDrafts ? "" : " no-drafts"}`}>
             <div className="dataset-editor-scenes-header">
               <div>
                 <h2>Снимки</h2>
@@ -2079,6 +2093,9 @@ export function DatasetEditorPage({
                   </span>
                 </div>
               </div>
+              <button className="secondary icon-button mobile-only" type="button" aria-label="Список снимков" aria-expanded={scenesExpanded} aria-controls="dataset-scene-list" onClick={() => setScenesExpanded((value) => !value)}>
+                <ChevronDown size={16} style={{ transform: scenesExpanded ? "rotate(180deg)" : undefined }} />
+              </button>
               <button
                 className="secondary icon-button dataset-editor-small-icon"
                 type="button"
@@ -2109,7 +2126,7 @@ export function DatasetEditorPage({
                 <Undo2 size={15} /> Отменить
               </button>
             </div>
-            <div className="dataset-editor-scene-list">
+            <div className="dataset-editor-scene-list" id="dataset-scene-list">
               {sortedScenes.map((scene) => {
                 const draft = drafts[scene.annotation_name];
                 const summary = scene.draft;
@@ -2138,7 +2155,7 @@ export function DatasetEditorPage({
                     type="button"
                     key={scene.annotation_name}
                     title={`Открыть снимок ${scene.image_name}. ${counts.total} объектов: ${countDescription}, hard negative: ${counts.hardNegative}${changed ? ". Есть неопубликованные изменения" : ""}`}
-                    onClick={() => selectScene(scene.annotation_name)}
+                    onClick={() => { selectScene(scene.annotation_name); if (compact) setScenesExpanded(false); }}
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
@@ -2170,13 +2187,13 @@ export function DatasetEditorPage({
           </aside>
 
           <section
-            className={`panel dataset-editor-workspace${fullscreen ? " fullscreen" : ""}`}
+            className={`panel dataset-editor-workspace${fullscreen ? " fullscreen" : ""}${editMode === "view" ? " view-mode" : ""}`}
             ref={workspaceRef}
           >
             {detail && activeDraft ? (
               <>
                 <div className="dataset-editor-toolbar">
-                  {fullscreen ? (
+                  {fullscreen || compact ? (
                     <nav className="dataset-editor-mode-toggle dataset-editor-scene-navigation" aria-label="Навигация по снимкам">
                       <button
                         className="secondary icon-button dataset-editor-icon-button"
@@ -2228,8 +2245,15 @@ export function DatasetEditorPage({
                       </small>
                     ) : null}
                   </span>
+                  <button className="secondary mobile-editor-toggle" type="button" aria-pressed={editMode !== "view"} onClick={() => setEditMode(editMode === "view" ? "select" : "view")}>
+                    {editMode === "view" ? <PencilLine size={15} /> : <Hand size={15} />}
+                    {editMode === "view" ? "Править" : "Просмотр"}
+                  </button>
                   <div className="dataset-editor-map-actions">
                     <div className="dataset-editor-mode-toggle" role="group" aria-label="Режим редактирования">
+                      <button className={`${editMode === "view" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`} type="button" aria-label="Просмотр без редактирования" aria-pressed={editMode === "view"} title="Перемещение карты без изменения разметки" onClick={() => setEditMode("view")}>
+                        <Hand size={17} />
+                      </button>
                       <button
                         className={`${editMode === "select" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
                         type="button"
@@ -2371,7 +2395,9 @@ export function DatasetEditorPage({
                   </div>
                 </div>
                 <div className="dataset-editor-help">
-                  <MousePointer2 size={14} /> {editMode === "pseudo"
+                  <MousePointer2 size={14} /> {editMode === "view"
+                    ? compact ? "Перемещайте снимок пальцем; масштаб меняйте двумя пальцами. Для изменения разметки нажмите «Править»." : "Перетаскивайте карту левой кнопкой мыши; колесо — масштаб. Разметка защищена от случайных изменений."
+                    : editMode === "pseudo"
                     ? "Клик — выбрать объект сети, Shift+клик — выбрать несколько; укажите назначение и добавьте их в черновик. Del снимает выбор."
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}

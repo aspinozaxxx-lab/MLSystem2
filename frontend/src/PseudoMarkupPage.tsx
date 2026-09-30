@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, Eye, EyeOff, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, Download, Eye, EyeOff, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
@@ -22,6 +22,7 @@ import { rasterCache } from "./utils/rasterCache";
 import { rasterBackdrop } from "./utils/rasterBackdrop";
 import { rasterLoadCancelled, rasterResponseError, watchRasterLoading } from "./utils/rasterLoading";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
+import { useCompactLayout } from "./utils/useCompactLayout";
 import "ol/ol.css";
 import "./styles/pseudoViewer.css";
 
@@ -53,6 +54,8 @@ export function PseudoMarkupPage({ resultId, username }: { resultId: string; use
 }
 
 function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username: string; onRetry: () => void }) {
+  const compact = useCompactLayout();
+  const [scenesExpanded, setScenesExpanded] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const target = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OLMap | null>(null);
@@ -300,7 +303,7 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
   return <div ref={workspaceRef} className={`pseudo-workspace${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
       <div><h1>Просмотр псевдоразметки</h1><p>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p></div>
-      <a className="secondary compact-action" href={info.geojson_url}><Download size={16} /> Скачать GeoJSON</a>
+      <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a>
     </header>
     <div className="pseudo-model"><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span><span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span></div>
     <div className="pseudo-toolbar">
@@ -323,8 +326,13 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
       <button type="button" className="secondary compact-action" onClick={onRetry}><RefreshCw size={14} /> Повторить загрузку</button>
     </div> : null}
     <div className="pseudo-viewer-body">
-      <aside className="pseudo-sidebar">
-        <h2>Снимки <span>{info.scenes.length}{info.expected_image_count != null && info.expected_image_count !== info.scenes.length ? ` из ${info.expected_image_count}` : ""}</span></h2>
+      <aside className={`pseudo-sidebar${scenesExpanded ? "" : " collapsed"}`}>
+        <div className="pseudo-sidebar-heading">
+          <h2>Снимки <span>{info.scenes.length}{info.expected_image_count != null && info.expected_image_count !== info.scenes.length ? ` из ${info.expected_image_count}` : ""}</span></h2>
+          <span className="mobile-only muted">На экране: {imagesVisible ? viewportSceneIds.size : 0}</span>
+          <button className="secondary icon-button mobile-only" type="button" aria-label="Список снимков" aria-expanded={scenesExpanded} aria-controls="pseudo-scene-content" onClick={() => setScenesExpanded((value) => !value)}><ChevronDown size={16} style={{ transform: scenesExpanded ? "rotate(180deg)" : undefined }} /></button>
+        </div>
+        <div className="pseudo-sidebar-content" id="pseudo-scene-content">
         <p className="pseudo-scene-count">{imagesVisible ? `На экране: ${viewportSceneIds.size}` : "Снимки скрыты"}{hiddenSceneIds.size > 0 ? ` · Выключено: ${hiddenSceneIds.size}` : ""}</p>
         <input type="search" placeholder="Найти снимок" aria-label="Найти снимок" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className="pseudo-scene-list">{scenes.map((scene) => {
@@ -349,10 +357,12 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
                 setSelectedSceneId(scene.id);
                 setOutlineAttempt((value) => value + 1);
                 fit(scene.bounds);
+                if (compact) setScenesExpanded(false);
               }}><span>{scene.name}</span></button>
           </div>;
         })}</div>
         {!info.scenes.length ? <p>Исходные снимки недоступны. Слой псевдоразметки можно просматривать отдельно.</p> : null}
+        </div>
       </aside>
       <div className="pseudo-map-area">
         <div className="pseudo-map" ref={target} aria-label="Мозаика снимков с псевдоразметкой" tabIndex={0} />
@@ -371,6 +381,6 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
         {outlineError ? <div className="pseudo-outline-error" role="status">{outlineError}</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">Колесо — масштаб, перетаскивание — перемещение. Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">{compact ? "Перемещение — одним пальцем, масштаб — двумя. Список снимков раскрывается стрелкой. " : "Колесо — масштаб, перетаскивание — перемещение. "}Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </div>;
 }

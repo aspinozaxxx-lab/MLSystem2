@@ -35,6 +35,8 @@
   height: auto;
 }
 
+.brand-mark { display: none; }
+
 .nav {
   display: flex;
   align-items: center;
@@ -68,7 +70,9 @@
   border-color: var(--border);
 }
 
-.nav .active {
+.nav .active,
+.nav .active:hover,
+.nav .active:focus-visible {
   background: var(--grovika-ink);
   border-color: var(--grovika-ink);
   color: var(--grovika-white);

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Гровика на телефоне</title>
+  <desc id="desc">Схема: компактное меню, карточки очереди и карта псевдоразметки со сворачиваемым списком снимков.</desc>
+  <defs>
+    <pattern id="tiles" width="32" height="32" patternUnits="userSpaceOnUse"><rect width="32" height="32" fill="#d2e2d6"/><path d="M0 16H32M16 0V32" stroke="#b9cec1"/></pattern>
+    <g id="menu" fill="none" stroke="#435c6b" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M0 0h10v10H0zM19 0l7 5-7 5zM36 1h9M36 5h9M36 9h9M54 2l3-2 3 2v6l-3 2-3-2zM70 5h3l2-4 3 8 2-4h3M89 1h9v8h-9zM106 2l5-2 5 2v6l-5 2-5-2zM128 0v6m-3-3 3 3 3-3m-7 5h8M140 9V5m4 4V1m4 8V3M161 0h-4v10h4m-1-5h8m-3-3 3 3-3 3"/></g>
+  </defs>
+  <rect width="960" height="540" rx="20" fill="#edf5f7"/>
+  <g font-family="Arial, sans-serif" fill="#102b3a">
+    <text x="38" y="59" font-size="28" font-weight="700">Гровика на телефоне</text>
+    <text x="38" y="87" font-size="15" fill="#56707f">Схема интерфейса · всё важное под рукой</text>
+    <g transform="translate(44 114)">
+      <rect width="254" height="391" rx="27" fill="#102b3a"/><rect x="9" y="10" width="236" height="369" rx="21" fill="#fff"/><rect x="91" y="17" width="72" height="12" rx="6" fill="#102b3a"/>
+      <use href="#menu" x="35" y="44"/><rect x="77" y="36" width="23" height="24" rx="5" fill="#22d3ee" opacity=".24"/>
+      <text x="23" y="86" font-size="18" font-weight="700">Очередь</text><text x="23" y="105" font-size="11" fill="#56707f">Обучение и создание псевдоразметки</text>
+      <rect x="20" y="120" width="214" height="130" rx="10" fill="#f5f8fa" stroke="#d6e1e7"/>
+      <text x="31" y="141" font-size="12" font-weight="700">Обучение</text><rect x="142" y="127" width="80" height="20" rx="6" fill="#d8f2e7"/><text x="151" y="141" font-size="10" fill="#238169">Выполняется</text>
+      <text x="31" y="166" font-size="12">Датасет · Здания / основной</text><text x="31" y="187" font-size="12">Модель · SegFormer B0</text><text x="31" y="206" font-size="10" fill="#56707f">В очереди · 1</text>
+      <g fill="#fff" stroke="#ccdce3"><rect x="30" y="216" width="62" height="25" rx="5"/><rect x="99" y="216" width="30" height="25" rx="5"/><rect x="136" y="216" width="30" height="25" rx="5"/><rect x="173" y="216" width="30" height="25" rx="5"/></g>
+      <text x="39" y="232" font-size="11">Задание</text><path d="m108 231 6-6 6 6m25-6 6 6 6-6" fill="none" stroke="#56707f"/><rect x="183" y="224" width="10" height="10" fill="#ef756b"/>
+      <rect x="20" y="261" width="214" height="96" rx="10" fill="#f5f8fa" stroke="#d6e1e7"/><text x="31" y="283" font-size="12" font-weight="700">Псевдоразметка</text><text x="31" y="307" font-size="12">Источник · Новые снимки</text><text x="31" y="328" font-size="12">Сеть · Основная</text><text x="31" y="346" font-size="10" fill="#56707f">Ожидает запуска</text>
+    </g>
+    <g transform="translate(326 114)">
+      <rect width="254" height="391" rx="27" fill="#102b3a"/><rect x="9" y="10" width="236" height="369" rx="21" fill="#fff"/><rect x="91" y="17" width="72" height="12" rx="6" fill="#102b3a"/>
+      <use href="#menu" x="35" y="44"/><text x="23" y="84" font-size="16" font-weight="700">Просмотр псевдоразметки</text><text x="23" y="104" font-size="11" fill="#56707f">Сеть · Основная</text>
+      <rect x="20" y="115" width="74" height="26" rx="5" fill="#f5f8fa" stroke="#d6e1e7"/><text x="27" y="132" font-size="10">Все снимки</text><text x="108" y="132" font-size="12">Каналы · RGB</text><text x="23" y="163" font-size="11">✓ Снимки    ✓ Псевдоразметка</text>
+      <text x="23" y="190" font-size="12" font-weight="700">Снимки · 3</text><text x="106" y="190" font-size="10" fill="#56707f">На экране: 2</text><path d="m214 183 5 5 5-5" fill="none" stroke="#56707f"/>
+      <rect x="20" y="202" width="214" height="155" rx="8" fill="url(#tiles)"/><path d="M24 234 71 249 93 287 140 294 167 326 228 337" fill="none" stroke="#fcfaf2" stroke-width="12"/>
+      <g fill="#4acbd9" fill-opacity=".35" stroke="#04768c" stroke-width="2"><path d="m65 215 30 5-5 25-29-5z"/><path d="m118 220 35 8-5 27-34-7z"/><path d="m155 274 23 3-3 25-25-3z"/><path d="m32 294 25 5-5 25-24-4z"/></g>
+      <rect x="201" y="210" width="26" height="27" rx="5" fill="#fff"/><path d="M207 220v-4h4m6 0h4v4m0 6v4h-4m-6 0h-4v-4" fill="none" stroke="#435c6b"/>
+      <rect x="28" y="327" width="92" height="22" rx="5" fill="#fff"/><text x="39" y="342" font-size="10">● Здания · 12</text>
+    </g>
+    <g transform="translate(612 142)">
+      <circle cx="13" cy="12" r="12" fill="#c3edf1"/><text x="7" y="17" font-size="13" font-weight="700">1</text><text x="0" y="50" font-size="18" font-weight="700">Компактное меню</text><text x="0" y="73" font-size="14" fill="#56707f">Все разделы одной строкой</text>
+      <circle cx="13" cy="115" r="12" fill="#c3edf1"/><text x="7" y="120" font-size="13" font-weight="700">2</text><text x="0" y="152" font-size="18" font-weight="700">Действия в карточке</text><text x="0" y="175" font-size="14" fill="#56707f">Статус, модель и результат рядом</text>
+      <circle cx="13" cy="218" r="12" fill="#c3edf1"/><text x="7" y="223" font-size="13" font-weight="700">3</text><text x="0" y="255" font-size="18" font-weight="700">Больше места для карты</text><text x="0" y="278" font-size="14" fill="#56707f">Список снимков раскрывается</text><text x="0" y="300" font-size="14" fill="#56707f">Масштаб — двумя пальцами</text>
+    </g>
+  </g>
+</svg>
