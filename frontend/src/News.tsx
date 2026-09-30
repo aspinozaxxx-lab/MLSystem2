@@ -13,6 +13,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "training-loader-stability",
+  date: "2026-09-30",
+  title: "Стабильность обучения и очереди",
+  updates: [
+    "Исправлено зависание загрузчиков снимков между эпохами, из-за которого обучение переставало продвигаться и задерживало всю очередь.",
+  ],
+}, {
   slug: "pseudo-markup-outline-toggle",
   date: "2026-09-30",
   title: "Управление рамкой снимка в просмотре псевдоразметки",

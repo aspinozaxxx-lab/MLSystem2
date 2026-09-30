@@ -426,6 +426,11 @@ def test_parallel_loading_preserves_batches_and_rng_across_epochs(tmp_path, monk
         assert not loader.persistent_workers
         if workers:
             assert loader.prefetch_factor == 2
+            assert loader.multiprocessing_context.get_start_method() == "spawn"
+            assert loader.timeout == _dataloader.TILE_LOADER_TIMEOUT_SEC
+        else:
+            assert loader.multiprocessing_context is None
+            assert loader.timeout == 0
         torch.manual_seed(1729)
         epochs = []
         for _ in range(2):
@@ -469,6 +474,7 @@ def test_parallel_notebook_augmentations_are_independent_and_repeatable(tmp_path
     dataset.close()
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=1, num_workers=2, prefetch_factor=2, persistent_workers=False,
+        multiprocessing_context="spawn", timeout=_dataloader.TILE_LOADER_TIMEOUT_SEC,
         collate_fn=_dataloader._collate_tile_batch, worker_init_fn=_dataloader._seed_tile_worker,
     )
     runs = []
@@ -716,7 +722,7 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     assert [r.mode for r in requests] == ["train", "val", "test"]
     assert tile_reports[0]["loader_runtime"] == {
         mode: {"num_workers": 2, "prefetch_factor": 2, "persistent_workers": False,
-               "pin_memory": torch.cuda.is_available()}
+               "pin_memory": torch.cuda.is_available(), "start_method": "spawn", "timeout": 180}
         for mode in ("train", "val", "test")
     }
     assert all(r.tile_split.strategy == "window_random" and not r.tile_split.spatial_purge and r.tile_split.test_fraction == 0.2 for r in requests)

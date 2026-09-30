@@ -23,6 +23,7 @@ from .contracts import TileDataloaderRequest, TilePreparationError
 VAL_CACHE_AVAILABLE_MEMORY_FRACTION = 0.5
 VAL_CACHE_ESTIMATE_OVERHEAD = 1.25
 VAL_LAZY_PREFETCH_FACTOR = 2
+TILE_LOADER_TIMEOUT_SEC = 180
 
 
 LOGGER = logging.getLogger(__name__)
@@ -83,15 +84,20 @@ def create_tile_dataloader(
             "persistent_workers": False,
         }
         if tile_settings.num_workers > 0:
+            # fork наследует блокировки фоновых потоков MLflow, OpenSSL и GDAL.
+            kwargs["multiprocessing_context"] = "spawn"
+            kwargs["timeout"] = TILE_LOADER_TIMEOUT_SEC
             # Полная эпоха может занимать сотни ГБ; достаточно двух batch на процесс.
             # Workers пересоздаются, чтобы RNG основной программы потреблялся как при workers=0.
             kwargs["prefetch_factor"] = 2
         loader = DataLoader(**kwargs)
         LOGGER.info(
             "Загрузчик %s (%s): workers=%s, prefetch_factor=%s, "
-            "persistent_workers=%s, pin_memory=%s, batch_size=%s",
+            "persistent_workers=%s, pin_memory=%s, batch_size=%s, start_method=%s, timeout=%s",
             request.pipeline_variant, request.mode, loader.num_workers, loader.prefetch_factor,
             loader.persistent_workers, loader.pin_memory, loader.batch_size,
+            loader.multiprocessing_context.get_start_method() if loader.num_workers else None,
+            loader.timeout,
         )
         return loader
 
@@ -143,6 +149,8 @@ def create_tile_dataloader(
     if sampler is not None:
         dataloader_kwargs["sampler"] = sampler
     if tile_settings.num_workers > 0:
+        dataloader_kwargs["multiprocessing_context"] = "spawn"
+        dataloader_kwargs["timeout"] = TILE_LOADER_TIMEOUT_SEC
         dataloader_kwargs["prefetch_factor"] = _effective_prefetch_factor(
             prefetch_epochs=tile_settings.prefetch_epochs,
             dataset_size=len(dataset),
@@ -276,6 +284,8 @@ class _LazyValLoader:
             "worker_init_fn": _seed_tile_worker,
         }
         if num_workers > 0:
+            dataloader_kwargs["multiprocessing_context"] = "spawn"
+            dataloader_kwargs["timeout"] = TILE_LOADER_TIMEOUT_SEC
             dataloader_kwargs["prefetch_factor"] = VAL_LAZY_PREFETCH_FACTOR
             dataloader_kwargs["persistent_workers"] = True
 

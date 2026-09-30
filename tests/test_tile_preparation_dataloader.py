@@ -1279,27 +1279,37 @@ def test_train_loader_is_stable_with_same_seed_when_augmentation_is_disabled(
     sys.platform.startswith("win"),
     reason="multiprocessing DataLoader на Windows нестабилен для unit-теста",
 )
-def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["train", "val"])
+def test_create_tile_dataloader_with_worker_prefetch(tmp_path: Path, monkeypatch, mode) -> None:
     pytest.importorskip("torch")
     raster_path = tmp_path / "image.tif"
     _write_raster(raster_path)
     annotation_file = tmp_path / "annotations.geojson"
     _write_annotation(annotation_file)
     load_settings(_write_config(tmp_path, tile_size=4, stride=4, batch_size=2, num_workers=1))
+    monkeypatch.setattr(dataloader_impl, "_val_cache_limit_bytes", lambda: 0)
 
     loader = create_tile_dataloader(
         TileDataloaderRequest(
             scenes=[TileSceneSource(scene_id="scene", image_path=str(raster_path))],
             annotation_file=annotation_file,
             batch_size=2,
-            mode="val",
+            mode=mode,
         )
     )
 
-    images, masks, batch_meta = next(iter(loader))
-    assert images.shape == (2, 3, 4, 4)
-    assert masks.shape == (2, 1, 4, 4)
-    assert batch_meta["augmented_tile_count"] == 0
+    raw_loader = getattr(loader, "_loader", loader)
+    assert raw_loader.multiprocessing_context.get_start_method() == "spawn"
+    assert raw_loader.timeout == 180
+    iterator = iter(loader)
+    try:
+        images, masks, batch_meta = next(iterator)
+        assert images.shape == (2, 3, 4, 4)
+        assert masks.shape == (2, 1, 4, 4)
+        assert batch_meta["augmented_tile_count"] == 0
+    finally:
+        iterator._shutdown_workers()
+        loader.dataset.close()
 
 
 def test_tile_category_precedence_keeps_hard_negative_pixels_in_supervision_mask(
@@ -1762,6 +1772,8 @@ def test_lazy_val_loader_uses_configured_workers_and_fixed_prefetch(
 
     assert loader.cache_mode == "lazy"
     assert captured["num_workers"] == 3
+    assert captured["multiprocessing_context"] == "spawn"
+    assert captured["timeout"] == 180
     assert captured["prefetch_factor"] == 2
     assert captured["persistent_workers"] is True
     assert list(captured["sampler"]) == list(loader.sampler)

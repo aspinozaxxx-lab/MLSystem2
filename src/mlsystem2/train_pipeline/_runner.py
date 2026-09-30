@@ -1160,7 +1160,7 @@ def _tile_preparation_report(
         "loader_runtime": {
             split: {
                 key: _loader_attr(loader, key)
-                for key in ("num_workers", "prefetch_factor", "persistent_workers", "pin_memory")
+                for key in ("num_workers", "prefetch_factor", "persistent_workers", "pin_memory", "start_method", "timeout")
             }
             for split, loader in (("train", train_loader.loader), ("val", val_loader.loader), ("test", test_loader))
             if loader is not None
@@ -1250,6 +1250,9 @@ def _dataset_attr(dataset: object, name: str) -> object:
 def _loader_attr(loader: object, name: str) -> object:
     if loader is None:
         return None
+    if name == "start_method":
+        context = getattr(loader, "multiprocessing_context", None)
+        return context.get_start_method() if context is not None else None
     return getattr(loader, name, None)
 
 
