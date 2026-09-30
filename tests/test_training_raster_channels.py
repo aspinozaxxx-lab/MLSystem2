@@ -86,9 +86,25 @@ def test_mixed_rgb_and_rgba_training_channels_and_alpha_validity(tmp_path, varia
         assert image.shape == (3, 64, 64)
         assert not meta["valid_pixels"][:16].any() and meta["valid_pixels"][16:].all()
         assert not image[:, :16].any() and not mask[..., :16, :].any()
+        rgb_image, _, rgb_meta = tiles[rgb_index]
+        assert rgb_image.shape == (3, 64, 64) and rgb_meta["valid_pixels"].all()
+    finally:
+        tiles.close()
+
+
+@pytest.mark.parametrize("variant", ["legacy", "next_gen2", "object_f1"])
+def test_mixed_rgb_and_rgba_collation_has_consistent_valid_masks(tmp_path, variant):
+    pytest.importorskip("torch")
+    images, annotations = _fixture(tmp_path, nodata=0)
+    prepared = _prepare(images, annotations, variant, 3)
+    tiles = _tiles(prepared.dataset, variant, 3)
+    try:
+        rgba_index = next(i for i, w in enumerate(tiles._windows) if w.scene_index == 0 and w.window.x == w.window.y == 0)
+        rgb_index = next(i for i, w in enumerate(tiles._windows) if w.scene_index == 1 and w.window.x == w.window.y == 0)
         batch = _collate_tile_batch([tiles[rgba_index], tiles[rgb_index]])
         assert batch[0].shape == (2, 3, 64, 64)
         assert batch[2]["valid_pixels"].shape == (2, 64, 64)
+        assert not batch[2]["valid_pixels"][0, :16].any()
         assert batch[2]["valid_pixels"][1].all()
     finally:
         tiles.close()
