@@ -12,6 +12,7 @@ import {
   FileText,
   Layers3,
   ListChecks,
+  LoaderCircle,
   LogOut,
   Map as MapIcon,
   PencilLine,
@@ -3159,7 +3160,9 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
         body: { default_config: config },
       }),
     );
-    if (updated) await reloadBootstrap();
+    if (!updated) return false;
+    await reloadBootstrap();
+    return true;
   };
 
   const resetTemplate = async (mode: "training" | "inference", template: AnyTemplate) => {
@@ -3200,17 +3203,6 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
         </>
       ),
     });
-  };
-
-  const applyFieldToAll = async (mode: "training" | "inference", template: AnyTemplate, key: string, value: unknown) => {
-    const path = mode === "training" ? "training-templates" : "inference-templates";
-    const updated = await run(() =>
-      apiJson<unknown>(`/${path}/by-id/${template.id}/apply-field-to-all`, {
-        method: "PUT",
-        body: { key, value },
-      }),
-    );
-    if (updated) await reloadBootstrap();
   };
 
   const showCreateModal = (mode: "training" | "inference") => {
@@ -3259,6 +3251,7 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
         <div className="form-stack">
           {trainingTemplate ? (
             <TemplateEditor
+              key={trainingTemplate.id}
               mode="training"
               template={trainingTemplate}
               config={trainingConfig}
@@ -3266,11 +3259,11 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
               onSave={() => saveTemplate("training", trainingTemplate, trainingConfig)}
               onReset={() => resetTemplate("training", trainingTemplate)}
               onDelete={trainingTemplate.dataset_key ? () => deleteTemplate("training", trainingTemplate) : undefined}
-              onApplyField={(key, value) => applyFieldToAll("training", trainingTemplate, key, value)}
             />
           ) : null}
           {inferenceTemplate ? (
             <TemplateEditor
+              key={inferenceTemplate.id}
               mode="inference"
               template={inferenceTemplate}
               config={inferenceConfig}
@@ -3278,7 +3271,6 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
               onSave={() => saveTemplate("inference", inferenceTemplate, inferenceConfig)}
               onReset={() => resetTemplate("inference", inferenceTemplate)}
               onDelete={inferenceTemplate.dataset_key ? () => deleteTemplate("inference", inferenceTemplate) : undefined}
-              onApplyField={(key, value) => applyFieldToAll("inference", inferenceTemplate, key, value)}
             />
           ) : null}
         </div>
@@ -3932,17 +3924,28 @@ function TemplateEditor({
   onSave,
   onReset,
   onDelete,
-  onApplyField,
 }: {
   mode: "training" | "inference";
   template: AnyTemplate;
   config: JsonRecord;
   onConfig: (next: JsonRecord) => void;
-  onSave: () => void;
+  onSave: () => Promise<boolean>;
   onReset: () => void;
   onDelete?: () => void;
-  onApplyField: (key: string, value: unknown) => void;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [savedTemplateName, setSavedTemplateName] = useState<string | null>(null);
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setSavedTemplateName(null);
+    try {
+      if (await onSave()) setSavedTemplateName(templateTitle(template));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section className="panel template-editor-panel" data-template-mode={mode}>
       <PanelHeader
@@ -3953,24 +3956,26 @@ function TemplateEditor({
       <ConfigEditor
         schema={template.config_schema}
         value={config}
-        onChange={onConfig}
-        onApplyField={onApplyField}
+        onChange={(next) => { setSavedTemplateName(null); onConfig(next); }}
+        readonly={saving}
         architecture={mode === "training" ? template.architecture : undefined}
       />
       <div className="button-row">
-        <button className="primary" type="button" onClick={onSave}>
-          Сохранить
+        <button className="primary" type="button" disabled={saving} aria-busy={saving} onClick={() => void save()}>
+          {saving ? <LoaderCircle className="status-spinner" size={16} aria-hidden="true" /> : null}
+          {saving ? "Сохранение…" : "Сохранить"}
         </button>
-        <button className="secondary" type="button" onClick={onReset}>
+        <button className="secondary" type="button" disabled={saving} onClick={() => { setSavedTemplateName(null); onReset(); }}>
           Сбросить
         </button>
         {onDelete ? (
-          <button className="danger" type="button" onClick={onDelete}>
+          <button className="danger" type="button" disabled={saving} onClick={onDelete}>
             <Trash2 size={16} />
             Удалить
           </button>
         ) : null}
       </div>
+      {savedTemplateName ? <p className="template-save-status" role="status">Сохранён шаблон «{savedTemplateName}».</p> : null}
     </section>
   );
 }

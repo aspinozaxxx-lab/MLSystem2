@@ -9,7 +9,6 @@ export function ConfigEditor({
   onChange,
   architecture,
   readonly = false,
-  onApplyField,
   presentation = {},
   showPipelineNote = true,
 }: {
@@ -18,7 +17,6 @@ export function ConfigEditor({
   onChange: (next: JsonRecord) => void;
   architecture?: string;
   readonly?: boolean;
-  onApplyField?: (key: string, value: unknown) => void;
   presentation?: Record<string, FieldPresentation>;
   showPipelineNote?: boolean;
 }) {
@@ -75,11 +73,6 @@ export function ConfigEditor({
                 onChange={(event) => setField(field, event.target.checked)}
               />
               <span>{labelText}</span>
-              {onApplyField && !readonly ? (
-                <button className="secondary compact-action" type="button" onClick={() => onApplyField(field.key, Boolean(current))}>
-                  ко всем
-                </button>
-              ) : null}
             </label>
           );
         }
@@ -117,11 +110,6 @@ export function ConfigEditor({
                 />
               )}
               {display?.unit ? <span className="config-unit" aria-hidden="true">{display.unit}</span> : null}
-              {onApplyField && !readonly ? (
-                <button className="secondary compact-action" type="button" onClick={() => onApplyField(field.key, value[field.key])}>
-                  ко всем
-                </button>
-              ) : null}
             </div>
           </label>
         );

@@ -61,6 +61,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+.template-save-status {
+  margin: 8px 0 0;
+  color: var(--accent-strong);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 .template-tree {
   display: flex;
   flex-direction: column;
