@@ -50,6 +50,7 @@ mlsystem2-train = "mlsystem2.cli.train:main"
 mlsystem2-infer = "mlsystem2.cli.infer:main"
 mlsystem2-training-ui-api = "mlsystem2.training_ui_api.api:main"
 mlsystem2-training-ui-worker = "mlsystem2.training_ui_api.api:worker_main"
+mlsystem2-feedback = "mlsystem2.training_ui_api.api:feedback_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

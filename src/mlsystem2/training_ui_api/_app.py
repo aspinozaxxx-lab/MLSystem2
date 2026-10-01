@@ -27,6 +27,7 @@ from ._routes.common import RouteContext
 from ._routes.dataset_editor import register_dataset_editor_routes
 from ._routes.export import register_export_routes
 from ._routes.files import register_file_routes
+from ._routes.feedback import register_feedback_routes
 from ._routes.frontend import register_frontend_routes
 from ._routes.jobs import register_job_routes
 from ._routes.pseudolabel import register_pseudolabel_routes
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "service": "training_ui_api"}
 
     register_auth_routes(app, route_context)
+    register_feedback_routes(app, route_context)
     register_catalog_routes(app, route_context)
     register_dataset_editor_routes(app, route_context)
     register_export_routes(app, route_context)

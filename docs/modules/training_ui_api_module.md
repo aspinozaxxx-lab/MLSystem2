@@ -43,8 +43,26 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `get_openapi_schema() -> dict[str, Any]` - возвращает OpenAPI-схему сервиса.
 - `main() -> None` - запускает `uvicorn` для сервиса.
 - `worker_main() -> None` - отдельно запускает исполнителей общей очереди и batch-задач тестовых разметок.
+- `feedback_main() -> None` — служебная команда `mlsystem2-feedback`: читает обращения через HTTP API или передаёт JSON изменения из стандартного ввода; токен берётся из окружения и не выводится.
 
 ## Публичные контракты
+
+`FeedbackKind=remark|improvement|feature`, `FeedbackStatus=waiting|preparing|implementing|implemented`.
+`FeedbackCreate`: `submission_id` — UUID отправки; `kind`, `title`, `message` — тип, заголовок и текст;
+`page_path`, `page_title` — внутренний hash-адрес без query и название страницы; `credit_name` — добровольная
+подпись для благодарности в новости или `null`. `FeedbackInfo` добавляет номер `id`, серверные `author`,
+`app_version`, `status`, `revision`, `preparation`, `progress`, `approved_at`, `approved_by`, `approval_note`,
+`news_slug`, `commit_sha`, `created_at`, `updated_at`. `FeedbackListResponse`: `items`, `has_more`.
+`FeedbackUpdate`: обязательная `expected_revision` и необязательные `status`, `preparation`, `progress`,
+`approval_note`, `news_slug`, `commit_sha`. Подготовленное решение нельзя менять вместе с подтверждением
+или после него; реализация требует решения и явного подтверждения, завершение — новость и полный SHA.
+HTTP: `POST /api/v1/feedback` — отправка из пользовательской сессии с защитой от дублей;
+`GET /api/v1/feedback` — общий список с `limit=1..100`, `before_id`, `active`;
+`GET /api/v1/feedback/{id}` — карточка; `PATCH /api/v1/feedback/{id}` — изменение с проверкой ревизии.
+Список и карточка доступны вошедшим пользователям и исполнителю, изменение — администратору или отдельному
+bearer-токену `MLSYSTEM2_FEEDBACK_API_TOKEN`. Пропуск этапов и устаревшая ревизия дают `409`.
+Одна таблица `feedback`, миграция `20261001_0028`; хранение и HTTP принадлежат этому модулю,
+ежечасная подготовка и подтверждённая разработка выполняются запланированной задачей Codex.
 
 `DatasetEditorImportRequest` содержит `scenes` (от 1 до 100 элементов `DatasetEditorImportSceneRequest`):
 `annotation_name` — имя per-image GeoJSON, `geojson` — FeatureCollection. Общий предел — 50 МиБ.

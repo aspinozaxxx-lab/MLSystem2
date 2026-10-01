@@ -51,6 +51,7 @@ MLSYSTEM2_GRAFANA_URL=/grafana/
 MLSYSTEM2_IMAGES_UI_URL=/prepared-images/
 MLSYSTEM2_TRAINING_UI_USERS_JSON='[{"username":"<администратор>","password":"<пароль>","role":"admin","aliases":["mlsystem"]},{"username":"<пользователь>","password":"<пароль>","role":"user"}]'
 MLSYSTEM2_TRAINING_UI_SESSION_SECRET=<случайная строка>
+MLSYSTEM2_FEEDBACK_API_TOKEN=<случайный_служебный_токен>
 MLSYSTEM2_TRAINING_UI_WORKER_ENABLED=false
 MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS=5
 MLSYSTEM2_AUTOMATION_SYNC_INTERVAL_SECONDS=30

@@ -72,6 +72,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_api_v1_feedback_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/feedback/{feedback_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detail */
+        get: operations["detail_api_v1_feedback__feedback_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change */
+        patch: operations["change_api_v1_feedback__feedback_id__patch"];
+        trace?: never;
+    };
     "/api/v1/bootstrap": {
         parameters: {
             query?: never;
@@ -2727,6 +2763,108 @@ export interface components {
             /** Diagnostics */
             diagnostics?: string[];
         };
+        /** FeedbackCreate */
+        FeedbackCreate: {
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "remark" | "improvement" | "feature";
+            /** Title */
+            title: string;
+            /** Message */
+            message: string;
+            /** Page Path */
+            page_path: string;
+            /** Page Title */
+            page_title: string;
+            /** Credit Name */
+            credit_name?: string | null;
+        };
+        /** FeedbackInfo */
+        FeedbackInfo: {
+            /** Id */
+            id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "remark" | "improvement" | "feature";
+            /** Title */
+            title: string;
+            /** Message */
+            message: string;
+            /** Author */
+            author: string;
+            /** Page Path */
+            page_path: string;
+            /** Page Title */
+            page_title: string;
+            /** App Version */
+            app_version: string | null;
+            /** Credit Name */
+            credit_name: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "waiting" | "preparing" | "implementing" | "implemented";
+            /** Revision */
+            revision: number;
+            /** Preparation */
+            preparation: string;
+            /** Progress */
+            progress: string;
+            /** Approved At */
+            approved_at: string | null;
+            /** Approved By */
+            approved_by: string | null;
+            /** Approval Note */
+            approval_note: string | null;
+            /** News Slug */
+            news_slug: string | null;
+            /** Commit Sha */
+            commit_sha: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** FeedbackListResponse */
+        FeedbackListResponse: {
+            /** Items */
+            items: components["schemas"]["FeedbackInfo"][];
+            /** Has More */
+            has_more: boolean;
+        };
+        /** FeedbackUpdate */
+        FeedbackUpdate: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Status */
+            status?: ("waiting" | "preparing" | "implementing" | "implemented") | null;
+            /** Preparation */
+            preparation?: string | null;
+            /** Progress */
+            progress?: string | null;
+            /** Approval Note */
+            approval_note?: string | null;
+            /** News Slug */
+            news_slug?: string | null;
+            /** Commit Sha */
+            commit_sha?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -4776,6 +4914,138 @@ export interface operations {
                     "application/json": {
                         [key: string]: string | boolean | null;
                     };
+                };
+            };
+        };
+    };
+    listing_api_v1_feedback_get: {
+        parameters: {
+            query?: {
+                before_id?: number | null;
+                limit?: number;
+                active?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_api_v1_feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detail_api_v1_feedback__feedback_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feedback_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_api_v1_feedback__feedback_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feedback_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

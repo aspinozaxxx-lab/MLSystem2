@@ -1,5 +1,9 @@
 import type { components } from "./schema";
 
+export type FeedbackCreate = components["schemas"]["FeedbackCreate"];
+export type FeedbackInfo = components["schemas"]["FeedbackInfo"];
+export type FeedbackListResponse = components["schemas"]["FeedbackListResponse"];
+
 export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];
 
 export type AppLink = components["schemas"]["AppLink"];

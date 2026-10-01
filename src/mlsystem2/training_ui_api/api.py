@@ -25,5 +25,12 @@ def worker_main() -> None:
     _worker_main()
 
 
-__all__ = ["create_app", "get_openapi_schema", "main", "worker_main"]
+def feedback_main() -> None:
+    """Запустить служебную команду работы с обращениями."""
+    from ._feedback_cli import main as _feedback_main
+
+    _feedback_main()
+
+
+__all__ = ["create_app", "get_openapi_schema", "main", "worker_main", "feedback_main"]
 

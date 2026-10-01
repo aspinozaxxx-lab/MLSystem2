@@ -32,6 +32,38 @@ def _json_type():
     return JSON().with_variant(JSONB, "postgresql")
 
 
+class FeedbackRow(Base):
+    """Обращение, подготовленное решение и подтверждение владельца."""
+
+    __tablename__ = "feedback"
+    __table_args__ = (
+        UniqueConstraint("author", "submission_id", name="uq_feedback_submission"),
+        CheckConstraint("status IN ('waiting', 'preparing', 'implementing', 'implemented')", name="ck_feedback_status"),
+        CheckConstraint("status NOT IN ('implementing', 'implemented') OR approved_at IS NOT NULL", name="ck_feedback_approval"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True))
+    kind: Mapped[str] = mapped_column(String(24))
+    title: Mapped[str] = mapped_column(String(160))
+    message: Mapped[str] = mapped_column(Text)
+    author: Mapped[str] = mapped_column(String(240))
+    page_path: Mapped[str] = mapped_column(String(1000))
+    page_title: Mapped[str] = mapped_column(String(160))
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    credit_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="waiting")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    preparation: Mapped[str] = mapped_column(Text, default="")
+    progress: Mapped[str] = mapped_column(Text, default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    news_slug: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    commit_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class DatasetClassRow(Base):
     __tablename__ = "dataset_classes"
     __table_args__ = (

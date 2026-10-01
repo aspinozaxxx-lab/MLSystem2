@@ -120,6 +120,7 @@ import {
 import { ConfigEditor } from "./ConfigEditor";
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
 import { NewsPage, NewsSection } from "./News";
+import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
@@ -303,6 +304,7 @@ function RoutedPage(props: {
 }) {
   const [head, second] = props.route;
   if (head === "news") return <NewsPage slug={second} />;
+  if (head === "feedback") return <FeedbackSection feedbackId={second} />;
   if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
@@ -456,6 +458,7 @@ function Shell({
             <BarChart3 size={16} />
             <span className="nav-label">Результаты</span>
           </a>
+          <FeedbackButton username={user} />
           <button type="button" title={`Выйти: ${user}`} aria-label={`Выйти: ${user}`} onClick={onLogout}>
             <LogOut size={16} />
             <span className="nav-label">Выйти</span>
@@ -560,6 +563,7 @@ function HomePage({ bootstrap }: RoutedPageProps) {
           </span>
         </a>
       </section>
+      <FeedbackSection />
       <NewsSection />
     </>
   );

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc">
+<title id="title">Схема обработки предложений Гровики</title>
+<desc id="desc">Обращение со страницы проходит ожидание, подготовку, подтверждение владельца, реализацию и публикацию новости.</desc>
+<rect width="1200" height="600" rx="24" fill="#f3f6f4"/>
+<g font-family="Arial, sans-serif" fill="#203c30">
+<text x="56" y="68" font-size="18" letter-spacing="2">ГРОВИКА · СХЕМА</text>
+<text x="56" y="123" font-size="36" font-weight="700">Ваше предложение становится улучшением</text>
+<text x="56" y="162" font-size="20" fill="#566c62">Сообщите о неудобстве на той странице, где оно возникло.</text>
+<rect x="56" y="204" width="1088" height="68" rx="16" fill="#fff" stroke="#d9e4dd"/>
+<text x="80" y="246" font-size="22" font-weight="600">Предложить улучшение</text>
+<text x="390" y="246" font-size="18" fill="#566c62">Замечание · Улучшение · Новая функция</text>
+<rect x="56" y="312" width="242" height="146" rx="16" fill="#e6ece8"/>
+<rect x="336" y="312" width="242" height="146" rx="16" fill="#fff2cc"/>
+<rect x="616" y="312" width="242" height="146" rx="16" fill="#e4efff"/>
+<rect x="896" y="312" width="248" height="146" rx="16" fill="#dff2e5"/>
+<text x="76" y="349" font-size="15">01</text><text x="356" y="349" font-size="15">02</text><text x="636" y="349" font-size="15">03</text><text x="916" y="349" font-size="15">04</text>
+<text x="76" y="386" font-size="23" font-weight="700">Ожидание</text>
+<text x="356" y="379" font-size="23" font-weight="700">Началась</text><text x="356" y="406" font-size="23" font-weight="700">подготовка</text>
+<text x="636" y="386" font-size="23" font-weight="700">Реализация</text><text x="916" y="386" font-size="23" font-weight="700">Реализовано</text>
+<text x="76" y="432" font-size="16">Обращение сохранено</text><text x="356" y="438" font-size="16">Изучаем и готовим решение</text>
+<text x="636" y="419" font-size="16">Владелец подтвердил</text><text x="636" y="440" font-size="16">подготовленное решение</text>
+<text x="916" y="419" font-size="16">Обновление установлено</text><text x="916" y="440" font-size="16">Опубликована новость</text>
+<g stroke="#566c62" stroke-width="2.5" fill="none"><path d="M305 384h23m-8-8 8 8-8 8"/><path d="M585 384h23m-8-8 8 8-8 8"/><path d="M865 384h23m-8-8 8 8-8 8"/></g>
+<text x="56" y="523" font-size="21" font-weight="600">Все предложения и этапы — на главной перед новостями</text>
+<text x="56" y="558" font-size="17" fill="#566c62">У каждого обращения есть постоянная ссылка. Благодарность автору — по его желанию.</text>
+</g></svg>

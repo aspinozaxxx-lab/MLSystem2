@@ -102,6 +102,7 @@ class TrainingUIAPIConfig:
     geoalert_triton_http_url: str = "http://127.0.0.1:8000"
     geoalert_triton_python_site_packages: str = "/mlsystem2-venv/lib/python3.12/site-packages"
     automation_sync_interval_seconds: int = 30
+    feedback_api_token: str = ""
 
 
 def get_config() -> TrainingUIAPIConfig:
@@ -193,6 +194,7 @@ def get_config() -> TrainingUIAPIConfig:
         worker_enabled=_bool_env("MLSYSTEM2_TRAINING_UI_WORKER_ENABLED", True),
         worker_interval_seconds=_int_env("MLSYSTEM2_TRAINING_UI_WORKER_INTERVAL_SECONDS", 5),
         pseudolabel_api_token=os.getenv("MLSYSTEM2_PSEUDOLABEL_API_TOKEN", ""),
+        feedback_api_token=os.getenv("MLSYSTEM2_FEEDBACK_API_TOKEN", ""),
         pseudolabel_max_aoi_area_m2=_optional_positive_float_env(
             "MLSYSTEM2_PSEUDOLABEL_MAX_AOI_AREA_M2",
         ),

@@ -10,6 +10,7 @@ _MODULES = (
     "common",
     "dataset_editor",
     "exports",
+    "feedback",
     "jobs",
     "pseudolabel",
     "results",

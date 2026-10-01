@@ -14,7 +14,7 @@ html { -webkit-text-size-adjust: 100%; }
   }
   .topbar .brand-logo { display: none; }
   .topbar .brand-mark { display: block; width: 28px; height: 28px; }
-  .nav { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 2px; width: 100%; }
+  .nav { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 2px; width: 100%; }
   .nav > a, .nav > button, .nav-dropdown > button {
     position: relative;
     justify-content: center;
