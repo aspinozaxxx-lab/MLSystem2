@@ -14,15 +14,12 @@
 .feedback-overlay { position: fixed; inset: 0; z-index: 1500; background: #17232d80; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .feedback-dialog { width: min(600px, 100%); max-height: 90dvh; overflow-y: auto; text-align: left; box-shadow: var(--shadow-overlay); }
 .feedback-dialog .feedback-heading { margin-bottom: 16px; }
-.feedback-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 .feedback-dialog textarea { resize: vertical; }
-.feedback-dialog .checkbox-row { display: flex; align-items: flex-start; gap: 10px; }
-.feedback-dialog .checkbox-row input { width: auto; margin-top: 4px; }
 @media (max-width: 700px) {
   .feedback-card-header { align-items: flex-start; flex-direction: column; gap: 8px; }
   .feedback-heading { align-items: flex-start; }
   .feedback-heading h2 { font-size: 20px; }
   .feedback-overlay { padding: 12px; padding-top: max(12px, env(safe-area-inset-top)); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .feedback-dialog { padding: 18px; }
-  .feedback-dialog input, .feedback-dialog select, .feedback-dialog textarea { font-size: 16px; }
+  .feedback-dialog textarea { font-size: 16px; }
 }

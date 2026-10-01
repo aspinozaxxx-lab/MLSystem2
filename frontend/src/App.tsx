@@ -458,7 +458,7 @@ function Shell({
             <BarChart3 size={16} />
             <span className="nav-label">Результаты</span>
           </a>
-          <FeedbackButton username={user} />
+          <FeedbackButton />
           <button type="button" title={`Выйти: ${user}`} aria-label={`Выйти: ${user}`} onClick={onLogout}>
             <LogOut size={16} />
             <span className="nav-label">Выйти</span>

@@ -26,19 +26,15 @@ export function feedbackPageContext(hash: string): { page_path: string; page_tit
   return { page_path: path, page_title: pageTitles[path.slice(2).split("/")[0]] || "Главная страница" };
 }
 
-export function FeedbackButton({ username }: { username: string }) {
+export function FeedbackButton() {
   const [context, setContext] = useState<ReturnType<typeof feedbackPageContext> | null>(null);
-  const [kind, setKind] = useState<FeedbackCreate["kind"]>("improvement");
-  const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
-  const [allowCredit, setAllowCredit] = useState(false);
-  const [creditName, setCreditName] = useState(username);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState<FeedbackInfo | null>(null);
   const submission = useRef<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const firstField = useRef<HTMLSelectElement>(null);
+  const firstField = useRef<HTMLTextAreaElement>(null);
   const close = useCallback(() => {
     if (busy) return;
     setContext(null);
@@ -52,7 +48,7 @@ export function FeedbackButton({ username }: { username: string }) {
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
       if (event.key === "Tab") {
-        const elements = [...document.querySelectorAll<HTMLElement>('.feedback-dialog button:not(:disabled), .feedback-dialog input:not(:disabled), .feedback-dialog select:not(:disabled), .feedback-dialog textarea:not(:disabled), .feedback-dialog a[href]')];
+        const elements = [...document.querySelectorAll<HTMLElement>('.feedback-dialog button:not(:disabled), .feedback-dialog textarea:not(:disabled), .feedback-dialog a[href]')];
         const first = elements[0], last = elements[elements.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -69,11 +65,12 @@ export function FeedbackButton({ username }: { username: string }) {
     submission.current ||= crypto.randomUUID();
     try {
       const result = await apiJson<FeedbackInfo>("/feedback", { method: "POST", body: {
-        submission_id: submission.current, kind, title, message, ...context,
-        credit_name: allowCredit ? creditName : null,
+        submission_id: submission.current, kind: "improvement",
+        title: message.trim().replace(/\s+/g, " ").slice(0, 160), message, ...context,
+        credit_name: null,
       } satisfies FeedbackCreate });
       if (!result) throw new Error("Войдите в Гровику и повторите отправку");
-      setSent(result); setTitle(""); setMessage(""); submission.current = null;
+      setSent(result); setMessage(""); submission.current = null;
       window.dispatchEvent(new Event("grovika-feedback-changed"));
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось отправить обращение"); }
     finally { setBusy(false); }
@@ -88,14 +85,8 @@ export function FeedbackButton({ username }: { username: string }) {
         <div className="feedback-heading"><h2 id="feedback-dialog-title">Предложить улучшение</h2><button type="button" aria-label="Закрыть обращение" disabled={busy} onClick={close}><X size={18} /></button></div>
         {sent ? <div className="form-stack" role="status"><p>Обращение №{sent.id} отправлено. Его подготовка начнётся после ближайшей проверки.</p><a className="primary" href={`#/feedback/${sent.id}`} onClick={close}>Следить за обращением</a><p className="muted">Все предложения и их этапы видны на главной странице перед новостями.</p></div> : <form className="form-stack" onSubmit={submit}>
           <p className="muted">Страница: {context.page_title}. Автор и адрес страницы сохранятся автоматически.</p>
-          <fieldset disabled={busy} className="form-stack feedback-fields">
-            <label className="field"><span>Тип обращения</span><select ref={firstField} value={kind} onChange={(event) => setKind(event.target.value as FeedbackCreate["kind"])}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="field"><span>Кратко о предложении</span><input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={160} required /></label>
-            <label className="field"><span>Что хочется изменить и зачем?</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} minLength={5} maxLength={6000} rows={5} required /></label>
-            <p className="muted">Текст будет виден всем вошедшим пользователям. Не включайте пароли и личные данные.</p>
-            <label className="checkbox-row"><input type="checkbox" checked={allowCredit} onChange={(event) => setAllowCredit(event.target.checked)} />Можно упомянуть меня в новости об изменении</label>
-            {allowCredit && <label className="field"><span>Как подписать благодарность</span><input value={creditName} onChange={(event) => setCreditName(event.target.value)} maxLength={80} required /></label>}
-          </fieldset>
+          <label className="field"><span>Опишите своё предложение</span><textarea ref={firstField} value={message} onChange={(event) => setMessage(event.target.value)} minLength={5} maxLength={6000} rows={5} disabled={busy} required /></label>
+          <p className="muted">Текст будет виден всем вошедшим пользователям. Не включайте пароли и личные данные.</p>
           {error && <p className="error-box" role="alert">{error}</p>}
           <button className="primary" type="submit" disabled={busy}><Send size={16} />{busy ? "Отправка…" : "Отправить"}</button>
         </form>}
