@@ -313,12 +313,14 @@ def test_api_rejects_incompatible_notebook_settings(key, value):
         _service._validate_training_pipeline_variant(payload, "segformer_b0")
 
 
-@pytest.mark.parametrize("architecture", ["segformer_b0", "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"])
+@pytest.mark.parametrize("pipeline_variant,architecture", [
+    ("next_gen2", name) for name in ("segformer_b0", "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3")
+] + [("object_f1", f"smp_segformer_b{index}") for index in range(4)])
 @pytest.mark.parametrize("tile_size", [512, 768, 1024, 1536])
 @pytest.mark.parametrize("imagery_type,channels", [("kanopus", 4), ("ortho", 3)])
-def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type, channels, architecture):
+def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type, channels, architecture, pipeline_variant):
     payload = sanitize_template_config({
-        "train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size,
+        "train.pipeline_variant": pipeline_variant, "tile_preparation.tile_size": tile_size,
         "train.epochs": 27, "train.early_stopping_patience": 6,
         "train.max_training_time_sec": 3600,
     }, architecture=architecture)
@@ -338,10 +340,16 @@ def test_tile_choice_and_imagery_contract_reach_settings(tile_size, imagery_type
         if key not in {"dataset.task", "dataset.imagery_type"}:
             settings[group][field] = value
     settings["train"]["model_name"] = architecture
+    settings["train"]["quality_metric"] = "objects" if pipeline_variant == "object_f1" else "pixel"
     checked = SystemSettings.model_validate(settings)
     assert checked.tile_preparation.tile_size == tile_size
     assert checked.train.input_channels == channels
     assert checked.tile_preparation.num_workers == 8
+    spec = _runner._model_spec(checked)
+    assert spec.name == architecture and spec.parameters["pipeline_variant"] == pipeline_variant
+    if pipeline_variant == "object_f1":
+        assert spec.parameters["output_layout"] == "background_foreground_boundary"
+        assert spec.parameters["checkpoint_selection_metric"] == "val/object_f1"
 
 
 @pytest.mark.parametrize("tile_size", [None, 0, 640, 2048, "1024", [], {}])

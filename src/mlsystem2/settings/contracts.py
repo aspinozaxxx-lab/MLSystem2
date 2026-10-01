@@ -229,8 +229,11 @@ class SystemSettings(BaseModel):
                 raise ValueError("multiclass per-image dataset требует минимум 3 output_channels")
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
-        if self.train.pipeline_variant == "object_f1" and (self.train.model_name != "smp_segformer_b0" or self.train.quality_metric != "objects"):
-            raise ValueError("object f1 требует SegFormer B0 и объектовую метрику")
+        if self.train.pipeline_variant == "object_f1" and (
+            self.train.model_name not in {"smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"}
+            or self.train.quality_metric != "objects"
+        ):
+            raise ValueError("object f1 требует SegFormer B0/B1/B2/B3 и объектовую метрику")
         if self.train.pipeline_variant in {"next_gen2", "object_f1"}:
             batch_sizes = {
                 "segformer_b0": (16, 8, 4, 2), "smp_segformer_b0": (16, 8, 4, 2),

@@ -13,6 +13,14 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "object-f1-all-segformers",
+  date: "2026-10-01",
+  title: "Object f1 для всех SegFormer",
+  updates: [
+    "Конвейер object f1 теперь доступен для SegFormer B0, B1, B2 и B3: в запуске обучения выберите архитектуру, затем object f1; сеть обучает области и границы для разделения соприкасающихся объектов.",
+    "Batch size автоматически учитывает архитектуру и размер тайла; выбор предобученных весов, тайлы 512/768/1024/1536 и настройки остановки остаются доступны.",
+  ],
+}, {
   slug: "template-save-feedback",
   date: "2026-10-01",
   title: "Понятное сохранение шаблонов",

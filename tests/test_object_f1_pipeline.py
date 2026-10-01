@@ -11,7 +11,7 @@ from shapely.geometry import MultiPolygon, box, mapping, shape
 from mlsystem2.inference.api import create_object_scene, object_window_origins, separate_objects
 from mlsystem2.inference.contracts import ObjectSceneRequest, ObjectWindowPrediction
 from mlsystem2.models.api import create_model, load_checkpoint, save_checkpoint
-from mlsystem2.models.contracts import ModelSpec, LoadCheckpointRequest, SaveCheckpointRequest
+from mlsystem2.models.contracts import ModelSpec, ModelsError, LoadCheckpointRequest, SaveCheckpointRequest
 from mlsystem2.tile_preparation._dataset import TileDataset
 from mlsystem2.tile_preparation._dataloader import _collate_tile_batch
 from mlsystem2.tile_preparation._object_targets import boundary_targets
@@ -50,6 +50,74 @@ def _config():
     return TrainConfig(pipeline_variant="object_f1", task="binary", quality_metric="objects", class_weights=[1, 1],
                        epochs=2, batch_size=2, device="cpu", learning_rate=1e-4, weight_decay=.01,
                        loss="cross_entropy_tversky", early_stopping_patience=10)
+
+
+@pytest.mark.parametrize("architecture", ["segformer_b0", "segformer_b2", "smp_unet_resnet34", "smp_deeplabv3plus_resnet50"])
+def test_object_profile_rejects_unsupported_architectures(architecture):
+    from mlsystem2.settings.api import load_settings
+    from mlsystem2.settings.contracts import SystemSettings
+    from mlsystem2.training_ui_api import _service
+    from mlsystem2.training_ui_api._templates import sanitize_template_config
+    from pathlib import Path
+
+    with pytest.raises(_service.TrainingUIAPIError, match="object f1"):
+        sanitize_template_config({"train.pipeline_variant": "object_f1"}, architecture=architecture)
+    with pytest.raises(_service.TrainingUIAPIError, match="object f1"):
+        _service._validate_training_pipeline_variant({"train.pipeline_variant": "object_f1"}, architecture)
+    with pytest.raises(ModelsError, match="object f1"):
+        create_model(ModelSpec(name=architecture, input_channels=3, output_channels=1, parameters={
+            "pipeline_variant": "object_f1", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}))
+    root = Path(__file__).resolve().parents[1]
+    settings = load_settings(root / "configs/settings.server.yaml", root / "configs/run.next-gen2.server.yaml").model_dump()
+    settings["train"].update(pipeline_variant="object_f1", model_name=architecture, quality_metric="objects")
+    with pytest.raises(ValueError, match="object f1"):
+        SystemSettings.model_validate(settings)
+
+
+@pytest.mark.parametrize("architecture", [f"smp_segformer_b{index}" for index in range(4)])
+@pytest.mark.parametrize("channels", [3, 4])
+@pytest.mark.parametrize("pretrained", [False, True])
+def test_object_encoder_weights_channels_and_offline_restore(monkeypatch, architecture, channels, pretrained):
+    torch = pytest.importorskip("torch")
+    from mlsystem2.models import _factory
+
+    calls = []
+
+    class Encoder(torch.nn.Module):
+        def __init__(self, count):
+            super().__init__()
+            self.patch_embed1 = torch.nn.Module()
+            self.patch_embed1.proj = torch.nn.Conv2d(count, 2, 3)
+
+        def set_in_channels(self, count, pretrained):
+            assert pretrained is False
+            self.patch_embed1.proj = torch.nn.Conv2d(count, 2, 3)
+
+    class FakeSMP:
+        @staticmethod
+        def Segformer(**kwargs):
+            model = torch.nn.Module()
+            model.encoder = Encoder(kwargs["in_channels"])
+            calls.append((kwargs, model.encoder.patch_embed1.proj.weight.detach().clone()))
+            return model
+
+    monkeypatch.setattr(_factory, "_import_smp", lambda: FakeSMP())
+    spec = ModelSpec(name=architecture, input_channels=channels, output_channels=1, pretrained=pretrained, parameters={
+        "pipeline_variant": "object_f1", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}})
+    handle = create_model(spec)
+    assert calls[0][0] == {"encoder_name": architecture.replace("smp_segformer", "mit"),
+        "encoder_weights": "imagenet" if pretrained else None,
+        "in_channels": 3 if pretrained else channels, "classes": 3, "activation": None}
+    assert handle.spec.pretrained is pretrained
+    assert handle.model.object_output is True
+    projection = handle.model.model.encoder.patch_embed1.proj.weight.detach()
+    assert projection.shape[1] == channels
+    if pretrained and channels == 4:
+        torch.testing.assert_close(projection[:, :3], calls[0][1])
+        torch.testing.assert_close(projection[:, 3], calls[0][1][:, 0])
+    _factory.create_model_for_checkpoint(spec)
+    assert calls[1][0]["encoder_weights"] is None
+    assert calls[1][0]["in_channels"] == channels and calls[1][0]["classes"] == 3
 
 
 def test_separation_touching_small_fallback_and_holes():
@@ -126,14 +194,18 @@ def test_rgb_alpha_split_ids_and_augmentation_reproducible(tmp_path):
             dataset.close()
 
 
-def test_model_both_heads_gradients_checkpoint_and_scene_validation(tmp_path):
+@pytest.mark.parametrize("architecture", [f"smp_segformer_b{index}" for index in range(4)])
+@pytest.mark.parametrize("channels", [3, 4])
+def test_model_both_heads_gradients_checkpoint_and_scene_validation(tmp_path, architecture, channels):
     torch = pytest.importorskip("torch")
     torch.set_num_threads(2)
     dataset = _dataset(_scenes(tmp_path), "val")
     try:
         batch = _collate_tile_batch([dataset[0], dataset[1]])
         images, masks, meta = batch
-        spec = ModelSpec(name="smp_segformer_b0", input_channels=3, output_channels=1, parameters={
+        if channels == 4:
+            images = torch.cat((images, images[:, :1]), dim=1)
+        spec = ModelSpec(name=architecture, input_channels=channels, output_channels=1, parameters={
             "pipeline_variant": "object_f1", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}})
         handle = create_model(spec)
         logits = handle.model(images)
@@ -150,7 +222,12 @@ def test_model_both_heads_gradients_checkpoint_and_scene_validation(tmp_path):
         handle.model.eval()
         with torch.no_grad():
             torch.testing.assert_close(handle.model(images), restored(images))
-        batches = [_collate_tile_batch([dataset[i]]) for i in range(len(dataset))]
+        batches = []
+        for i in range(len(dataset)):
+            image, mask, metadata = _collate_tile_batch([dataset[i]])
+            if channels == 4:
+                image = torch.cat((image, image[:, :1]), dim=1)
+            batches.append((image, mask, metadata))
         result = validate_objects(torch, restored, batches, "cpu", _config(), 1, None)
         assert np.isfinite(result["loss"]) and len(result["per_scene_metrics"]) == 1
         assert 0 <= result["quality_f1"] <= 1
@@ -186,7 +263,32 @@ def test_onnx_two_probabilities_and_instance_pipeline(tmp_path):
     assert "dims: [ -1, 2, -1, -1 ]" in _triton_config("objects", 3, foreground_channels=2, probability_output=True)
 
 
-def test_training_two_epochs_uses_object_score_and_evaluates_best(tmp_path):
+@pytest.mark.parametrize("architecture", [f"smp_segformer_b{index}" for index in range(4)])
+def test_real_object_model_onnx_preserves_both_probabilities(tmp_path, architecture):
+    torch = pytest.importorskip("torch")
+    onnx = pytest.importorskip("onnx")
+    reference = pytest.importorskip("onnx.reference")
+    from mlsystem2.training_ui_api._model_export import _export_segmentation_mask_onnx
+
+    torch.set_num_threads(2)
+    handle = create_model(ModelSpec(name=architecture, input_channels=4, output_channels=1, parameters={
+        "pipeline_variant": "object_f1", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}))
+    path = tmp_path / "object.onnx"
+    _export_segmentation_mask_onnx(model=handle.model, input_channels=4, output_channels=1, sample_size=64,
+        threshold=.5, onnx_path=path, probability_output=True, object_output=True)
+    exported = onnx.load(path)
+    onnx.checker.check_model(exported)
+    image = np.random.default_rng(42).uniform(0, 255, size=(1, 4, 64, 64)).astype(np.float32)
+    actual = reference.ReferenceEvaluator(exported).run(["probabilities"], {"input": image})[0]
+    with torch.no_grad():
+        logits = handle.model(torch.from_numpy(image))
+        expected = torch.cat((logits[:, :2].softmax(1)[:, 1:2], logits[:, 2:3].sigmoid()), 1).numpy()
+    assert actual.shape == (1, 2, 64, 64)
+    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+
+@pytest.mark.parametrize("architecture", [f"smp_segformer_b{index}" for index in range(4)])
+def test_training_two_epochs_uses_object_score_and_evaluates_best(tmp_path, architecture):
     torch = pytest.importorskip("torch")
     from mlsystem2.train.api import train_model
     from mlsystem2.train.contracts import TrainRequest
@@ -204,7 +306,7 @@ def test_training_two_epochs_uses_object_score_and_evaluates_best(tmp_path):
     try:
         loaders = [[_collate_tile_batch([dataset[i], dataset[min(i+1, len(dataset)-1)]])
                     for i in range(0, len(dataset), 2)] for dataset in datasets]
-        handle = create_model(ModelSpec(name="smp_segformer_b0", input_channels=3, output_channels=1,
+        handle = create_model(ModelSpec(name=architecture, input_channels=3, output_channels=1,
             parameters={"pipeline_variant": "object_f1", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}))
         result = train_model(TrainRequest(model=handle, train_loader=loaders[0], val_loader=loaders[1], test_loader=loaders[2],
                             config=_config(), checkpoint_dir=str(tmp_path / "checkpoints"), sample_size=64))

@@ -17,7 +17,7 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|object_f1`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits.
 - `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
@@ -29,7 +29,7 @@
 
 ## Алгоритм работы и его особенности
 
-`train.pipeline_variant` дополнен object_f1: binary SegFormer B0, quality_metric=objects, фиксированные параметры next-gen2 и отдельная ветвь подготовки/оценки границ. Размер тайла, pretrained и условия остановки изменяемы.
+`train.pipeline_variant` дополнен object_f1: binary SegFormer B0/B1/B2/B3, quality_metric=objects, фиксированные параметры next-gen2 и отдельная ветвь подготовки/оценки границ. Batch size для тайлов 512/768/1024/1536: B0 — 16/8/4/2, B1 — 8/4/2/1, B2 и B3 — 4/2/1/1. Размер тайла, pretrained и условия остановки изменяемы.
 
 `next_gen2` требует профиль ноутбука: binary, HF B0 или SMP SegFormer B0/B1/B2/B3, 3 или 4 канала,
 тайлы 512/768/1024/1536, шаг в половину тайла, context 0, augmentation_level 3, seed 42,

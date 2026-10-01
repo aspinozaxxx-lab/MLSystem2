@@ -103,6 +103,7 @@ from ._queueing import (
     queue_sort_key,
 )
 from ._templates import (
+    OBJECT_F1_MODEL_NAMES,
     NEXT_GEN2_DEFAULT_CONFIG,
     NEXT_GEN2_MODEL_BATCH_SIZES,
     next_gen2_train_batch_size,
@@ -1062,8 +1063,8 @@ def _validate_training_pipeline_variant(
         raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
     if variant == "legacy":
         return
-    if variant == "object_f1" and architecture != "smp_segformer_b0":
-        raise TrainingUIAPIError("object f1 доступен только для SegFormer B0")
+    if variant == "object_f1" and architecture not in OBJECT_F1_MODEL_NAMES:
+        raise TrainingUIAPIError("object f1 доступен для SegFormer B0/B1/B2/B3")
     if variant in {"next_gen2", "object_f1"}:
         if architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2 поддерживает только архитектуры SegFormer.")

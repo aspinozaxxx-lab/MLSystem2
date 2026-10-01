@@ -18,6 +18,9 @@ NEXT_GEN2_MODEL_BATCH_SIZES = {
     "smp_segformer_b1": (8, 4, 2, 1), "smp_segformer_b2": (4, 2, 1, 1),
     "smp_segformer_b3": (4, 2, 1, 1),
 }
+OBJECT_F1_MODEL_NAMES = frozenset(
+    name for name in NEXT_GEN2_MODEL_BATCH_SIZES if name.startswith("smp_segformer_")
+)
 
 
 def next_gen2_train_batch_size(tile_size: int, architecture: str = "segformer_b0") -> int:
@@ -104,12 +107,14 @@ NEXT_GEN2_DESCRIPTION = (
 
 OBJECT_F1_DEFAULT_CONFIG = {**NEXT_GEN2_DEFAULT_CONFIG, "train.pipeline_variant": "object_f1"}
 OBJECT_F1_DESCRIPTION = (
-    "Конвейер для SegFormer B0 на основе next-gen2. Сеть предсказывает область и отдельную карту границ; "
+    "Конвейер для SegFormer B0/B1/B2/B3 на основе next-gen2 с соответствующим encoder MiT. "
+    "Сеть предсказывает область и отдельную карту границ; "
     "после объединения окон watershed разделяет соприкасающиеся объекты на самостоятельные полигоны. "
     "Один Polygon — один объект, части MultiPolygon считаются отдельно. Исходная разметка не изменяется.\n\n"
     "RGB для ортофотопланов, RGB+NIR для Канопуса. Alpha используется только как valid mask. "
     "Предобученные веса — ImageNet encoder; галочку можно снять. Min-max нормализация каждого канала окна. "
-    "Размеры тайла 512/768/1024/1536 px, batch size 16/8/4/2, шаг — половина тайла, полное покрытие краёв.\n\n"
+    "Размеры тайла 512/768/1024/1536 px, шаг — половина тайла, полное покрытие краёв. "
+    "Batch size выбирается автоматически: B0 — 16/8/4/2, B1 — 8/4/2/1, B2 и B3 — 4/2/1/1.\n\n"
     "Разбиение 60/20/20 по независимым группам снимков, seed 42. Пересекающиеся территории остаются в одной части. "
     "Sampler 7/8/1 и аугментации next-gen2; заполнение за пределами изображения исключено из loss. "
     "Границы шириной 2 px формируются по ID после совместных преобразований изображения и масок.\n\n"
@@ -135,7 +140,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука для SegFormer B0/B1/B2/B3: Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536, CrossEntropy + Tversky, выбор весов по validation loss. object f1 для SegFormer B0 обучает области и границы, разделяет соприкасающиеся объекты и выбирает checkpoint по object F1 полных validation-снимков. Batch size учитывает архитектуру и размер тайла; подробности внизу формы.",
+            "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука для SegFormer B0/B1/B2/B3: Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536, CrossEntropy + Tversky, выбор весов по validation loss. object f1 для SegFormer B0/B1/B2/B3 обучает области и границы, разделяет соприкасающиеся объекты и выбирает checkpoint по object F1 полных validation-снимков. Batch size учитывает архитектуру и размер тайла; подробности внизу формы.",
             "options": ["legacy", "next_gen2", "object_f1"],
         },
         {
@@ -697,8 +702,8 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
-    if result.get("train.pipeline_variant") == "object_f1" and architecture != "smp_segformer_b0":
-        raise TrainingUIAPIError("object f1 доступен только для SegFormer B0")
+    if result.get("train.pipeline_variant") == "object_f1" and architecture not in OBJECT_F1_MODEL_NAMES:
+        raise TrainingUIAPIError("object f1 доступен для SegFormer B0/B1/B2/B3")
     if result.get("train.pipeline_variant") in {"next_gen2", "object_f1"}:
         result.update({key: value for key, value in fixed_pipeline_defaults(str(result["train.pipeline_variant"])).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = result.get("tile_preparation.tile_size")
@@ -933,11 +938,13 @@ def _template(
     if default_config.get("train.pipeline_variant") == "legacy":
         legacy_defaults.update(default_config)
     schema["fields"][0]["options"] = ["legacy", "next_gen2"]
-    if architecture == "smp_segformer_b0":
+    if architecture in OBJECT_F1_MODEL_NAMES:
         schema["fields"][0]["options"].append("object_f1")
     schema["pipeline_defaults"] = {"legacy": legacy_defaults}
-    if architecture == "smp_segformer_b0":
-        schema["pipeline_defaults"]["object_f1"] = deepcopy(OBJECT_F1_DEFAULT_CONFIG)
+    if architecture in OBJECT_F1_MODEL_NAMES:
+        schema["pipeline_defaults"]["object_f1"] = {
+            **OBJECT_F1_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
     if architecture in NEXT_GEN2_MODEL_BATCH_SIZES:
         schema["pipeline_defaults"]["next_gen2"] = {
             **NEXT_GEN2_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),

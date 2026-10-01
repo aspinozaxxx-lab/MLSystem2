@@ -158,8 +158,8 @@ def create_model_for_checkpoint(spec: ModelSpec) -> ModelHandle:
 
 
 def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") == "object_f1" and spec.name != "smp_segformer_b0":
-        raise ModelsError("object f1 поддерживает только SegFormer B0")
+    if spec.parameters.get("pipeline_variant") == "object_f1" and spec.name not in _SMP_ENCODERS:
+        raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
     if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1"} and (

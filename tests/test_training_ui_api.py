@@ -95,8 +95,9 @@ def test_segformer_templates_offer_supported_pipelines() -> None:
     for name, template in templates.items():
         schema = template["config_schema"]
         expected = ["legacy", "next_gen2"] if "segformer" in name else ["legacy"]
-        if name == "smp_segformer_b0":
+        if "segformer" in name:
             expected.append("object_f1")
+            assert schema["pipeline_defaults"]["object_f1"]["train.batch_size"] == next_gen2_train_batch_size(512, name)
         assert schema["fields"][0]["options"] == expected
         assert not any(field["key"].startswith("next_gen.") for field in schema["fields"])
         assert schema["pipeline_defaults"]["legacy"]["train.pipeline_variant"] == "legacy"
@@ -3728,7 +3729,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
 
 @pytest.mark.parametrize("pipeline_variant,tile_size,architecture",
     [("legacy", 512, f"smp_segformer_b{index}") for index in range(4)] + [
-        ("next_gen2", size, name) for size in (512, 768, 1024, 1536)
+        (variant, size, name) for variant in ("next_gen2", "object_f1") for size in (512, 768, 1024, 1536)
         for name in ("smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3")
     ],
 )
@@ -3781,8 +3782,8 @@ def test_training_ui_worker_snapshots_per_image_annotations(
                 mlflow_experiment_name="per-image-test",
                 dataset_key="Реки\\test",
                 architecture=architecture,
-                config=({"train.pipeline_variant": "next_gen2", "tile_preparation.tile_size": tile_size, "train.pretrained": pretrained}
-                        if pipeline_variant == "next_gen2" else {**_short_training_config(), "train.pipeline_variant": "legacy", "train.pretrained": pretrained}),
+                config=({"train.pipeline_variant": pipeline_variant, "tile_preparation.tile_size": tile_size, "train.pretrained": pretrained}
+                        if pipeline_variant in {"next_gen2", "object_f1"} else {**_short_training_config(), "train.pipeline_variant": "legacy", "train.pretrained": pretrained}),
             ),
             config,
         )
@@ -3791,8 +3792,9 @@ def test_training_ui_worker_snapshots_per_image_annotations(
 
         payload = _worker._build_training_config(session, row, config, run_dir)
         assert payload["train"]["pretrained"] is pretrained
-        if pipeline_variant == "next_gen2":
-            assert job.pipeline_variant == "next_gen2"
+        if pipeline_variant in {"next_gen2", "object_f1"}:
+            assert job.pipeline_variant == pipeline_variant
+            assert payload["train"]["quality_metric"] == ("objects" if pipeline_variant == "object_f1" else job.config["train.quality_metric"])
             assert payload["train"]["loss"] == "cross_entropy_tversky"
             assert payload["tile_preparation"]["context"] == 0
             assert payload["tile_preparation"]["stride"] == tile_size // 2
