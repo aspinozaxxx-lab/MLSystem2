@@ -648,6 +648,79 @@ def test_seed_training_template_backfills_background_weight_and_preserves_overri
         assert template.default_config["train.batch_size"] == 3
 
 
+def test_result_classes_sort_by_last_successful_training(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+
+    names = {
+        "untrained_a": "Абрикос", "tie_z": "Ясень", "old": "Бор",
+        "legacy": "Исторический", "untrained_b": "Берёза", "fresh": "Свежий", "tie_a": "Альфа",
+    }
+    datasets = [SimpleNamespace(
+        key=key, name=name, dataset_name=name, class_key="forest", class_name="Лес",
+        quality_metric="pixel", is_primary=key == "fresh", image_count=10,
+    ) for key, name in names.items()]
+    class_info = SimpleNamespace(
+        key="forest", name="Лес", updated_at=None, datasets=datasets,
+        is_custom=False, quality_metric="pixel",
+    )
+    empty_class = SimpleNamespace(
+        key="empty", name="Пустой класс", updated_at=None, datasets=[],
+        is_custom=False, quality_metric="pixel",
+    )
+    monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: [class_info, empty_class])
+    metric_calls: list[UUID] = []
+
+    def metric_info(_session, result, _config):
+        metric_calls.append(result.id)
+        return None
+
+    monkeypatch.setattr(_service, "training_result_test_f1_info", metric_info)
+    past = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    older = datetime(2026, 10, 1, 9, tzinfo=timezone.utc)
+    historical = datetime(2026, 10, 2, 8, tzinfo=timezone.utc)
+    newest = datetime(2026, 10, 2, 12, tzinfo=timezone.utc)
+    failed = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    cases = [
+        ("fresh", past, past, "ok"),
+        ("old", older, older, "ok"),
+        ("fresh", newest, newest, "ok"),
+        ("legacy", None, historical, "ok"),
+        ("tie_a", older, older, "ok"),
+        ("tie_z", older, older, "ok"),
+        ("old", failed, failed, "error"),
+        ("untrained_b", failed, failed, "cancelled"),
+        ("untrained_b", failed, failed, "error"),
+        ("untrained_a", None, failed, "queued"),
+        ("untrained_a", None, failed, "running"),
+    ]
+    with session_factory() as session:
+        class_row = DatasetClassRow(key="forest", name="Лес", technical_name="forest")
+        session.add(class_row)
+        session.add_all([TrainingResultRow(
+            id=UUID(int=index), source="manual",
+            dataset_key="retired-legacy" if key == "legacy" else key,
+            class_key=key, class_display_name=names[key], architecture="smp_segformer_b2",
+            model_name="Тестовая сеть", trained_at=trained_at, created_at=created_at, status=status,
+        ) for index, (key, trained_at, created_at, status) in enumerate(cases, start=1)])
+        session.flush()
+        class_row.primary_training_result_id = UUID(int=1)
+        session.flush()
+
+        response = _service.result_classes(session, config)
+        cards = response.classes[0].datasets
+        assert [card.key for card in cards] == [
+            "fresh", "legacy", "tie_a", "old", "tie_z", "untrained_a", "untrained_b",
+        ]
+        assert cards[0].is_primary is True
+        assert set(metric_calls) == {UUID(int=index) for index in (1, 2, 4, 5, 6)}
+        assert response.classes[1].datasets == []
+
+
 def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")

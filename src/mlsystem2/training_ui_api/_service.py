@@ -313,7 +313,7 @@ def result_classes(
     catalog = list_managed_classes(session, config)
     output: list[ResultClassInfo] = []
     for class_info in catalog:
-        selected_results = _result_card_training_results(
+        selected_results, last_training_time = _result_card_training_results(
             session,
             class_info.key,
             [dataset.key for dataset in class_info.datasets],
@@ -348,6 +348,11 @@ def result_classes(
                     test_f1_training_result_id=test_f1_training_result_id,
                 )
             )
+        result_datasets.sort(key=lambda dataset: (
+            -last_training_time.get(dataset.key, float("-inf")),
+            (dataset.dataset_name or dataset.name).casefold(),
+            dataset.key,
+        ))
         output.append(
             ResultClassInfo(
                 key=class_info.key,
@@ -365,12 +370,12 @@ def _result_card_training_results(
     session: Session,
     class_key: str,
     dataset_keys: list[str],
-) -> dict[str, TrainingResultRow]:
-    """Выбрать основную либо последнюю успешную сеть отдельно для каждого датасета."""
+) -> tuple[dict[str, TrainingResultRow], dict[str, float]]:
+    """Выбрать сеть для F1 и независимо определить время последнего успешного обучения."""
 
     ordered_dataset_keys = list(dict.fromkeys(dataset_keys))
     if not ordered_dataset_keys:
-        return {}
+        return {}, {}
     active_dataset_keys = set(ordered_dataset_keys)
     rows = session.scalars(
         select(TrainingResultRow)
@@ -388,21 +393,28 @@ def _result_card_training_results(
         )
     ).all()
     selected: dict[str, TrainingResultRow] = {}
+    last_training_time: dict[str, float] = {}
     for row in rows:
         dataset_key = _training_result_dataset_key(row, active_dataset_keys)
         if dataset_key is not None:
             selected.setdefault(dataset_key, row)
+            trained_at = row.trained_at or row.created_at
+            if trained_at.tzinfo is None:
+                trained_at = trained_at.replace(tzinfo=timezone.utc)
+            last_training_time[dataset_key] = max(
+                last_training_time.get(dataset_key, float("-inf")), trained_at.timestamp(),
+            )
 
     class_row = dataset_class_row(session, class_key)
     if class_row is None or class_row.primary_training_result_id is None:
-        return selected
+        return selected, last_training_time
     primary = session.get(TrainingResultRow, class_row.primary_training_result_id)
     if primary is None or primary.status != ResultStatus.OK.value:
-        return selected
+        return selected, last_training_time
     primary_dataset_key = _training_result_dataset_key(primary, active_dataset_keys)
     if primary_dataset_key is not None:
         selected[primary_dataset_key] = primary
-    return selected
+    return selected, last_training_time
 
 
 def _training_result_dataset_key(

@@ -4131,7 +4131,6 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
         <Layers3 size={20} />
         {item.name}
       </div>
-      <p className="muted">Обновлено: {formatDate(item.updated_at)}</p>
       <div className="dataset-list">
         {datasets.length ? (
           datasets.map((dataset) => (

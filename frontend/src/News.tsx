@@ -13,6 +13,14 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "results-datasets-latest-training",
+  date: "2026-10-02",
+  title: "Свежие обучения — первыми в результатах",
+  updates: [
+    "На странице «Результаты» плашки датасетов внутри каждого класса упорядочены по последнему успешному обучению: свежие первыми, без успешных обучений — в конце.",
+    "Под названием класса убрана строка «Обновлено…».",
+  ],
+}, {
   slug: "grovika-feedback-simple-form",
   date: "2026-10-01",
   title: "Предложение — одним сообщением",
