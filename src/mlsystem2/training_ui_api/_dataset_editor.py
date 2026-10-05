@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -3519,7 +3520,12 @@ def _footprint_covers_geometry(
     if footprint.covers(geometry):
         return True
     outside_area = geometry.difference(footprint).area
-    numerical_tolerance = max(geometry.area, 1.0) * 1e-12
+    # На мировых координатах пересечение оставляет погрешность вдоль границы в несколько ULP.
+    coordinate_scale = max(abs(value) for value in footprint.bounds + geometry.bounds)
+    numerical_tolerance = (
+        max(geometry.area, 1.0) * 1e-12
+        + geometry.length * math.ulp(coordinate_scale) * 8
+    )
     return outside_area <= numerical_tolerance
 
 

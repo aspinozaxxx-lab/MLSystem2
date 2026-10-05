@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
+import math
 import shutil
 import sqlite3
 import subprocess
@@ -1235,11 +1236,19 @@ def test_dataset_editor_returns_service_unavailable_for_missing_clone(
     assert "Editor-клон" in response.json()["detail"]
 
 
-def test_dataset_editor_footprint_allows_only_numerical_boundary_sliver() -> None:
-    footprint = box(0, 0, 10, 10)
+@pytest.mark.parametrize("offset", [0.0, 5_000_000.0, 20_000_000.0])
+def test_dataset_editor_footprint_allows_only_numerical_boundary_sliver(offset: float) -> None:
+    footprint = box(offset, offset, offset + 10, offset + 10)
+    sliver_width = max(1e-13, math.ulp(offset + 10) * 2)
 
-    assert _footprint_covers_geometry(footprint, box(-1e-13, 1, 2, 2))
-    assert not _footprint_covers_geometry(footprint, box(-0.01, 1, 2, 2))
+    assert _footprint_covers_geometry(
+        footprint,
+        box(offset - sliver_width, offset + 1, offset + 2, offset + 2),
+    )
+    assert not _footprint_covers_geometry(
+        footprint,
+        box(offset - 0.01, offset + 1, offset + 2, offset + 2),
+    )
 
 
 def test_pseudo_basename_reference_requires_unique_tiff(tmp_path: Path) -> None:
