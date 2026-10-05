@@ -1308,6 +1308,30 @@
               }
             }
           },
+          "400": {
+            "description": "Ошибка проверки; code=annotation_outside_footprint предлагает подтверждённую обрезку.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "detail"
+                  ],
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "annotation_outside_footprint"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -6176,6 +6200,11 @@
             "maxItems": 100,
             "minItems": 1,
             "title": "Scenes"
+          },
+          "clip_to_footprint": {
+            "type": "boolean",
+            "title": "Clip To Footprint",
+            "default": false
           }
         },
         "additionalProperties": false,

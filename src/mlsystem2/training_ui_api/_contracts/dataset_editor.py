@@ -160,6 +160,7 @@ class DatasetEditorImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenes: list[DatasetEditorImportSceneRequest] = Field(min_length=1, max_length=100)
+    clip_to_footprint: bool = False
 
     @model_validator(mode="after")
     def validate_unique_names(self) -> Self:

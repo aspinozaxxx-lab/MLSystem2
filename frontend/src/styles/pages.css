@@ -2124,7 +2124,6 @@
 }
 
 @media (max-width: 700px) {
-  .tool-card,
   .class-card,
   .panel {
     padding: 14px;
@@ -2229,3 +2228,6 @@
   }
 }
 .pseudo-download-actions { display: inline-flex; align-items: center; gap: 6px; }
+.home-heading .page-header { flex-direction: row; align-items: flex-start; }
+.home-heading .page-title { min-width: 0; flex: 1; }
+.home-heading .page-header > .button-row { width: auto; flex: none; margin-left: auto; justify-content: flex-end; }

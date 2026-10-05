@@ -32,7 +32,6 @@
   color: var(--muted);
 }
 
-.tool-card,
 .class-card {
   min-height: 132px;
   padding: var(--grovika-space-4);
@@ -48,14 +47,6 @@
     transform var(--grovika-motion-fast) var(--grovika-easing);
 }
 
-.tool-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: var(--grovika-space-4);
-}
-
-.tool-card:hover,
 .class-card:hover {
   border-color: var(--grovika-cyan-text);
   box-shadow: var(--shadow-overlay);

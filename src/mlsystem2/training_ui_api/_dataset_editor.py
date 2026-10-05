@@ -122,6 +122,10 @@ class DatasetEditorGitError(RuntimeError):
     """Git-клон редактора недоступен или операция Git завершилась ошибкой."""
 
 
+class DatasetEditorImportClippingRequired(TrainingUIAPIError):
+    """Импорт требует согласия на обрезку объектов по валидным данным TIFF."""
+
+
 def download_editor_dataset(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -394,6 +398,7 @@ def import_editor_drafts(
     *,
     scenes: list[tuple[str, dict[str, Any]]],
     username: str,
+    clip_to_footprint: bool = False,
 ) -> DatasetEditorSceneListResponse:
     """Проверить весь пакет, затем сохранить новые сцены только в личных черновиках."""
     if len(json.dumps(scenes, ensure_ascii=False).encode("utf-8")) > 50 * 1024 * 1024:
@@ -406,6 +411,7 @@ def import_editor_drafts(
             DatasetEditorDraftRow.username == username,
         )).all()}
         prepared: dict[str, dict[str, Any]] = {}
+        clipping_messages: list[str] = []
         for annotation_name, raw in scenes:
             try:
                 safe_name = _safe_annotation_name(annotation_name)
@@ -437,12 +443,39 @@ def import_editor_drafts(
                         properties.setdefault(_ROLE_PROPERTY, "positive")
                     candidate["features"].append({**feature, "properties": properties})
                 # Сначала проверяем исходную схему и геометрию: импорт не должен молча исправлять чужой формат.
-                _validate_editor_geojson(candidate, image_path, dataset)
+                _validate_editor_geojson(candidate, image_path, dataset, check_footprint=False)
+                footprint = valid_data_footprint(image_path)
+                outside_count = 0
+                removed_count = 0
+                for feature in candidate["features"]:
+                    if feature["properties"][_ROLE_PROPERTY] == "annotation_zone":
+                        continue
+                    geometry = shape(feature["geometry"])
+                    if not _footprint_covers_geometry(footprint, geometry):
+                        outside_count += 1
+                        if geometry.intersection(footprint).area <= 0:
+                            removed_count += 1
+                if outside_count:
+                    clipping_messages.append(
+                        f"{annotation_name}: объектов за контуром — {outside_count}, "
+                        f"из них полностью снаружи — {removed_count}."
+                    )
+                    if clip_to_footprint:
+                        candidate = _clip_geojson_to_footprint(candidate, footprint)
+                        _validate_editor_geojson(candidate, image_path, dataset)
                 prepared[safe_name] = _normalize_editor_geojson(
                     candidate, _empty_annotation_payload(image_path, dataset), dataset, image_path=image_path,
                 )
             except TrainingUIAPIError as exc:
                 raise TrainingUIAPIError(f"{annotation_name}: {exc}") from exc
+        if clipping_messages and not clip_to_footprint:
+            raise DatasetEditorImportClippingRequired(
+                "Объекты выходят за реальный контур валидных данных TIFF (footprint). "
+                + " ".join(clipping_messages)
+                + " Можно обрезать выходящие полигоны по этому контуру и загрузить весь пакет в черновики. "
+                "Объекты полностью вне валидных данных будут исключены. "
+                "Размеченные зоны сохранят полный контур."
+            )
         now = datetime.now(timezone.utc)
         for annotation_name, payload in prepared.items():
             session.add(DatasetEditorDraftRow(
@@ -3454,6 +3487,8 @@ def _validate_editor_geojson(
     payload: dict[str, Any],
     image_path: Path,
     dataset: DatasetInfo,
+    *,
+    check_footprint: bool = True,
 ) -> None:
     if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
@@ -3524,7 +3559,7 @@ def _validate_editor_geojson(
             raise TrainingUIAPIError(f"Объект {index} должен быть Polygon или MultiPolygon")
         if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
             raise TrainingUIAPIError(f"Геометрия объекта {index} пуста или невалидна")
-        if role != "annotation_zone" and not _footprint_covers_geometry(footprint, geometry):
+        if check_footprint and role != "annotation_zone" and not _footprint_covers_geometry(footprint, geometry):
             raise TrainingUIAPIError(
                 f"Геометрия объекта {index} выходит за реальный footprint TIFF"
             )

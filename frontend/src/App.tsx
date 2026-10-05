@@ -10,6 +10,7 @@ import {
   Download,
   ExternalLink,
   FileText,
+  Images,
   Layers3,
   ListChecks,
   LoaderCircle,
@@ -544,46 +545,21 @@ function HomePage({ bootstrap }: RoutedPageProps) {
 
   return (
     <>
-      <PageHeader title="Рабочая панель" subtitle="Обучение, очереди, результаты и сервисные ссылки MLSystem2" />
-      <section className="content-grid">
-        <ToolCard link={links.grafana} fallbackTitle="Grafana" icon={<BarChart3 size={20} />} />
-        <ToolCard link={links.mlflow} fallbackTitle="MLflow" icon={<Activity size={20} />} />
-        <ToolCard link={links.images} fallbackTitle="Снимки" icon={<Database size={20} />} />
-        <a className="tool-card" href="/projects">
-          <div>
-            <div className="card-title">
-              <Layers3 size={20} />
-              Mapflow
-            </div>
-            <p className="muted">Открыть интерфейс ПМО и результаты обработок.</p>
-          </div>
-          <span className="secondary compact-action">
-            <ExternalLink size={14} />
-            Открыть
-          </span>
-        </a>
-      </section>
+      <div className="home-heading">
+        <PageHeader title="Рабочая панель" subtitle="Обучение, очереди и результаты MLSystem2" actions={<>
+          <a className="secondary icon-button" href={links.grafana?.url} target="_blank" rel="noreferrer"
+            aria-label="Графана" title="Графана — мониторинг сервера" aria-disabled={!links.grafana?.url}>
+            <BarChart3 size={19} />
+          </a>
+          <a className="secondary icon-button" href={links.images?.url} target="_blank" rel="noreferrer"
+            aria-label="Снимки" title="Снимки — файлы на сервере" aria-disabled={!links.images?.url}>
+            <Images size={19} />
+          </a>
+        </>} />
+      </div>
       <FeedbackSection />
       <NewsSection />
     </>
-  );
-}
-
-function ToolCard({ link, fallbackTitle, icon }: { link?: { title: string; url: string }; fallbackTitle: string; icon: ReactNode }) {
-  return (
-    <a className="tool-card" href={link?.url || "#"} target={link?.url ? "_blank" : undefined} rel="noreferrer">
-      <div>
-        <div className="card-title">
-          {icon}
-          {link?.title || fallbackTitle}
-        </div>
-        <p className="muted">{link?.url ? link.url : "Ссылка не настроена"}</p>
-      </div>
-      <span className="secondary compact-action">
-        <ExternalLink size={14} />
-        Открыть
-      </span>
-    </a>
   );
 }
 

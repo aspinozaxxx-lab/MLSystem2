@@ -2,11 +2,13 @@ const API_PREFIX = "/api/v1";
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -27,7 +29,7 @@ export async function apiJson<T>(path: string, options: JsonOptions = {}): Promi
     return null as T;
   }
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response), response.status);
+    throw await responseError(response);
   }
   if (response.status === 204) {
     return null as T;
@@ -42,7 +44,7 @@ export async function apiForm<T>(path: string, form: FormData): Promise<T> {
     body: form,
   });
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response), response.status);
+    throw await responseError(response);
   }
   return (await response.json()) as T;
 }
@@ -54,7 +56,7 @@ export async function apiDownload(path: string, form: FormData): Promise<{ blob:
     body: form,
   });
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response), response.status);
+    throw await responseError(response);
   }
   return {
     blob: await response.blob(),
@@ -70,7 +72,7 @@ export async function apiDownloadJson(path: string, body: unknown): Promise<{ bl
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response), response.status);
+    throw await responseError(response);
   }
   return {
     blob: await response.blob(),
@@ -84,7 +86,7 @@ export async function apiDownloadGet(path: string): Promise<{ blob: Blob; filena
     credentials: "same-origin",
   });
   if (!response.ok) {
-    throw new ApiError(await errorMessage(response), response.status);
+    throw await responseError(response);
   }
   return {
     blob: await response.blob(),
@@ -121,14 +123,14 @@ function apiUrl(path: string): string {
   return path === API_PREFIX || path.startsWith(`${API_PREFIX}/`) ? path : `${API_PREFIX}${path}`;
 }
 
-async function errorMessage(response: Response): Promise<string> {
+async function responseError(response: Response): Promise<ApiError> {
   try {
-    const payload = (await response.json()) as { detail?: unknown };
+    const payload = (await response.json()) as { detail?: unknown; code?: unknown };
     if (typeof payload.detail === "string") {
-      return payload.detail;
+      return new ApiError(payload.detail, response.status, typeof payload.code === "string" ? payload.code : undefined);
     }
   } catch {
-    // Ignore non-JSON error payloads.
+    // Ответ без читаемого JSON сохраняет обычное сообщение с HTTP-статусом.
   }
-  return `HTTP ${response.status}`;
+  return new ApiError(`HTTP ${response.status}`, response.status);
 }

@@ -2274,6 +2274,11 @@ export interface components {
         DatasetEditorImportRequest: {
             /** Scenes */
             scenes: components["schemas"]["DatasetEditorImportSceneRequest"][];
+            /**
+             * Clip To Footprint
+             * @default false
+             */
+            clip_to_footprint: boolean;
         };
         /** DatasetEditorImportSceneRequest */
         DatasetEditorImportSceneRequest: {
@@ -5864,6 +5869,19 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorSceneListResponse"];
+                };
+            };
+            /** @description Ошибка проверки; code=annotation_outside_footprint предлагает подтверждённую обрезку. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail: string;
+                        /** @enum {string} */
+                        code?: "annotation_outside_footprint";
+                    };
                 };
             };
             /** @description Validation Error */

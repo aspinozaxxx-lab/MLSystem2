@@ -59,7 +59,8 @@ def test_dataset_editor_import_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import DatasetEditorImportRequest, DatasetEditorImportSceneRequest
 
-    assert set(DatasetEditorImportRequest.model_fields) == {"scenes"}
+    assert set(DatasetEditorImportRequest.model_fields) == {"scenes", "clip_to_footprint"}
+    assert DatasetEditorImportRequest(scenes=[{"annotation_name": "image.geojson", "geojson": {}}]).clip_to_footprint is False
     assert set(DatasetEditorImportSceneRequest.model_fields) == {"annotation_name", "geojson"}
     assert DatasetEditorImportRequest.model_json_schema()["properties"]["scenes"]["maxItems"] == 100
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
@@ -68,6 +69,7 @@ def test_dataset_editor_import_contract(monkeypatch) -> None:
     endpoint = schema["paths"]["/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import"]["post"]
     assert endpoint["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/DatasetEditorImportRequest")
     assert endpoint["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/DatasetEditorSceneListResponse")
+    assert endpoint["responses"]["400"]["content"]["application/json"]["schema"]["properties"]["code"]["enum"] == ["annotation_outside_footprint"]
 
 
 def test_test_sample_annotation_merge_contract(monkeypatch) -> None:

@@ -314,6 +314,7 @@ export function DatasetEditorPage({
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importMessage, setImportMessage] = useState("");
   const [importError, setImportError] = useState("");
+  const [importClippingRequired, setImportClippingRequired] = useState(false);
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -601,6 +602,7 @@ export function DatasetEditorPage({
     setImportFiles([]);
     setImportMessage("");
     setImportError("");
+    setImportClippingRequired(false);
     setPublication(null);
     setBandMode("RGB");
     bandModeRef.current = "RGB";
@@ -1902,22 +1904,23 @@ export function DatasetEditorPage({
     }));
   };
 
-  const importAnnotations = async () => {
+  const importAnnotations = async (clipToFootprint = false) => {
     const key = datasetKey;
     if (!key || !importFiles.length) return;
     setBusy(true);
     setImportError("");
+    setImportClippingRequired(false);
     try {
       const uploaded = await readAnnotationFiles(importFiles);
       if (datasetKeyRef.current !== key) return;
       const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
         `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/import`,
-        { method: "POST", body: { scenes: uploaded } },
+        { method: "POST", body: { scenes: uploaded, clip_to_footprint: clipToFootprint } },
       );
       if (datasetKeyRef.current !== key) return;
       setImportOpen(false);
       setImportFiles([]);
-      setImportMessage(`Загружено файлов: ${uploaded.length}. Снимки и разметка сохранены в ваших черновиках. Проверьте их и нажмите «Опубликовать».`);
+      setImportMessage(`Загружено файлов: ${uploaded.length}. ${clipToFootprint ? "Выходящие объекты обрезаны по footprint; объекты полностью вне валидных данных исключены. " : ""}Снимки и разметка сохранены в ваших черновиках. Проверьте их и нажмите «Опубликовать».`);
       const preferred = response.scenes.find((scene) => scene.annotation_name.toLowerCase() === uploaded[0].annotation_name.toLowerCase())?.annotation_name;
       await loadScenes(key, preferred);
     } catch (error) {
@@ -1925,6 +1928,7 @@ export function DatasetEditorPage({
         await run(async () => { throw error; });
       } else if (datasetKeyRef.current === key) {
         setImportError(error instanceof Error ? error.message : "Не удалось загрузить разметку.");
+        setImportClippingRequired(error instanceof ApiError && error.code === "annotation_outside_footprint");
       }
     } finally { setBusy(false); }
   };
@@ -2018,7 +2022,7 @@ export function DatasetEditorPage({
           disabled={busy || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
           aria-label="Загрузить GeoJSON"
           title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
-          onClick={() => { setImportFiles([]); setImportError(""); setImportOpen(true); }}
+          onClick={() => { setImportFiles([]); setImportError(""); setImportClippingRequired(false); setImportOpen(true); }}
         ><CloudUpload size={16} /><span className="compact-control-label">Загрузить GeoJSON</span></button>
         <button
           className="secondary"
@@ -2659,18 +2663,18 @@ export function DatasetEditorPage({
                   <span key={item.slug}>{index ? ", " : ""}<code>{item.slug}</code> — {item.name}</span>
                 ))}. Схема классов должна совпадать с GeoJSON этого датасета.</p>
               ) : null}
-              {importError ? <p className="error-box" role="alert" style={{ overflowWrap: "anywhere" }}>{importError}</p> : null}
+              {importError ? <p className={importClippingRequired ? "info-box" : "error-box"} role="alert" style={{ overflowWrap: "anywhere" }}>{importError}</p> : null}
               <label className="field"><span>Файлы разметки · до 100 файлов, всего до 50 МиБ</span>
                 <input type="file" accept=".geojson" multiple disabled={busy}
-                  onChange={(event) => { setImportFiles(Array.from(event.target.files || [])); setImportError(""); }} />
+                  onChange={(event) => { setImportFiles(Array.from(event.target.files || [])); setImportError(""); setImportClippingRequired(false); }} />
               </label>
               {importFiles.length ? <p>Выбрано файлов: {importFiles.length}</p> : null}
               <p className="muted">Весь пакет проходит проверку перед сохранением. После загрузки снимки появятся только в ваших черновиках — для добавления в датасет нужна отдельная публикация.</p>
             </div>
             <footer className="modal-footer">
               <button className="secondary" type="button" disabled={busy} onClick={() => setImportOpen(false)}>Отмена</button>
-              <button className="primary" type="button" disabled={busy || !importFiles.length} onClick={() => void importAnnotations()}>
-                <CloudUpload size={16} /> {busy ? "Проверяем и загружаем…" : "Загрузить в черновики"}
+              <button className="primary" type="button" disabled={busy || !importFiles.length} onClick={() => void importAnnotations(importClippingRequired)}>
+                <CloudUpload size={16} /> {busy ? "Проверяем и загружаем…" : importClippingRequired ? "Обрезать и загрузить" : "Загрузить в черновики"}
               </button>
             </footer>
           </section>

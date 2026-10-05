@@ -2415,6 +2415,90 @@ def test_editor_type_error_lists_current_dataset_types(tmp_path: Path, role: str
         assert text in str(error.value)
 
 
+def test_import_geojson_offers_clipping_before_saving_whole_batch(editor_environment):
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    image = env.database_path.parent / "images" / "kanopus" / "batch" / "SCN02.tif"
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    mask[:, 4:6] = 0
+    mask[3:5, 1:3] = 0
+    with rasterio.open(image, "r+") as raster:
+        raster.write_mask(mask)
+    features = [
+        _feature(1, "positive", mapping(box(-1, -1, 9, 9))["coordinates"][0],
+                 properties={"источник": "ручная разметка"}),
+        _feature(2, "hard_negative", mapping(box(1, 1, 2, 2))["coordinates"][0]),
+        _feature(3, "positive", mapping(box(4.2, 1, 5.8, 7))["coordinates"][0]),
+        _feature(4, "positive", mapping(box(20, 20, 30, 30))["coordinates"][0]),
+        _feature(5, "annotation_zone", mapping(box(-10, -10, 10, 10))["coordinates"][0]),
+        _feature(6, "positive", mapping(box(1.25, 3.25, 2.75, 4.75))["coordinates"][0]),
+    ]
+    payload = {"scenes": [
+        {"annotation_name": "batch_SCN03.geojson", "geojson": _annotation_payload([])},
+        {"annotation_name": "batch_SCN02.geojson", "geojson": _annotation_payload(features)},
+    ]}
+    head = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    proposal = env.client.post(f"{base}/drafts/import", json=payload)
+    assert proposal.status_code == 400, proposal.text
+    assert proposal.json()["code"] == "annotation_outside_footprint"
+    for text in ("batch_SCN02.geojson", "за контуром — 4", "полностью снаружи — 3", "footprint"):
+        assert text in proposal.json()["detail"], proposal.text
+    with create_session_factory(get_config())() as session:
+        assert not session.scalars(select(DatasetEditorDraftRow)).all()
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    accepted = env.client.post(f"{base}/drafts/import", json={**payload, "clip_to_footprint": True})
+    assert accepted.status_code == 200, accepted.text
+    detail = env.client.get(f"{base}/scenes/batch_SCN02.geojson").json()
+    draft = detail["draft"]
+    by_id = {feature["id"]: feature for feature in draft["geojson"]["features"]}
+    assert set(by_id) == {1, 2, 5}
+    assert draft["positive_count"] == 1
+    assert draft["hard_negative_count"] == 1
+    assert draft["annotation_zone_count"] == 1
+    assert by_id[1]["properties"]["источник"] == "ручная разметка"
+    clipped = shape(by_id[1]["geometry"])
+    assert clipped.geom_type == "MultiPolygon"
+    assert clipped.equals(shape(detail["valid_data_footprint"]))
+    assert any(polygon.interiors for polygon in clipped.geoms)
+    assert shape(by_id[2]["geometry"]).equals(box(1, 1, 2, 2))
+    assert shape(by_id[5]["geometry"]).equals(box(-10, -10, 10, 10))
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    with create_session_factory(get_config())() as session:
+        assert len(session.scalars(select(DatasetEditorDraftRow)).all()) == 2
+    assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
+    published = env.client.post(f"{base}/drafts/publish")
+    assert published.status_code == 200, published.text
+    written = json.loads((env.editor_dataset / "batch_SCN02.geojson").read_text(encoding="utf-8"))
+    assert shape(written["features"][0]["geometry"]).equals(clipped)
+
+
+@pytest.mark.parametrize("clip_to_footprint", [False, True])
+@pytest.mark.parametrize("invalid_kind", ["role", "geometry"])
+def test_import_geojson_clipping_does_not_bypass_other_validation(
+    editor_environment, clip_to_footprint, invalid_kind,
+):
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    outside = _feature(1, "positive", mapping(box(-1, -1, 9, 9))["coordinates"][0])
+    invalid = deepcopy(outside)
+    if invalid_kind == "role":
+        invalid["properties"]["_mlsystem2_role"] = "negative"
+    else:
+        invalid["geometry"] = {"type": "Polygon", "coordinates": [[[0, 0], [6, 6], [6, 0], [0, 6], [0, 0]]]}
+    response = env.client.post(f"{base}/drafts/import", json={
+        "scenes": [
+            {"annotation_name": "batch_SCN02.geojson", "geojson": _annotation_payload([outside])},
+            {"annotation_name": "batch_SCN03.geojson", "geojson": _annotation_payload([invalid])},
+        ],
+        "clip_to_footprint": clip_to_footprint,
+    })
+    assert response.status_code == 400, response.text
+    assert "code" not in response.json()
+    assert "batch_SCN03.geojson" in response.json()["detail"]
+    with create_session_factory(get_config())() as session:
+        assert not session.scalars(select(DatasetEditorDraftRow)).all()
+
+
 def test_import_geojson_discard_delete_and_publish_conflict(editor_environment):
     env = editor_environment
     base = f"/api/v1/dataset-editor/datasets/{quote(env.empty_dataset_key, safe='')}"

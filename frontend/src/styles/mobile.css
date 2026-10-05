@@ -46,8 +46,6 @@ html { -webkit-text-size-adjust: 100%; }
   .panel-header h2 { font-size: 18px; line-height: 24px; }
   .content-grid { grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 8px; }
   .card, .class-card { padding: 12px; min-height: 100px; }
-  .tool-card { padding: 12px; min-height: 122px; gap: 8px; }
-  .tool-card p { margin: 4px 0; font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
   .card-title { font-size: 15px; line-height: 21px; gap: 6px; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .metric { padding: 10px; }

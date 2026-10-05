@@ -5,13 +5,14 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._dataset_editor import (
     DatasetEditorConflict,
     DatasetEditorGitError,
+    DatasetEditorImportClippingRequired,
     add_editor_scenes,
     browse_editor_rasters,
     copy_editor_dataset,
@@ -187,18 +188,31 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import",
         response_model=DatasetEditorSceneListResponse,
         summary="Загрузить GeoJSON новых снимков в черновики",
+        responses={400: {
+            "description": "Ошибка проверки; code=annotation_outside_footprint предлагает подтверждённую обрезку.",
+            "content": {"application/json": {"schema": {
+                "type": "object", "required": ["detail"],
+                "properties": {"detail": {"type": "string"},
+                               "code": {"type": "string", "enum": ["annotation_outside_footprint"]}},
+            }}},
+        }},
     )
     def import_drafts(
         dataset_key: str,
         request: DatasetEditorImportRequest,
         db: Session = Depends(ctx.get_db),
         username: str = Depends(ctx.authenticated),
-    ) -> DatasetEditorSceneListResponse:
-        return _git_call(
-            import_editor_drafts, db, ctx.config, dataset_key,
-            scenes=[(scene.annotation_name, scene.geojson) for scene in request.scenes],
-            username=username,
-        )
+    ) -> DatasetEditorSceneListResponse | JSONResponse:
+        try:
+            return _git_call(
+                import_editor_drafts, db, ctx.config, dataset_key,
+                scenes=[(scene.annotation_name, scene.geojson) for scene in request.scenes],
+                username=username, clip_to_footprint=request.clip_to_footprint,
+            )
+        except DatasetEditorImportClippingRequired as exc:
+            return JSONResponse(status_code=400, content={
+                "detail": str(exc), "code": "annotation_outside_footprint",
+            })
 
     @app.put(
         "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}",
