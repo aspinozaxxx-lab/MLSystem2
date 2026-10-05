@@ -3608,7 +3608,23 @@ def _non_system_properties(feature: dict[str, Any]) -> str:
         if isinstance(properties, dict)
         else {}
     )
-    return json.dumps(cleaned, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        _canonical_property_value(cleaned),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _canonical_property_value(value: Any) -> Any:
+    """Браузер сохраняет 1.0 как 1; это не изменение значения атрибута."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _canonical_property_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical_property_value(item) for item in value]
+    return value
 
 
 def _geojson_crs(payload: dict[str, Any]) -> PyprojCRS:

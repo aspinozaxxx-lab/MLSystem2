@@ -43,7 +43,9 @@ from mlsystem2.training_ui_api._models import (
 from mlsystem2.training_ui_api._dataset_editor import (
     _footprint_covers_geometry,
     _unique_basename_reference_matches,
+    _validate_preserved_properties,
 )
+from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
 from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
@@ -419,6 +421,129 @@ def test_dataset_editor_persists_discards_and_publishes_server_drafts(
     assert env.client.get(detail_url).json()["draft"] is None
     with create_session_factory(get_config())() as session:
         assert session.scalar(select(DatasetEditorDraftRow)) is None
+
+
+@pytest.mark.parametrize("with_id", [True, False])
+def test_dataset_editor_accepts_browser_number_representation(with_id: bool) -> None:
+    feature = {
+        "properties": {
+            "число": 1.0,
+            "вложенные": {"значения": [0.0, -2.0, 0.25], "флаг": True},
+        },
+    }
+    if with_id:
+        feature["id"] = "объект"
+    updated = deepcopy(feature)
+    updated["properties"]["число"] = 1
+    updated["properties"]["вложенные"]["значения"][:2] = [0, -2]
+    _validate_preserved_properties({"features": [feature]}, {"features": [updated]})
+
+
+@pytest.mark.parametrize("feature_id", [1, 2])
+@pytest.mark.parametrize("properties", [
+    {"число": 2},
+    {"число": 1.0001},
+    {"число": True},
+    {"число": "1"},
+    {"число": None},
+    {},
+    {"число": 1, "новый": 1},
+    {"число": [1]},
+])
+def test_dataset_editor_preserves_property_validation(
+    properties: dict[str, object],
+    feature_id: int,
+) -> None:
+    previous = {"features": [{"id": 1, "properties": {"число": 1.0}}]}
+    updated = {"features": [{"id": feature_id, "properties": properties}]}
+    message = (
+        "Существующие свойства объектов изменять нельзя"
+        if feature_id == 1
+        else "Редактор не поддерживает произвольные атрибуты объектов"
+    )
+    if feature_id == 2 and not properties:
+        _validate_preserved_properties(previous, updated)
+        return
+    with pytest.raises(TrainingUIAPIError, match=message):
+        _validate_preserved_properties(previous, updated)
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_dataset_editor_saves_and_publishes_browser_numbers(
+    editor_environment: _EditorEnvironment,
+    deleted: bool,
+) -> None:
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    annotation_path = env.editor_dataset / env.live_annotation.name
+    original = json.loads(annotation_path.read_text(encoding="utf-8"))
+    original["features"][0]["properties"].update({
+        "число": 1.0,
+        "вложенные": {"значения": [0.0, 2.0, 0.25], "флаг": True},
+    })
+    annotation_path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+    _git(env.editor_root, "add", "--", str(annotation_path.relative_to(env.editor_root)))
+    _git(env.editor_root, "commit", "-m", "Исходные числовые атрибуты")
+    _git(env.editor_root, "push", "origin", "main")
+    added = env.client.post(f"{base}/scenes", json={"image_paths": ["batch/SCN02.tif"]})
+    assert added.status_code == 200, added.text
+    retained = env.editor_dataset / "batch_SCN02.geojson"
+    retained_before = retained.read_bytes()
+    retained_footprint = env.editor_dataset / "batch_SCN02_footprint.geojson"
+    retained_footprint_before = retained_footprint.read_bytes()
+    live_before = env.live_annotation.read_bytes()
+    source_before = annotation_path.read_bytes()
+    commits_before = int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout)
+    annotation = quote(annotation_path.name, safe="")
+    detail_url = f"{base}/scenes/{annotation}"
+    detail = env.client.get(detail_url).json()
+    browser_payload = deepcopy(detail["geojson"])
+    browser_payload["features"][0]["properties"]["число"] = 1
+    browser_payload["features"][0]["properties"]["вложенные"]["значения"][:2] = [0, 2]
+    browser_payload["features"][0]["geometry"] = mapping(box(1.25, 1.25, 2.75, 2.75))
+    draft_url = f"{base}/drafts/{annotation}"
+    saved = env.client.put(draft_url, json={
+        "base_revision": detail["scene"]["revision"],
+        "geojson": browser_payload,
+        "deleted": deleted,
+    })
+    assert saved.status_code == 200, saved.text
+    reopened = env.client.get(detail_url).json()["draft"]
+    assert reopened["deleted"] is deleted
+    assert reopened["geojson"] == saved.json()["geojson"]
+    assert annotation_path.read_bytes() == source_before
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == commits_before
+    if deleted:
+        for deletion_mark in (False, True):
+            restored = env.client.put(draft_url, json={
+                "base_revision": detail["scene"]["revision"],
+                "geojson": reopened["geojson"],
+                "deleted": deletion_mark,
+            })
+            assert restored.status_code == 200, restored.text
+            assert restored.json()["deleted"] is deletion_mark
+            restored_features = {item["id"]: item for item in restored.json()["geojson"]["features"]}
+            assert set(restored_features) == {item["id"] for item in reopened["geojson"]["features"]}
+            for item in reopened["geojson"]["features"]:
+                restored_item = restored_features[item["id"]]
+                assert restored_item["properties"] == item["properties"]
+                assert shape(restored_item["geometry"]).equals(shape(item["geometry"]))
+    published = env.client.post(f"{base}/drafts/publish")
+    assert published.status_code == 200, published.text
+    assert int(_git(env.editor_root, "rev-list", "--count", "HEAD").stdout) == commits_before + 1
+    assert retained.read_bytes() == retained_before
+    assert retained_footprint.read_bytes() == retained_footprint_before
+    assert env.live_annotation.read_bytes() == live_before
+    with create_session_factory(get_config())() as session:
+        assert session.scalar(select(DatasetEditorDraftRow)) is None
+    if deleted:
+        assert not annotation_path.exists()
+        remaining = env.client.get(f"{base}/scenes").json()["scenes"]
+        assert [scene["annotation_name"] for scene in remaining] == [retained.name]
+    else:
+        persisted = json.loads(annotation_path.read_text(encoding="utf-8"))
+        assert persisted["features"][0]["properties"] == browser_payload["features"][0]["properties"]
+        assert shape(persisted["features"][0]["geometry"]).equals(box(1.25, 1.25, 2.75, 2.75))
 
 
 def test_dataset_editor_lists_only_current_users_drafts_by_dataset(
