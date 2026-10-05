@@ -12,6 +12,7 @@ import uuid
 import warnings
 import zipfile
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from io import BytesIO
 from math import gcd
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from typing import Any
 
 import numpy as np
@@ -38,7 +40,7 @@ from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
@@ -100,6 +102,7 @@ from .contracts import (
     TestSampleBatchInfo,
     TestSampleBatchItemInfo,
     TestSampleBatchOptionsResponse,
+    TestSampleCreationSettings,
     TestSampleCatalogResponse,
     TestSampleClassGroup,
     TestSampleCreate,
@@ -141,7 +144,7 @@ _JPEG_QUALITY_MAX = 95
 _THUMBNAIL_MAX_SIZE = 384
 _THUMBNAIL_JPEG_QUALITY = 82
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
-_BATCH_FINISHED_ITEM_STATUSES = ("ok", "error")
+_BATCH_FINISHED_ITEM_STATUSES = ("ok", "error", "cancelled")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -360,6 +363,85 @@ def test_sample_batch_options(
     )
 
 
+def save_test_sample_creation_settings(
+    session: Session,
+    dataset_key: str,
+    request: TestSampleCreationSettings,
+    config: TrainingUIAPIConfig,
+) -> TestSampleCreationSettings:
+    dataset = find_managed_dataset(session, config, dataset_key)
+    row = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset_key))
+    if dataset is None or row is None or not _dataset_ready_for_test_sample_batch(dataset):
+        raise TrainingUIAPIError("Датасет для создания разметки не найден.")
+    if request.exclude_boundary_objects and dataset.quality_metric != "objects":
+        raise TrainingUIAPIError("Исключение граничных объектов доступно для объектовой метрики.")
+    row.test_sample_settings = request.model_dump(mode="json")
+    session.flush()
+    return request
+
+
+def _lock_test_sample_queue(session: Session) -> None:
+    # Блокировка относится только к очереди нарезки, независимо от ML-заданий.
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(1941705)"))
+
+
+def test_sample_batch_queue(session: Session) -> list[TestSampleBatchInfo]:
+    loading = selectinload(TestSampleBatchRow.items).selectinload(TestSampleBatchItemRow.sample)
+    active = session.scalars(
+        select(TestSampleBatchRow).where(TestSampleBatchRow.status.in_(_BATCH_ACTIVE_STATUSES))
+        .options(loading).order_by(TestSampleBatchRow.queue_position, TestSampleBatchRow.created_at, TestSampleBatchRow.id)
+    ).all()
+    completed = session.scalars(
+        select(TestSampleBatchRow).where(TestSampleBatchRow.status.not_in(_BATCH_ACTIVE_STATUSES))
+        .options(loading).order_by(TestSampleBatchRow.created_at.desc(), TestSampleBatchRow.id.desc()).limit(10)
+    ).all()
+    active.sort(key=lambda row: row.status != "running")
+    return [_batch_info(row) for row in [*active, *completed]]
+
+
+def move_test_sample_batch(session: Session, batch_id: uuid.UUID, direction: str) -> TestSampleBatchInfo:
+    _lock_test_sample_queue(session)
+    queued = session.scalars(
+        select(TestSampleBatchRow).where(TestSampleBatchRow.status == "queued")
+        .order_by(TestSampleBatchRow.queue_position, TestSampleBatchRow.created_at, TestSampleBatchRow.id)
+        .with_for_update()
+    ).all()
+    position = next((index for index, row in enumerate(queued) if row.id == batch_id), None)
+    if position is None:
+        raise TrainingUIAPIError("Менять порядок можно только у ожидающего задания.")
+    target = position + (-1 if direction == "up" else 1)
+    if 0 <= target < len(queued):
+        queued[position], queued[target] = queued[target], queued[position]
+    for index, row in enumerate(queued, start=1):
+        row.queue_position = index
+    session.flush()
+    return test_sample_batch_detail(session, batch_id)
+
+
+def delete_test_sample_batch(session: Session, batch_id: uuid.UUID) -> None:
+    _lock_test_sample_queue(session)
+    row = session.get(TestSampleBatchRow, batch_id)
+    if row is None:
+        raise TestSampleBatchUnavailable(str(batch_id))
+    if row.status != "queued":
+        raise TrainingUIAPIError("Удалить из очереди можно только ожидающее задание.")
+    session.delete(row)
+    session.flush()
+
+
+def cancel_test_sample_batch(session: Session, batch_id: uuid.UUID) -> TestSampleBatchInfo:
+    _lock_test_sample_queue(session)
+    row = session.get(TestSampleBatchRow, batch_id)
+    if row is None:
+        raise TestSampleBatchUnavailable(str(batch_id))
+    if row.status != "running":
+        raise TrainingUIAPIError("Отменить можно только выполняемое задание.")
+    row.cancel_requested = True
+    session.flush()
+    return _batch_info(row)
+
+
 def _dataset_ready_for_test_sample_batch(dataset: Any) -> bool:
     if dataset.is_custom or dataset.diagnostics or (dataset.image_count or 0) <= 0:
         return False
@@ -385,6 +467,10 @@ def _test_sample_batch_dataset_option(
         "quality_metric": dataset.quality_metric,
         "task": dataset.task,
     }
+    settings_row = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset.key))
+    common["creation_settings"] = TestSampleCreationSettings.model_validate(
+        settings_row.test_sample_settings or {} if settings_row is not None else {}
+    )
     if training_result is None:
         return TestSampleBatchDatasetOption(
             **common,
@@ -467,20 +553,11 @@ def create_test_sample_batch(
     request: TestSampleBatchCreate,
     config: TrainingUIAPIConfig,
 ) -> TestSampleBatchInfo:
-    active = session.scalar(
-        select(TestSampleBatchRow.id).where(TestSampleBatchRow.active_slot == 1).limit(1)
-    )
-    if active is not None:
-        raise TrainingUIAPIError(
-            "Групповое создание тестовых разметок уже выполняется. Дождитесь его завершения."
-        )
-    keys = [item.dataset_key for item in request.items]
-    if len(keys) != len(set(keys)):
-        raise TrainingUIAPIError("Один датасет нельзя добавить в групповой запуск дважды.")
-
+    _lock_test_sample_queue(session)
     batch = TestSampleBatchRow(
         status="queued",
-        active_slot=1,
+        active_slot=None,
+        queue_position=(session.scalar(select(func.max(TestSampleBatchRow.queue_position))) or 0) + 1,
         tile_size=request.tile_size,
         min_image_count=request.min_image_count,
         image_count=request.image_count,
@@ -505,9 +582,9 @@ def create_test_sample_batch(
                 "для объектовой метрики F1."
             )
         training_result = dataset_training_result(session, dataset.key)
-        if training_result is None:
+        if item.use_optimization and training_result is None:
             raise TrainingUIAPIError(f"{dataset.name}: для датасета нет успешной обученной сети.")
-        if item.training_result_id is not None and item.training_result_id != training_result.id:
+        if item.use_optimization and item.training_result_id is not None and item.training_result_id != training_result.id:
             raise TrainingUIAPIError(
                 f"{dataset.name}: выбранная сеть изменилась; обновите страницу создания."
             )
@@ -516,8 +593,8 @@ def create_test_sample_batch(
             dataset.key,
             training_result.id,
             config=config,
-        )
-        if pseudo_markup is None:
+        ) if item.use_optimization else None
+        if item.use_optimization and pseudo_markup is None:
             raise TrainingUIAPIError(
                 f"{dataset.name}: нет полной псевдоразметки сети, обученной на этом датасете."
             )
@@ -532,11 +609,12 @@ def create_test_sample_batch(
                 class_key=dataset.class_key or class_name,
                 class_name=class_name,
                 dataset_short_name=dataset_name,
-                training_result_id=training_result.id,
-                pseudo_markup_result_id=pseudo_markup.id,
+                training_result_id=training_result.id if item.use_optimization else None,
+                pseudo_markup_result_id=pseudo_markup.id if pseudo_markup is not None else None,
                 min_object_count=item.min_object_count,
                 metric=dataset.quality_metric,
                 exclude_boundary_objects=item.exclude_boundary_objects,
+                use_optimization=item.use_optimization,
                 status="queued",
             )
         )
@@ -573,13 +651,18 @@ def test_sample_batch_detail(
 
 
 def recover_test_sample_batches(session: Session) -> None:
+    _lock_test_sample_queue(session)
     rows = session.scalars(
         select(TestSampleBatchRow)
-        .where(TestSampleBatchRow.active_slot == 1)
+        .where(TestSampleBatchRow.status.in_(_BATCH_ACTIVE_STATUSES))
         .options(selectinload(TestSampleBatchRow.items))
     ).all()
     for row in rows:
+        row.active_slot = None
         for item in row.items:
+            if row.cancel_requested and item.status in _BATCH_ACTIVE_STATUSES:
+                item.status = "cancelled"
+                item.finished_at = _utc_now()
             if item.status == "running":
                 item.status = "queued"
                 item.started_at = None
@@ -597,7 +680,11 @@ async def run_test_sample_batch_worker(
     config: TrainingUIAPIConfig,
 ) -> None:
     interval = max(1, config.worker_interval_seconds)
-    LOGGER.info("Исполнитель групповых тестовых разметок запущен")
+    with session_factory() as session:
+        recover_test_sample_batches(session)
+        cleanup_test_sample_storage(session, config)
+        session.commit()
+    LOGGER.info("Исполнитель очереди создания тестовых разметок запущен")
     while True:
         try:
             await asyncio.to_thread(
@@ -608,7 +695,7 @@ async def run_test_sample_batch_worker(
         except asyncio.CancelledError:
             raise
         except Exception:
-            LOGGER.exception("Ошибка шага группового создания тестовых разметок")
+            LOGGER.exception("Ошибка шага очереди создания тестовых разметок")
         await asyncio.sleep(interval)
 
 
@@ -618,14 +705,23 @@ def process_test_sample_batch_once(
 ) -> None:
     item_id: uuid.UUID | None = None
     with session_factory() as session:
+        _lock_test_sample_queue(session)
         batch = session.scalar(
             select(TestSampleBatchRow)
             .where(TestSampleBatchRow.active_slot == 1)
             .options(selectinload(TestSampleBatchRow.items))
-            .order_by(TestSampleBatchRow.created_at, TestSampleBatchRow.id)
             .limit(1)
         )
         if batch is None:
+            batch = session.scalar(
+                select(TestSampleBatchRow).where(TestSampleBatchRow.status == "queued")
+                .options(selectinload(TestSampleBatchRow.items))
+                .order_by(TestSampleBatchRow.queue_position, TestSampleBatchRow.created_at, TestSampleBatchRow.id)
+                .limit(1)
+            )
+        if batch is None:
+            return
+        if any(row.status == "running" for row in batch.items):
             return
         item = next((row for row in batch.items if row.status == "queued"), None)
         if item is None:
@@ -635,6 +731,7 @@ def process_test_sample_batch_once(
             return
         now = _utc_now()
         batch.status = "running"
+        batch.active_slot = 1
         batch.started_at = batch.started_at or now
         batch.updated_at = now
         item.status = "running"
@@ -646,6 +743,17 @@ def process_test_sample_batch_once(
         session.commit()
 
     assert item_id is not None
+
+    def check_cancelled() -> None:
+        with session_factory() as check_session:
+            requested = check_session.scalar(
+                select(TestSampleBatchRow.cancel_requested)
+                .join(TestSampleBatchItemRow, TestSampleBatchItemRow.batch_id == TestSampleBatchRow.id)
+                .where(TestSampleBatchItemRow.id == item_id)
+            )
+        if requested:
+            raise _TestSampleCreationCancelled()
+
     try:
         with session_factory() as session:
             item = session.get(TestSampleBatchItemRow, item_id)
@@ -654,7 +762,8 @@ def process_test_sample_batch_once(
             batch = session.get(TestSampleBatchRow, item.batch_id)
             if batch is None:
                 return
-            detail = _create_grouped_test_sample(session, batch, item, config)
+            check_cancelled()
+            detail = _create_grouped_test_sample(session, batch, item, config, check_cancelled=check_cancelled)
             item.sample_id = detail.id
             item.pool_tile_count = detail.image_count
             item.pool_object_count = detail.actual_object_count
@@ -665,17 +774,30 @@ def process_test_sample_batch_once(
             _finish_batch_if_complete(session, batch.id)
             session.commit()
     except Exception as exc:  # noqa: BLE001
-        LOGGER.exception("Не удалось создать тестовую разметку для строки %s", item_id)
+        cancelled = isinstance(exc, _TestSampleCreationCancelled)
+        if not cancelled:
+            LOGGER.exception("Не удалось создать тестовую разметку для строки %s", item_id)
         with session_factory() as session:
+            _lock_test_sample_queue(session)
             item = session.get(TestSampleBatchItemRow, item_id)
             if item is None:
                 return
-            item.status = "error"
-            item.error = str(exc) or exc.__class__.__name__
+            item.status = "cancelled" if cancelled else "error"
+            item.error = None if cancelled else str(exc) or exc.__class__.__name__
             item.finished_at = _utc_now()
             item.updated_at = item.finished_at
+            if cancelled:
+                batch = session.get(TestSampleBatchRow, item.batch_id)
+                for pending in batch.items:
+                    if pending.status == "queued":
+                        pending.status = "cancelled"
+                        pending.finished_at = item.finished_at
             _finish_batch_if_complete(session, item.batch_id)
             session.commit()
+
+
+class _TestSampleCreationCancelled(Exception):
+    """Пользователь отменил создание разметки."""
 
 
 def _create_grouped_test_sample(
@@ -683,15 +805,17 @@ def _create_grouped_test_sample(
     batch: TestSampleBatchRow,
     item: TestSampleBatchItemRow,
     config: TrainingUIAPIConfig,
+    *,
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> TestSampleDetail:
     source = (
         session.get(PseudoMarkupResultRow, item.pseudo_markup_result_id)
         if item.pseudo_markup_result_id is not None
         else None
     )
-    if source is None or source.geojson_file is None:
+    if item.use_optimization and (source is None or source.geojson_file is None):
         raise TrainingUIAPIError("Зафиксированная псевдоразметка выбранного датасета не найдена.")
-    if (
+    if item.use_optimization and (
         source.status != "ok"
         or source.dataset_key != item.dataset_key
         or source.training_result_id != item.training_result_id
@@ -700,8 +824,8 @@ def _create_grouped_test_sample(
         raise TrainingUIAPIError(
             "Зафиксированная пара датасет-сеть больше не имеет полной готовой псевдоразметки."
         )
-    source_path = Path(source.geojson_file.path)
-    if not source_path.is_file():
+    source_path = Path(source.geojson_file.path) if source is not None else None
+    if item.use_optimization and not source_path.is_file():
         raise TrainingUIAPIError("Файл последней псевдоразметки не найден на сервере.")
 
     sample_id = uuid.uuid4()
@@ -710,10 +834,20 @@ def _create_grouped_test_sample(
     building_root = root / f".building-{sample_id}"
     final_root = root / str(sample_id)
     building_root.mkdir(parents=False, exist_ok=False)
+    (building_root / ".queue-creation").touch()
     try:
         dataset = find_managed_dataset(session, config, item.dataset_key)
         if dataset is None or dataset.is_custom:
             raise TrainingUIAPIError(f"Датасет не найден: {item.dataset_key}")
+        last_cancel_check = 0.0
+
+        def check_during_cutting() -> None:
+            nonlocal last_cancel_check
+            now = monotonic()
+            if now - last_cancel_check >= 0.25:
+                check_cancelled()
+                last_cancel_check = now
+
         generated = generate_markup_pool_files(
             dataset_key=item.dataset_key,
             tile_size=batch.tile_size,
@@ -724,7 +858,10 @@ def _create_grouped_test_sample(
             output_root=building_root,
             dataset=dataset,
             exclude_boundary_objects=item.exclude_boundary_objects,
+            random_selection=not item.use_optimization,
+            check_cancelled=check_during_cutting,
         )
+        check_cancelled()
         _build_test_sample_thumbnails(building_root, generated.tiles)
         building_root.replace(final_root)
         row = _new_test_sample_row(
@@ -734,28 +871,32 @@ def _create_grouped_test_sample(
             quality_metric=dataset.quality_metric,
         )
         row.source_training_result_id = item.training_result_id
-        row.source_pseudo_result_id = source.id
+        row.source_pseudo_result_id = source.id if source is not None else None
         _normalize_test_sample_class(session, row)
         session.add(row)
         session.flush()
-        _optimize_test_sample_row(
-            row,
-            TestSampleOptimizeRequest(
-                min_tile_count=batch.min_image_count,
-                max_tile_count=min(batch.image_count, row.image_count),
-                min_object_count=item.min_object_count,
-                metric=item.metric,
-            ),
-            config,
-            source,
-            source_path,
-        )
-        queue_test_sample_evaluation(
-            session,
-            row,
-            config,
-            source=JobSource.AUTOMATION,
-        )
+        if not item.use_optimization:
+            selected = set(generated.selected_tile_indices)
+            for tile in row.tiles:
+                tile.enabled = tile.tile_index in selected
+        else:
+            _optimize_test_sample_row(
+                row,
+                TestSampleOptimizeRequest(
+                    min_tile_count=batch.min_image_count,
+                    max_tile_count=min(batch.image_count, row.image_count),
+                    min_object_count=item.min_object_count,
+                    metric=item.metric,
+                ),
+                config,
+                source,
+                source_path,
+            )
+        # Отмена и завершение имеют один порядок относительно HTTP-запросов.
+        _lock_test_sample_queue(session)
+        check_cancelled()
+        if item.use_optimization:
+            queue_test_sample_evaluation(session, row, config, source=JobSource.AUTOMATION)
         session.flush()
         return _detail(session, row, config)
     except Exception:
@@ -780,6 +921,8 @@ def _finish_batch(batch: TestSampleBatchRow) -> None:
     successful = sum(item.status == "ok" for item in batch.items)
     if successful == len(batch.items):
         batch.status = "ok"
+    elif any(item.status == "cancelled" for item in batch.items):
+        batch.status = "cancelled"
     elif successful:
         batch.status = "partial"
     else:
@@ -797,6 +940,8 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
     return TestSampleBatchInfo(
         id=row.id,
         status=row.status,
+        queue_position=row.queue_position,
+        cancel_requested=row.cancel_requested,
         tile_size=row.tile_size,
         min_image_count=row.min_image_count,
         image_count=row.image_count,
@@ -828,6 +973,7 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
                 min_object_count=item.min_object_count,
                 metric=item.metric,
                 exclude_boundary_objects=item.exclude_boundary_objects,
+                use_optimization=item.use_optimization,
                 status=item.status,
                 pool_tile_count=item.pool_tile_count,
                 pool_object_count=item.pool_object_count,
@@ -2250,7 +2396,10 @@ def cleanup_test_sample_storage(
     session: Session,
     config: TrainingUIAPIConfig,
 ) -> None:
-    del session
+    _lock_test_sample_queue(session)
+    # HTTP-процесс может перезапуститься, пока отдельный исполнитель пишет тайлы.
+    if session.scalar(select(TestSampleBatchRow.id).where(TestSampleBatchRow.active_slot == 1)):
+        return
     shutil.rmtree(
         Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME,
         ignore_errors=True,
@@ -2258,8 +2407,14 @@ def cleanup_test_sample_storage(
     root = _test_sample_root(config)
     if not root.is_dir():
         return
+    saved = {str(value) for value in session.scalars(select(TestSampleRow.id))}
     for child in root.iterdir():
-        if child.name.startswith((".building-", ".deleting-")):
+        try:
+            uuid.UUID(child.name)
+            orphan = child.name not in saved and (child / ".queue-creation").is_file()
+        except ValueError:
+            orphan = False
+        if orphan or child.name.startswith((".building-", ".deleting-")):
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child, ignore_errors=True)
             else:

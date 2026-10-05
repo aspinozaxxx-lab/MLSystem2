@@ -2989,6 +2989,7 @@ def test_class_results_includes_sample_size_hint_from_training_job(
 def test_training_ui_frontend_is_react_vite_app() -> None:
     package_json = json.loads(Path("frontend/package.json").read_text(encoding="utf-8"))
     app_tsx = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    creation_tsx = Path("frontend/src/TestMarkupCreatePage.tsx").read_text(encoding="utf-8")
     config_helpers = Path("frontend/src/utils/trainingConfig.ts").read_text(encoding="utf-8")
     api_client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     api_types = Path("frontend/src/api/types.ts").read_text(encoding="utf-8")
@@ -3013,23 +3014,13 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/optimize-preview" in app_tsx
     assert "/evaluate-preview" in app_tsx
     assert "Не сохранено" in app_tsx
-    assert "[512, 768, 1024, 1536, 2048, 2560, 3072, 3584]" in app_tsx
-    assert "useState(1536)" in app_tsx
-    assert '"/test-sample-batches/latest"' in app_tsx
-    assert "setTileSize(latest.tile_size)" in app_tsx
-    assert "setMinImageCount(latest.min_image_count)" in app_tsx
-    assert "setMaxImageCount(latest.image_count)" in app_tsx
-    assert "minObjectCount: previous.min_object_count" in app_tsx
-    assert "excludeBoundaryObjects" in app_tsx
-    assert "Не учитывать объекты, выходящие за тайл" in app_tsx
+    assert "[512, 768, 1024, 1536, 2048, 2560, 3072, 3584]" in creation_tsx
+    assert "Не учитывать объекты, выходящие за тайл" in creation_tsx
     assert "defaultTrainingZipModelName" in app_tsx
     assert "metric: previous.metric" not in app_tsx
-    assert "qualityMetricLabel(dataset.quality_metric)" in app_tsx
     assert 'head === "classes"' in app_tsx
     assert "/dataset-catalog/sync" in app_tsx
-    assert 'className="test-sample-batch-class-list"' in app_tsx
-    assert '"/test-sample-batches/options"' in app_tsx
-    assert "Сеть: {dataset.training_model_name" in app_tsx
+    assert '"/test-sample-batches/options"' in creation_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx

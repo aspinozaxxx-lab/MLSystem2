@@ -62,6 +62,7 @@ export type TrainingResultInfo = components["schemas"]["TrainingResultInfo"];
 export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
 export type TestSampleCatalogResponse = components["schemas"]["TestSampleCatalogResponse"];
 export type TestSampleBatchCreate = components["schemas"]["TestSampleBatchCreate"];
+export type TestSampleCreationSettings = components["schemas"]["TestSampleCreationSettings"];
 export type TestSampleBatchDatasetOption = components["schemas"]["TestSampleBatchDatasetOption"];
 export type TestSampleBatchInfo = components["schemas"]["TestSampleBatchInfo"];
 export type TestSampleBatchOptionsResponse = components["schemas"]["TestSampleBatchOptionsResponse"];

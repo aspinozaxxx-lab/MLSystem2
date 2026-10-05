@@ -812,6 +812,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-sample-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Creation Queue */
+        get: operations["get_creation_queue_api_v1_test_sample_batches_get"];
+        put?: never;
+        /** Post Test Sample Batch */
+        post: operations["post_test_sample_batch_api_v1_test_sample_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/options/{dataset_key}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Creation Settings */
+        put: operations["put_creation_settings_api_v1_test_sample_batches_options__dataset_key__settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/{batch_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Creation Move */
+        post: operations["post_creation_move_api_v1_test_sample_batches__batch_id__move_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/{batch_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Creation Cancel */
+        post: operations["post_creation_cancel_api_v1_test_sample_batches__batch_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-sample-batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Batch */
+        get: operations["get_test_sample_batch_api_v1_test_sample_batches__batch_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Creation Job */
+        delete: operations["delete_creation_job_api_v1_test_sample_batches__batch_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-sample-batches/options": {
         parameters: {
             query?: never;
@@ -846,23 +933,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/test-sample-batches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Post Test Sample Batch */
-        post: operations["post_test_sample_batch_api_v1_test_sample_batches_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/test-sample-batches/latest": {
         parameters: {
             query?: never;
@@ -872,23 +942,6 @@ export interface paths {
         };
         /** Get Latest Test Sample Batch */
         get: operations["get_latest_test_sample_batch_api_v1_test_sample_batches_latest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/test-sample-batches/{batch_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Test Sample Batch */
-        get: operations["get_test_sample_batch_api_v1_test_sample_batches__batch_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3897,6 +3950,7 @@ export interface components {
         };
         /** TestSampleBatchDatasetOption */
         TestSampleBatchDatasetOption: {
+            creation_settings?: components["schemas"]["TestSampleCreationSettings"];
             /** Dataset Key */
             dataset_key: string;
             /** Dataset Name */
@@ -3955,7 +4009,17 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "ok" | "partial" | "error";
+            status: "queued" | "running" | "ok" | "partial" | "error" | "cancelled";
+            /**
+             * Queue Position
+             * @default 0
+             */
+            queue_position: number;
+            /**
+             * Cancel Requested
+             * @default false
+             */
+            cancel_requested: boolean;
             /** Tile Size */
             tile_size: number;
             /** Min Image Count */
@@ -4002,6 +4066,11 @@ export interface components {
              * @default false
              */
             exclude_boundary_objects: boolean;
+            /**
+             * Use Optimization
+             * @default true
+             */
+            use_optimization: boolean;
         };
         /** TestSampleBatchItemInfo */
         TestSampleBatchItemInfo: {
@@ -4043,10 +4112,15 @@ export interface components {
              */
             exclude_boundary_objects: boolean;
             /**
+             * Use Optimization
+             * @default true
+             */
+            use_optimization: boolean;
+            /**
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "ok" | "error";
+            status: "queued" | "running" | "ok" | "error" | "cancelled";
             /** Pool Tile Count */
             pool_tile_count?: number | null;
             /** Pool Object Count */
@@ -4061,6 +4135,14 @@ export interface components {
             started_at?: string | null;
             /** Finished At */
             finished_at?: string | null;
+        };
+        /** TestSampleBatchMove */
+        TestSampleBatchMove: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "up" | "down";
         };
         /** TestSampleBatchOptionsResponse */
         TestSampleBatchOptionsResponse: {
@@ -4130,6 +4212,40 @@ export interface components {
              * @default false
              */
             exclude_boundary_objects: boolean;
+        };
+        /** TestSampleCreationSettings */
+        TestSampleCreationSettings: {
+            /**
+             * Tile Size
+             * @default 1536
+             * @enum {integer}
+             */
+            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584;
+            /**
+             * Min Image Count
+             * @default 5
+             */
+            min_image_count: number;
+            /**
+             * Image Count
+             * @default 10
+             */
+            image_count: number;
+            /**
+             * Min Object Count
+             * @default 150
+             */
+            min_object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
+            /**
+             * Use Optimization
+             * @default true
+             */
+            use_optimization: boolean;
         };
         /** TestSampleDatasetGroup */
         TestSampleDatasetGroup: {
@@ -6517,6 +6633,220 @@ export interface operations {
             };
         };
     };
+    get_creation_queue_api_v1_test_sample_batches_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"][];
+                };
+            };
+        };
+    };
+    post_test_sample_batch_api_v1_test_sample_batches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleBatchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_creation_settings_api_v1_test_sample_batches_options__dataset_key__settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleCreationSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleCreationSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_creation_move_api_v1_test_sample_batches__batch_id__move_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestSampleBatchMove"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_creation_cancel_api_v1_test_sample_batches__batch_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_batch_api_v1_test_sample_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleBatchInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_creation_job_api_v1_test_sample_batches__batch_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_test_sample_batch_options_api_v1_test_sample_batches_options_get: {
         parameters: {
             query?: never;
@@ -6568,39 +6898,6 @@ export interface operations {
             };
         };
     };
-    post_test_sample_batch_api_v1_test_sample_batches_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TestSampleBatchCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TestSampleBatchInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_latest_test_sample_batch_api_v1_test_sample_batches_latest_get: {
         parameters: {
             query?: never;
@@ -6617,37 +6914,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestSampleBatchInfo"];
-                };
-            };
-        };
-    };
-    get_test_sample_batch_api_v1_test_sample_batches__batch_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TestSampleBatchInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

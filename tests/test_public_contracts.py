@@ -55,6 +55,28 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_test_markup_creation_queue_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TestSampleBatchCreate, TestSampleCreationSettings
+
+    assert TestSampleBatchCreate.model_json_schema()["properties"]["items"]["maxItems"] == 1
+    assert set(TestSampleCreationSettings.model_fields) == {
+        "tile_size", "min_image_count", "image_count", "min_object_count",
+        "use_optimization", "exclude_boundary_objects",
+    }
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    paths = schema["paths"]
+    assert {"get", "post"} <= paths["/api/v1/test-sample-batches"].keys()
+    settings = paths["/api/v1/test-sample-batches/options/{dataset_key}/settings"]["put"]
+    assert settings["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/TestSampleCreationSettings")
+    assert "delete" in paths["/api/v1/test-sample-batches/{batch_id}"]
+    move = paths["/api/v1/test-sample-batches/{batch_id}/move"]["post"]
+    assert move["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/TestSampleBatchMove")
+    assert "post" in paths["/api/v1/test-sample-batches/{batch_id}/cancel"]
+
+
 def test_dataset_editor_import_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import DatasetEditorImportRequest, DatasetEditorImportSceneRequest

@@ -20,6 +20,11 @@ from mlsystem2.training_ui_api._test_samples import (
     build_test_sample_download,
     build_test_samples_download,
     create_test_sample_batch,
+    cancel_test_sample_batch,
+    delete_test_sample_batch,
+    move_test_sample_batch,
+    save_test_sample_creation_settings,
+    test_sample_batch_queue,
     create_test_sample,
     delete_test_sample,
     evaluate_test_sample_by_id,
@@ -46,8 +51,10 @@ from mlsystem2.training_ui_api.contracts import (
     JobDetail,
     TestSampleAnnotationsMerge,
     TestSampleBatchCreate,
+    TestSampleBatchMove,
     TestSampleBatchInfo,
     TestSampleBatchOptionsResponse,
+    TestSampleCreationSettings,
     TestSampleBulkDownloadRequest,
     TestSampleCatalogResponse,
     TestSampleCreate,
@@ -65,6 +72,46 @@ from .common import RouteContext
 
 
 def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get("/api/v1/test-sample-batches", response_model=list[TestSampleBatchInfo])
+    def get_creation_queue(
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> list[TestSampleBatchInfo]:
+        return test_sample_batch_queue(db)
+
+    @app.put("/api/v1/test-sample-batches/options/{dataset_key}/settings", response_model=TestSampleCreationSettings)
+    def put_creation_settings(
+        dataset_key: str, request: TestSampleCreationSettings,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> TestSampleCreationSettings:
+        saved = save_test_sample_creation_settings(db, dataset_key, request, ctx.config)
+        db.commit()
+        return saved
+
+    @app.post("/api/v1/test-sample-batches/{batch_id}/move", response_model=TestSampleBatchInfo)
+    def post_creation_move(
+        batch_id: uuid.UUID, request: TestSampleBatchMove,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchInfo:
+        detail = _batch_or_404(lambda: move_test_sample_batch(db, batch_id, request.direction))
+        db.commit()
+        return detail
+
+    @app.post("/api/v1/test-sample-batches/{batch_id}/cancel", response_model=TestSampleBatchInfo)
+    def post_creation_cancel(
+        batch_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> TestSampleBatchInfo:
+        detail = _batch_or_404(lambda: cancel_test_sample_batch(db, batch_id))
+        db.commit()
+        return detail
+
+    @app.delete("/api/v1/test-sample-batches/{batch_id}", status_code=204)
+    def delete_creation_job(
+        batch_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> Response:
+        _batch_or_404(lambda: delete_test_sample_batch(db, batch_id))
+        db.commit()
+        return Response(status_code=204)
+
     @app.get(
         "/api/v1/test-sample-batches/options",
         response_model=TestSampleBatchOptionsResponse,

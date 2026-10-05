@@ -1,0 +1,80 @@
+.test-markup-create { display: grid; gap: 12px; max-width: 900px; margin: 0 auto; }
+.test-markup-create .page-header { margin: 0; }
+.test-markup-create h1 { margin: 0; font-size: 28px; line-height: 34px; }
+.test-markup-create .page-header p { margin: 2px 0 0; color: var(--muted); }
+.test-markup-create .panel { margin: 0; padding: 16px; }
+.creation-form { display: grid; gap: 10px; }
+.creation-class > span { display: flex; justify-content: space-between; gap: 8px; }
+.creation-class small { font-weight: 400; }
+.creation-sources { max-height: 182px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 8px; }
+.creation-source { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; }
+.creation-source + .creation-source { border-top: 1px solid var(--border); }
+.creation-source.selected { background: var(--accent-soft); }
+.creation-source > input { flex: 0 0 auto; width: 18px; height: 18px; }
+.creation-source > span { min-width: 0; }
+.creation-source strong, .creation-source small { display: block; overflow-wrap: anywhere; }
+.creation-source small { color: var(--muted); font-size: 12px; line-height: 17px; }
+.creation-network svg { margin-left: 4px; color: var(--warn); vertical-align: middle; }
+.creation-parameters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; align-items: end; }
+.creation-range { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.creation-range legend { margin-bottom: 5px; padding: 0; color: var(--muted); font-weight: 600; }
+.creation-range input { min-width: 0; width: 100%; }
+.creation-optimization { display: flex; align-items: center; gap: 3px; min-height: 44px; }
+.creation-optimization label, .creation-boundary { display: flex; align-items: center; gap: 7px; min-height: 36px; cursor: pointer; }
+.creation-optimization label { font-size: 13px; line-height: 17px; }
+.creation-optimization input, .creation-boundary input { margin: 0; width: 18px; height: 18px; }
+.creation-warning { position: relative; flex-shrink: 0; }
+.creation-warning button { display: grid; place-items: center; width: 44px; min-height: 44px; border: 0; border-radius: 6px; background: transparent; color: var(--warn); padding: 0; }
+.creation-warning [role="tooltip"] { display: none; position: absolute; z-index: 5; right: 0; bottom: calc(100% + 4px); width: 240px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-overlay); font-size: 12px; line-height: 18px; }
+.creation-warning:hover [role="tooltip"], .creation-warning:focus-within [role="tooltip"], .creation-warning [role="tooltip"].visible { display: block; }
+.creation-boundary { font-size: 12px; line-height: 17px; }
+.creation-hint { color: var(--muted); font-size: 12px; line-height: 17px; }
+.creation-pseudo button { width: 100%; min-height: 44px; }
+.creation-submit { width: 100%; min-height: 44px; }
+.creation-queue { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.creation-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.creation-queue-heading h2 { font-size: 18px; line-height: 24px; margin: 0; }
+.creation-queue-heading > span { font-size: 12px; white-space: nowrap; }
+.creation-queue-list { min-height: 0; max-height: 260px; overflow-y: auto; overscroll-behavior: contain; }
+.creation-job { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
+.creation-job + .creation-job { border-top: 1px solid var(--border); }
+.creation-job-info { display: grid; gap: 2px; min-width: 0; }
+.creation-job-info strong, .creation-job-info small { overflow-wrap: anywhere; }
+.creation-job-info > span { color: var(--muted); font-size: 12px; }
+.creation-job.running .creation-job-info > span { color: var(--accent-strong); }
+.creation-job.ok .creation-job-info > span { color: var(--ok); }
+.creation-job.error .creation-job-info > span { color: var(--danger); }
+.creation-job-actions { display: flex; gap: 3px; flex-shrink: 0; }
+.creation-job .icon-button { min-width: 44px; width: 44px; min-height: 44px; padding: 0; }
+.creation-empty { padding: 8px 0; }
+
+@media (max-width: 700px) {
+  .test-markup-create { height: calc(100dvh - 88px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 0; gap: 8px; grid-template-rows: auto auto minmax(100px, 1fr); }
+  .test-markup-create h1 { font-size: 21px; line-height: 26px; }
+  .test-markup-create .page-header p { font-size: 12px; line-height: 17px; }
+  .test-markup-create .panel { padding: 10px; }
+  .creation-form { gap: 6px; }
+  .test-markup-create .creation-class { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; }
+  .creation-class > span { flex-direction: column; gap: 0; }
+  .creation-class small { font-size: 10px; }
+  .creation-sources { max-height: 88px; }
+  .creation-form.needs-pseudo { gap: 5px; }
+  .needs-pseudo .creation-sources { max-height: 72px; }
+  .needs-pseudo .creation-source { padding-top: 4px; padding-bottom: 4px; }
+  .creation-source { padding: 6px 8px; gap: 8px; }
+  .creation-source strong { font-size: 13px; line-height: 18px; }
+  .creation-source small { font-size: 11px; line-height: 15px; }
+  .creation-parameters { gap: 6px 10px; }
+  .creation-range legend { font-size: 12px; line-height: 17px; margin-bottom: 4px; }
+  .test-markup-create select, .test-markup-create input[type="number"] { min-height: 44px; padding: 5px 8px; }
+  .creation-optimization { align-items: center; }
+  .creation-optimization label { font-size: 12px; line-height: 16px; min-height: 44px; }
+  .creation-boundary { min-height: 44px; }
+  .creation-hint { font-size: 11px; line-height: 15px; }
+  .creation-queue-heading h2 { font-size: 16px; line-height: 22px; }
+  .creation-queue { max-height: none; overflow: hidden; }
+  .creation-queue-list { max-height: none; }
+  .creation-job { gap: 5px; padding: 6px 0; }
+  .creation-job-info { font-size: 12px; line-height: 16px; }
+  .creation-job-info small, .creation-job-info > span { font-size: 11px; line-height: 15px; }
+}

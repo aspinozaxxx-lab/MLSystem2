@@ -42,6 +42,7 @@ from mlsystem2.training_ui_api._models import (
     ManagedDatasetSourceRow,
     PseudoMarkupResultRow,
     StoredFileRow,
+    TestSampleBatchRow as _TestSampleBatchRow,
     TestSampleRow as _TestSampleRow,
     TestSampleTileRow as _TestSampleTileRow,
     TrainingResultRow,
@@ -4271,10 +4272,13 @@ def test_test_sample_cleanup_keeps_ready_directories(
     ready = root / "00000000-0000-0000-0000-000000000001"
     building = root / ".building-00000000-0000-0000-0000-000000000002"
     deleting = root / ".deleting-00000000-0000-0000-0000-000000000003"
+    interrupted = root / "00000000-0000-0000-0000-000000000004"
     download = config.scratch_root / "test-sample-downloads" / "unfinished.zip"
     ready.mkdir(parents=True)
     building.mkdir()
     deleting.mkdir()
+    interrupted.mkdir()
+    (interrupted / ".queue-creation").touch()
     download.parent.mkdir(parents=True)
     download.write_bytes(b"unfinished")
 
@@ -4284,6 +4288,7 @@ def test_test_sample_cleanup_keeps_ready_directories(
     assert ready.is_dir()
     assert not building.exists()
     assert not deleting.exists()
+    assert not interrupted.exists()
     assert not download.exists()
 
 
@@ -4479,6 +4484,195 @@ def test_annotations_merge_requires_authentication(tmp_path, monkeypatch):
             "tiles": [{"tile_index": 1, "groups": [[1, 2]]}],
         })
         assert response.status_code == 404
+
+
+def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_path, monkeypatch):
+    from urllib.parse import quote
+
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    second_root = config.mlmarkup_root / "Вырубки" / "дополнительный"
+    second_root.mkdir()
+    for path in (config.mlmarkup_root / "Вырубки" / "main").iterdir():
+        (second_root / path.name).write_bytes(path.read_bytes())
+    request = {
+        "tile_size": 512, "min_image_count": 1, "image_count": 2,
+        "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}],
+    }
+    with TestClient(create_app()) as client:
+        _login(client)
+        options = client.get("/api/v1/test-sample-batches/options").json()
+        assert all(source["training_result_id"] is None for group in options["classes"] for source in group["datasets"])
+        settings = {"tile_size": 2048, "min_image_count": 2, "image_count": 4, "min_object_count": 12, "use_optimization": False, "exclude_boundary_objects": False}
+        changed = client.put(f"/api/v1/test-sample-batches/options/{quote('Вырубки' + chr(92) + 'main', safe='')}/settings", json=settings)
+        assert changed.status_code == 200
+        queued = [client.post("/api/v1/test-sample-batches", json=request) for _ in range(3)]
+        assert [response.status_code for response in queued] == [200, 200, 200]
+        ids = [response.json()["id"] for response in queued]
+        assert client.post(f"/api/v1/test-sample-batches/{ids[2]}/move", json={"direction": "up"}).status_code == 200
+        assert [job["id"] for job in client.get("/api/v1/test-sample-batches").json()] == [ids[0], ids[2], ids[1]]
+        assert client.delete(f"/api/v1/test-sample-batches/{ids[1]}").status_code == 204
+        assert client.get(f"/api/v1/test-sample-batches/{ids[1]}").status_code == 404
+        assert client.post(f"/api/v1/test-sample-batches/{ids[0]}/cancel").status_code == 400
+        optimized = {**request, "items": [{**request["items"][0], "use_optimization": True}]}
+        assert client.post("/api/v1/test-sample-batches", json=optimized).status_code == 400
+        assert client.post("/api/v1/test-sample-batches", json={**request, "items": request["items"] * 2}).status_code == 422
+        with create_session_factory(config)() as session:
+            assert session.scalars(select(JobRow)).all() == []
+    # Повторное открытие страницы получает настройки из БД, независимо от последнего задания.
+    with TestClient(create_app()) as client:
+        _login(client)
+        sources = {source["dataset_key"]: source for group in client.get("/api/v1/test-sample-batches/options").json()["classes"] for source in group["datasets"]}
+        assert sources["Вырубки\\main"]["creation_settings"] == settings
+        assert sources["Вырубки\\дополнительный"]["creation_settings"]["tile_size"] == 1536
+
+
+def test_random_test_markup_worker_creates_real_tiles_without_network(tmp_path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_queue_export_dataset(config)
+    with TestClient(create_app()) as client:
+        _login(client)
+        created = client.post("/api/v1/test-sample-batches", json={
+            "tile_size": 512, "min_image_count": 1, "image_count": 2,
+            "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}],
+        })
+        assert created.status_code == 200
+        _test_samples.process_test_sample_batch_once(create_session_factory(config), config)
+        job = client.get(f"/api/v1/test-sample-batches/{created.json()['id']}").json()
+        assert job["status"] == "ok", job
+        item = job["items"][0]
+        assert item["training_result_id"] is None
+        assert item["pseudo_markup_result_id"] is None
+        detail = client.get(f"/api/v1/test-samples/{item['sample_id']}").json()
+        assert 1 <= detail["enabled_image_count"] <= 2
+        assert detail["enabled_object_count"] >= 2
+        assert 2 < detail["image_count"] <= 6
+        assert sum(tile["enabled"] for tile in detail["tiles"]) == detail["enabled_image_count"]
+        with create_session_factory(config)() as session:
+            assert session.scalars(select(JobRow)).all() == []
+            row = session.get(_TestSampleRow, uuid.UUID(item["sample_id"]))
+            root = _test_samples._test_sample_root(config) / str(row.id)
+            assert len(list(root.glob("*.tif"))) == detail["image_count"]
+
+
+def test_optimized_test_markup_worker_keeps_fixed_source_pair(tmp_path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_queue_export_dataset(config)
+    with TestClient(create_app()) as client:
+        _login(client)
+        training_id, pseudo_id = _seed_test_sample_batch_source(config, "Вырубки\\main")
+        created = client.post("/api/v1/test-sample-batches", json={
+            "tile_size": 512, "min_image_count": 1, "image_count": 2,
+            "items": [{"dataset_key": "Вырубки\\main", "training_result_id": str(training_id), "min_object_count": 2, "use_optimization": True}],
+        })
+        assert created.status_code == 200
+        _test_samples.process_test_sample_batch_once(create_session_factory(config), config)
+        job = client.get(f"/api/v1/test-sample-batches/{created.json()['id']}").json()
+        assert job["status"] == "ok", job
+        detail = client.get(f"/api/v1/test-samples/{job['items'][0]['sample_id']}").json()
+        assert detail["source_training_result_id"] == str(training_id)
+        assert detail["source_pseudo_markup_result_id"] == str(pseudo_id)
+        assert 1 <= detail["enabled_image_count"] <= 2
+        assert detail["enabled_object_count"] >= 2
+
+
+def test_test_markup_cancellation_keeps_running_slot_and_cleans_files(tmp_path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_queue_export_dataset(config)
+    factory = create_session_factory(config)
+    with TestClient(create_app()) as client:
+        _login(client)
+        request = {"tile_size": 512, "min_image_count": 1, "image_count": 2, "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}]}
+        first = client.post("/api/v1/test-sample-batches", json=request).json()
+        second = client.post("/api/v1/test-sample-batches", json=request).json()
+        writing = _markup_export._write_selected_tiles
+
+        def cancel_before_writing(**kwargs):
+            with factory() as session:
+                _test_samples.cleanup_test_sample_storage(session, config)
+                session.commit()
+            assert kwargs["output_root"].is_dir()
+            assert client.delete(f"/api/v1/test-sample-batches/{first['id']}").status_code == 400
+            assert client.post(f"/api/v1/test-sample-batches/{first['id']}/move", json={"direction": "up"}).status_code == 400
+            assert client.post(f"/api/v1/test-sample-batches/{first['id']}/cancel").json()["cancel_requested"] is True
+            # Другой шаг исполнителя не начинает следующее задание до завершения отмены.
+            _test_samples.process_test_sample_batch_once(factory, config)
+            assert client.get(f"/api/v1/test-sample-batches/{second['id']}").json()["status"] == "queued"
+            return writing(**kwargs)
+
+        monkeypatch.setattr(_markup_export, "_write_selected_tiles", cancel_before_writing)
+        _test_samples.process_test_sample_batch_once(factory, config)
+        cancelled = client.get(f"/api/v1/test-sample-batches/{first['id']}").json()
+        assert cancelled["status"] == "cancelled", cancelled
+        assert cancelled["items"][0]["sample_id"] is None
+        assert list(_test_samples._test_sample_root(config).iterdir()) == []
+        with factory() as session:
+            assert session.scalars(select(_TestSampleRow)).all() == []
+            assert session.scalars(select(JobRow)).all() == []
+        monkeypatch.setattr(_markup_export, "_write_selected_tiles", writing)
+        _test_samples.process_test_sample_batch_once(factory, config)
+        assert client.get(f"/api/v1/test-sample-batches/{second['id']}").json()["status"] == "ok"
+
+
+def test_test_markup_queue_recovery_preserves_order_and_honors_cancellation(tmp_path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    with TestClient(create_app()) as client:
+        _login(client)
+        request = {"tile_size": 512, "min_image_count": 1, "image_count": 2, "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}]}
+        ids = [client.post("/api/v1/test-sample-batches", json=request).json()["id"] for _ in range(3)]
+        client.post(f"/api/v1/test-sample-batches/{ids[2]}/move", json={"direction": "up"})
+        factory = create_session_factory(config)
+        with factory() as session:
+            first = session.get(_TestSampleBatchRow, uuid.UUID(ids[0]))
+            first.status = first.items[0].status = "running"
+            first.active_slot = 1
+            first.cancel_requested = True
+            session.commit()
+        with factory() as session:
+            _test_samples.recover_test_sample_batches(session)
+            session.commit()
+        jobs = client.get("/api/v1/test-sample-batches").json()
+        assert [job["id"] for job in jobs if job["status"] == "queued"] == [ids[2], ids[1]]
+        assert client.get(f"/api/v1/test-sample-batches/{ids[0]}").json()["status"] == "cancelled"
+        with factory() as session:
+            next_job = session.get(_TestSampleBatchRow, uuid.UUID(ids[2]))
+            next_job.status = next_job.items[0].status = "running"
+            next_job.active_slot = 1
+            session.commit()
+        with factory() as session:
+            _test_samples.recover_test_sample_batches(session)
+            session.commit()
+        assert [job["id"] for job in client.get("/api/v1/test-sample-batches").json() if job["status"] == "queued"] == [ids[2], ids[1]]
+
+
+def test_random_candidate_pool_respects_conflicts_and_differs_between_seeds(monkeypatch):
+    import random
+
+    candidates = [_selection_candidate(CRS.from_epsg(3857), index=index, territory="Область", source="Снимок", count=2) for index in range(12)]
+    candidates.append(_selection_candidate(CRS.from_epsg(3857), index=0, territory="Область", source="Снимок", count=3))
+    selections = set()
+    for seed_value in range(6):
+        monkeypatch.setattr(_markup_export.random, "SystemRandom", lambda: random.Random(seed_value))
+        pool, selected = _markup_export._random_candidate_pool(candidates, min_image_count=2, max_image_count=3, min_object_count=5, max_pool_count=9, allow_touching=False, check_cancelled=lambda: None)
+        assert pool is not None and len(pool) == 9
+        assert 2 <= len(selected) <= 3
+        assert sum(candidates[index].object_count for index in selected) >= 5
+        assert set(selected).issubset(pool)
+        assert not ({0, 12} <= set(pool))
+        selections.add(tuple(sorted(selected)))
+    assert len(selections) > 1
+
+
+def _write_queue_export_dataset(config):
+    root = config.mlmarkup_root / "Вырубки" / "main"
+    root.mkdir(parents=True)
+    (root / "scenes.txt").write_text("region_a\n", encoding="utf-8")
+    _write_geojson(root / "deforestation.geojson", [(index + 1, box(index * 512 + 240, 240, index * 512 + 272, 272), f"объект-{index}") for index in range(8)])
+    path = config.images_root / "kanopus" / "region_a" / "scene_a.tif"
+    path.parent.mkdir(parents=True)
+    with rasterio.open(path, "w", driver="GTiff", width=4096, height=512, count=4, dtype="uint8", nodata=0, crs="EPSG:3857", transform=from_origin(0, 512, 1, 1), tiled=True, blockxsize=512, blockysize=512, compress="deflate") as image:
+        image.write(np.full((4, 512, 4096), 64, dtype=np.uint8))
 
 
 def _configure_export_environment(tmp_path: Path, monkeypatch):

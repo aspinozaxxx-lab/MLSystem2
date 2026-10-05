@@ -74,10 +74,6 @@ import type {
   TrainingResultInfo,
   TrainingTemplate,
   TestSampleCatalogResponse,
-  TestSampleBatchCreate,
-  TestSampleBatchDatasetOption,
-  TestSampleBatchInfo,
-  TestSampleBatchOptionsResponse,
   TestSampleBulkDownloadRequest,
   TestSampleDetail,
   TestSampleDownloadRequest,
@@ -113,19 +109,18 @@ import {
   testMarkupDownloadOptions,
   testMarkupDraft,
   testMarkupDraftChanged,
-  testMarkupStats,
   type TestMarkupDownloadOption,
   type TestMarkupDraft,
 } from "./utils/testMarkups";
 
 import { ConfigEditor } from "./ConfigEditor";
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
+import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
-const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
 const GROVIKA_LOGO_PATH = "/grovika/brand/grovika-lockup-horizontal-color.svg";
 
 type ModalState = {
@@ -142,13 +137,6 @@ const DatasetEditorPage = lazy(() =>
   import("./DatasetEditorPage").then((module) => ({ default: module.DatasetEditorPage })),
 );
 const PseudoMarkupPage = lazy(() => import("./PseudoMarkupPage").then((module) => ({ default: module.PseudoMarkupPage })));
-
-type TestSampleBatchFormRow = {
-  dataset: TestSampleBatchDatasetOption;
-  selected: boolean;
-  minObjectCount: number;
-  excludeBoundaryObjects: boolean;
-};
 
 function BrandLogo() {
   return <img className="brand-logo" src={GROVIKA_LOGO_PATH} alt="GROVIKA" width="190" height="60" />;
@@ -996,270 +984,6 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
   );
 }
 
-function TestMarkupCreatePage({ run }: RoutedPageProps) {
-  const [tileSize, setTileSize] = useState(1536);
-  const [minImageCount, setMinImageCount] = useState(5);
-  const [maxImageCount, setMaxImageCount] = useState(10);
-  const [options, setOptions] = useState<TestSampleBatchOptionsResponse | null>(null);
-  const [rows, setRows] = useState<TestSampleBatchFormRow[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
-  const [batch, setBatch] = useState<TestSampleBatchInfo | null>(null);
-  const appliedBatchDefaultsRef = useRef<string | null>(null);
-
-  const loadOptions = useCallback(async () => {
-    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>("/test-sample-batches/options"));
-    if (payload) setOptions(payload);
-  }, [run]);
-
-  const loadCatalog = useCallback(async () => {
-    const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
-    if (payload) setCatalog(payload);
-  }, [run]);
-
-  useEffect(() => {
-    void loadCatalog();
-    void loadOptions();
-  }, [loadCatalog, loadOptions]);
-
-  useEffect(() => {
-    const datasets = (options?.classes || []).flatMap((item) => item.datasets || []);
-    setRows((current) =>
-      datasets.map((dataset) => {
-        const existing = current.find((item) => item.dataset.dataset_key === dataset.dataset_key);
-        return existing ? { ...existing, dataset } : {
-          dataset,
-          selected: false,
-          minObjectCount: 150,
-          excludeBoundaryObjects: false,
-        };
-      }),
-    );
-  }, [options]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void apiJson<TestSampleBatchInfo>("/test-sample-batches/latest")
-      .then((latest) => {
-        if (cancelled) return;
-        setBatch(latest);
-        setTileSize(latest.tile_size);
-        setMinImageCount(latest.min_image_count);
-        setMaxImageCount(latest.image_count);
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof ApiError) || error.status !== 404) {
-          void run(() => Promise.reject(error));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [run]);
-
-  useEffect(() => {
-    if (!batch || !rows.length || appliedBatchDefaultsRef.current === batch.id) return;
-    setRows((current) => current.map((row) => {
-      const previous = (batch.items || []).find((item) => item.dataset_key === row.dataset.dataset_key);
-      return previous ? {
-        ...row,
-        selected: false,
-        minObjectCount: previous.min_object_count,
-        excludeBoundaryObjects: Boolean(
-          row.dataset.quality_metric === "objects" && previous.exclude_boundary_objects
-        ),
-      } : row;
-    }));
-    appliedBatchDefaultsRef.current = batch.id;
-  }, [batch, rows.length]);
-
-  const batchActive = batch?.status === "queued" || batch?.status === "running";
-  const pseudoActive = (options?.classes || []).some((item) =>
-    (item.datasets || []).some((dataset) => dataset.pseudo_status === "queued" || dataset.pseudo_status === "running"),
-  );
-  useEffect(() => {
-    if (!batchActive || !batch) return undefined;
-    const timer = window.setTimeout(() => {
-      void run(() => apiJson<TestSampleBatchInfo>(`/test-sample-batches/${batch.id}`)).then((updated) => {
-        if (!updated) return;
-        setBatch(updated);
-        if (updated.status !== "queued" && updated.status !== "running") void loadCatalog();
-      });
-    }, 2_000);
-    return () => window.clearTimeout(timer);
-  }, [batch, batchActive, loadCatalog, run]);
-
-  useEffect(() => {
-    if (!pseudoActive) return undefined;
-    const timer = window.setTimeout(() => void loadOptions(), 2_000);
-    return () => window.clearTimeout(timer);
-  }, [loadOptions, options, pseudoActive]);
-
-  const updateRow = (datasetKey: string, update: Partial<(typeof rows)[number]>) => {
-    setRows((current) => current.map((row) => (row.dataset.dataset_key === datasetKey ? { ...row, ...update } : row)));
-  };
-
-  const launchPseudoMarkup = async (datasetKey: string) => {
-    const job = await run(() => apiJson<JobDetail>(
-      `/test-sample-batches/options/${encodeURIComponent(datasetKey)}/pseudo-markup`,
-      { method: "POST" },
-    ));
-    if (job) await loadOptions();
-  };
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const request: TestSampleBatchCreate = {
-        tile_size: tileSize as TestSampleBatchCreate["tile_size"],
-        min_image_count: minImageCount,
-        image_count: maxImageCount,
-        items: rows
-          .filter((row) => row.selected)
-          .map((row) => ({
-            dataset_key: row.dataset.dataset_key,
-            training_result_id: row.dataset.training_result_id,
-            min_object_count: row.minObjectCount,
-            metric: row.dataset.quality_metric || "pixel",
-            exclude_boundary_objects:
-              row.dataset.quality_metric === "objects" && row.excludeBoundaryObjects,
-          })),
-      };
-      const payload = await run(() =>
-        apiJson<TestSampleBatchInfo>("/test-sample-batches", { method: "POST", body: request }),
-      );
-      if (payload) setBatch(payload);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <PageHeader
-        title="Создание тестовых разметок"
-        subtitle="Разметка создаётся для класса на основе выбранного датасета и сети, обученной именно на этом датасете"
-      />
-      <form className="form-stack" onSubmit={submit}>
-        <section className="panel">
-          <PanelHeader title="Выберите исходные датасеты" />
-          {options === null ? <div className="empty-state">Загрузка доступных датасетов...</div> : null}
-          {(options?.classes || []).length ? (
-            <>
-              <div className="form-grid test-sample-batch-settings">
-                <label className="field">
-                  <span>Размер квадратного тайла, пиксели</span>
-                  <select value={tileSize} disabled={busy || batchActive} onChange={(event) => setTileSize(Number(event.target.value))}>
-                    {TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size} × {size}</option>)}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Минимум снимков в итоге</span>
-                  <input type="number" min="1" max={maxImageCount} step="1" required value={minImageCount} disabled={busy || batchActive} onChange={(event) => setMinImageCount(Number(event.target.value))} />
-                </label>
-                <label className="field">
-                  <span>Максимум снимков в итоге</span>
-                  <input type="number" min={minImageCount} step="1" required value={maxImageCount} disabled={busy || batchActive} onChange={(event) => setMaxImageCount(Number(event.target.value))} />
-                </label>
-              </div>
-              <div className="button-row test-sample-batch-select-actions">
-                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: row.dataset.pseudo_status === "ready" })))}>Выбрать готовые</button>
-                <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => setRows((current) => current.map((row) => ({ ...row, selected: false })))}>Снять все</button>
-              </div>
-              <div className="test-sample-batch-class-list">
-                {(options?.classes || []).map((classOption) => {
-                  const stats = testMarkupStats(catalog, classOption.class_key);
-                  return (
-                    <section className="test-sample-batch-class" key={classOption.class_key}>
-                      <div className="test-sample-batch-class-header">
-                        <strong>{classOption.class_name}</strong>
-                        <span className="test-markup-creation-status">
-                          {stats.hasPrimary ? <><Star className="primary-star" size={13} fill="currentColor" />Основная есть</> : "Основной нет"}
-                          <span>Разметок: {stats.count}</span>
-                        </span>
-                      </div>
-                      <div className="test-sample-batch-datasets">
-                        {(classOption.datasets || []).map((dataset) => {
-                          const row = rows.find((item) => item.dataset.dataset_key === dataset.dataset_key);
-                          if (!row) return null;
-                          const ready = dataset.pseudo_status === "ready";
-                          const active = dataset.pseudo_status === "queued" || dataset.pseudo_status === "running";
-                          return (
-                            <div className={`test-sample-batch-row ${row.selected ? "selected-row" : ""}`} key={dataset.dataset_key}>
-                              <label className="test-sample-batch-choice">
-                                <input
-                                  type="checkbox"
-                                  checked={row.selected}
-                                  disabled={busy || batchActive || !ready}
-                                  aria-label={`Создать разметку ${classOption.class_name}, датасет ${dataset.dataset_name}`}
-                                  onChange={(event) => updateRow(dataset.dataset_key, { selected: event.target.checked })}
-                                />
-                                <span className="source-lines">
-                                  <strong>{dataset.dataset_name}</strong>
-                                  <span>{dataset.image_count} снимков · {qualityMetricLabel(dataset.quality_metric)}</span>
-                                  <span className="test-sample-batch-network">
-                                    Сеть: {dataset.training_model_name || "нет успешной сети"}
-                                    {dataset.training_trained_at ? ` · ${formatDateTime(dataset.training_trained_at)}` : ""}
-                                    {dataset.training_is_primary ? <Star className="primary-star" size={13} fill="currentColor" aria-label="Основная сеть" /> : null}
-                                  </span>
-                                </span>
-                              </label>
-                              <div className="test-sample-batch-pseudo-state">
-                                <span className={`badge ${ready ? "ok" : dataset.pseudo_status === "error" ? "error" : active ? "neutral" : "warning"}`}>
-                                  {testSampleBatchPseudoStatusLabel(dataset.pseudo_status)}
-                                </span>
-                                {!ready && !active && dataset.training_result_id ? (
-                                  <button className="secondary compact-action" type="button" disabled={busy || batchActive} onClick={() => void launchPseudoMarkup(dataset.dataset_key)}>
-                                    <Play size={14} />
-                                    Создать псевдоразметку
-                                  </button>
-                                ) : null}
-                                {dataset.error ? <small className="error-text">{dataset.error}</small> : null}
-                              </div>
-                              <label className="test-sample-batch-field">
-                                <span>Мин. объектов</span>
-                                <input type="number" min="1" step="1" value={row.minObjectCount} disabled={busy || batchActive || !ready} aria-label={`Минимум объектов ${dataset.dataset_name}`} onChange={(event) => updateRow(dataset.dataset_key, { minObjectCount: Number(event.target.value) })} />
-                              </label>
-                              {dataset.quality_metric === "objects" ? (
-                                <label className="test-sample-boundary-option">
-                                  <input
-                                    type="checkbox"
-                                    checked={row.excludeBoundaryObjects}
-                                    disabled={busy || batchActive || !ready}
-                                    aria-label={`Не учитывать объекты, выходящие за тайл ${dataset.dataset_name}`}
-                                    onChange={(event) => updateRow(dataset.dataset_key, { excludeBoundaryObjects: event.target.checked })}
-                                  />
-                                  <span>
-                                    <strong>Не учитывать объекты, выходящие за тайл</strong>
-                                    <small>Пересекающий границу объект будет исключён целиком.</small>
-                                  </span>
-                                </label>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
-            </>
-          ) : options ? <div className="empty-state">Нет готовых датасетов с размеченными снимками.</div> : null}
-        </section>
-        <div className="button-row">
-          <button className="primary" type="submit" disabled={busy || batchActive || minImageCount > maxImageCount || !rows.some((row) => row.selected)}>
-            <Layers3 size={16} />
-            {batchActive ? "Формирование..." : "Создать выбранные разметки"}
-          </button>
-        </div>
-      </form>
-
-      {batch ? <TestSampleBatchProgress batch={batch} /> : null}
-    </>
-  );
-}
-
 function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) {
   const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -1541,60 +1265,6 @@ function DownloadModeFields({
       </label>
     </fieldset>
   );
-}
-
-function TestSampleBatchProgress({ batch }: { batch: TestSampleBatchInfo }) {
-  const percent = batch.total_count ? Math.round((batch.completed_count / batch.total_count) * 100) : 0;
-  return (
-    <section className="panel test-sample-batch-progress">
-      <PanelHeader
-        title="Ход группового создания"
-        subtitle={`${batch.completed_count} / ${batch.total_count} · итог ${batch.min_image_count}–${batch.image_count} тайлов · прошло ${formatElapsedSeconds(batch.elapsed_seconds)}`}
-        aside={<span className={`badge ${batch.status === "ok" ? "ok" : batch.status === "error" ? "error" : batch.status === "partial" ? "warning" : "neutral"}`}>{batchStatusLabel(batch.status)}</span>}
-      />
-      <div className="batch-progress-track" aria-label={`Выполнено ${percent}%`}><span style={{ width: `${percent}%` }} /></div>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>#</th><th>Датасет</th><th>Статус</th><th>Пул</th><th>Результат</th></tr></thead>
-          <tbody>
-            {(batch.items || []).map((item) => (
-              <tr key={item.id} title={item.error || undefined}>
-                <td>{item.position}</td><td>{item.dataset_name}</td>
-                <td><span className={`badge ${item.status === "ok" ? "ok" : item.status === "error" ? "error" : "neutral"}`}>{batchItemStatusLabel(item.status)}</span></td>
-                <td>{item.pool_tile_count ?? "—"} тайлов · {item.pool_object_count ?? "—"} объектов</td>
-                <td>{item.sample_id ? <a href={`#/test-markups/${item.sample_id}`}>{item.sample_name || "Открыть разметку"}</a> : item.error ? <span className="error-text">Ошибка — наведите для подробностей</span> : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function formatElapsedSeconds(value: number): string {
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  const seconds = value % 60;
-  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function batchStatusLabel(status: TestSampleBatchInfo["status"]): string {
-  return { queued: "в очереди", running: "выполняется", ok: "готово", partial: "частично", error: "ошибка" }[status];
-}
-
-function batchItemStatusLabel(status: NonNullable<TestSampleBatchInfo["items"]>[number]["status"]): string {
-  return { queued: "в очереди", running: "выполняется", ok: "готово", error: "ошибка" }[status];
-}
-
-function testSampleBatchPseudoStatusLabel(status: TestSampleBatchDatasetOption["pseudo_status"]): string {
-  return {
-    ready: "псевдоразметка готова",
-    queued: "псевдоразметка в очереди",
-    running: "псевдоразметка выполняется",
-    unavailable: "псевдоразметки нет",
-    error: "ошибка псевдоразметки",
-  }[status];
 }
 
 function TestSampleCatalog({

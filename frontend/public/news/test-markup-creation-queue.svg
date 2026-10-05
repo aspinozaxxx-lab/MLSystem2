@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" role="img" aria-labelledby="title description">
+  <title id="title">Одна тестовая разметка — одно задание</title>
+  <desc id="description">Схема выбора одного датасета и параметров, отдельной очереди создания и запаса тайлов для ручного выбора.</desc>
+  <rect width="960" height="560" rx="24" fill="#eef4f8"/>
+  <g font-family="Arial, sans-serif" fill="#091b34">
+    <text x="40" y="49" font-size="14" fill="#607386">СХЕМА РАБОТЫ</text>
+    <text x="40" y="86" font-size="30" font-weight="700">Одна разметка — одно задание</text>
+    <rect x="40" y="118" width="415" height="382" rx="18" fill="white" stroke="#d2e0e9"/>
+    <text x="64" y="153" font-size="20" font-weight="700">Выберите источник и параметры</text>
+    <rect x="64" y="172" width="367" height="58" rx="9" fill="#dff6fa"/>
+    <text x="82" y="196" font-size="14" fill="#486375">Класс → один датасет</text>
+    <text x="82" y="216" font-size="17" font-weight="700">Снимки и настоящая разметка</text>
+    <text x="64" y="264" font-size="16">Размер тайла · диапазон · объекты</text>
+    <text x="64" y="289" font-size="14" fill="#607386">Настройки запоминаются для датасета</text>
+    <rect x="64" y="309" width="367" height="92" rx="9" fill="#f4f7fa"/>
+    <text x="82" y="337" font-size="16" font-weight="700">С оптимизацией</text>
+    <text x="82" y="358" font-size="14" fill="#607386">Своя обученная сеть и её прогноз</text>
+    <text x="82" y="384" font-size="15">Без оптимизации — случайный состав</text>
+    <rect x="64" y="424" width="367" height="51" rx="9" fill="#091b34"/>
+    <text x="247" y="456" font-size="18" fill="white" text-anchor="middle">Создать разметку</text>
+    <path d="M463 288h27m-10-8 10 8-10 8" fill="none" stroke="#168aa5" stroke-width="4" stroke-linecap="round"/>
+    <rect x="504" y="118" width="416" height="382" rx="18" fill="white" stroke="#d2e0e9"/>
+    <text x="528" y="153" font-size="20" font-weight="700">Очередь создания разметок</text>
+    <rect x="528" y="172" width="368" height="66" rx="9" fill="#dff6fa"/>
+    <text x="548" y="199" font-size="17" font-weight="700">Создаётся одна разметка</text>
+    <text x="548" y="221" font-size="14" fill="#486375">Доступна отмена</text>
+    <rect x="528" y="251" width="368" height="66" rx="9" fill="#f4f7fa"/>
+    <text x="548" y="278" font-size="17" font-weight="700">Остальные задания ожидают</text>
+    <text x="548" y="300" font-size="14" fill="#607386">Изменить порядок · удалить</text>
+    <path d="M708 331v26m-8-9 8 9 8-9" fill="none" stroke="#168aa5" stroke-width="4" stroke-linecap="round"/>
+    <text x="528" y="386" font-size="18" font-weight="700">Готовая разметка</text>
+    <text x="528" y="414" font-size="16">Итоговый состав: от минимума до максимума</text>
+    <text x="528" y="439" font-size="16">Запас: до 3 × максимального числа тайлов</text>
+    <text x="528" y="465" font-size="14" fill="#607386">Откройте результат и выберите тайлы вручную</text>
+    <text x="40" y="535" font-size="16" fill="#486375">Отдельная очередь · сохранение параметров · создание без обученной сети</text>
+  </g>
+</svg>

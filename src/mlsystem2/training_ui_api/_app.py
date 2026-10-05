@@ -39,7 +39,6 @@ from ._test_samples import (
     cleanup_test_sample_storage,
     reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
-    recover_test_sample_batches,
     run_test_sample_batch_worker,
 )
 from ._worker import run_queue_worker
@@ -61,7 +60,6 @@ def create_app() -> FastAPI:
             ensure_seed_templates(session)
             synchronize_dataset_catalog(session, config)
             cleanup_test_sample_storage(session, config)
-            recover_test_sample_batches(session)
             reconcile_test_sample_evaluations(session, config)
             reconcile_training_result_test_f1(session, config)
             session.commit()

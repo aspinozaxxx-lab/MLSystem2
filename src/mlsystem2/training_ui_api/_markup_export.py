@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import shutil
 import uuid
 import warnings
 import zipfile
 from dataclasses import dataclass
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -151,6 +153,7 @@ class GeneratedMarkupFiles:
     territory_count: int
     warnings: tuple[str, ...]
     tiles: tuple[GeneratedMarkupTile, ...]
+    selected_tile_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -635,13 +638,15 @@ def generate_markup_pool_files(
     output_root: Path,
     dataset: DatasetInfo | None = None,
     exclude_boundary_objects: bool = False,
+    random_selection: bool = False,
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> GeneratedMarkupFiles:
     """Создать максимально широкий пул, содержащий допустимую итоговую разметку."""
 
     dataset = dataset or find_dataset(config.mlmarkup_root, dataset_key, config.images_root)
     if dataset is None or dataset.is_custom:
         raise TrainingUIAPIError(
-            "Для группового создания нужен существующий датасет MLMarkup."
+            "Для создания разметки нужен существующий датасет MLMarkup."
         )
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
@@ -660,6 +665,7 @@ def generate_markup_pool_files(
         tile_height=tile_size,
         max_grid_origins=max(32, requested_pool_count * 8),
         exclude_boundary_objects=exclude_boundary_objects,
+        check_cancelled=check_cancelled,
     )
     if len(candidates) < min_final_image_count:
         raise TrainingUIAPIError(
@@ -671,16 +677,29 @@ def generate_markup_pool_files(
     selected_indices: list[int] | None = None
     touching_allowed = False
     maximum_pool_count = min(requested_pool_count, len(candidates))
+    final_indices: list[int] = []
     for allow_touching in (False, True):
-        selected_indices = _select_candidate_pool(
-            candidates,
-            min_final_image_count=min_final_image_count,
-            max_final_image_count=max_final_image_count,
-            min_final_object_count=min_object_count,
-            max_pool_count=maximum_pool_count,
-            target_pool_object_count=requested_pool_objects,
-            allow_touching=allow_touching,
-        )
+        check_cancelled()
+        if random_selection:
+            selected_indices, final_indices = _random_candidate_pool(
+                candidates,
+                min_image_count=min_final_image_count,
+                max_image_count=max_final_image_count,
+                min_object_count=min_object_count,
+                max_pool_count=maximum_pool_count,
+                allow_touching=allow_touching,
+                check_cancelled=check_cancelled,
+            )
+        else:
+            selected_indices = _select_candidate_pool(
+                candidates,
+                min_final_image_count=min_final_image_count,
+                max_final_image_count=max_final_image_count,
+                min_final_object_count=min_object_count,
+                max_pool_count=maximum_pool_count,
+                target_pool_object_count=requested_pool_objects,
+                allow_touching=allow_touching,
+            )
         if selected_indices is not None:
             touching_allowed = allow_touching
             break
@@ -737,9 +756,11 @@ def generate_markup_pool_files(
         tile_width=tile_size,
         tile_height=tile_size,
         class_schema=class_schema,
+        check_cancelled=check_cancelled,
     )
     class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
     dataset_short_name = dataset.dataset_name or "main"
+    final_candidates = {id(candidates[index]) for index in final_indices}
     return GeneratedMarkupFiles(
         dataset_key=dataset.key,
         dataset_name=dataset.name,
@@ -758,6 +779,10 @@ def generate_markup_pool_files(
         territory_count=len({item.territory for item in selected}),
         warnings=tuple(warnings),
         tiles=tuple(tile_files),
+        selected_tile_indices=tuple(
+            index for index, candidate in enumerate(selected, start=1)
+            if id(candidate) in final_candidates
+        ),
     )
 
 
@@ -1053,10 +1078,12 @@ def _build_candidates(
     tile_height: int,
     max_grid_origins: int,
     exclude_boundary_objects: bool = False,
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> list[_Candidate]:
     candidates: dict[tuple[Path, int, int], _Candidate] = {}
     root = Path(images_root).resolve()
     for source_path, source_annotations in sources:
+        check_cancelled()
         transformed_cache: dict[str, _TransformedAnnotations] = {}
         try:
             relative_path = Path(source_path).resolve().relative_to(root)
@@ -1083,6 +1110,7 @@ def _build_candidates(
                     predicate="intersects",
                 )
                 for raw_feature_index in feature_indices:
+                    check_cancelled()
                     feature_index = int(raw_feature_index)
                     clipped_to_image = transformed.geometries[feature_index].intersection(
                         image_footprint
@@ -1333,6 +1361,69 @@ def _window_is_fully_valid(
     if not bool(np.all(np.isfinite(pixels))):
         return False
     return not bool(np.any(np.all(pixels == 0, axis=0)))
+
+
+def _random_candidate_pool(
+    candidates: list[_Candidate],
+    *,
+    min_image_count: int,
+    max_image_count: int,
+    min_object_count: int,
+    max_pool_count: int,
+    allow_touching: bool,
+    check_cancelled: Callable[[], None],
+) -> tuple[list[int] | None, list[int]]:
+    """Случайный допустимый состав и непересекающийся запас для ручного выбора."""
+    conflicts = _candidate_conflicts(candidates, allow_touching=allow_touching)
+    adjacency = [set() for _ in candidates]
+    for left, right in conflicts:
+        adjacency[left].add(right)
+        adjacency[right].add(left)
+    generator = random.SystemRandom()
+    ordering = list(range(len(candidates)))
+    seed: list[int] | None = None
+    for _attempt in range(128):
+        check_cancelled()
+        generator.shuffle(ordering)
+        target = generator.randint(min_image_count, max_image_count)
+        selected: list[int] = []
+        selected_set: set[int] = set()
+        count = 0
+        for index in ordering:
+            if not adjacency[index].isdisjoint(selected_set):
+                continue
+            selected.append(index)
+            selected_set.add(index)
+            count += candidates[index].object_count
+            if len(selected) >= target and count >= min_object_count:
+                break
+            if len(selected) == max_image_count:
+                break
+        if min_image_count <= len(selected) <= max_image_count and count >= min_object_count:
+            seed = selected
+            break
+    if seed is None:
+        # MILP проверяет только геометрические ограничения, без прогнозов и F1.
+        generator.shuffle(ordering)
+        shuffled = [candidates[index] for index in ordering]
+        fallback = _milp_final_subset(
+            shuffled, conflicts=_candidate_conflicts(shuffled, allow_touching=allow_touching),
+            min_image_count=min_image_count, max_image_count=max_image_count,
+            min_object_count=min_object_count,
+        )
+        if fallback is None:
+            return None, []
+        seed = [ordering[index] for index in fallback]
+    pool = list(seed)
+    generator.shuffle(ordering)
+    chosen = set(pool)
+    for index in ordering:
+        if len(pool) >= max_pool_count:
+            break
+        if index not in chosen and adjacency[index].isdisjoint(chosen):
+            pool.append(index)
+            chosen.add(index)
+    return pool, seed
 
 
 def _select_candidate_pool(
@@ -2037,9 +2128,11 @@ def _write_selected_tiles(
     tile_width: int,
     tile_height: int,
     class_schema: tuple[dict[str, Any], ...] = (),
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> list[GeneratedMarkupTile]:
     tile_infos: list[GeneratedMarkupTile] = []
     for index, candidate in enumerate(selected, start=1):
+        check_cancelled()
         annotations = candidate.annotations
         if annotations is None:
             raise TrainingUIAPIError("У кандидата отсутствует разметка сцены.")

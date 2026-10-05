@@ -269,6 +269,29 @@ class TestSampleDraftPreview(BaseModel):
     evaluation: TestSampleEvaluationInfo
 
 
+class TestSampleCreationSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tile_size: Literal[512, 768, 1024, 1536, 2048, 2560, 3072, 3584] = 1536
+    min_image_count: int = Field(default=5, gt=0)
+    image_count: int = Field(default=10, gt=0)
+    min_object_count: int = Field(default=150, gt=0)
+    exclude_boundary_objects: bool = False
+    use_optimization: bool = True
+
+    @model_validator(mode="after")
+    def validate_range(self) -> Self:
+        if self.min_image_count > self.image_count:
+            raise ValueError("Минимальное число тайлов не может быть больше максимального.")
+        return self
+
+
+class TestSampleBatchMove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: Literal["up", "down"]
+
+
 class TestSampleBatchItemCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -277,6 +300,7 @@ class TestSampleBatchItemCreate(BaseModel):
     min_object_count: int = Field(default=150, gt=0)
     metric: Literal["pixel", "objects"] = "pixel"
     exclude_boundary_objects: bool = False
+    use_optimization: bool = True
 
     @model_validator(mode="after")
     def validate_boundary_objects_metric(self) -> Self:
@@ -301,7 +325,7 @@ class TestSampleBatchCreate(BaseModel):
         gt=0,
         description="Максимальное число включённых тайлов.",
     )
-    items: list[TestSampleBatchItemCreate] = Field(min_length=1)
+    items: list[TestSampleBatchItemCreate] = Field(min_length=1, max_length=1)
 
     @model_validator(mode="after")
     def validate_image_count_range(self) -> Self:
@@ -329,18 +353,22 @@ class TestSampleBatchItemInfo(BaseModel):
     min_object_count: int = Field(gt=0)
     metric: Literal["pixel", "objects"]
     exclude_boundary_objects: bool = False
-    status: Literal["queued", "running", "ok", "error"]
+    use_optimization: bool = True
+    status: Literal["queued", "running", "ok", "error", "cancelled"]
     pool_tile_count: int | None = Field(default=None, gt=0)
     pool_object_count: int | None = Field(default=None, gt=0)
     sample_id: UUID | None = None
     sample_name: str | None = None
     error: str | None = None
+
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
 
 class TestSampleBatchDatasetOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    creation_settings: TestSampleCreationSettings = Field(default_factory=TestSampleCreationSettings)
 
     dataset_key: str
     dataset_name: str
@@ -378,7 +406,9 @@ class TestSampleBatchInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
-    status: Literal["queued", "running", "ok", "partial", "error"]
+    status: Literal["queued", "running", "ok", "partial", "error", "cancelled"]
+    queue_position: int = 0
+    cancel_requested: bool = False
     tile_size: int = Field(gt=0)
     min_image_count: int = Field(gt=0)
     image_count: int = Field(gt=0)
@@ -392,6 +422,8 @@ class TestSampleBatchInfo(BaseModel):
 
 
 __all__ = [
+    "TestSampleCreationSettings",
+    "TestSampleBatchMove",
     "TestSampleAnnotationsMerge",
     "TestSampleBatchCreate",
     "TestSampleBatchClassOption",

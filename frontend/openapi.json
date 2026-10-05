@@ -2200,6 +2200,274 @@
         }
       }
     },
+    "/api/v1/test-sample-batches": {
+      "get": {
+        "summary": "Get Creation Queue",
+        "operationId": "get_creation_queue_api_v1_test_sample_batches_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestSampleBatchInfo"
+                  },
+                  "type": "array",
+                  "title": "Response Get Creation Queue Api V1 Test Sample Batches Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Test Sample Batch",
+        "operationId": "post_test_sample_batch_api_v1_test_sample_batches_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleBatchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/options/{dataset_key}/settings": {
+      "put": {
+        "summary": "Put Creation Settings",
+        "operationId": "put_creation_settings_api_v1_test_sample_batches_options__dataset_key__settings_put",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleCreationSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleCreationSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/{batch_id}/move": {
+      "post": {
+        "summary": "Post Creation Move",
+        "operationId": "post_creation_move_api_v1_test_sample_batches__batch_id__move_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSampleBatchMove"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/{batch_id}/cancel": {
+      "post": {
+        "summary": "Post Creation Cancel",
+        "operationId": "post_creation_cancel_api_v1_test_sample_batches__batch_id__cancel_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-sample-batches/{batch_id}": {
+      "delete": {
+        "summary": "Delete Creation Job",
+        "operationId": "delete_creation_job_api_v1_test_sample_batches__batch_id__delete",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Test Sample Batch",
+        "operationId": "get_test_sample_batch_api_v1_test_sample_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleBatchInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-sample-batches/options": {
       "get": {
         "summary": "Get Test Sample Batch Options",
@@ -2257,44 +2525,6 @@
         }
       }
     },
-    "/api/v1/test-sample-batches": {
-      "post": {
-        "summary": "Post Test Sample Batch",
-        "operationId": "post_test_sample_batch_api_v1_test_sample_batches_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TestSampleBatchCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TestSampleBatchInfo"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/test-sample-batches/latest": {
       "get": {
         "summary": "Get Latest Test Sample Batch",
@@ -2306,46 +2536,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestSampleBatchInfo"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/test-sample-batches/{batch_id}": {
-      "get": {
-        "summary": "Get Test Sample Batch",
-        "operationId": "get_test_sample_batch_api_v1_test_sample_batches__batch_id__get",
-        "parameters": [
-          {
-            "name": "batch_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Batch Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TestSampleBatchInfo"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -10677,6 +10867,7 @@
               "$ref": "#/components/schemas/TestSampleBatchItemCreate"
             },
             "type": "array",
+            "maxItems": 1,
             "minItems": 1,
             "title": "Items"
           }
@@ -10690,6 +10881,9 @@
       },
       "TestSampleBatchDatasetOption": {
         "properties": {
+          "creation_settings": {
+            "$ref": "#/components/schemas/TestSampleCreationSettings"
+          },
           "dataset_key": {
             "type": "string",
             "title": "Dataset Key"
@@ -10853,9 +11047,20 @@
               "running",
               "ok",
               "partial",
-              "error"
+              "error",
+              "cancelled"
             ],
             "title": "Status"
+          },
+          "queue_position": {
+            "type": "integer",
+            "title": "Queue Position",
+            "default": 0
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested",
+            "default": false
           },
           "tile_size": {
             "type": "integer",
@@ -10977,6 +11182,11 @@
             "type": "boolean",
             "title": "Exclude Boundary Objects",
             "default": false
+          },
+          "use_optimization": {
+            "type": "boolean",
+            "title": "Use Optimization",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -11090,13 +11300,19 @@
             "title": "Exclude Boundary Objects",
             "default": false
           },
+          "use_optimization": {
+            "type": "boolean",
+            "title": "Use Optimization",
+            "default": true
+          },
           "status": {
             "type": "string",
             "enum": [
               "queued",
               "running",
               "ok",
-              "error"
+              "error",
+              "cancelled"
             ],
             "title": "Status"
           },
@@ -11197,6 +11413,24 @@
           "status"
         ],
         "title": "TestSampleBatchItemInfo"
+      },
+      "TestSampleBatchMove": {
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Direction"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "direction"
+        ],
+        "title": "TestSampleBatchMove"
       },
       "TestSampleBatchOptionsResponse": {
         "properties": {
@@ -11334,6 +11568,56 @@
           "dataset_key"
         ],
         "title": "TestSampleCreate"
+      },
+      "TestSampleCreationSettings": {
+        "properties": {
+          "tile_size": {
+            "type": "integer",
+            "enum": [
+              512,
+              768,
+              1024,
+              1536,
+              2048,
+              2560,
+              3072,
+              3584
+            ],
+            "title": "Tile Size",
+            "default": 1536
+          },
+          "min_image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Image Count",
+            "default": 5
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count",
+            "default": 10
+          },
+          "min_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Min Object Count",
+            "default": 150
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
+          },
+          "use_optimization": {
+            "type": "boolean",
+            "title": "Use Optimization",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TestSampleCreationSettings"
       },
       "TestSampleDatasetGroup": {
         "properties": {
