@@ -1216,6 +1216,8 @@ def _build_test_sample_f1_config(
                     "index": len(tiles) + 1 if target is not None else tile.tile_index,
                     "source_tile_index": tile.tile_index,
                     "test_sample_id": str(target_sample.id),
+                    "test_sample_name": target_sample.name,
+                    "test_sample_revision": target_sample.content_revision,
                     "image_path": str(tif_path),
                     "mask_path": str(mask_path),
                     "geojson_path": str(geojson_path),
@@ -1234,6 +1236,8 @@ def _build_test_sample_f1_config(
         "inference_backend": inference_backend,
         "run_root": str(run_dir / "scratch"),
         "report_path": str(run_dir / "scratch" / "report.json"),
+        "save_test_f1_view": not saved_evaluation,
+        "test_f1_view_root": str(run_dir / "scratch" / "test_f1_view"),
         "metric_target": row.config.get("metric_target"),
         "class_key": sample.class_key if saved_evaluation else training_result.class_key,
         "class_name": sample.class_name if saved_evaluation else training_result.class_display_name,
@@ -2031,7 +2035,16 @@ def _finish_test_sample_f1_job(
             ) = object_values
             report_threshold = report.get("threshold")
             metric.threshold = float(report_threshold) if report_threshold is not None else None
-            metric.metrics = merged_metrics or dict(report.get("metrics") or {})
+            from ._test_f1_viewer import store_test_f1_view
+
+            viewer_jobs = store_test_f1_view(
+                row, config, dict(metric.metrics or {}).get("viewer_jobs") or {},
+                selected_slugs=managed_selected_slugs if partial_managed_evaluation else None,
+            )
+            metric.metrics = {
+                **(merged_metrics or dict(report.get("metrics") or {})),
+                **({"viewer_jobs": viewer_jobs} if viewer_jobs else {}),
+            }
             metric.status = "current"
             metric.evaluated_at = row.finished_at
             metric.error = None

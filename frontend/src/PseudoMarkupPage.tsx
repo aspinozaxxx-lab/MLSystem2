@@ -1,5 +1,5 @@
 import { ArrowLeft, ChevronDown, Download, Eye, EyeOff, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
 import { defaults as defaultControls } from "ol/control/defaults";
@@ -23,10 +23,12 @@ import { rasterBackdrop } from "./utils/rasterBackdrop";
 import { rasterLoadCancelled, rasterResponseError, watchRasterLoading } from "./utils/rasterLoading";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { useCompactLayout } from "./utils/useCompactLayout";
+import { comparisonLayerStyle, TEST_F1_LAYERS } from "./utils/testF1Viewer";
 import "ol/ol.css";
 import "./styles/pseudoViewer.css";
 
-type GeoJson = { type: string; features: { properties?: PseudoProperties | null }[] };
+export type ViewerGeoJson = { type: string; features: { properties?: PseudoProperties | null }[] };
+type GeoJson = ViewerGeoJson;
 type LoadedView = { info: PseudoMarkupViewInfo; geojson: GeoJson };
 
 export function PseudoMarkupPage({ resultId, username }: { resultId: string; username: string }) {
@@ -53,7 +55,10 @@ export function PseudoMarkupPage({ resultId, username }: { resultId: string; use
   </section>;
 }
 
-function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username: string; onRetry: () => void }) {
+export function PseudoMap({ info, geojson, username, onRetry, comparison }: LoadedView & {
+  username: string; onRetry: () => void;
+  comparison?: { sidebar: ReactNode; summary: ReactNode };
+}) {
   const compact = useCompactLayout();
   const [scenesExpanded, setScenesExpanded] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +73,9 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
   const footprints = useRef(new Map<string, Feature[]>());
   const nirLayer = useRef<WebGLTileLayer | null>(null);
   const markupLayer = useRef<VectorImageLayer | null>(null);
+  const markupSource = useRef<VectorSource | null>(null);
+  const comparisonLayers = useRef({ reference: true, predicted: true });
+  const [referenceVisible, setReferenceVisible] = useState(true);
   const allBounds = useRef<Extent>(createEmpty());
   const hiddenClasses = useRef(new Set<string>());
   const [hidden, setHidden] = useState(new Set<string>());
@@ -169,10 +177,26 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
       new Style({ stroke: new Stroke({ color: "#111827", width: 6 }) }),
       new Style({ stroke: new Stroke({ color: "#fbbf24", width: 3 }) }),
     ] });
-    const vector = new VectorSource({ features: new GeoJSON().readFeatures(geojson, { featureProjection: "EPSG:3857" }) });
+    const vector = new VectorSource({ features: new GeoJSON().readFeatures(geojson, {
+      dataProjection: comparison ? "EPSG:3857" : "EPSG:4326", featureProjection: "EPSG:3857",
+    }) });
+    markupSource.current = vector;
     const markup = new VectorImageLayer({
-      source: vector, opacity: 0.8,
+      source: vector, opacity,
       style: (feature) => {
+        if (comparison) {
+          const appearance = comparisonLayerStyle(String(feature.get("test_f1_layer")),
+            comparisonLayers.current.reference, comparisonLayers.current.predicted);
+          if (!appearance) return undefined;
+          const key = `${appearance.color}:${appearance.fill}`;
+          let style = styles.get(key);
+          if (!style) {
+            style = new Style({ stroke: new Stroke({ color: appearance.color, width: appearance.width }),
+              fill: new Fill({ color: appearance.fill }) });
+            styles.set(key, style);
+          }
+          return style;
+        }
         const item = pseudoClass(feature.getProperties());
         if (hiddenClasses.current.has(item.key)) return undefined;
         let style = styles.get(item.color);
@@ -203,6 +227,8 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
     const detachBackdrop = backdrop.attach(map);
     nirLayer.current = rasters[2];
     markupLayer.current = markup;
+    markup.setVisible(comparison ? true : markupVisible);
+    refreshRasters.current();
     const bounds = createEmpty();
     info.scenes.forEach((scene) => extend(bounds, scene.bounds));
     const vectorBounds = vector.getExtent();
@@ -249,11 +275,28 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
       sourceCleanup.clear();
       sources.clear();
       contour.dispose();
+      markup.dispose();
+      vector.clear();
+      markupSource.current = null;
       outlineSource.current = null;
       mapRef.current = null;
       nirLayer.current = null;
     };
-  }, [info, geojson, username]);
+  }, [info, username]);
+
+  useEffect(() => {
+    const source = markupSource.current;
+    if (!source) return;
+    source.clear();
+    source.addFeatures(new GeoJSON().readFeatures(geojson, {
+      dataProjection: comparison ? "EPSG:3857" : "EPSG:4326", featureProjection: "EPSG:3857",
+    }));
+    const bounds = source.getExtent();
+    if (!info.scenes.length && bounds && !isEmpty(bounds)) {
+      allBounds.current = bounds;
+      mapRef.current?.getView().fit(allBounds.current, { padding: [32, 32, 32, 32], maxZoom: 20 });
+    }
+  }, [geojson, info]);
 
   const highlightId = hoverSceneId ?? selectedSceneId;
   useEffect(() => {
@@ -300,14 +343,15 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
     refreshRasters.current();
   };
   const visibleErrors = info.scenes.filter((scene) => rasterErrors[scene.id] && !hiddenSceneIds.has(scene.id));
-  return <div ref={workspaceRef} className={`pseudo-workspace${fullscreen ? " fullscreen" : ""}`}>
+  return <div ref={workspaceRef} className={`pseudo-workspace${comparison ? " test-f1-workspace" : ""}${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
-      <div><h1>Просмотр псевдоразметки</h1><p>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p></div>
-      <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a>
+      <div><h1>{comparison ? "Проверка тестового F1" : "Просмотр псевдоразметки"}</h1><p>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p></div>
+      {!comparison ? <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a> : null}
     </header>
-    <div className="pseudo-model"><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span><span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span></div>
+    <div className="pseudo-model"><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
+    {comparison?.summary}
     <div className="pseudo-toolbar">
-      <button type="button" className="secondary compact-action" onClick={() => fit(allBounds.current)}><Maximize size={15} /> Все снимки</button>
+      <button type="button" className="secondary compact-action" onClick={() => fit(allBounds.current)}><Maximize size={15} /> {comparison ? "Весь снимок" : "Все снимки"}</button>
       {hasNir ? <label title="Как в редакторе датасета: RGB, NRG или NGB. Снимки без NIR остаются в RGB.">Каналы
         <select aria-label="Сочетание каналов" value={bandMode} onChange={(event) => {
           const mode = event.target.value as BandMode;
@@ -317,8 +361,17 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
         }}>{Object.keys(BAND_CHANNELS).map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
       </label> : null}
       <label><input type="checkbox" checked={imagesVisible} onChange={(event) => { imagesEnabled.current = event.target.checked; setImagesVisible(event.target.checked); refreshRasters.current(); }} /> Снимки</label>
-      <label><input type="checkbox" checked={markupVisible} onChange={(event) => { setMarkupVisible(event.target.checked); markupLayer.current?.setVisible(event.target.checked); }} /> Псевдоразметка</label>
-      <label>Непрозрачность <input aria-label="Непрозрачность псевдоразметки" type="range" min="0.1" max="1" step="0.05" value={opacity} onChange={(event) => { const value = Number(event.target.value); setOpacity(value); markupLayer.current?.setOpacity(value); }} /></label>
+      {comparison ? <>
+        <label><input type="checkbox" checked={referenceVisible} onChange={(event) => {
+          setReferenceVisible(event.target.checked); comparisonLayers.current.reference = event.target.checked;
+          markupLayer.current?.changed();
+        }} /> Эталон</label>
+        <label><input type="checkbox" checked={markupVisible} onChange={(event) => {
+          setMarkupVisible(event.target.checked); comparisonLayers.current.predicted = event.target.checked;
+          markupLayer.current?.changed();
+        }} /> Прогноз</label>
+      </> : <label><input type="checkbox" checked={markupVisible} onChange={(event) => { setMarkupVisible(event.target.checked); markupLayer.current?.setVisible(event.target.checked); }} /> Псевдоразметка</label>}
+      <label>Непрозрачность <input aria-label={comparison ? "Непрозрачность слоёв сравнения" : "Непрозрачность псевдоразметки"} type="range" min="0.1" max="1" step="0.05" value={opacity} onChange={(event) => { const value = Number(event.target.value); setOpacity(value); markupLayer.current?.setOpacity(value); }} /></label>
     </div>
     {info.warnings.length > 0 ? <details className="info-box"><summary>Не все исходные снимки доступны: подробности</summary><ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details> : null}
     {imagesVisible && visibleErrors.length > 0 ? <div className="info-box" role="alert">
@@ -326,7 +379,7 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
       <button type="button" className="secondary compact-action" onClick={onRetry}><RefreshCw size={14} /> Повторить загрузку</button>
     </div> : null}
     <div className="pseudo-viewer-body">
-      <aside className={`pseudo-sidebar${scenesExpanded ? "" : " collapsed"}`}>
+      {comparison ? <aside className="test-f1-sidebar">{comparison.sidebar}</aside> : <aside className={`pseudo-sidebar${scenesExpanded ? "" : " collapsed"}`}>
         <div className="pseudo-sidebar-heading">
           <h2>Снимки <span>{info.scenes.length}{info.expected_image_count != null && info.expected_image_count !== info.scenes.length ? ` из ${info.expected_image_count}` : ""}</span></h2>
           <span className="mobile-only muted">На экране: {imagesVisible ? viewportSceneIds.size : 0}</span>
@@ -363,9 +416,9 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
         })}</div>
         {!info.scenes.length ? <p>Исходные снимки недоступны. Слой псевдоразметки можно просматривать отдельно.</p> : null}
         </div>
-      </aside>
+      </aside>}
       <div className="pseudo-map-area">
-        <div className="pseudo-map" ref={target} aria-label="Мозаика снимков с псевдоразметкой" tabIndex={0} />
+        <div className="pseudo-map" ref={target} aria-label={comparison ? "Тестовый снимок с эталоном, прогнозом и областями TP, FP, FN" : "Мозаика снимков с псевдоразметкой"} tabIndex={0} />
         <div className="dataset-editor-map-controls">
           <button
             className={`${fullscreen ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
@@ -376,11 +429,13 @@ function PseudoMap({ info, geojson, username, onRetry }: LoadedView & { username
             onClick={() => void toggleFullscreen()}
           >{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
         </div>
-        <div className="pseudo-map-legend">{classes.map((item) => <button type="button" key={item.key} aria-pressed={!hidden.has(item.key)} onClick={() => toggleClass(item.key)}><span style={{ backgroundColor: item.color }} />{item.name} <small>{item.count.toLocaleString("ru-RU")}</small></button>)}</div>
-        {!geojson.features.length ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
+        <div className="pseudo-map-legend">{comparison
+          ? Object.entries(TEST_F1_LAYERS).filter(([layer]) => comparisonLayerStyle(layer, referenceVisible, markupVisible)).map(([layer, item]) => <span className="test-f1-legend-item" key={layer}><i style={{ backgroundColor: item.color }} />{item.label}</span>)
+          : classes.map((item) => <button type="button" key={item.key} aria-pressed={!hidden.has(item.key)} onClick={() => toggleClass(item.key)}><span style={{ backgroundColor: item.color }} />{item.name} <small>{item.count.toLocaleString("ru-RU")}</small></button>)}</div>
+        {!geojson.features.length && !comparison ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
         {outlineError ? <div className="pseudo-outline-error" role="status">{outlineError}</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">{compact ? "Перемещение — одним пальцем, масштаб — двумя. Список снимков раскрывается стрелкой. " : "Колесо — масштаб, перетаскивание — перемещение. "}Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">{comparison ? "Два включённых слоя показывают пиксельное сравнение: зелёный — совпадение, красный — лишнее, жёлтый — пропуск. Эталон и прогноз можно отключать независимо. " : `${compact ? "Перемещение — одним пальцем, масштаб — двумя. Список снимков раскрывается стрелкой. " : "Колесо — масштаб, перетаскивание — перемещение. "}Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.`}{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </div>;
 }

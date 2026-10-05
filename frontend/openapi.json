@@ -4586,6 +4586,289 @@
         }
       }
     },
+    "/api/v1/results/training/{result_id}/test-f1/view": {
+      "get": {
+        "summary": "Get Test F1 View",
+        "operationId": "get_test_f1_view_api_v1_results_training__result_id__test_f1_view_get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestF1ViewInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Test F1 View",
+        "operationId": "post_test_f1_view_api_v1_results_training__result_id__test_f1_view_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestF1ViewInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}": {
+      "get": {
+        "summary": "Get Test F1 Layers",
+        "operationId": "get_test_f1_layers_api_v1_results_training__result_id__test_f1_layers__scene_id__get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "class_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Class Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/test-f1/raster/{scene_id}": {
+      "get": {
+        "summary": "Get Test F1 Raster",
+        "operationId": "get_test_f1_raster_api_v1_results_training__result_id__test_f1_raster__scene_id__get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "V"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/test-f1/footprint/{scene_id}": {
+      "get": {
+        "summary": "Get Test F1 Footprint",
+        "operationId": "get_test_f1_footprint_api_v1_results_training__result_id__test_f1_footprint__scene_id__get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "V"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/pseudo-markup/{result_id}/view": {
       "get": {
         "summary": "Get Pseudo Markup View",
@@ -10767,6 +11050,243 @@
           "manual"
         ],
         "title": "TemplateSource"
+      },
+      "TestF1SceneInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "raster_url": {
+            "type": "string",
+            "title": "Raster Url"
+          },
+          "footprint_url": {
+            "type": "string",
+            "title": "Footprint Url"
+          },
+          "bounds": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds"
+          },
+          "has_alpha": {
+            "type": "boolean",
+            "title": "Has Alpha",
+            "default": false
+          },
+          "has_nir": {
+            "type": "boolean",
+            "title": "Has Nir",
+            "default": false
+          },
+          "nodata": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodata"
+          },
+          "layers_url": {
+            "type": "string",
+            "title": "Layers Url"
+          },
+          "raster_available": {
+            "type": "boolean",
+            "title": "Raster Available",
+            "default": true
+          },
+          "sample_name": {
+            "type": "string",
+            "title": "Sample Name"
+          },
+          "sample_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Sample Revision"
+          },
+          "target_class_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Class Id"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "pixel": {
+            "$ref": "#/components/schemas/TestF1ScoreInfo"
+          },
+          "objects": {
+            "$ref": "#/components/schemas/TestF1ScoreInfo"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "raster_url",
+          "footprint_url",
+          "bounds",
+          "layers_url",
+          "sample_name",
+          "sample_revision",
+          "pixel",
+          "objects"
+        ],
+        "title": "TestF1SceneInfo",
+        "description": "Независимый тестовый TIFF и его сохранённые оценки."
+      },
+      "TestF1ScoreInfo": {
+        "properties": {
+          "precision": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Precision"
+          },
+          "recall": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Recall"
+          },
+          "f1": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "F1"
+          },
+          "true_positive": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "True Positive"
+          },
+          "false_positive": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "False Positive"
+          },
+          "false_negative": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "False Negative"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "precision",
+          "recall",
+          "f1",
+          "true_positive",
+          "false_positive",
+          "false_negative"
+        ],
+        "title": "TestF1ScoreInfo",
+        "description": "Оценка одного снимка в сохранённом расчёте."
+      },
+      "TestF1ViewInfo": {
+        "properties": {
+          "training_result_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Training Result Id"
+          },
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          },
+          "training_dataset_name": {
+            "type": "string",
+            "title": "Training Dataset Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "queued",
+              "running",
+              "error",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "metric": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingResultTestF1Info"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/TestF1SceneInfo"
+            },
+            "type": "array",
+            "title": "Scenes"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "training_result_id",
+          "model_name",
+          "training_dataset_name",
+          "status"
+        ],
+        "title": "TestF1ViewInfo",
+        "description": "Готовность карты и снимки оценки конкретной сети."
       },
       "TestSampleAnnotationsMerge": {
         "properties": {

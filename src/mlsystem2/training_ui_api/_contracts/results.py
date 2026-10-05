@@ -122,6 +122,45 @@ class PrimaryTestSampleInfo(BaseModel):
     color: str | None = None
 
 
+class TestF1ScoreInfo(BaseModel):
+    """Оценка одного снимка в сохранённом расчёте."""
+
+    model_config = ConfigDict(extra="forbid")
+    precision: float = Field(ge=0.0, le=1.0)
+    recall: float = Field(ge=0.0, le=1.0)
+    f1: float = Field(ge=0.0, le=1.0)
+    true_positive: int = Field(ge=0)
+    false_positive: int = Field(ge=0)
+    false_negative: int = Field(ge=0)
+
+
+class TestF1SceneInfo(PseudoMarkupSceneInfo):
+    """Независимый тестовый TIFF и его сохранённые оценки."""
+
+    layers_url: str
+    raster_available: bool = True
+    sample_name: str
+    sample_revision: int = Field(ge=1)
+    target_class_id: int | None = None
+    class_schema: list[dict[str, Any]] = Field(default_factory=list)
+    pixel: TestF1ScoreInfo
+    objects: TestF1ScoreInfo
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class TestF1ViewInfo(BaseModel):
+    """Готовность карты и снимки оценки конкретной сети."""
+
+    model_config = ConfigDict(extra="forbid")
+    training_result_id: UUID
+    model_name: str
+    training_dataset_name: str
+    status: Literal["ready", "missing", "queued", "running", "error", "unavailable"]
+    metric: TrainingResultTestF1Info | None = None
+    scenes: list[TestF1SceneInfo] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TrainingResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -301,4 +340,7 @@ __all__ = [
     "TrainingResultExportItem",
     "TrainingResultInfo",
     "TrainingResultTestF1Info",
+    "TestF1ScoreInfo",
+    "TestF1SceneInfo",
+    "TestF1ViewInfo",
 ]

@@ -5,6 +5,9 @@ export type FeedbackInfo = components["schemas"]["FeedbackInfo"];
 export type FeedbackListResponse = components["schemas"]["FeedbackListResponse"];
 
 export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];
+export type TestF1ViewInfo = components["schemas"]["TestF1ViewInfo"];
+export type TestF1SceneInfo = components["schemas"]["TestF1SceneInfo"];
+export type TestF1ScoreInfo = components["schemas"]["TestF1ScoreInfo"];
 
 export type AppLink = components["schemas"]["AppLink"];
 export type AutomationRuleInfo = components["schemas"]["AutomationRuleInfo"];

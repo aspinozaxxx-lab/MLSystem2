@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Тестовый F1: от оценки к карте совпадений и ошибок</title>
+  <desc id="desc">Схема на условных данных. По кнопке F1 открывается тестовый снимок: зелёные области совпадают с эталоном, красные лишние, жёлтые пропущены. Эталон и прогноз включаются независимо.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#081f35"/><stop offset="1" stop-color="#103647"/></linearGradient>
+    <linearGradient id="map" x2=".8" y2="1"><stop stop-color="#2d5b51"/><stop offset="1" stop-color="#172f36"/></linearGradient>
+    <linearGradient id="accent" x2="1"><stop stop-color="#32ddc7"/><stop offset="1" stop-color="#63b6ff"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#fff" stroke-opacity=".05"/></pattern>
+    <filter id="shadow"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#00111e" flood-opacity=".5"/></filter>
+    <clipPath id="crop"><rect x="616" y="126" width="594" height="426" rx="22"/></clipPath>
+  </defs>
+  <rect width="1280" height="760" rx="28" fill="url(#bg)"/>
+  <rect width="1280" height="760" rx="28" fill="url(#grid)"/>
+  <g font-family="Arial, sans-serif">
+    <rect x="62" y="46" width="254" height="31" rx="15" fill="#21465b"/>
+    <text x="80" y="67" font-size="14" font-weight="600" fill="#bce8e9">СХЕМА · УСЛОВНЫЕ ДАННЫЕ</text>
+    <text x="62" y="140" font-size="46" font-weight="700" fill="#f0f9ff">Тестовый F1</text>
+    <text x="62" y="194" font-size="46" font-weight="700" fill="#f0f9ff">на карте</text>
+    <rect x="64" y="222" width="146" height="5" rx="2.5" fill="url(#accent)"/>
+    <text x="64" y="271" font-size="22" fill="#b5cbd8">Посмотрите, где сеть совпала</text>
+    <text x="64" y="303" font-size="22" fill="#b5cbd8">с эталоном — и где ошиблась.</text>
+    <g filter="url(#shadow)">
+      <rect x="64" y="342" width="450" height="176" rx="22" fill="#f5faff"/>
+      <text x="86" y="377" fill="#5b7184" font-size="15">Результаты · выбранная сеть</text>
+      <text x="86" y="415" fill="#102e43" font-size="22" font-weight="700">F1 на тестовой выборке</text>
+      <rect x="86" y="438" width="148" height="56" rx="12" fill="#d9f7ef" stroke="#38b9a1"/>
+      <text x="102" y="474" fill="#107667" font-size="30" font-weight="700">82,9</text>
+      <path d="M195 455l12 12-12 12m-10-12h20" stroke="#107667" stroke-width="2.5" fill="none"/>
+      <text x="256" y="462" fill="#5b7184" font-size="15">Нажмите на оценку,</text>
+      <text x="256" y="486" fill="#5b7184" font-size="15">чтобы открыть снимки</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="594" y="96" width="638" height="480" rx="30" fill="#eaf4f7"/>
+      <g clip-path="url(#crop)">
+        <rect x="616" y="126" width="594" height="426" fill="url(#map)"/>
+        <path d="M590 180l280-80 185 165-250 82Z" fill="#477158" opacity=".65"/>
+        <path d="M812 296l250-120 180 220-223 117Z" fill="#6d7953" opacity=".5"/>
+        <path d="M615 396l163-116 139 147-84 137H615Z" fill="#263d31"/>
+        <path d="M610 212l202 46 96 208 302-28" fill="none" stroke="#b1c4a5" stroke-opacity=".23" stroke-width="12"/>
+        <rect x="616" y="126" width="594" height="426" fill="url(#grid)"/>
+        <path d="M729 217l124-28 51 89-27 111-130-22Z" fill="#fbbf24" fill-opacity=".75"/>
+        <path d="M751 212l102-23 51 89-27 111-108-18Z" fill="#22c55e" fill-opacity=".75"/>
+        <path d="M853 189l19-4 57 90-27 117-25-3 27-111Z" fill="#f43f5e" fill-opacity=".8"/>
+        <path d="M729 217l124-28 51 89-27 111-130-22Z" fill="none" stroke="#c4b5fd" stroke-width="2.5"/>
+        <path d="M751 212l121-27 57 90-27 117-133-21Z" fill="none" stroke="#7dd3fc" stroke-width="2.5"/>
+        <path d="M987 341l90-35 63 53-24 95-115-2Z" fill="#22c55e" fill-opacity=".7" stroke="#7dd3fc" stroke-width="2"/>
+        <path d="M974 346l13-5 14 111 115 2-4 14-123-4Z" fill="#fbbf24" fill-opacity=".8"/>
+        <path d="M962 201h69v67h-69Z" fill="#f43f5e" fill-opacity=".8" stroke="#7dd3fc" stroke-width="2"/>
+      </g>
+      <rect x="641" y="143" width="222" height="40" rx="10" fill="#f5faff"/>
+      <text x="658" y="169" fill="#17334a" font-size="16" font-weight="700">Тайл 001 · F1 82,9</text>
+      <rect x="641" y="486" width="535" height="43" rx="10" fill="#f5faff"/>
+      <circle cx="659" cy="507" r="5" fill="#22c55e"/><text x="671" y="513" fill="#20384c" font-size="14">TP · Совпадение</text>
+      <circle cx="846" cy="507" r="5" fill="#f43f5e"/><text x="858" y="513" fill="#20384c" font-size="14">FP · Лишнее</text>
+      <circle cx="1010" cy="507" r="5" fill="#fbbf24"/><text x="1022" y="513" fill="#20384c" font-size="14">FN · Пропуск</text>
+    </g>
+    <g fill="#bce8e9" font-size="16">
+      <path d="M535 421h40m-11-10 12 10-12 10" fill="none" stroke="#56d5cc" stroke-width="3"/>
+      <rect x="64" y="624" width="354" height="76" rx="16" fill="#163f51"/>
+      <text x="86" y="654" font-weight="700" fill="#fff">Выберите снимок</text><text x="86" y="679">У каждого тайла своя оценка F1</text>
+      <rect x="442" y="624" width="354" height="76" rx="16" fill="#163f51"/>
+      <text x="464" y="654" font-weight="700" fill="#fff">Переключайте слои</text><text x="464" y="679">Эталон и прогноз — независимо</text>
+      <rect x="820" y="624" width="390" height="76" rx="16" fill="#163f51"/>
+      <text x="842" y="654" font-weight="700" fill="#fff">Сравнивайте области</text><text x="842" y="679">Пиксельные TP, FP, FN в трёх цветах</text>
+    </g>
+  </g>
+</svg>

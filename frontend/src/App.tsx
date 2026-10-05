@@ -89,6 +89,7 @@ import {
   formatDate,
   formatDateTime,
   formatF1Score,
+  formatTestF1Percent,
   formatFileSize,
   formatGeojsonSummary,
   formatRuntimeMinutes,
@@ -137,6 +138,7 @@ const DatasetEditorPage = lazy(() =>
   import("./DatasetEditorPage").then((module) => ({ default: module.DatasetEditorPage })),
 );
 const PseudoMarkupPage = lazy(() => import("./PseudoMarkupPage").then((module) => ({ default: module.PseudoMarkupPage })));
+const TestF1Page = lazy(() => import("./TestF1Page").then((module) => ({ default: module.TestF1Page })));
 
 function BrandLogo() {
   return <img className="brand-logo" src={GROVIKA_LOGO_PATH} alt="GROVIKA" width="190" height="60" />;
@@ -295,6 +297,7 @@ function RoutedPage(props: {
   if (head === "news") return <NewsPage slug={second} />;
   if (head === "feedback") return <FeedbackSection feedbackId={second} />;
   if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
+  if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;
@@ -454,7 +457,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
     </div>
   );
 }
@@ -2222,10 +2225,6 @@ function TestSampleEvaluationBadge({ evaluation }: { evaluation: TestSampleEvalu
   return <span className={`badge ${classes[evaluation.status]}`}>{labels[evaluation.status]}</span>;
 }
 
-function formatTestF1Percent(value: number): string {
-  return (value * 100).toFixed(1);
-}
-
 function latestSuccessfulTrainingResult(results: TrainingResultInfo[]): TrainingResultInfo | null {
   const primary = results.find((item) => item.status === "ok" && item.is_primary);
   if (primary) return primary;
@@ -3787,30 +3786,29 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
               key={dataset.key}
               title={dataset.is_primary ? "Основной датасет класса" : undefined}
             >
-              <a
-                className="dataset-result-link"
-                href={`#/results/${encodeURIComponent(dataset.key)}`}
-              >
-                <span className="dataset-result-identity">
+              <div className="dataset-result-link">
+                <a className="dataset-result-identity" href={`#/results/${encodeURIComponent(dataset.key)}`}>
                   <span className="dataset-result-name">{dataset.dataset_name || dataset.name}</span>
                   <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
-                </span>
+                </a>
                 {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
                   <span className="dataset-result-score">
-                    <strong
-                      className={`result-card-f1 ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
-                      title="F1 основной или последней успешной сети этого датасета"
+                    <a
+                      className={`result-card-f1 test-f1-link ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
+                      href={dataset.test_f1_training_result_id ? `#/test-f1/${dataset.test_f1_training_result_id}` : `#/results/${encodeURIComponent(dataset.key)}`}
+                      title="Открыть снимки с эталоном, прогнозом и тестовым F1 этой сети"
+                      aria-label={`Посмотреть тестовый F1 датасета ${dataset.dataset_name || dataset.name}`}
                     >
                       <small>{metricAggregationLabel(dataset.test_f1_metrics, dataset.quality_metric)}</small>
                       {formatTestF1Percent(dataset.test_f1)}
-                    </strong>
+                    </a>
                     <CompactPerClassF1
                       metrics={dataset.test_f1_metrics}
                       section={dataset.quality_metric === "objects" ? "objects" : "pixel"}
                     />
                   </span>
                 ) : null}
-              </a>
+              </div>
               <a
                 className="dataset-editor-link"
                 href={`#/dataset-editor/${encodeURIComponent(dataset.key)}`}
@@ -3960,9 +3958,10 @@ function ResultsTable({
                       <span className="result-score-summary">
                         <span className="result-score-value">
                           <small>{result.test_f1.aggregation === "macro" ? "F1 сред." : qualityMetricShort(result.quality_metric)}</small>
-                          <span className={`badge technical-value ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}>
+                          <a className={`badge technical-value test-f1-link ${result.test_f1.status === "current" ? "ok" : result.test_f1.status === "error" ? "error" : "warning"}`}
+                            href={`#/test-f1/${result.id}`} title="Посмотреть тестовый F1 на снимках" aria-label={`Посмотреть тестовый F1 сети ${result.model_name}`}>
                             {formatTestF1Percent(result.test_f1.f1)}
-                          </span>
+                          </a>
                         </span>
                         <CompactPerClassF1
                           metrics={result.test_f1.metrics}

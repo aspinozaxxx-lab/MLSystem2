@@ -144,3 +144,28 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/footprint/{scene_id}"]) == {"get"}
     raster_parameters = paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]["get"]["parameters"]
     assert any(item["name"] == "v" and item["in"] == "query" and item["required"] is False for item in raster_parameters)
+
+
+def test_training_test_f1_view_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TestF1ViewInfo, TestF1SceneInfo, TestF1ScoreInfo, PseudoMarkupSceneInfo
+
+    assert set(TestF1ScoreInfo.model_fields) == {
+        "precision", "recall", "f1", "true_positive", "false_positive", "false_negative",
+    }
+    assert set(TestF1SceneInfo.model_fields) == set(PseudoMarkupSceneInfo.model_fields) | {
+        "layers_url", "raster_available", "sample_name", "sample_revision", "target_class_id",
+        "class_schema", "pixel", "objects", "metrics",
+    }
+    assert set(TestF1ViewInfo.model_fields) == {
+        "training_result_id", "model_name", "training_dataset_name", "status", "metric", "scenes", "warnings",
+    }
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    prefix = "/api/v1/results/training/{result_id}/test-f1"
+    assert set(paths[f"{prefix}/view"]) == {"get", "post"}
+    for suffix in ("raster", "footprint", "layers"):
+        assert set(paths[f"{prefix}/{suffix}/{{scene_id}}"] ) == {"get"}
+    parameters = paths[f"{prefix}/layers/{{scene_id}}"]["get"]["parameters"]
+    assert any(item["name"] == "class_id" and not item["required"] for item in parameters)

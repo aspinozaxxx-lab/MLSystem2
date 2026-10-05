@@ -20,6 +20,10 @@ export function formatF1Score(value: number | null | undefined): string {
   return Number.isFinite(score) ? score.toFixed(3) : "—";
 }
 
+export function formatTestF1Percent(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "—" : (value * 100).toFixed(1);
+}
+
 export function formatFileSize(value: number | null | undefined): string {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return "—";

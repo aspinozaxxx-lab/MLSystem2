@@ -4675,6 +4675,106 @@ def _write_queue_export_dataset(config):
         image.write(np.full((4, 512, 4096), 64, dtype=np.uint8))
 
 
+def test_test_f1_view_keeps_exact_masks_after_worker_cleanup_and_prepares_legacy_once(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api._pseudo_runner import run_test_sample_f1
+
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    factory = create_session_factory(config)
+    Base.metadata.create_all(factory.kw["bind"])
+    with factory() as session:
+        sample = create_test_sample(session, _TestSampleCreate(
+            name="Проверка карты", dataset_key="Вырубки\\main", tile_width=16, tile_height=16,
+            image_count=2, object_count=4,
+        ), config)
+        update_test_sample_primary(session, sample.id, _TestSamplePrimaryUpdate(is_primary=True))
+        training = TrainingResultRow(dataset_key=sample.dataset_key, class_key=sample.class_key,
+            class_display_name="Вырубки", architecture="segformer_b2", model_name="Проверяемая сеть",
+            mlflow_run_id="test-view-run", status="ok")
+        session.add(training); session.flush()
+        assert queue_training_result_test_f1(session, training, config)
+        metric = session.get(TrainingResultTestMetricRow, training.id)
+        job = session.get(JobRow, metric.job_id)
+        monkeypatch.setattr(_worker, "_best_training_checkpoint", lambda *_: SimpleNamespace(
+            artifact_uri="file:///checkpoint.pt", artifact_path="checkpoints/best.pt", f1_score=0.8,
+            epoch=20, threshold=0.5,
+        ))
+        run_root = tmp_path / "scratch" / str(job.id)
+        payload = _worker._build_test_sample_f1_config(session, job, config, run_root)
+        for tile in payload["tiles"]:
+            with rasterio.open(tile["mask_path"]) as image:
+                truth = (image.read(1) > 0).astype(np.uint8)
+            predicted = np.roll(truth, 2, axis=1)
+            path = tmp_path / f"prediction-{tile['index']}.npy"
+            np.save(path, predicted)
+            tile["precomputed_prediction_path"] = str(path)
+        report = run_test_sample_f1(payload)
+        assert report["status"] == "ok"
+        (run_root / "scratch" / "report.json").write_text(json.dumps(report), encoding="utf-8")
+        job.tmp_path = str(run_root); job.status = "running"
+        _finish_test_sample_f1_job(session, job, config, succeeded=True)
+        session.commit()
+        assert metric.status == "current"
+        assert metric.metrics["viewer_jobs"] == {"foreground": str(job.id)}
+        assert not (run_root / "scratch").exists()
+        result_id, sample_id = training.id, sample.id
+        expected = report["tiles"][0]
+
+    endpoint = f"/api/v1/results/training/{result_id}/test-f1/view"
+    with TestClient(create_app()) as client:
+        assert client.get(endpoint).status_code == 401
+        _login(client)
+        response = client.get(endpoint); assert response.status_code == 200
+        view = response.json(); assert view["status"] == "ready"
+        assert len(view["scenes"]) == 2
+        scene = view["scenes"][0]
+        assert scene["pixel"]["true_positive"] == expected["true_positive"]
+        assert scene["objects"]["false_negative"] == expected["object_false_negative"]
+        assert view["metric"]["f1"] == pytest.approx(2 * report["true_positive"] / (
+            2 * report["true_positive"] + report["false_positive"] + report["false_negative"]))
+        layers = client.get(scene["layers_url"]).json()
+        reference_root = config.stored_files_root / "test-samples" / str(sample_id)
+        image_path = reference_root / "tile_001.tif"
+        with rasterio.open(image_path) as image:
+            for layer, count in (("tp", expected["true_positive"]), ("fp", expected["false_positive"]), ("fn", expected["false_negative"])):
+                geometries = [feature["geometry"] for feature in layers["features"] if feature["properties"]["test_f1_layer"] == layer]
+                mask = rasterize([(geometry, 1) for geometry in geometries], out_shape=(image.height, image.width), transform=image.transform) if geometries else np.zeros((image.height, image.width))
+                assert int(mask.sum()) == count
+        assert client.get(scene["layers_url"] + "?class_id=999").status_code == 400
+        assert client.get(scene["raster_url"], headers={"Range": "bytes=0-31"}).status_code == 206
+        assert client.get(scene["footprint_url"]).status_code == 200
+        foreign_id = uuid.uuid4()
+        assert client.get(scene["layers_url"].replace(str(result_id), str(foreign_id))).status_code == 400
+        # Изменение эталона не подставляет новые пиксели под старую оценку.
+        with rasterio.open(reference_root / "tile_001_mask.png", "r+") as mask:
+            mask.write(np.zeros((mask.height, mask.width), np.uint8), 1)
+        with factory() as session:
+            session.get(_TestSampleRow, sample_id).content_revision += 1
+            session.commit()
+        assert client.get(scene["layers_url"]).json() == layers
+        assert client.get(endpoint).json()["metric"]["status"] == "stale"
+        # Подмена TIFF блокируется; без него архивные маски остаются доступными.
+        image_path.touch()
+        assert client.get(scene["raster_url"]).status_code == 412
+        assert client.get(endpoint).json()["scenes"][0]["raster_available"] is False
+        image_path.unlink()
+        assert client.get(scene["layers_url"]).status_code == 200
+        # Старый расчёт без масок: GET не создаёт работу, два POST делят один job.
+        with factory() as session:
+            metric = session.get(TrainingResultTestMetricRow, result_id)
+            metric.metrics = {}; metric.status = "current"
+            before = len(session.scalars(select(JobRow)).all()); session.commit()
+        assert client.get(endpoint).json()["status"] == "missing"
+        with factory() as session:
+            assert len(session.scalars(select(JobRow)).all()) == before
+        first = client.post(endpoint).json(); second = client.post(endpoint).json()
+        assert first["status"] == second["status"] == "queued"
+        assert first["metric"]["job_id"] == second["metric"]["job_id"]
+        with factory() as session:
+            assert len(session.scalars(select(JobRow)).all()) == before + 1
+
+
 def _configure_export_environment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "MLSYSTEM2_TRAINING_UI_DATABASE_URL",

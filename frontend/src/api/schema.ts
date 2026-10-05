@@ -1657,6 +1657,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/{result_id}/test-f1/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test F1 View */
+        get: operations["get_test_f1_view_api_v1_results_training__result_id__test_f1_view_get"];
+        put?: never;
+        /** Post Test F1 View */
+        post: operations["post_test_f1_view_api_v1_results_training__result_id__test_f1_view_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test F1 Layers */
+        get: operations["get_test_f1_layers_api_v1_results_training__result_id__test_f1_layers__scene_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/training/{result_id}/test-f1/raster/{scene_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test F1 Raster */
+        get: operations["get_test_f1_raster_api_v1_results_training__result_id__test_f1_raster__scene_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/training/{result_id}/test-f1/footprint/{scene_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test F1 Footprint */
+        get: operations["get_test_f1_footprint_api_v1_results_training__result_id__test_f1_footprint__scene_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/pseudo-markup/{result_id}/view": {
         parameters: {
             query?: never;
@@ -3908,6 +3977,105 @@ export interface components {
          * @enum {string}
          */
         TemplateSource: "hpo_best" | "analogy" | "manual";
+        /**
+         * TestF1SceneInfo
+         * @description Независимый тестовый TIFF и его сохранённые оценки.
+         */
+        TestF1SceneInfo: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Raster Url */
+            raster_url: string;
+            /** Footprint Url */
+            footprint_url: string;
+            /** Bounds */
+            bounds: [
+                number,
+                number,
+                number,
+                number
+            ];
+            /**
+             * Has Alpha
+             * @default false
+             */
+            has_alpha: boolean;
+            /**
+             * Has Nir
+             * @default false
+             */
+            has_nir: boolean;
+            /** Nodata */
+            nodata?: number | null;
+            /** Layers Url */
+            layers_url: string;
+            /**
+             * Raster Available
+             * @default true
+             */
+            raster_available: boolean;
+            /** Sample Name */
+            sample_name: string;
+            /** Sample Revision */
+            sample_revision: number;
+            /** Target Class Id */
+            target_class_id?: number | null;
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            pixel: components["schemas"]["TestF1ScoreInfo"];
+            objects: components["schemas"]["TestF1ScoreInfo"];
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * TestF1ScoreInfo
+         * @description Оценка одного снимка в сохранённом расчёте.
+         */
+        TestF1ScoreInfo: {
+            /** Precision */
+            precision: number;
+            /** Recall */
+            recall: number;
+            /** F1 */
+            f1: number;
+            /** True Positive */
+            true_positive: number;
+            /** False Positive */
+            false_positive: number;
+            /** False Negative */
+            false_negative: number;
+        };
+        /**
+         * TestF1ViewInfo
+         * @description Готовность карты и снимки оценки конкретной сети.
+         */
+        TestF1ViewInfo: {
+            /**
+             * Training Result Id
+             * Format: uuid
+             */
+            training_result_id: string;
+            /** Model Name */
+            model_name: string;
+            /** Training Dataset Name */
+            training_dataset_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "missing" | "queued" | "running" | "error" | "unavailable";
+            metric?: components["schemas"]["TrainingResultTestF1Info"] | null;
+            /** Scenes */
+            scenes?: components["schemas"]["TestF1SceneInfo"][];
+            /** Warnings */
+            warnings?: string[];
+        };
         /** TestSampleAnnotationsMerge */
         TestSampleAnnotationsMerge: {
             /** Expected Revision */
@@ -8508,6 +8676,172 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_f1_view_api_v1_results_training__result_id__test_f1_view_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestF1ViewInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_f1_view_api_v1_results_training__result_id__test_f1_view_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestF1ViewInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_f1_layers_api_v1_results_training__result_id__test_f1_layers__scene_id__get: {
+        parameters: {
+            query?: {
+                class_id?: number | null;
+            };
+            header?: never;
+            path: {
+                result_id: string;
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_f1_raster_api_v1_results_training__result_id__test_f1_raster__scene_id__get: {
+        parameters: {
+            query?: {
+                v?: string | null;
+            };
+            header?: {
+                Range?: string | null;
+            };
+            path: {
+                result_id: string;
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_f1_footprint_api_v1_results_training__result_id__test_f1_footprint__scene_id__get: {
+        parameters: {
+            query?: {
+                v?: string | null;
+            };
+            header?: never;
+            path: {
+                result_id: string;
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

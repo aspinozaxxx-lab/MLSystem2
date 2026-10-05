@@ -329,6 +329,8 @@
 }
 
 .dataset-result-identity {
+  color: inherit;
+  text-decoration: none;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -381,7 +383,13 @@
   font: 600 13px/20px var(--grovika-font-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  border-radius: 5px;
+  padding: 2px 5px;
+  text-decoration: none;
 }
+
+.test-f1-link { cursor: pointer; border: 1px solid transparent; text-decoration: none; }
+.test-f1-link:hover, .test-f1-link:focus-visible { border-color: currentColor; text-decoration: underline; }
 
 .result-card-f1.current {
   color: var(--ok);

@@ -26,14 +26,51 @@ from mlsystem2.training_ui_api.contracts import (
     ResultClassListResponse,
     ResultChangesResponse,
     TrainingResultInfo,
+    TestF1ViewInfo,
 )
 
 from .common import RouteContext
 from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, pseudo_markup_raster, pseudo_markup_view
 from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
+from mlsystem2.training_ui_api._test_f1_viewer import (
+    prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
+)
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get("/api/v1/results/training/{result_id}/test-f1/view", response_model=TestF1ViewInfo)
+    def get_test_f1_view(result_id: uuid.UUID, db: Session = Depends(ctx.get_db),
+                         _: str = Depends(ctx.authenticated)) -> TestF1ViewInfo:
+        return test_f1_view(db, ctx.config, result_id)
+
+    @app.post("/api/v1/results/training/{result_id}/test-f1/view", response_model=TestF1ViewInfo)
+    def post_test_f1_view(result_id: uuid.UUID, db: Session = Depends(ctx.get_db),
+                          _: str = Depends(ctx.authenticated)) -> TestF1ViewInfo:
+        return prepare_test_f1_view(db, ctx.config, result_id)
+
+    @app.get("/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}")
+    def get_test_f1_layers(result_id: uuid.UUID, scene_id: str, class_id: int | None = None,
+                           db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> JSONResponse:
+        return JSONResponse(test_f1_scene_layers(db, ctx.config, result_id, scene_id, class_id),
+                            headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/v1/results/training/{result_id}/test-f1/raster/{scene_id}")
+    def get_test_f1_raster(result_id: uuid.UUID, scene_id: str, v: str | None = None,
+                           range_header: str | None = Header(default=None, alias="Range"),
+                           db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> StreamingResponse:
+        return raster_response(test_f1_raster(db, ctx.config, result_id, scene_id), range_header, v)
+
+    @app.get("/api/v1/results/training/{result_id}/test-f1/footprint/{scene_id}")
+    def get_test_f1_footprint(result_id: uuid.UUID, scene_id: str, v: str | None = None,
+                              db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> JSONResponse:
+        path = test_f1_raster(db, ctx.config, result_id, scene_id)
+        revision = raster_revision(path)
+        if v is not None and v != revision:
+            raise HTTPException(412, "Снимок изменился. Откройте просмотр заново.")
+        return JSONResponse(pseudo_markup_footprint(path), headers={
+            "ETag": f'"{revision}"', "Cache-Control": "private, no-store",
+        })
+
     @app.get("/api/v1/results/pseudo-markup/{result_id}/view", response_model=PseudoMarkupViewInfo)
     def get_pseudo_markup_view(
         result_id: uuid.UUID,

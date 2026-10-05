@@ -322,6 +322,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     class_pixel_counts: dict[int, dict[str, int]] = {}
     class_object_counts: dict[int, dict[str, int]] = {}
     reports: list[dict[str, Any]] = []
+    view_scenes: list[dict[str, Any]] = []
     torch = None
     loaded = None
     external_loaded = None
@@ -644,6 +645,13 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     "elapsed_sec": round(time.time() - tile_started, 3),
                 }
             )
+            if config.get("save_test_f1_view"):
+                from ._test_f1_artifacts import save_test_f1_scene
+
+                view_scenes.append(save_test_f1_scene(
+                    Path(config["test_f1_view_root"]), config, tile,
+                    ground_truth_labels, prediction, reports[-1],
+                ))
             _write_test_f1_progress(
                 progress_path,
                 current=number,
@@ -704,6 +712,12 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             "aggregation_label": "Среднее F1 по основным выборкам классов",
             "test_samples": list(config.get("test_samples") or []),
         }
+    if view_scenes:
+        from ._test_f1_artifacts import save_test_f1_manifest
+
+        save_test_f1_manifest(
+            Path(config["test_f1_view_root"]), str(config["training_result_id"]), view_scenes,
+        )
     return {
         "status": "ok" if reports else "error",
         "operation": "test_sample_f1",
@@ -726,6 +740,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         "preserve_boundary_components": True,
         "task": str(config.get("task") or "binary"),
         "class_schema": list(config.get("object_types") or []),
+        **({"view_scenes": [scene["id"] for scene in view_scenes]} if view_scenes else {}),
         **({"metrics": structured_metrics} if structured_metrics is not None else {}),
         "tiles": reports,
         "elapsed_sec": round(time.time() - started, 3),

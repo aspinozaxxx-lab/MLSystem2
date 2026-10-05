@@ -3880,6 +3880,7 @@ def queue_training_result_test_f1(
     *,
     source: JobSource | None = None,
     managed_class_keys: set[str] | None = None,
+    force: bool = False,
 ) -> bool:
     """Создаёт задание F1 для одной сети, если её оценка неактуальна."""
 
@@ -3943,7 +3944,7 @@ def queue_training_result_test_f1(
         template,
         config_hash,
     ):
-        if metric.status == "current":
+        if metric.status == "current" and not force:
             return False
         if metric.status in {"queued", "running"} and _metric_job_is_active(session, metric):
             return False
