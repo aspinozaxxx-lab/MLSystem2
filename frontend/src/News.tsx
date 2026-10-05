@@ -1,4 +1,5 @@
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Sparkles, Wrench } from "lucide-react";
+import { useState } from "react";
 
 type NewsImage = { src: string; alt: string; caption?: string };
 type NewsArticle = {
@@ -13,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "news-category-filters",
+  date: "2026-10-05",
+  title: "Фильтры новостей",
+  updates: [
+    "В новостях появились плашки «Фичи» для больших статей и «Исправления» для коротких обновлений: по умолчанию включены фичи, категории можно включать и выключать независимо.",
+  ],
+}, {
   slug: "dataset-draft-numeric-properties",
   date: "2026-10-05",
   title: "Сохранение и загрузка разметки",
@@ -308,9 +316,24 @@ function articleDate(value: string): string {
 }
 
 export function NewsSection() {
+  const [showFeatures, setShowFeatures] = useState(true);
+  const [showUpdates, setShowUpdates] = useState(false);
+  const visibleArticles = newsArticles.filter((article) => "updates" in article ? showUpdates : showFeatures);
   return <section className="panel news-section" aria-labelledby="news-heading">
-    <div className="panel-header"><div><h2 id="news-heading">Новости</h2><p>Что появилось в Гровике и как этим пользоваться</p></div></div>
-    <div className="news-list">{newsArticles.map((article) => "updates" in article ? <article className="news-updates" key={article.slug}>
+    <div className="panel-header">
+      <div><h2 id="news-heading">Новости</h2><p>Что появилось в Гровике и как этим пользоваться</p></div>
+      <div className="news-filters" role="group" aria-label="Категории новостей">
+        <button className="news-filter" type="button" aria-pressed={showFeatures}
+          title="Большие новости о новых возможностях" onClick={() => setShowFeatures((value) => !value)}>
+          <Sparkles size={15} /> Фичи
+        </button>
+        <button className="news-filter" type="button" aria-pressed={showUpdates}
+          title="Короткие доработки и исправления" onClick={() => setShowUpdates((value) => !value)}>
+          <Wrench size={15} /> Исправления
+        </button>
+      </div>
+    </div>
+    <div className="news-list">{visibleArticles.map((article) => "updates" in article ? <article className="news-updates" key={article.slug}>
       <time dateTime={article.date}>{articleDate(article.date)}</time>
       <h3><a href={`#/news/${article.slug}`}>{article.title}</a></h3>
       <ul>{article.updates.map((text) => <li key={text}>{text}</li>)}</ul>
@@ -322,6 +345,7 @@ export function NewsSection() {
       </div>
       {article.image ? <img src={article.image.src} alt="" loading="lazy" /> : null}
     </a>)}</div>
+    {!visibleArticles.length ? <p className="muted" role="status">Включите «Фичи» или «Исправления», чтобы увидеть новости.</p> : null}
   </section>;
 }
 

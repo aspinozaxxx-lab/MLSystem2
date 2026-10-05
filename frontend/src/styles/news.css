@@ -1,3 +1,8 @@
+.news-section > .panel-header { flex-wrap: wrap; align-items: center; }
+.news-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.news-filter { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 13px; font-weight: 600; }
+.news-filter:hover { border-color: var(--accent-strong); color: var(--text); }
+.news-filter[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--grovika-white); }
 .news-list { display: grid; gap: 16px; }
 .news-updates { padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--grovika-radius-panel); }
 .news-updates time { color: var(--muted); font-size: 12px; }
