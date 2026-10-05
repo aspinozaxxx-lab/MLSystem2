@@ -65,6 +65,8 @@ html { -webkit-text-size-adjust: 100%; }
   .inline-form input { flex-basis: 160px; }
   .primary, .secondary, .danger, .ghost, .compact-action { min-height: 38px; padding: 6px 11px; font-size: 12px; }
   .icon-button { width: 38px; min-width: 38px; padding: 0; }
+  .home-service-link { width: 38px; min-width: 38px; min-height: 38px; padding: 0; }
+  .home-service-label { display: none; }
   .badge { min-height: 23px; padding: 2px 7px; font-size: 11px; }
   .info-box, .error-box { padding: 10px; font-size: 12px; overflow-wrap: anywhere; }
   .empty-state { padding: 20px 12px; }

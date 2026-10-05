@@ -547,13 +547,15 @@ function HomePage({ bootstrap }: RoutedPageProps) {
     <>
       <div className="home-heading">
         <PageHeader title="Рабочая панель" subtitle="Обучение, очереди и результаты MLSystem2" actions={<>
-          <a className="secondary icon-button" href={links.grafana?.url} target="_blank" rel="noreferrer"
-            aria-label="Графана" title="Графана — мониторинг сервера" aria-disabled={!links.grafana?.url}>
-            <BarChart3 size={19} />
+          <a className="secondary home-service-link" href={links.grafana?.url} target="_blank" rel="noreferrer"
+            aria-label="Grafana" title="Grafana — мониторинг сервера" aria-disabled={!links.grafana?.url}>
+            <BarChart3 size={20} />
+            <span className="home-service-label">Grafana</span>
           </a>
-          <a className="secondary icon-button" href={links.images?.url} target="_blank" rel="noreferrer"
+          <a className="secondary home-service-link" href={links.images?.url} target="_blank" rel="noreferrer"
             aria-label="Снимки" title="Снимки — файлы на сервере" aria-disabled={!links.images?.url}>
-            <Images size={19} />
+            <Images size={20} />
+            <span className="home-service-label">Снимки</span>
           </a>
         </>} />
       </div>

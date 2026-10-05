@@ -2231,3 +2231,5 @@
 .home-heading .page-header { flex-direction: row; align-items: flex-start; }
 .home-heading .page-title { min-width: 0; flex: 1; }
 .home-heading .page-header > .button-row { width: auto; flex: none; margin-left: auto; justify-content: flex-end; }
+.home-service-link { min-width: 140px; min-height: 44px; padding: 0 20px; font-size: 14px; white-space: nowrap; }
+.home-service-link svg { flex-shrink: 0; }
