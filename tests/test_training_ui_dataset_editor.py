@@ -44,9 +44,10 @@ from mlsystem2.training_ui_api._models import (
 from mlsystem2.training_ui_api._dataset_editor import (
     _footprint_covers_geometry,
     _unique_basename_reference_matches,
+    _validate_editor_geojson,
     _validate_preserved_properties,
 )
-from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
+from mlsystem2.training_ui_api.contracts import DatasetInfo, TrainingUIAPIError
 from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
 from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
@@ -2362,6 +2363,56 @@ def test_import_geojson_validates_whole_batch_without_writes(editor_environment)
     assert existing.status_code == 409
     with TestClient(create_app()) as unauthenticated:
         assert unauthenticated.post(f"{base}/drafts/import", json={"scenes": [{"annotation_name": "batch_SCN02.geojson", "geojson": payload}]}).status_code == 401
+
+
+@pytest.mark.parametrize("invalid_role", ["negative", "hadr-negative", ["negative"]])
+def test_import_geojson_role_error_explains_values_without_changing_batch(
+    editor_environment: _EditorEnvironment,
+    invalid_role: object,
+) -> None:
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    first = _feature(1, "positive", [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]])
+    incorrect = deepcopy(first)
+    incorrect["id"] = 2
+    incorrect["properties"]["_mlsystem2_role"] = invalid_role
+    head = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    response = env.client.post(f"{base}/drafts/import", json={"scenes": [
+        {"annotation_name": "batch_SCN02.geojson", "geojson": _annotation_payload([first])},
+        {"annotation_name": "batch_SCN03.geojson", "geojson": _annotation_payload([first, incorrect])},
+    ]})
+    assert response.status_code == 400, response.text
+    message = response.json()["detail"]
+    for text in ("batch_SCN03.geojson", "объекта 2", "_mlsystem2_role", "Реки", "test",
+                 json.dumps(invalid_role, ensure_ascii=False), "positive", "hard_negative",
+                 "annotation_zone", '"_mlsystem2_role": "hard_negative"'):
+        assert text in message
+    with create_session_factory(get_config())() as session:
+        assert not session.scalars(select(DatasetEditorDraftRow)).all()
+    assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
+    assert not (env.editor_dataset / "batch_SCN02.geojson").exists()
+
+
+@pytest.mark.parametrize("role", ["positive", "hard_negative", "annotation_zone"])
+def test_editor_type_error_lists_current_dataset_types(tmp_path: Path, role: str) -> None:
+    image = tmp_path / "image.tif"
+    _write_raster(image, value=1)
+    dataset = DatasetInfo(key="types", name="Реки и озёра / test", task="multiclass", managed=True,
+                          object_types=[
+                              {"id": 1, "slug": "water", "name": "Реки", "color": "#3366CC"},
+                              {"id": 2, "slug": "lake", "name": "Озёра", "color": "#6699CC"},
+                          ])
+    payload = _annotation_payload([
+        _feature(1, role, [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]],
+                 properties={"_mlsystem2_class": "negative"}),
+    ])
+    payload.update({"_mlsystem2_schema_version": 1, "_mlsystem2_task": "multiclass",
+                    "_mlsystem2_classes": [item.model_dump(mode="json") for item in dataset.object_types]})
+    with pytest.raises(TrainingUIAPIError) as error:
+        _validate_editor_geojson(payload, image, dataset)
+    for text in ("объекта 1", "_mlsystem2_class", '"negative"', dataset.name,
+                 "water (Реки)", "lake (Озёра)"):
+        assert text in str(error.value)
 
 
 def test_import_geojson_discard_delete_and_publish_conflict(editor_environment):

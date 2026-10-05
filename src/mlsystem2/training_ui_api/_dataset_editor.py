@@ -3466,6 +3466,7 @@ def _validate_editor_geojson(
             f"({raster_crs.to_string()})"
         )
     known_slugs = {item.slug for item in dataset.object_types}
+    allowed_classes = ", ".join(f"{item.slug} ({item.name})" for item in dataset.object_types)
     if dataset.task == "multiclass":
         if payload.get("_mlsystem2_schema_version") != 1:
             raise TrainingUIAPIError("Некорректная версия схемы multiclass-разметки")
@@ -3474,26 +3475,42 @@ def _validate_editor_geojson(
         actual_classes = payload.get("_mlsystem2_classes")
         expected_classes = [item.model_dump(mode="json") for item in dataset.object_types]
         if actual_classes != expected_classes:
-            raise TrainingUIAPIError("Схема классов GeoJSON не совпадает с датасетом")
+            raise TrainingUIAPIError(
+                f"Схема классов GeoJSON не совпадает с датасетом «{dataset.name}». "
+                f"Допустимые типы объектов в поле {_CLASS_PROPERTY}: {allowed_classes}. "
+                "Используйте схему из GeoJSON этого датасета."
+            )
     for index, feature in enumerate(payload["features"], start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
         properties = feature.get("properties")
-        if not isinstance(properties, dict) or properties.get(_ROLE_PROPERTY) not in _ROLES:
+        if not isinstance(properties, dict):
             raise TrainingUIAPIError(
-                f"У объекта {index} должна быть роль positive, hard_negative или annotation_zone"
+                f"У объекта {index} поле properties должно быть объектом JSON с полем {_ROLE_PROPERTY}"
+            )
+        role_value = properties.get(_ROLE_PROPERTY)
+        if not isinstance(role_value, str) or role_value not in _ROLES:
+            raise TrainingUIAPIError(
+                f"У объекта {index} недопустимое значение {json.dumps(role_value, ensure_ascii=False)} "
+                f"поля {_ROLE_PROPERTY}. В датасете «{dataset.name}» допустимы: "
+                "positive (объекты), hard_negative (отрицательные примеры), "
+                "annotation_zone (размеченные зоны). "
+                'Для отрицательного примера укажите "_mlsystem2_role": "hard_negative".'
             )
         role = str(properties[_ROLE_PROPERTY])
         class_slug = properties.get(_CLASS_PROPERTY)
         if dataset.task == "multiclass" and role == "positive":
-            if class_slug not in known_slugs:
+            if not isinstance(class_slug, str) or class_slug not in known_slugs:
                 raise TrainingUIAPIError(
-                    f"У positive-объекта {index} должен быть один из классов датасета"
+                    f"У объекта {index} недопустимое значение {json.dumps(class_slug, ensure_ascii=False)} "
+                    f"поля {_CLASS_PROPERTY}. Типы объектов датасета «{dataset.name}»: {allowed_classes}."
                 )
         elif dataset.task == "multiclass" and role in {"hard_negative", "annotation_zone"} and dataset.managed:
-            if class_slug is not None and class_slug not in known_slugs:
+            if class_slug is not None and (not isinstance(class_slug, str) or class_slug not in known_slugs):
                 raise TrainingUIAPIError(
-                    f"У hard negative объекта {index} указан неизвестный исходный класс"
+                    f"У объекта {index} недопустимое значение {json.dumps(class_slug, ensure_ascii=False)} "
+                    f"поля {_CLASS_PROPERTY}. Типы объектов датасета «{dataset.name}»: {allowed_classes}. "
+                    "Для всех исходных классов не задавайте это поле."
                 )
         elif _CLASS_PROPERTY in properties:
             raise TrainingUIAPIError(

@@ -46,7 +46,7 @@ import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
-import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
 import { NEW_SCENE_REVISION, readAnnotationFiles } from "./utils/datasetEditorImport";
@@ -313,6 +313,7 @@ export function DatasetEditorPage({
   const [importOpen, setImportOpen] = useState(false);
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importMessage, setImportMessage] = useState("");
+  const [importError, setImportError] = useState("");
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -599,6 +600,7 @@ export function DatasetEditorPage({
     setImportOpen(false);
     setImportFiles([]);
     setImportMessage("");
+    setImportError("");
     setPublication(null);
     setBandMode("RGB");
     bandModeRef.current = "RGB";
@@ -1904,22 +1906,26 @@ export function DatasetEditorPage({
     const key = datasetKey;
     if (!key || !importFiles.length) return;
     setBusy(true);
+    setImportError("");
     try {
-      const result = await run(async () => {
-        const uploaded = await readAnnotationFiles(importFiles);
-        if (datasetKeyRef.current !== key) return null;
-        const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
-          `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/import`,
-          { method: "POST", body: { scenes: uploaded } },
-        );
-        return { response, first: uploaded[0].annotation_name, count: uploaded.length };
-      });
-      if (!result || datasetKeyRef.current !== key) return;
+      const uploaded = await readAnnotationFiles(importFiles);
+      if (datasetKeyRef.current !== key) return;
+      const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
+        `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/import`,
+        { method: "POST", body: { scenes: uploaded } },
+      );
+      if (datasetKeyRef.current !== key) return;
       setImportOpen(false);
       setImportFiles([]);
-      setImportMessage(`Загружено файлов: ${result.count}. Снимки и разметка сохранены в ваших черновиках. Проверьте их и нажмите «Опубликовать».`);
-      const preferred = result.response.scenes.find((scene) => scene.annotation_name.toLowerCase() === result.first.toLowerCase())?.annotation_name;
+      setImportMessage(`Загружено файлов: ${uploaded.length}. Снимки и разметка сохранены в ваших черновиках. Проверьте их и нажмите «Опубликовать».`);
+      const preferred = response.scenes.find((scene) => scene.annotation_name.toLowerCase() === uploaded[0].annotation_name.toLowerCase())?.annotation_name;
       await loadScenes(key, preferred);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        await run(async () => { throw error; });
+      } else if (datasetKeyRef.current === key) {
+        setImportError(error instanceof Error ? error.message : "Не удалось загрузить разметку.");
+      }
     } finally { setBusy(false); }
   };
 
@@ -2012,7 +2018,7 @@ export function DatasetEditorPage({
           disabled={busy || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
           aria-label="Загрузить GeoJSON"
           title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
-          onClick={() => { setImportFiles([]); setImportOpen(true); }}
+          onClick={() => { setImportFiles([]); setImportError(""); setImportOpen(true); }}
         ><CloudUpload size={16} /><span className="compact-control-label">Загрузить GeoJSON</span></button>
         <button
           className="secondary"
@@ -2646,10 +2652,17 @@ export function DatasetEditorPage({
             <div className="modal-body">
               <p>Выберите один или несколько файлов разметки. TIFF уже должны находиться на сервере, а снимков ещё не должно быть в этом датасете.</p>
               <p>Имя файла: <code>папка_имя-снимка.geojson</code>. Например, для <code>batch/SCN02.tif</code> — <code>batch_SCN02.geojson</code>.</p>
-              <p>Нужен FeatureCollection с Polygon/MultiPolygon и явно указанным CRS EPSG:3857. Роли: <code>positive</code>, <code>hard_negative</code>, <code>annotation_zone</code>. Для многоклассового датасета схема и классы должны совпадать с его GeoJSON.</p>
+              <p>Нужен FeatureCollection с Polygon/MultiPolygon и явно указанным CRS EPSG:3857.</p>
+              <p>Допустимые роли в поле <code>_mlsystem2_role</code>: <code>positive</code> — объекты, <code>hard_negative</code> — отрицательные примеры, <code>annotation_zone</code> — размеченные зоны.</p>
+              {selectedDataset?.task === "multiclass" ? (
+                <p>Типы объектов этого датасета в поле <code>_mlsystem2_class</code>: {selectedDataset.object_types.map((item, index) => (
+                  <span key={item.slug}>{index ? ", " : ""}<code>{item.slug}</code> — {item.name}</span>
+                ))}. Схема классов должна совпадать с GeoJSON этого датасета.</p>
+              ) : null}
+              {importError ? <p className="error-box" role="alert" style={{ overflowWrap: "anywhere" }}>{importError}</p> : null}
               <label className="field"><span>Файлы разметки · до 100 файлов, всего до 50 МиБ</span>
                 <input type="file" accept=".geojson" multiple disabled={busy}
-                  onChange={(event) => setImportFiles(Array.from(event.target.files || []))} />
+                  onChange={(event) => { setImportFiles(Array.from(event.target.files || [])); setImportError(""); }} />
               </label>
               {importFiles.length ? <p>Выбрано файлов: {importFiles.length}</p> : null}
               <p className="muted">Весь пакет проходит проверку перед сохранением. После загрузки снимки появятся только в ваших черновиках — для добавления в датасет нужна отдельная публикация.</p>
