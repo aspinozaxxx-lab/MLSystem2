@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from contextlib import suppress
+from functools import partial
+from threading import Event
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._service import (
@@ -38,25 +43,48 @@ from mlsystem2.training_ui_api.contracts import (
 
 from .common import RouteContext
 from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, pseudo_markup_raster, pseudo_markup_view
-from mlsystem2.training_ui_api._pseudo_comparison import pseudo_comparison_counts, pseudo_comparison_layers
+from mlsystem2.training_ui_api._pseudo_comparison import _ComparisonCancelled, pseudo_comparison_counts, pseudo_comparison_layers
 from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
 from mlsystem2.training_ui_api._test_f1_viewer import (
     prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
 )
 
 
+async def _comparison_read(http_request, operation):
+    cancel = Event()
+
+    async def disconnected():
+        # FastAPI уже прочитал JSON. Ждём ASGI disconnect напрямую: неблокирующая
+        # is_disconnected() теряет уведомление внутри BaseHTTPMiddleware.
+        while True:
+            if (await http_request.receive())["type"] == "http.disconnect":
+                cancel.set()
+                return
+
+    watcher = asyncio.create_task(disconnected())
+    try:
+        return await run_in_threadpool(operation, cancel=cancel)
+    except _ComparisonCancelled:
+        raise HTTPException(499, "Устаревший запрос сравнения отменён.") from None
+    finally:
+        cancel.set()
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
+
+
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
     @app.post("/api/v1/results/pseudo-markup/compare/counts", response_model=PseudoMarkupComparisonCounts)
-    def post_pseudo_comparison_counts(request: PseudoMarkupComparisonRequest,
+    async def post_pseudo_comparison_counts(request: PseudoMarkupComparisonRequest, http_request: Request,
                                      db: Session = Depends(ctx.get_db),
                                      _: str = Depends(ctx.authenticated)) -> PseudoMarkupComparisonCounts:
-        return pseudo_comparison_counts(db, ctx.config, request)
+        return await _comparison_read(http_request, partial(pseudo_comparison_counts, db, ctx.config, request))
 
     @app.post("/api/v1/results/pseudo-markup/compare/{scene_id}/layers", response_model=PseudoMarkupComparisonLayers)
-    def post_pseudo_comparison_layers(scene_id: str, request: PseudoMarkupComparisonRequest,
+    async def post_pseudo_comparison_layers(scene_id: str, request: PseudoMarkupComparisonRequest, http_request: Request,
                                      db: Session = Depends(ctx.get_db),
                                      _: str = Depends(ctx.authenticated)) -> PseudoMarkupComparisonLayers:
-        return pseudo_comparison_layers(db, ctx.config, scene_id, request)
+        return await _comparison_read(http_request, partial(pseudo_comparison_layers, db, ctx.config, scene_id, request))
 
     @app.get("/api/v1/results/training/{result_id}/continue", response_model=TrainingContinuationOptions)
     def get_training_continuation(

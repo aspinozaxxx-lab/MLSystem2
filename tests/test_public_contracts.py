@@ -174,9 +174,11 @@ def test_pseudo_markup_comparison_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.contracts import (
         PseudoMarkupComparisonRequest, PseudoMarkupPixelComparison,
         PseudoMarkupComparisonCounts, PseudoMarkupComparisonLayers,
+        PseudoMarkupComparisonViewport,
     )
 
-    assert set(PseudoMarkupComparisonRequest.model_fields) == {"result_ids", "scene_revisions"}
+    assert set(PseudoMarkupComparisonRequest.model_fields) == {"result_ids", "scene_revisions", "scene_id", "viewport"}
+    assert set(PseudoMarkupComparisonViewport.model_fields) == {"bounds", "width", "height"}
     assert set(PseudoMarkupPixelComparison.model_fields) == {"intersection", "only_first", "only_second"}
     assert set(PseudoMarkupComparisonCounts.model_fields) == {"result_ids", "scenes", "total", "warnings"}
     assert set(PseudoMarkupComparisonLayers.model_fields) == {"scene_id", "available_result_ids", "geojson", "counts"}

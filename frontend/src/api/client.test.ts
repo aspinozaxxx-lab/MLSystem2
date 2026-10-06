@@ -5,6 +5,14 @@ import { apiJson, downloadFilename } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ошибки API", () => {
+  it("передаёт отмену запроса серверу без замены AbortError на ошибку API", async () => {
+    const controller = new AbortController();
+    const aborted = new DOMException("Запрос отменён", "AbortError");
+    const fetcher = vi.fn().mockRejectedValue(aborted);
+    vi.stubGlobal("fetch", fetcher);
+    await expect(apiJson("/results/pseudo-markup/compare/counts", { signal: controller.signal })).rejects.toBe(aborted);
+    expect(fetcher.mock.calls[0][1].signal).toBe(controller.signal);
+  });
   it("передаёт код предложения обрезки вместе с сообщением сервера", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: "Разметка выходит за footprint.", code: "annotation_outside_footprint",

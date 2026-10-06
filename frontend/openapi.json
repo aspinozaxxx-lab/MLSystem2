@@ -10013,6 +10013,29 @@
             },
             "type": "object",
             "title": "Scene Revisions"
+          },
+          "scene_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene Id"
+          },
+          "viewport": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PseudoMarkupComparisonViewport"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -10022,6 +10045,51 @@
         ],
         "title": "PseudoMarkupComparisonRequest",
         "description": "Активные сохранённые разметки и ревизии подложки."
+      },
+      "PseudoMarkupComparisonViewport": {
+        "properties": {
+          "bounds": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bounds"
+          },
+          "width": {
+            "type": "integer",
+            "maximum": 2048.0,
+            "minimum": 1.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "maximum": 2048.0,
+            "minimum": 1.0,
+            "title": "Height"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bounds",
+          "width",
+          "height"
+        ],
+        "title": "PseudoMarkupComparisonViewport",
+        "description": "Видимая область EPSG:3857 и размер карты в экранных пикселях."
       },
       "PseudoMarkupPixelComparison": {
         "properties": {

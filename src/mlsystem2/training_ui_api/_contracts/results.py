@@ -75,6 +75,22 @@ class PseudoMarkupViewInfo(BaseModel):
     warnings: list[str]
 
 
+class PseudoMarkupComparisonViewport(BaseModel):
+    """Видимая область EPSG:3857 и размер карты в экранных пикселях."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    bounds: tuple[float, float, float, float]
+    width: int = Field(ge=1, le=2048)
+    height: int = Field(ge=1, le=2048)
+
+    @model_validator(mode="after")
+    def ordered_bounds(self):
+        if self.bounds[0] >= self.bounds[2] or self.bounds[1] >= self.bounds[3]:
+            raise ValueError("Границы видимой области должны задавать непустой прямоугольник.")
+        return self
+
+
 class PseudoMarkupComparisonRequest(BaseModel):
     """Активные сохранённые разметки и ревизии подложки."""
 
@@ -82,6 +98,8 @@ class PseudoMarkupComparisonRequest(BaseModel):
 
     result_ids: list[UUID] = Field(min_length=1, max_length=12)
     scene_revisions: dict[str, str] = Field(default_factory=dict)
+    scene_id: str | None = Field(default=None, min_length=1, max_length=128)
+    viewport: PseudoMarkupComparisonViewport | None = None
 
     @model_validator(mode="after")
     def unique_results(self):
@@ -380,6 +398,7 @@ __all__ = [
     "PseudoMarkupSceneInfo",
     "PseudoMarkupViewInfo",
     "PseudoMarkupComparisonRequest",
+    "PseudoMarkupComparisonViewport",
     "PseudoMarkupPixelComparison",
     "PseudoMarkupComparisonCounts",
     "PseudoMarkupComparisonLayers",

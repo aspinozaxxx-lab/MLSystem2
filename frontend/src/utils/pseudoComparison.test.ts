@@ -1,8 +1,36 @@
 import { describe, expect, it } from "vitest";
-import type { PseudoMarkupViewInfo } from "../api/types";
-import { comparisonAppearance, comparisonScenes } from "./pseudoComparison";
+import type { PseudoMarkupComparisonCounts, PseudoMarkupPixelComparison, PseudoMarkupViewInfo } from "../api/types";
+import { comparisonAppearance, comparisonScenes, comparisonTotal, loadComparisonSceneCounts } from "./pseudoComparison";
 
 describe("сравнение псевдоразметок", () => {
+  it("считает выбранный снимок первым, отдаёт готовые значения сразу и сохраняет их при переключении", async () => {
+    const completed = new Map<string, PseudoMarkupPixelComparison>();
+    const calls: string[] = []; const delivered: number[] = [];
+    const value = { intersection: 2, only_first: 3, only_second: 4 };
+    const load = async (id: string) => {
+      calls.push(id);
+      return { result_ids: ["1", "2"], scenes: { [id]: value }, total: value, warnings: [] } as PseudoMarkupComparisonCounts;
+    };
+    await loadComparisonSceneCounts(["первый", "второй", "третий"], "третий", completed, new AbortController().signal, load,
+      () => delivered.push(completed.size));
+    expect(calls).toEqual(["третий", "первый", "второй"]);
+    expect(delivered).toEqual([1, 2, 3]);
+    await loadComparisonSceneCounts(["первый", "второй", "третий"], "второй", completed, new AbortController().signal, load, () => {});
+    expect(calls).toHaveLength(3);
+    expect(comparisonTotal(Object.fromEntries(completed))).toEqual({ intersection: 6, only_first: 9, only_second: 12 });
+  });
+  it("не продолжает старую очередь и не принимает её ответ после отмены", async () => {
+    const controller = new AbortController(); const completed = new Map();
+    const calls: string[] = []; let delivered = false;
+    const load = async (id: string, signal: AbortSignal) => {
+      calls.push(id); expect(signal).toBe(controller.signal); controller.abort();
+      return { scenes: { [id]: { intersection: 1, only_first: 0, only_second: 0 } } } as PseudoMarkupComparisonCounts;
+    };
+    await expect(loadComparisonSceneCounts(["первый", "второй"], "второй", completed, controller.signal, load,
+      () => { delivered = true; })).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual(["второй"]);
+    expect(completed.size).toBe(0); expect(delivered).toBe(false);
+  });
   it("объединяет один TIFF из разных датасетов, сохраняя разные снимки с одинаковыми именами", () => {
     const view = (id: string, scenes: { id: string; name: string }[]) => ({ id, scenes } as PseudoMarkupViewInfo);
     const scenes = comparisonScenes([view("реки", [{ id: "общий", name: "снимок.tif" }, { id: "копия", name: "снимок.tif" }]),

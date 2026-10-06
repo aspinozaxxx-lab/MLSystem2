@@ -1,9 +1,32 @@
-import type { PseudoMarkupViewInfo } from "../api/types";
+import type { PseudoMarkupComparisonCounts, PseudoMarkupPixelComparison, PseudoMarkupViewInfo } from "../api/types";
 import type { PseudoProperties } from "./pseudoViewer";
 import { TEST_F1_LAYERS } from "./testF1Viewer";
 
 export const COMPARISON_COLORS = [TEST_F1_LAYERS.fp.color, TEST_F1_LAYERS.fn.color, "#00d9ff", "#c084fc", "#ff9100", "#ff40c8",
   "#b2ff59", "#448aff", "#ffffff", "#00e5b0", "#ff80ab", "#b388ff"];
+
+// Один запрос за раз; новая выбранная сцена получает новую очередь после отмены старой.
+// Завершённые сцены сохраняются и не считаются повторно при переключении.
+export async function loadComparisonSceneCounts(sceneIds: string[], selected: string,
+  completed: Map<string, PseudoMarkupPixelComparison>, signal: AbortSignal,
+  load: (sceneId: string, signal: AbortSignal) => Promise<PseudoMarkupComparisonCounts>,
+  onScene: (data: PseudoMarkupComparisonCounts) => void) {
+  const ordered = [selected, ...sceneIds.filter((id) => id !== selected)].filter((id) => sceneIds.includes(id));
+  for (const id of ordered) {
+    signal.throwIfAborted();
+    if (completed.has(id)) continue;
+    const data = await load(id, signal);
+    signal.throwIfAborted();
+    if (data.scenes[id]) completed.set(id, data.scenes[id]);
+    onScene(data);
+  }
+}
+
+export function comparisonTotal(scenes: Record<string, PseudoMarkupPixelComparison>): PseudoMarkupPixelComparison {
+  return Object.values(scenes).reduce((sum, scene) => ({ intersection: sum.intersection + scene.intersection,
+    only_first: sum.only_first + scene.only_first, only_second: sum.only_second + scene.only_second }),
+  { intersection: 0, only_first: 0, only_second: 0 });
+}
 
 export function comparisonScenes(views: PseudoMarkupViewInfo[]) {
   const scenes = new Map<string, PseudoMarkupViewInfo["scenes"][number] & { resultIds: string[] }>();

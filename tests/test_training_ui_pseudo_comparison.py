@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import uuid
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -13,6 +13,7 @@ from rasterio.enums import ColorInterp
 from rasterio.features import rasterize, shapes
 from rasterio.transform import from_origin
 from rasterio.warp import transform_geom
+from rasterio.warp import transform_bounds
 from sqlalchemy import select
 
 from mlsystem2.training_ui_api.api import create_app
@@ -200,3 +201,146 @@ def test_projected_image_edge_keeps_pixels_outside_straight_geographic_outline(c
     layers = env.client.post(f"/api/v1/results/pseudo-markup/compare/{_scene_id(image)}/layers", json={"result_ids": ids}).json()
     assert layers["counts"] == expected
     assert any(feature["properties"]["comparison_kind"] == "intersection" for feature in layers["geojson"]["features"])
+
+
+def test_incremental_counts_only_read_requested_shared_scene(comparison_environment, monkeypatch):
+    from mlsystem2.training_ui_api import _pseudo_comparison as comparison
+    env = comparison_environment; pair = _pair(env)
+    scene_id = _scene_id(pair.image)
+    original = comparison._count_scene
+    read = []
+
+    def counted(key, files, cancel=None):
+        read.append(key[0])
+        return original(key, files, cancel)
+
+    monkeypatch.setattr(comparison, "_count_scene", counted)
+    response = env.client.post("/api/v1/results/pseudo-markup/compare/counts", json={"result_ids": pair.ids, "scene_id": scene_id})
+    assert response.status_code == 200
+    assert read == [str(pair.image)]
+    assert response.json()["scenes"] == {scene_id: {"intersection": 3, "only_first": 12, "only_second": 12}}
+    assert response.json()["total"] == response.json()["scenes"][scene_id]
+    assert env.client.post("/api/v1/results/pseudo-markup/compare/counts", json={"result_ids": pair.ids, "scene_id": _scene_id(pair.private)}).status_code == 400
+    assert env.client.post("/api/v1/results/pseudo-markup/compare/counts", json={"result_ids": pair.ids, "scene_id": scene_id, "scene_revisions": {scene_id: "stale"}}).status_code == 412
+
+
+def _viewport(image, width, height):
+    with rasterio.open(image) as source:
+        return {"bounds": transform_bounds(source.crs, "EPSG:3857", *source.bounds, densify_pts=21),
+                "width": width, "height": height}
+
+
+def test_viewport_preview_does_not_wait_for_native_counts_and_refines_to_exact_pixels(comparison_environment, monkeypatch):
+    from mlsystem2.training_ui_api import _pseudo_comparison as comparison
+    env = comparison_environment; pair = _pair(env)
+    def no_full_scene(*args, **kwargs):
+        raise AssertionError("Показ карты не должен считать или векторизовать весь снимок.")
+    monkeypatch.setattr(comparison, "_count_scene", no_full_scene)
+    monkeypatch.setattr(comparison, "_layer_scene", no_full_scene)
+    scene_id = _scene_id(pair.image)
+    body = {"result_ids": pair.ids, "viewport": _viewport(pair.image, 8, 8)}
+    url = f"/api/v1/results/pseudo-markup/compare/{scene_id}/layers"
+    response = env.client.post(url, json=body)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["counts"] is None
+    for kind, result_id, expected in [("intersection", None, pair.first & pair.second & pair.valid),
+                                      ("difference", pair.ids[0], pair.first & ~pair.second & pair.valid)]:
+        geometries = [(transform_geom("EPSG:3857", env.crs, feature["geometry"]), 1) for feature in data["geojson"]["features"]
+                      if feature["properties"]["comparison_kind"] == kind and feature["properties"]["comparison_result_id"] == result_id]
+        np.testing.assert_array_equal(rasterize(geometries, out_shape=pair.valid.shape, transform=env.transform).astype(bool), expected)
+    assert env.client.post(url, json={**body, "scene_revisions": {scene_id: "stale"}}).status_code == 412
+    env.client.cookies.clear()
+    assert env.client.post(url, json=body).status_code == 401
+
+
+def test_overview_masks_are_bounded_and_empty_viewport_is_valid(comparison_environment, monkeypatch):
+    from mlsystem2.training_ui_api import _pseudo_comparison as comparison
+    env = comparison_environment
+    valid = np.ones((1024, 1536), dtype=bool)
+    mask = valid.copy(); mask[500:] = False
+    image = _image(env, "обзор.tif", valid)
+    ids = [_result(env, [image], mask, str(index))[0] for index in range(2)]
+    original = comparison._masks
+    sizes = []
+    def sampled(source, trees, window, step=1):
+        value = original(source, trees, window, step)
+        if value is not None:
+            sizes.append((value[1][0].shape, step))
+        return value
+    monkeypatch.setattr(comparison, "_masks", sampled)
+    viewport = _viewport(image, 64, 32)
+    url = f"/api/v1/results/pseudo-markup/compare/{_scene_id(image)}/layers"
+    assert env.client.post(url, json={"result_ids": ids, "viewport": viewport}).status_code == 200
+    assert sizes and sizes[0][1] > 1
+    assert sizes[0][0][0] <= 33 and sizes[0][0][1] <= 65
+    empty = {**viewport, "bounds": [value + 1000000 for value in viewport["bounds"]]}
+    response = env.client.post(url, json={"result_ids": ids, "viewport": empty})
+    assert response.status_code == 200 and response.json()["geojson"]["features"] == []
+    assert len(sizes) == 1
+    for invalid in [{**viewport, "width": 2049}, {**viewport, "bounds": [4, 1, 3, 5]}]:
+        assert env.client.post(url, json={"result_ids": ids, "viewport": invalid}).status_code == 422
+
+
+def test_cancelled_window_count_is_not_cached_as_partial_success(comparison_environment, monkeypatch):
+    from threading import Event
+    from mlsystem2.training_ui_api import _pseudo_comparison as comparison
+    env = comparison_environment
+    mask = np.ones((5, 1030), dtype=bool)
+    image = _image(env, "отмена.tif", mask)
+    ids = [_result(env, [image], mask, str(index))[0] for index in range(2)]
+    cancel = Event(); original = comparison._masks; calls = []
+    def interrupted(*args, **kwargs):
+        calls.append(1)
+        value = original(*args, **kwargs)
+        cancel.set()
+        return value
+    monkeypatch.setattr(comparison, "_masks", interrupted)
+    stat = image.stat()
+    from mlsystem2.training_ui_api.contracts import PseudoMarkupComparisonRequest
+    with env.factory() as session:
+        entries, _ = comparison._inputs(session, env.config, PseudoMarkupComparisonRequest(result_ids=ids))
+    key = (str(image), stat.st_mtime_ns, stat.st_size)
+    with pytest.raises(comparison._ComparisonCancelled):
+        comparison._count_scene(key, tuple(item[1] for item in entries), cancel)
+    assert calls == [1]
+    monkeypatch.setattr(comparison, "_masks", original)
+    assert comparison._count_scene(key, tuple(item[1] for item in entries)) == {"intersection": 5150, "only_first": 0, "only_second": 0}
+
+
+def test_disconnect_stops_worker_inside_request_timing_middleware(comparison_environment, monkeypatch):
+    from threading import Event
+    from mlsystem2.training_ui_api._pseudo_comparison import _ComparisonCancelled
+    from mlsystem2.training_ui_api._routes import results as routes
+    started, cancelled = Event(), Event()
+    def calculation(*args, cancel):
+        started.set()
+        if cancel.wait(timeout=1):
+            cancelled.set()
+            raise _ComparisonCancelled()
+        raise AssertionError("Расчёт продолжился после закрытия соединения.")
+    monkeypatch.setattr(routes, "pseudo_comparison_counts", calculation)
+    env = comparison_environment
+    body = json.dumps({"result_ids": [str(uuid.uuid4()), str(uuid.uuid4())]}).encode()
+    cookie = "; ".join(f"{key}={value}" for key, value in env.client.cookies.items()).encode()
+    async def interrupted_request():
+        body_sent = False
+        async def receive():
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            while not started.is_set():
+                await asyncio.sleep(0.001)
+            return {"type": "http.disconnect"}
+        async def send(message):
+            pass
+        path = "/api/v1/results/pseudo-markup/compare/counts"
+        await env.client.app({"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                              "method": "POST", "scheme": "http", "path": path, "raw_path": path.encode(),
+                              "root_path": "", "query_string": b"", "server": ("testserver", 80),
+                              "client": ("127.0.0.1", 10000),
+                              "headers": [(b"host", b"testserver"), (b"content-type", b"application/json"),
+                                          (b"cookie", cookie)]}, receive, send)
+    asyncio.run(interrupted_request())
+    assert cancelled.is_set()

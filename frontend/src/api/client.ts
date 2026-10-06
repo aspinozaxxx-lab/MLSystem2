@@ -16,6 +16,7 @@ type JsonOptions = {
   method?: string;
   body?: unknown;
   authOptional?: boolean;
+  signal?: AbortSignal;
 };
 
 export async function apiJson<T>(path: string, options: JsonOptions = {}): Promise<T> {
@@ -24,6 +25,7 @@ export async function apiJson<T>(path: string, options: JsonOptions = {}): Promi
     credentials: "same-origin",
     headers: options.body === undefined ? undefined : { "Content-Type": "application/json" },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal,
   });
   if (response.status === 401 && options.authOptional) {
     return null as T;

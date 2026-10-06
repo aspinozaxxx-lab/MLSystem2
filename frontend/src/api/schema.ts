@@ -3567,6 +3567,26 @@ export interface components {
             scene_revisions?: {
                 [key: string]: string;
             };
+            /** Scene Id */
+            scene_id?: string | null;
+            viewport?: components["schemas"]["PseudoMarkupComparisonViewport"] | null;
+        };
+        /**
+         * PseudoMarkupComparisonViewport
+         * @description Видимая область EPSG:3857 и размер карты в экранных пикселях.
+         */
+        PseudoMarkupComparisonViewport: {
+            /** Bounds */
+            bounds: [
+                number,
+                number,
+                number,
+                number
+            ];
+            /** Width */
+            width: number;
+            /** Height */
+            height: number;
         };
         /** PseudoMarkupPixelComparison */
         PseudoMarkupPixelComparison: {

@@ -14,7 +14,7 @@ import GeoTIFF from "ol/source/GeoTIFF";
 import VectorSource from "ol/source/Vector";
 import { Fill, Stroke, Style } from "ol/style";
 import { apiJson } from "./api/client";
-import type { PseudoMarkupViewInfo } from "./api/types";
+import type { PseudoMarkupComparisonViewport, PseudoMarkupViewInfo } from "./api/types";
 import { formatDateTime } from "./utils/format";
 import { BAND_CHANNELS, type BandMode } from "./utils/datasetEditor";
 import { pseudoClass, pseudoClasses, pseudoRasterCacheSizes, pseudoRasterScenes, pseudoRasterStyle, pseudoViewportScenes, type PseudoProperties } from "./utils/pseudoViewer";
@@ -34,6 +34,7 @@ type Comparison = {
   sidebar: ReactNode; summary: ReactNode; title?: string; subtitle?: string; controls?: ReactNode;
   legend?: ReactNode; hint?: string; layerControls?: ReactNode;
   featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number } | null;
+  onViewport?: (viewport: PseudoMarkupComparisonViewport) => void;
 };
 
 export function PseudoMarkupPage({ resultId, username }: { resultId: string; username: string }) {
@@ -82,6 +83,8 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const comparisonLayers = useRef({ reference: true, predicted: true });
   const customStyle = useRef(comparison?.featureStyle);
   customStyle.current = comparison?.featureStyle;
+  const viewportChanged = useRef(comparison?.onViewport);
+  viewportChanged.current = comparison?.onViewport;
   const [referenceVisible, setReferenceVisible] = useState(true);
   const allBounds = useRef<Extent>(createEmpty());
   const hiddenClasses = useRef(new Set<string>());
@@ -269,10 +272,23 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
         }
       }
     });
-    const resize = new ResizeObserver(() => map.updateSize());
+    let viewportTimer: ReturnType<typeof setTimeout> | undefined;
+    const reportViewport = () => {
+      clearTimeout(viewportTimer);
+      viewportTimer = setTimeout(() => {
+        if (!active || !viewportChanged.current) return;
+        const size = map.getSize();
+        if (!size || size[0] <= 0 || size[1] <= 0) return;
+        const bounds = view.calculateExtent(size).map((value) => Math.round(value * 1000) / 1000) as [number, number, number, number];
+        viewportChanged.current({ bounds, width: Math.min(1536, Math.ceil(size[0])), height: Math.min(1536, Math.ceil(size[1])) });
+      }, 60);
+    };
+    map.on("moveend", reportViewport);
+    const resize = new ResizeObserver(() => { map.updateSize(); reportViewport(); });
     resize.observe(target.current);
     return () => {
       active = false;
+      clearTimeout(viewportTimer);
       requests.abort();
       resize.disconnect();
       detachBackdrop();
