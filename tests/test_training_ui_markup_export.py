@@ -286,6 +286,51 @@ def test_markup_export_uses_only_positive_features_from_per_image_dataset(
 
 
 @pytest.mark.parametrize("dataset_format", ["legacy", "per_image"])
+@pytest.mark.parametrize("mode", ["single", "optimized_pool", "random_pool"])
+def test_creation_removes_small_objects_before_counts_masks_and_tile_selection(
+    tmp_path, monkeypatch, dataset_format, mode,
+):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    dataset_root = config.mlmarkup_root / "Площадь" / "main"
+    dataset_root.mkdir(parents=True)
+    image_path = config.images_root / "kanopus" / "площадь" / "scene.tif"
+    _write_cog(image_path, left=0, top=64, valid_slice=(slice(0, 64), slice(0, 64)))
+    features = [(1, box(10, 44, 20, 54), "positive"),
+                (2, box(30, 44, 32, 46), "positive")]
+    if dataset_format == "legacy":
+        (dataset_root / "scenes.txt").write_text("площадь\n", encoding="utf-8")
+        _write_geojson(dataset_root / "markup.geojson", features)
+    else:
+        _write_per_image_geojson(dataset_root / "площадь_scene.geojson", features)
+    output = tmp_path / "результат"
+    output.mkdir()
+    if mode == "single":
+        generated = _markup_export.generate_markup_files(
+            MarkupExportRequest(dataset_key="Площадь\\main", tile_width=64,
+                                tile_height=64, image_count=1, object_count=1),
+            config, output, min_object_area_m2=10,
+        )
+    else:
+        generated = _markup_export.generate_markup_pool_files(
+            dataset_key="Площадь\\main", tile_size=64, min_final_image_count=1,
+            max_final_image_count=1, min_object_count=1, min_object_area_m2=10,
+            config=config, output_root=output, random_selection=mode == "random_pool",
+        )
+    assert generated.actual_object_count == 1
+    payload = json.loads(next(output.glob("tile_*.geojson")).read_text(encoding="utf-8"))
+    assert [feature["id"] for feature in payload["features"]] == [1]
+    mask = np.asarray(Image.open(next(output.glob("*_mask.png"))))
+    assert np.count_nonzero(mask) == 100
+    assert any("Исключено объектов" in warning for warning in generated.warnings)
+    with pytest.raises(TrainingUIAPIError, match="Недостаточно.*тайлов"):
+        _markup_export.generate_markup_pool_files(
+            dataset_key="Площадь\\main", tile_size=64, min_final_image_count=1,
+            max_final_image_count=1, min_object_count=1, min_object_area_m2=200,
+            config=config, output_root=tmp_path / "пустой", random_selection=mode == "random_pool",
+        )
+
+
+@pytest.mark.parametrize("dataset_format", ["legacy", "per_image"])
 def test_markup_export_can_exclude_objects_crossing_tile_boundary(
     tmp_path: Path,
     monkeypatch,
@@ -4497,17 +4542,18 @@ def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_pat
         (second_root / path.name).write_bytes(path.read_bytes())
     request = {
         "tile_size": 512, "min_image_count": 1, "image_count": 2,
-        "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}],
+        "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "min_object_area_m2": 84.25, "use_optimization": False}],
     }
     with TestClient(create_app()) as client:
         _login(client)
         options = client.get("/api/v1/test-sample-batches/options").json()
         assert all(source["training_result_id"] is None for group in options["classes"] for source in group["datasets"])
-        settings = {"tile_size": 2048, "min_image_count": 2, "image_count": 4, "min_object_count": 12, "use_optimization": False, "exclude_boundary_objects": False}
+        settings = {"tile_size": 2048, "min_image_count": 2, "image_count": 4, "min_object_count": 12, "min_object_area_m2": 12.5, "use_optimization": False, "exclude_boundary_objects": False}
         changed = client.put(f"/api/v1/test-sample-batches/options/{quote('Вырубки' + chr(92) + 'main', safe='')}/settings", json=settings)
         assert changed.status_code == 200
         queued = [client.post("/api/v1/test-sample-batches", json=request) for _ in range(3)]
         assert [response.status_code for response in queued] == [200, 200, 200]
+        assert all(response.json()["items"][0]["min_object_area_m2"] == 84.25 for response in queued)
         ids = [response.json()["id"] for response in queued]
         assert client.post(f"/api/v1/test-sample-batches/{ids[2]}/move", json={"direction": "up"}).status_code == 200
         assert [job["id"] for job in client.get("/api/v1/test-sample-batches").json()] == [ids[0], ids[2], ids[1]]
@@ -4527,20 +4573,29 @@ def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_pat
         assert sources["Вырубки\\дополнительный"]["creation_settings"]["tile_size"] == 1536
 
 
-def test_random_test_markup_worker_creates_real_tiles_without_network(tmp_path, monkeypatch):
+@pytest.mark.parametrize("min_area", [0, 100])
+def test_random_test_markup_worker_creates_real_tiles_without_network(tmp_path, monkeypatch, min_area):
     config = _configure_export_environment(tmp_path, monkeypatch)
     _write_queue_export_dataset(config)
+    _write_geojson(config.mlmarkup_root / "Вырубки" / "main" / "deforestation.geojson", [
+        (index + 1, box(index * 512 + 240, 240, index * 512 + 272, 272), "объект")
+        for index in range(8)
+    ] + [
+        (index + 101, box(index * 512 + 280, 240, index * 512 + 281, 241), "мелкий объект")
+        for index in range(8)
+    ])
     with TestClient(create_app()) as client:
         _login(client)
         created = client.post("/api/v1/test-sample-batches", json={
             "tile_size": 512, "min_image_count": 1, "image_count": 2,
-            "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False}],
+            "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "use_optimization": False, **({"min_object_area_m2": min_area} if min_area else {})}],
         })
         assert created.status_code == 200
         _test_samples.process_test_sample_batch_once(create_session_factory(config), config)
         job = client.get(f"/api/v1/test-sample-batches/{created.json()['id']}").json()
         assert job["status"] == "ok", job
         item = job["items"][0]
+        assert item["min_object_area_m2"] == min_area
         assert item["training_result_id"] is None
         assert item["pseudo_markup_result_id"] is None
         detail = client.get(f"/api/v1/test-samples/{item['sample_id']}").json()
@@ -4553,6 +4608,10 @@ def test_random_test_markup_worker_creates_real_tiles_without_network(tmp_path, 
             row = session.get(_TestSampleRow, uuid.UUID(item["sample_id"]))
             root = _test_samples._test_sample_root(config) / str(row.id)
             assert len(list(root.glob("*.tif"))) == detail["image_count"]
+            identifiers = {feature["id"] for path in root.glob("tile_*.geojson")
+                           for feature in json.loads(path.read_text(encoding="utf-8"))["features"]}
+            assert any(identifier >= 101 for identifier in identifiers) is (min_area == 0)
+            assert any(identifier <= 8 for identifier in identifiers)
 
 
 def test_optimized_test_markup_worker_keeps_fixed_source_pair(tmp_path, monkeypatch):

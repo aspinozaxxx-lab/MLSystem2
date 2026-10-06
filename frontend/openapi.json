@@ -11689,6 +11689,13 @@
             "title": "Min Object Count",
             "default": 150
           },
+          "min_object_area_m2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Min Object Area M2",
+            "description": "Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+            "default": 0.0
+          },
           "metric": {
             "type": "string",
             "enum": [
@@ -11806,6 +11813,12 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Min Object Count"
+          },
+          "min_object_area_m2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Min Object Area M2",
+            "default": 0.0
           },
           "metric": {
             "type": "string",
@@ -12076,6 +12089,13 @@
             "title": "Object Count",
             "default": 150
           },
+          "min_object_area_m2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Min Object Area M2",
+            "description": "Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+            "default": 0.0
+          },
           "exclude_boundary_objects": {
             "type": "boolean",
             "title": "Exclude Boundary Objects",
@@ -12123,6 +12143,13 @@
             "exclusiveMinimum": 0.0,
             "title": "Min Object Count",
             "default": 150
+          },
+          "min_object_area_m2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Min Object Area M2",
+            "description": "Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+            "default": 0.0
           },
           "exclude_boundary_objects": {
             "type": "boolean",

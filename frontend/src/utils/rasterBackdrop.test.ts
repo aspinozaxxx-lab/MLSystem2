@@ -50,3 +50,22 @@ it("увеличивает готовый кадр и перемещает ег�
   detach();
   expect(canvases.every((canvas) => canvas.width === 0)).toBe(true);
 });
+
+it("сохраняет последнюю подложку при кадре нулевого размера во время полного экрана", () => {
+  const map = Object.assign(new Observable(), {
+    getView: () => ({ getAnimating: () => false, getInteracting: () => false }),
+    getViewport: () => ({ querySelectorAll: () => [{ width: 800, height: 600 }] }),
+  });
+  const fallback = rasterBackdrop();
+  const detach = fallback.attach(map as unknown as OLMap);
+  const transform = [1, 0, 0, 1, 0, 0];
+  map.dispatchEvent({ type: "postrender", frameState: { size: [800, 600], pixelToCoordinateTransform: transform } } as never);
+  map.dispatchEvent("rendercomplete");
+  map.dispatchEvent({ type: "postrender", frameState: { size: [0, 600], pixelToCoordinateTransform: transform } } as never);
+  map.dispatchEvent("rendercomplete");
+  const frame = { size: [800, 600], coordinateToPixelTransform: transform } as FrameState;
+  fallback.layer.render(frame, null as never);
+  expect(canvases[2].getContext().drawImage).toHaveBeenLastCalledWith(canvases[1], 0, 0);
+  expect(canvases[1].width).toBe(800);
+  detach();
+});

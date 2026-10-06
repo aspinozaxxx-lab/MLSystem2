@@ -9,7 +9,7 @@ import { testMarkupStats } from "./utils/testMarkups";
 export const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
 type Settings = Required<TestSampleCreationSettings>;
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
-const defaults: Settings = { tile_size: 1536, min_image_count: 5, image_count: 10, min_object_count: 150, exclude_boundary_objects: false, use_optimization: true };
+const defaults: Settings = { tile_size: 1536, min_image_count: 5, image_count: 10, min_object_count: 150, min_object_area_m2: 0, exclude_boundary_objects: false, use_optimization: true };
 const statusLabels = { queued: "В очереди", running: "Создаётся", ok: "Готово", partial: "Частично", error: "Ошибка", cancelled: "Отменено" };
 const pseudoLabels = { ready: "Псевдоразметка готова", queued: "Псевдоразметка в очереди", running: "Создаётся псевдоразметка", unavailable: "Псевдоразметки нет", error: "Ошибка псевдоразметки" };
 
@@ -58,7 +58,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   }, [selectedClass, datasetKey]);
   const saved = drafts[datasetKey] || defaults;
   const settings: Settings = { ...saved, use_optimization: Boolean(dataset?.training_result_id && saved.use_optimization), exclude_boundary_objects: Boolean(dataset?.quality_metric === "objects" && saved.exclude_boundary_objects) };
-  const valid = [settings.min_image_count, settings.image_count, settings.min_object_count].every((value) => Number.isInteger(value) && value > 0) && settings.min_image_count <= settings.image_count;
+  const valid = [settings.min_image_count, settings.image_count, settings.min_object_count].every((value) => Number.isInteger(value) && value > 0) && settings.min_image_count <= settings.image_count && Number.isFinite(settings.min_object_area_m2) && settings.min_object_area_m2 >= 0;
   const active = queue.filter((job) => job.status === "queued" || job.status === "running");
   const pending = active.filter((job) => job.status === "queued");
   const pseudoActive = options?.classes?.some((group) => group.datasets?.some((source) => source.pseudo_status === "queued" || source.pseudo_status === "running"));
@@ -77,7 +77,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const updateSettings = (change: Partial<Settings>) => {
     const next = { ...settings, ...change };
     setDrafts((current) => ({ ...current, [datasetKey]: next }));
-    if (![next.min_image_count, next.image_count, next.min_object_count].every((value) => Number.isInteger(value) && value > 0) || next.min_image_count > next.image_count) return;
+    if (![next.min_image_count, next.image_count, next.min_object_count].every((value) => Number.isInteger(value) && value > 0) || next.min_image_count > next.image_count || !Number.isFinite(next.min_object_area_m2) || next.min_object_area_m2 < 0) return;
     const key = datasetKey;
     saves.current = saves.current.then(async () => {
       await run(() => apiJson<TestSampleCreationSettings>(`/test-sample-batches/options/${encodeURIComponent(key)}/settings`, { method: "PUT", body: next }));
@@ -88,7 +88,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
     if (!dataset || !valid || submitting) return;
     const request: TestSampleBatchCreate = {
       tile_size: settings.tile_size, min_image_count: settings.min_image_count, image_count: settings.image_count,
-      items: [{ dataset_key: dataset.dataset_key, training_result_id: settings.use_optimization ? dataset.training_result_id : null, min_object_count: settings.min_object_count, metric: dataset.quality_metric, exclude_boundary_objects: settings.exclude_boundary_objects, use_optimization: settings.use_optimization }],
+      items: [{ dataset_key: dataset.dataset_key, training_result_id: settings.use_optimization ? dataset.training_result_id : null, min_object_count: settings.min_object_count, min_object_area_m2: settings.min_object_area_m2, metric: dataset.quality_metric, exclude_boundary_objects: settings.exclude_boundary_objects, use_optimization: settings.use_optimization }],
     };
     setSubmitting(true);
     try {
@@ -134,14 +134,15 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
             <label className="field"><span>Размер тайла, пикс.</span><select aria-label="Размер тайла" value={settings.tile_size} onChange={(event) => updateSettings({ tile_size: Number(event.target.value) as Settings["tile_size"] })}>{TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size} × {size}</option>)}</select></label>
             <fieldset className="creation-range"><legend>Тайлов в итоге</legend><input type="number" inputMode="numeric" aria-label="Минимум тайлов" min="1" step="1" required value={settings.min_image_count || ""} onChange={(event) => updateSettings({ min_image_count: Number(event.target.value) })} /><span>—</span><input type="number" inputMode="numeric" aria-label="Максимум тайлов" min="1" step="1" required value={settings.image_count || ""} onChange={(event) => updateSettings({ image_count: Number(event.target.value) })} /></fieldset>
             <label className="field"><span>Минимум объектов</span><input type="number" inputMode="numeric" aria-label="Минимум объектов" min="1" step="1" required value={settings.min_object_count || ""} onChange={(event) => updateSettings({ min_object_count: Number(event.target.value) })} /></label>
+            <label className="field" title="Площадь исходного объекта до нарезки. Объекты меньше этого значения исключаются; 0 — без фильтра."><span>Мин. площадь, м²</span><input type="number" inputMode="decimal" aria-label="Минимальная площадь объекта в м²" min="0" step="any" required value={settings.min_object_area_m2} onChange={(event) => updateSettings({ min_object_area_m2: Number(event.target.value) })} /></label>
             <div className="creation-optimization"><label><input type="checkbox" checked={settings.use_optimization} disabled={!dataset.training_result_id} onChange={(event) => updateSettings({ use_optimization: event.target.checked })} />Использовать оптимизацию</label>
               {!dataset.training_result_id ? <span className="creation-warning"><button type="button" aria-label="Почему оптимизация недоступна" title="Нет обученных сетей для выбранного датасета" onClick={() => setShowNetworkWarning((current) => !current)}><CircleAlert size={17} /></button><span role="tooltip" className={showNetworkWarning ? "visible" : ""}>Нет обученных сетей для выбранного датасета. Создайте разметку без оптимизации.</span></span> : null}
             </div>
           </div>
           {dataset.quality_metric === "objects" ? <label className="creation-boundary"><input type="checkbox" checked={settings.exclude_boundary_objects} onChange={(event) => updateSettings({ exclude_boundary_objects: event.target.checked })} />Не учитывать объекты, выходящие за тайл</label> : null}
-          <div className="creation-hint">Настройки сохраняются · запас: до {settings.image_count * 3} тайлов</div>
+          <div className="creation-hint">Настройки сохраняются · запас: до {settings.image_count * 3} тайлов · площадь 0 — без фильтра</div>
           {settings.use_optimization && dataset.pseudo_status !== "ready" ? <div className="creation-pseudo"><button className="secondary" type="button" title="Для оптимизации нужна полная псевдоразметка выбранной сети этого датасета" disabled={dataset.pseudo_status === "queued" || dataset.pseudo_status === "running"} onClick={() => void launchPseudo()}><Play size={14} />Создать псевдоразметку для оптимизации</button></div> : null}
-          {!valid ? <small className="error-text">Укажите положительные целые числа; минимум тайлов должен быть не больше максимума.</small> : null}
+          {!valid ? <small className="error-text">Укажите положительные целые количества и площадь от 0; минимум тайлов должен быть не больше максимума.</small> : null}
           <button className="primary creation-submit" type="submit" disabled={submitting || !valid || (settings.use_optimization && dataset.pseudo_status !== "ready")}>
             {submitting ? <LoaderCircle size={17} className="spin" /> : <Layers3 size={17} />} {submitting ? "Добавление…" : "Создать разметку"}
           </button>
@@ -155,7 +156,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
           const item = job.items?.[0];
           const position = pending.findIndex((entry) => entry.id === job.id);
           return <article className={`creation-job ${job.status}${active.includes(job) ? "" : " history"}`} key={job.id}>
-            <div className="creation-job-info"><strong>{item?.class_name} · {item?.dataset_name.split("\\").at(-1)}</strong><small>{job.tile_size} пикс. · {job.min_image_count}–{job.image_count} тайлов · ≥ {item?.min_object_count} объектов · {item?.use_optimization ? "с оптимизацией" : "случайный выбор"}</small>
+            <div className="creation-job-info"><strong>{item?.class_name} · {item?.dataset_name.split("\\").at(-1)}</strong><small>{job.tile_size} пикс. · {job.min_image_count}–{job.image_count} тайлов · ≥ {item?.min_object_count} объектов{item?.min_object_area_m2 ? ` · от ${item.min_object_area_m2.toLocaleString("ru-RU")} м²` : ""} · {item?.use_optimization ? "с оптимизацией" : "случайный выбор"}</small>
               <span>{job.cancel_requested && job.status === "running" ? "Отмена…" : statusLabels[job.status]}{job.status === "running" ? ` · ${Math.floor(job.elapsed_seconds / 60)} мин.` : ""}{item?.sample_id ? <> · <a href={`#/test-markups/${item.sample_id}`}>Открыть разметку</a></> : null}</span>{item?.error ? <small className="error-text">{item.error}</small> : null}
             </div>
             {job.status === "queued" ? <div className="creation-job-actions"><button className="secondary icon-button" type="button" aria-label="Выше в очереди" disabled={actionId !== null || position === 0} onClick={() => void queueAction(job.id, "up")}><ChevronUp size={19} /></button><button className="secondary icon-button" type="button" aria-label="Ниже в очереди" disabled={actionId !== null || position === pending.length - 1} onClick={() => void queueAction(job.id, "down")}><ChevronDown size={19} /></button><button className="secondary icon-button" type="button" aria-label="Удалить из очереди" disabled={actionId !== null} onClick={() => void queueAction(job.id, "delete")}><Trash2 size={17} /></button></div> : job.status === "running" ? <button className="secondary icon-button" type="button" aria-label="Отменить создание" disabled={actionId !== null || job.cancel_requested} onClick={() => void queueAction(job.id, "cancel")}><Square size={17} /></button> : null}

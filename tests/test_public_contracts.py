@@ -62,12 +62,15 @@ def test_test_markup_creation_queue_contract(monkeypatch) -> None:
     assert TestSampleBatchCreate.model_json_schema()["properties"]["items"]["maxItems"] == 1
     assert set(TestSampleCreationSettings.model_fields) == {
         "tile_size", "min_image_count", "image_count", "min_object_count",
-        "use_optimization", "exclude_boundary_objects",
+        "use_optimization", "exclude_boundary_objects", "min_object_area_m2",
     }
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     schema = get_openapi_schema()
     paths = schema["paths"]
+    for name in ("TestSampleCreationSettings", "TestSampleBatchItemCreate", "TestSampleCreate"):
+        area = schema["components"]["schemas"][name]["properties"]["min_object_area_m2"]
+        assert area["minimum"] == 0 and area["default"] == 0
     assert {"get", "post"} <= paths["/api/v1/test-sample-batches"].keys()
     settings = paths["/api/v1/test-sample-batches/options/{dataset_key}/settings"]["put"]
     assert settings["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/TestSampleCreationSettings")

@@ -9,10 +9,11 @@ import shutil
 import uuid
 import warnings
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from math import isfinite
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -29,6 +30,7 @@ from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import coo_matrix
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.geometry.polygon import orient
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -533,6 +535,7 @@ def generate_markup_files(
     output_root: Path,
     *,
     dataset: DatasetInfo | None = None,
+    min_object_area_m2: float = 0.0,
 ) -> GeneratedMarkupFiles:
     dataset = dataset or find_dataset(
         config.mlmarkup_root,
@@ -544,7 +547,7 @@ def generate_markup_files(
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
     images_root = Path(dataset.images_dir or config.images_root)
-    sources = _dataset_markup_sources(dataset, images_root)
+    sources = _dataset_markup_sources(dataset, images_root, min_object_area_m2)
     candidates = _build_candidates(
         sources=sources,
         images_root=images_root,
@@ -634,6 +637,7 @@ def generate_markup_pool_files(
     min_final_image_count: int,
     max_final_image_count: int,
     min_object_count: int,
+    min_object_area_m2: float = 0.0,
     config: TrainingUIAPIConfig,
     output_root: Path,
     dataset: DatasetInfo | None = None,
@@ -651,7 +655,9 @@ def generate_markup_pool_files(
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
     images_root = Path(dataset.images_dir or config.images_root)
-    sources = _dataset_markup_sources(dataset, images_root)
+    sources = _dataset_markup_sources(
+        dataset, images_root, min_object_area_m2, check_cancelled=check_cancelled
+    )
     if min_final_image_count > max_final_image_count:
         raise TrainingUIAPIError(
             "Минимальное число итоговых тайлов не может быть больше максимального."
@@ -959,6 +965,9 @@ def _annotations_from_payload(
 def _dataset_markup_sources(
     dataset: DatasetInfo,
     images_root: Path,
+    min_object_area_m2: float = 0.0,
+    *,
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> list[tuple[Path, _AnnotationSet]]:
     if dataset.annotations_dir:
         try:
@@ -1002,7 +1011,47 @@ def _dataset_markup_sources(
         raise TrainingUIAPIError(
             "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
         )
+    if min_object_area_m2 > 0:
+        # Общий GeoJSON legacy-набора фильтруем один раз для всех его снимков.
+        filtered: dict[int, _AnnotationSet] = {}
+        for path, annotations in sources:
+            if id(annotations) not in filtered:
+                filtered[id(annotations)] = _filter_annotation_objects_by_area(
+                    annotations, min_object_area_m2, check_cancelled=check_cancelled
+                )
+        sources = [(path, filtered[id(annotations)]) for path, annotations in sources]
     return sources
+
+
+def _filter_annotation_objects_by_area(
+    annotations: _AnnotationSet, min_object_area_m2: float,
+    *, check_cancelled: Callable[[], None] = lambda: None,
+) -> _AnnotationSet:
+    """Отбирать исходные объекты по площади на эллипсоиде до поиска тайлов."""
+
+    wgs84 = PyprojCRS.from_epsg(4326)
+    transformer = None if annotations.crs == wgs84 else Transformer.from_crs(
+        annotations.crs, wgs84, always_xy=True
+    )
+    geod = Geod(ellps="WGS84")
+    selected = []
+    for index, feature in enumerate(annotations.features):
+        if index % 128 == 0:
+            check_cancelled()
+        geometry = (transform_geometry(transformer.transform, feature.geometry)
+                    if transformer is not None else feature.geometry)
+        polygons = geometry.geoms if isinstance(geometry, MultiPolygon) else (geometry,)
+        # Ориентация учитывает отверстия, а сумма частей не допускает их взаимного вычитания.
+        area = sum(abs(geod.geometry_area_perimeter(orient(part, sign=1.0))[0]) for part in polygons)
+        if not isfinite(area):
+            raise TrainingUIAPIError("Не удалось определить площадь объекта в квадратных метрах.")
+        if area >= min_object_area_m2:
+            selected.append(feature)
+    removed = len(annotations.features) - len(selected)
+    warnings = annotations.warnings
+    if removed:
+        warnings += (f"Исключено объектов с площадью меньше {min_object_area_m2:g} м²: {removed}.",)
+    return replace(annotations, features=tuple(selected), warnings=warnings)
 
 
 def _source_annotation_warnings(

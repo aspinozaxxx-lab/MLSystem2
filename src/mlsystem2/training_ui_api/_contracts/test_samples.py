@@ -20,6 +20,10 @@ class TestSampleCreate(BaseModel):
     tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
     object_count: int = Field(default=150, gt=0)
+    min_object_area_m2: float = Field(
+        default=0.0, ge=0.0, allow_inf_nan=False,
+        description="Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+    )
     exclude_boundary_objects: bool = False
 
 
@@ -276,6 +280,10 @@ class TestSampleCreationSettings(BaseModel):
     min_image_count: int = Field(default=5, gt=0)
     image_count: int = Field(default=10, gt=0)
     min_object_count: int = Field(default=150, gt=0)
+    min_object_area_m2: float = Field(
+        default=0.0, ge=0.0, allow_inf_nan=False,
+        description="Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+    )
     exclude_boundary_objects: bool = False
     use_optimization: bool = True
 
@@ -298,6 +306,10 @@ class TestSampleBatchItemCreate(BaseModel):
     dataset_key: str = Field(min_length=1)
     training_result_id: UUID | None = None
     min_object_count: int = Field(default=150, gt=0)
+    min_object_area_m2: float = Field(
+        default=0.0, ge=0.0, allow_inf_nan=False,
+        description="Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.",
+    )
     metric: Literal["pixel", "objects"] = "pixel"
     exclude_boundary_objects: bool = False
     use_optimization: bool = True
@@ -351,6 +363,7 @@ class TestSampleBatchItemInfo(BaseModel):
     training_trained_at: datetime | None = None
     pseudo_markup_result_id: UUID | None = None
     min_object_count: int = Field(gt=0)
+    min_object_area_m2: float = Field(default=0.0, ge=0.0)
     metric: Literal["pixel", "objects"]
     exclude_boundary_objects: bool = False
     use_optimization: bool = True

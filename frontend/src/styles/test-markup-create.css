@@ -21,7 +21,7 @@
 .creation-range { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .creation-range legend { margin-bottom: 5px; padding: 0; color: var(--muted); font-weight: 600; }
 .creation-range input { min-width: 0; width: 100%; }
-.creation-optimization { display: flex; align-items: center; gap: 3px; min-height: 44px; }
+.creation-optimization { display: flex; align-items: center; gap: 3px; min-height: 36px; grid-column: 1 / -1; }
 .creation-optimization label, .creation-boundary { display: flex; align-items: center; gap: 7px; min-height: 36px; cursor: pointer; }
 .creation-optimization label { font-size: 13px; line-height: 17px; }
 .creation-optimization input, .creation-boundary input { margin: 0; width: 18px; height: 18px; }

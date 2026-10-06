@@ -18,7 +18,7 @@ export function rasterBackdrop() {
       canvas.width = frame.size[0];
       canvas.height = frame.size[1];
       const context = canvas.getContext("2d")!;
-      if (savedTransform) {
+      if (savedTransform && saved.width > 0 && saved.height > 0) {
         const transform = multiply(frame.coordinateToPixelTransform.slice(), savedTransform);
         context.setTransform(...transform as [number, number, number, number, number, number]);
         context.drawImage(saved, 0, 0);
@@ -31,6 +31,9 @@ export function rasterBackdrop() {
     const capture = map.on("postrender", (event) => {
       const frame = event.frameState;
       if (!frame || !layer.getVisible() || map.getView().getAnimating() || map.getView().getInteracting()) return;
+      // Переход в полный экран может дать промежуточный кадр без размера.
+      // Он не заменяет последнюю пригодную подложку и не передаётся в drawImage.
+      if (frame.size[0] <= 0 || frame.size[1] <= 0) { pendingTransform = undefined; return; }
       pending.width = frame.size[0];
       pending.height = frame.size[1];
       const context = pending.getContext("2d")!;
@@ -41,7 +44,7 @@ export function rasterBackdrop() {
       pendingTransform = frame.pixelToCoordinateTransform.slice();
     });
     const commit = map.on("rendercomplete", () => {
-      if (!pendingTransform) return;
+      if (!pendingTransform || pending.width <= 0 || pending.height <= 0) return;
       [saved, pending] = [pending, saved];
       savedTransform = pendingTransform;
       pendingTransform = undefined;

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -747,6 +748,7 @@ class TestSampleBatchItemRow(Base):
         nullable=True,
     )
     min_object_count: Mapped[int] = mapped_column(Integer)
+    min_object_area_m2: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     metric: Mapped[str] = mapped_column(String(32))
     exclude_boundary_objects: Mapped[bool] = mapped_column(Boolean, default=False)
     use_optimization: Mapped[bool] = mapped_column(Boolean, default=True)

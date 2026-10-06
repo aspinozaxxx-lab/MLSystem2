@@ -4224,6 +4224,12 @@ export interface components {
              */
             min_object_count: number;
             /**
+             * Min Object Area M2
+             * @description Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.
+             * @default 0
+             */
+            min_object_area_m2: number;
+            /**
              * Metric
              * @default pixel
              * @enum {string}
@@ -4269,6 +4275,11 @@ export interface components {
             pseudo_markup_result_id?: string | null;
             /** Min Object Count */
             min_object_count: number;
+            /**
+             * Min Object Area M2
+             * @default 0
+             */
+            min_object_area_m2: number;
             /**
              * Metric
              * @enum {string}
@@ -4376,6 +4387,12 @@ export interface components {
              */
             object_count: number;
             /**
+             * Min Object Area M2
+             * @description Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.
+             * @default 0
+             */
+            min_object_area_m2: number;
+            /**
              * Exclude Boundary Objects
              * @default false
              */
@@ -4404,6 +4421,12 @@ export interface components {
              * @default 150
              */
             min_object_count: number;
+            /**
+             * Min Object Area M2
+             * @description Минимальная площадь исходного объекта в м² до нарезки; 0 отключает фильтр.
+             * @default 0
+             */
+            min_object_area_m2: number;
             /**
              * Exclude Boundary Objects
              * @default false

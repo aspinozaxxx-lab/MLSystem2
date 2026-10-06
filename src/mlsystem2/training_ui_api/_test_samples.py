@@ -245,6 +245,7 @@ def create_test_sample(
             config,
             building_root,
             dataset=dataset,
+            min_object_area_m2=request.min_object_area_m2,
         )
         _build_test_sample_thumbnails(building_root, generated.tiles)
         building_root.replace(final_root)
@@ -612,6 +613,7 @@ def create_test_sample_batch(
                 training_result_id=training_result.id if item.use_optimization else None,
                 pseudo_markup_result_id=pseudo_markup.id if pseudo_markup is not None else None,
                 min_object_count=item.min_object_count,
+                min_object_area_m2=item.min_object_area_m2,
                 metric=dataset.quality_metric,
                 exclude_boundary_objects=item.exclude_boundary_objects,
                 use_optimization=item.use_optimization,
@@ -854,6 +856,7 @@ def _create_grouped_test_sample(
             min_final_image_count=batch.min_image_count,
             max_final_image_count=batch.image_count,
             min_object_count=item.min_object_count,
+            min_object_area_m2=item.min_object_area_m2,
             config=config,
             output_root=building_root,
             dataset=dataset,
@@ -971,6 +974,7 @@ def _batch_info(row: TestSampleBatchRow) -> TestSampleBatchInfo:
                 ),
                 pseudo_markup_result_id=item.pseudo_markup_result_id,
                 min_object_count=item.min_object_count,
+                min_object_area_m2=item.min_object_area_m2,
                 metric=item.metric,
                 exclude_boundary_objects=item.exclude_boundary_objects,
                 use_optimization=item.use_optimization,

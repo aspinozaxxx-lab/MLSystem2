@@ -79,18 +79,20 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
       </div> : null}
       {layerError ? <p className="info-box" role="alert">{layerError} <button type="button" className="secondary compact-action" onClick={() => setAttempt((value) => value + 1)}>Повторить</button></p> : null}
       {info && scene ? <PseudoMap info={info} geojson={loaded?.key === layerKey ? loaded.geojson : EMPTY_LAYERS} username={username} onRetry={() => setAttempt((value) => value + 1)} comparison={{
-          sidebar: <TestScenes scenes={view.scenes ?? []} selected={scene.id} quality={quality} onSelect={(item) => { setSceneId(item.id); setClassId(item.target_class_id ?? null); }} />,
-          summary: <div className="test-f1-summary">
-            {loaded?.key !== layerKey ? <p role="status">Загружаем эталон и прогноз снимка…</p> : null}
-            <div className="test-f1-overall"><span>F1 всей выборки{view.metric?.aggregation === "macro" ? " · среднее по классам" : ""}</span><strong>{formatTestF1Percent(view.metric?.f1)}</strong></div>
-            <div className="test-f1-image-score"><span>F1 этого снимка · {quality === "objects" ? "объекты" : "пиксели"}</span><strong>{formatTestF1Percent(sceneF1Score(scene, quality, effectiveClassId).f1)}</strong>
-              <small>TP {sceneF1Score(scene, quality, effectiveClassId).true_positive.toLocaleString("ru-RU")} · FP {sceneF1Score(scene, quality, effectiveClassId).false_positive.toLocaleString("ru-RU")} · FN {sceneF1Score(scene, quality, effectiveClassId).false_negative.toLocaleString("ru-RU")}</small>
-            </div>
+          sidebar: <>
+            <TestScenes scenes={view.scenes ?? []} selected={scene.id} quality={quality} onSelect={(item) => { setSceneId(item.id); setClassId(item.target_class_id ?? null); }} />
             {(scene.class_schema?.length ?? 0) > 0 ? <label className="test-f1-class">Тип объектов<select aria-label="Тип объектов для сравнения" value={effectiveClassId ?? "foreground"} disabled={scene.target_class_id != null} onChange={(event) => setClassId(event.target.value === "foreground" ? null : Number(event.target.value))}>
               {scene.target_class_id == null ? <option value="foreground">Все объекты — без различения типов</option> : null}
               {(scene.class_schema ?? []).filter((item) => scene.target_class_id == null || Number(item.id) === scene.target_class_id).map((item) => <option key={String(item.id)} value={String(item.id)}>{String(item.name)}</option>)}
             </select></label> : null}
-            {quality === "objects" ? <p className="test-f1-metric-note">Объектовый F1 учитывает сопоставление объектов при IoU ≥ 0,5. Цвета карты показывают пересечение пикселей; пиксельный F1 этого снимка — {formatTestF1Percent(sceneF1Score(scene, "pixel", effectiveClassId).f1)}.</p> : null}
+            {loaded?.key !== layerKey ? <p className="test-f1-metric-note" role="status">Загружаем эталон и прогноз снимка…</p> : null}
+            {quality === "objects" ? <p className="test-f1-metric-note">Объектовый F1: сопоставление при IoU ≥ 0,5. Цвета показывают пересечение пикселей; пиксельный F1 снимка — {formatTestF1Percent(sceneF1Score(scene, "pixel", effectiveClassId).f1)}.</p> : null}
+          </>,
+          summary: <div className="test-f1-summary" role="group" aria-label="Оценки тестового F1">
+            <div className="test-f1-overall"><span title={view.metric?.aggregation === "macro" ? "Среднее F1 по классам всей выборки" : "F1 всей тестовой выборки"}>{quality === "objects" ? "Объектовый F1" : "Пиксельный F1"} · выборка</span><strong>{formatTestF1Percent(view.metric?.f1)}</strong></div>
+            <div className="test-f1-image-score"><span>{quality === "objects" ? "Объектовый F1" : "Пиксельный F1"} · снимок</span><strong>{formatTestF1Percent(sceneF1Score(scene, quality, effectiveClassId).f1)}</strong>
+              <small>TP {sceneF1Score(scene, quality, effectiveClassId).true_positive.toLocaleString("ru-RU")} · FP {sceneF1Score(scene, quality, effectiveClassId).false_positive.toLocaleString("ru-RU")} · FN {sceneF1Score(scene, quality, effectiveClassId).false_negative.toLocaleString("ru-RU")}</small>
+            </div>
           </div>,
         }} /> : null}
     </> : null}
@@ -103,9 +105,9 @@ function TestScenes({ scenes, selected, quality, onSelect }: {
   return <>
     <h2>Тестовые снимки <span>{scenes.length}</span></h2>
     <select className="test-f1-mobile-scenes" aria-label="Тестовый снимок" value={selected} onChange={(event) => { const scene = scenes.find((item) => item.id === event.target.value); if (scene) onSelect(scene); }}>
-      {scenes.map((item) => <option key={item.id} value={item.id}>{item.sample_name} · {item.name} · F1 {formatTestF1Percent(item[quality].f1)}</option>)}
+      {scenes.map((item) => <option key={item.id} value={item.id}>{item.name} · {quality === "objects" ? "Объектовый F1" : "Пиксельный F1"} {formatTestF1Percent(item[quality].f1)} · {item.sample_name}</option>)}
     </select>
-    <div className="test-f1-scene-list">{scenes.map((item) => <button type="button" key={item.id} aria-pressed={selected === item.id} onClick={() => onSelect(item)}>
+    <div className="test-f1-scene-list">{scenes.map((item) => <button type="button" key={item.id} aria-pressed={selected === item.id} title={`${quality === "objects" ? "Объектовый F1" : "Пиксельный F1"}: ${formatTestF1Percent(item[quality].f1)}`} onClick={() => onSelect(item)}>
       <span><strong>{item.name}</strong><small>{item.sample_name}</small></span><b>{formatTestF1Percent(item[quality].f1)}</b>
     </button>)}</div>
   </>;

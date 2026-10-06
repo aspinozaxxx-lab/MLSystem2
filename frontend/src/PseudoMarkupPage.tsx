@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, Download, Eye, EyeOff, Maximize, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Blend, ChevronDown, ClipboardCheck, Download, Eye, EyeOff, Image, ImageOff, Layers, Maximize2, Minimize2, RefreshCw, Scan, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import OLMap from "ol/Map";
 import View from "ol/View";
@@ -81,9 +81,10 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const [hidden, setHidden] = useState(new Set<string>());
   const [imagesVisible, setImagesVisible] = useState(true);
   const [markupVisible, setMarkupVisible] = useState(true);
-  const [opacity, setOpacity] = useState(0.8);
   const [query, setQuery] = useState("");
   const [bandMode, setBandMode] = useState<BandMode>("RGB");
+  const selectedBandMode = useRef<BandMode>("RGB");
+  const [bandMenuOpen, setBandMenuOpen] = useState(false);
   const [rasterErrors, setRasterErrors] = useState<Record<string, string>>({});
   const [hiddenSceneIds, setHiddenSceneIds] = useState(new Set<string>());
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
@@ -167,7 +168,7 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
             return source;
           });
         },
-        style: pseudoRasterStyle("RGB", alpha, nir),
+        style: pseudoRasterStyle(nir ? selectedBandMode.current : "RGB", alpha, nir),
       });
     });
     const backdrop = rasterBackdrop();
@@ -182,7 +183,7 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
     }) });
     markupSource.current = vector;
     const markup = new VectorImageLayer({
-      source: vector, opacity,
+      source: vector, opacity: 0.8,
       style: (feature) => {
         if (comparison) {
           const appearance = comparisonLayerStyle(String(feature.get("test_f1_layer")),
@@ -345,34 +346,12 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const visibleErrors = info.scenes.filter((scene) => rasterErrors[scene.id] && !hiddenSceneIds.has(scene.id));
   return <div ref={workspaceRef} className={`pseudo-workspace${comparison ? " test-f1-workspace" : ""}${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
-      <div><h1>{comparison ? "Проверка тестового F1" : "Просмотр псевдоразметки"}</h1><p>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p></div>
+      <div className="pseudo-viewer-title"><h1>{comparison ? "Тестовый F1" : "Просмотр псевдоразметки"}</h1><p title={`${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p>
+        <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
+      </div>
+      {comparison?.summary}
       {!comparison ? <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a> : null}
     </header>
-    <div className="pseudo-model"><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
-    {comparison?.summary}
-    <div className="pseudo-toolbar">
-      <button type="button" className="secondary compact-action" onClick={() => fit(allBounds.current)}><Maximize size={15} /> {comparison ? "Весь снимок" : "Все снимки"}</button>
-      {hasNir ? <label title="Как в редакторе датасета: RGB, NRG или NGB. Снимки без NIR остаются в RGB.">Каналы
-        <select aria-label="Сочетание каналов" value={bandMode} onChange={(event) => {
-          const mode = event.target.value as BandMode;
-          setBandMode(mode);
-          resetBackdrop.current();
-          nirLayer.current?.setStyle(pseudoRasterStyle(mode, false, true));
-        }}>{Object.keys(BAND_CHANNELS).map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
-      </label> : null}
-      <label><input type="checkbox" checked={imagesVisible} onChange={(event) => { imagesEnabled.current = event.target.checked; setImagesVisible(event.target.checked); refreshRasters.current(); }} /> Снимки</label>
-      {comparison ? <>
-        <label><input type="checkbox" checked={referenceVisible} onChange={(event) => {
-          setReferenceVisible(event.target.checked); comparisonLayers.current.reference = event.target.checked;
-          markupLayer.current?.changed();
-        }} /> Эталон</label>
-        <label><input type="checkbox" checked={markupVisible} onChange={(event) => {
-          setMarkupVisible(event.target.checked); comparisonLayers.current.predicted = event.target.checked;
-          markupLayer.current?.changed();
-        }} /> Прогноз</label>
-      </> : <label><input type="checkbox" checked={markupVisible} onChange={(event) => { setMarkupVisible(event.target.checked); markupLayer.current?.setVisible(event.target.checked); }} /> Псевдоразметка</label>}
-      <label>Непрозрачность <input aria-label={comparison ? "Непрозрачность слоёв сравнения" : "Непрозрачность псевдоразметки"} type="range" min="0.1" max="1" step="0.05" value={opacity} onChange={(event) => { const value = Number(event.target.value); setOpacity(value); markupLayer.current?.setOpacity(value); }} /></label>
-    </div>
     {info.warnings.length > 0 ? <details className="info-box"><summary>Не все исходные снимки доступны: подробности</summary><ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details> : null}
     {imagesVisible && visibleErrors.length > 0 ? <div className="info-box" role="alert">
       <ul>{visibleErrors.map((scene) => <li key={scene.id}><strong>{scene.name}</strong>: {rasterErrors[scene.id]}</li>)}</ul>
@@ -420,6 +399,14 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
       <div className="pseudo-map-area">
         <div className="pseudo-map" ref={target} aria-label={comparison ? "Тестовый снимок с эталоном, прогнозом и областями TP, FP, FN" : "Мозаика снимков с псевдоразметкой"} tabIndex={0} />
         <div className="dataset-editor-map-controls">
+          <button className="secondary icon-button dataset-editor-map-control" type="button" aria-label={comparison ? "Весь снимок" : "Все снимки"} title={comparison ? "Показать весь снимок" : "Показать все снимки"} onClick={() => fit(allBounds.current)}><Scan size={17} /></button>
+          <button className={`${imagesVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label="Снимки" aria-pressed={imagesVisible} title={imagesVisible ? "Скрыть снимки" : "Показать снимки"} onClick={() => { imagesEnabled.current = !imagesVisible; setImagesVisible(!imagesVisible); refreshRasters.current(); }}>{imagesVisible ? <Image size={17} /> : <ImageOff size={17} />}</button>
+          {comparison ? <button className={`${referenceVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label="Эталон" aria-pressed={referenceVisible} title={referenceVisible ? "Скрыть тестовую разметку" : "Показать тестовую разметку"} onClick={() => { setReferenceVisible(!referenceVisible); comparisonLayers.current.reference = !referenceVisible; markupLayer.current?.changed(); }}><ClipboardCheck size={17} /></button> : null}
+          <button className={`${markupVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label={comparison ? "Прогноз" : "Псевдоразметка"} aria-pressed={markupVisible} title={`${markupVisible ? "Скрыть" : "Показать"} ${comparison ? "предсказанную разметку" : "псевдоразметку"}`} onClick={() => { setMarkupVisible(!markupVisible); if (comparison) { comparisonLayers.current.predicted = !markupVisible; markupLayer.current?.changed(); } else markupLayer.current?.setVisible(!markupVisible); }}>{comparison ? <Sparkles size={17} /> : <Layers size={17} />}</button>
+          {hasNir ? <div className={`dataset-editor-band-picker${bandMenuOpen ? " open" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setBandMenuOpen(false); }} onBlur={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setBandMenuOpen(false); }}>
+            <button className="secondary icon-button dataset-editor-map-control" type="button" aria-label={`Сочетание каналов ${bandMode}`} aria-haspopup="menu" aria-expanded={bandMenuOpen} title={`Сочетание каналов снимка: ${bandMode}. Открыть варианты RGB, NRG и NGB`} onClick={() => setBandMenuOpen((open) => !open)}><Blend size={17} /></button>
+            <div className="dataset-editor-band-menu" role="menu">{Object.keys(BAND_CHANNELS).map((mode) => <button className={bandMode === mode ? "active" : ""} type="button" role="menuitemradio" aria-checked={bandMode === mode} key={mode} onClick={() => { const selected = mode as BandMode; selectedBandMode.current = selected; setBandMode(selected); setBandMenuOpen(false); resetBackdrop.current(); nirLayer.current?.setStyle(pseudoRasterStyle(selected, false, true)); }}>{mode}</button>)}</div>
+          </div> : null}
           <button
             className={`${fullscreen ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
             type="button"
