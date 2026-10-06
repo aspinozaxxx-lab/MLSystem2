@@ -183,7 +183,7 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
     }) });
     markupSource.current = vector;
     const markup = new VectorImageLayer({
-      source: vector, opacity: 0.8,
+      source: vector, opacity: comparison ? 1 : 0.8,
       style: (feature) => {
         if (comparison) {
           const appearance = comparisonLayerStyle(String(feature.get("test_f1_layer")),

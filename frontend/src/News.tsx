@@ -14,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "test-f1-brighter-overlays",
+  date: "2026-10-06",
+  title: "Яркое сравнение тестовой разметки",
+  updates: [
+    "В просмотре F1 совпадения TP, лишние участки FP и пропуски FN выделены более яркими цветами и плотной заливкой; отдельно включённые эталон и прогноз тоже стали заметнее на снимке.",
+  ],
+}, {
   slug: "compact-viewer-and-test-markup-area",
   date: "2026-10-06",
   title: "Улучшения просмотра и создания тестовых разметок",

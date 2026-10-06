@@ -1,11 +1,11 @@
 import type { TestF1SceneInfo, TestF1ScoreInfo } from "../api/types";
 
 export const TEST_F1_LAYERS = {
-  tp: { color: "#22c55e", label: "TP · Совпадение" },
-  fp: { color: "#f43f5e", label: "FP · Лишнее" },
-  fn: { color: "#fbbf24", label: "FN · Пропуск" },
-  reference: { color: "#a78bfa", label: "Эталон" },
-  predicted: { color: "#38bdf8", label: "Прогноз" },
+  tp: { color: "#00ff66", label: "TP · Совпадение" },
+  fp: { color: "#ff1744", label: "FP · Лишнее" },
+  fn: { color: "#ffea00", label: "FN · Пропуск" },
+  reference: { color: "#c084fc", label: "Эталон" },
+  predicted: { color: "#00d9ff", label: "Прогноз" },
 } as const;
 
 export function comparisonLayerStyle(layer: string, reference: boolean, predicted: boolean) {
@@ -14,9 +14,9 @@ export function comparisonLayerStyle(layer: string, reference: boolean, predicte
   const color = TEST_F1_LAYERS[name].color;
   if (name === "reference" || name === "predicted") {
     if (!(name === "reference" ? reference : predicted)) return null;
-    return { color, fill: reference && predicted ? "transparent" : `${color}50`, width: 1.5 };
+    return { color, fill: reference && predicted ? "transparent" : `${color}b3`, width: 2 };
   }
-  return reference && predicted ? { color, fill: `${color}80`, width: 0.5 } : null;
+  return reference && predicted ? { color, fill: `${color}cc`, width: 1 } : null;
 }
 
 export function sceneF1Score(scene: TestF1SceneInfo, metric: "pixel" | "objects", classId: number | null): TestF1ScoreInfo {
