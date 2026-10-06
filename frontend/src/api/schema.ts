@@ -1657,6 +1657,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/pseudo-markup/compare/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Pseudo Comparison Counts */
+        post: operations["post_pseudo_comparison_counts_api_v1_results_pseudo_markup_compare_counts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/pseudo-markup/compare/{scene_id}/layers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Pseudo Comparison Layers */
+        post: operations["post_pseudo_comparison_layers_api_v1_results_pseudo_markup_compare__scene_id__layers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/continue": {
         parameters: {
             query?: never;
@@ -3498,6 +3532,51 @@ export interface components {
             /** Color */
             color?: string | null;
         };
+        /** PseudoMarkupComparisonCounts */
+        PseudoMarkupComparisonCounts: {
+            /** Result Ids */
+            result_ids: string[];
+            /** Scenes */
+            scenes: {
+                [key: string]: components["schemas"]["PseudoMarkupPixelComparison"];
+            };
+            total: components["schemas"]["PseudoMarkupPixelComparison"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** PseudoMarkupComparisonLayers */
+        PseudoMarkupComparisonLayers: {
+            /** Scene Id */
+            scene_id: string;
+            /** Available Result Ids */
+            available_result_ids: string[];
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+            counts?: components["schemas"]["PseudoMarkupPixelComparison"] | null;
+        };
+        /**
+         * PseudoMarkupComparisonRequest
+         * @description Активные сохранённые разметки и ревизии подложки.
+         */
+        PseudoMarkupComparisonRequest: {
+            /** Result Ids */
+            result_ids: string[];
+            /** Scene Revisions */
+            scene_revisions?: {
+                [key: string]: string;
+            };
+        };
+        /** PseudoMarkupPixelComparison */
+        PseudoMarkupPixelComparison: {
+            /** Intersection */
+            intersection: number;
+            /** Only First */
+            only_first: number;
+            /** Only Second */
+            only_second: number;
+        };
         /** PseudoMarkupResultInfo */
         PseudoMarkupResultInfo: {
             /**
@@ -3594,6 +3673,8 @@ export interface components {
             source_dataset_name: string;
             /** Training Dataset Name */
             training_dataset_name: string;
+            /** Class Name */
+            class_name?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -8783,6 +8864,74 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_pseudo_comparison_counts_api_v1_results_pseudo_markup_compare_counts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PseudoMarkupComparisonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudoMarkupComparisonCounts"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_pseudo_comparison_layers_api_v1_results_pseudo_markup_compare__scene_id__layers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PseudoMarkupComparisonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PseudoMarkupComparisonLayers"];
                 };
             };
             /** @description Validation Error */

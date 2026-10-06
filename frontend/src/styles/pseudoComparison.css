@@ -1,0 +1,31 @@
+.pseudo-compare-layers { margin-bottom: 12px; font-size: 12px; }
+.pseudo-compare-layers summary { cursor: pointer; font-weight: 600; padding: 4px 0 8px; }
+.pseudo-compare-layers > div { max-height: 250px; overflow: auto; }
+.pseudo-compare-layer-card { display: flex; align-items: flex-start; gap: 7px; padding: 8px; margin-bottom: 5px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 7px; }
+.pseudo-compare-layer-card[data-active="false"] { opacity: 0.55; }
+.pseudo-compare-layer-card > span { min-width: 0; }
+.pseudo-compare-layer-card small { display: block; color: var(--muted); font-size: 10px; line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; }
+.pseudo-compare-layer-card i { width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; flex-shrink: 0; }
+.pseudo-compare-map-layers { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 310px); }
+.pseudo-compare-map-layers button { position: relative; width: 52px; min-height: 36px; padding: 0 7px; gap: 4px; box-shadow: var(--shadow-overlay); }
+.pseudo-compare-map-layers button[aria-pressed="false"] { opacity: 0.65; }
+.pseudo-compare-map-layers button i { position: absolute; height: 3px; bottom: 2px; left: 7px; right: 7px; border-radius: 2px; }
+.pseudo-compare-summary { flex: 0 0 auto; max-width: 60%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); font-size: 11px; }
+.pseudo-compare-summary > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; margin: 2px 0; }
+.pseudo-compare-summary > div > span:first-child, .pseudo-compare-summary small { color: var(--muted); }
+.pseudo-compare-pixels { display: flex; flex-wrap: wrap; gap: 3px 8px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.pseudo-compare-pixels span { white-space: nowrap; }
+.pseudo-compare-pixels span:nth-child(1) { color: #008c39; }
+.pseudo-compare-pixels span:nth-child(2) { color: #d30c34; }
+.pseudo-compare-pixels span:nth-child(3) { color: #886800; }
+.pseudo-compare-search { min-height: 34px; margin-bottom: 8px; font-size: 12px; }
+.pseudo-comparison-page .test-f1-scene-list button { padding: 8px; }
+@media (max-width: 800px) {
+  .pseudo-comparison-page .pseudo-viewer-heading { flex-wrap: wrap; }
+  .pseudo-compare-summary { max-width: 100%; width: 100%; }
+  .pseudo-compare-search { display: none; }
+  .pseudo-compare-layers { margin: 0; }
+  .pseudo-compare-layers > div { max-height: 180px; }
+  .pseudo-compare-map-layers { top: 56px; max-width: calc(100% - 20px); }
+  .pseudo-compare-map-layers button { min-height: 44px; }
+}

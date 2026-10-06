@@ -48,11 +48,13 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
             warnings.append(f"Снимок {path.name} недоступен для просмотра: {exc}")
     model = result.training_result
     dataset = find_managed_dataset(session, config, model.dataset_key or model.class_key) if model else None
+    class_row = dataset_class_row(session, model.dataset_key or model.class_key) if model else None
     return PseudoMarkupViewInfo(
         id=result.id, training_result_id=result.training_result_id,
         checkpoint_epoch=model.epoch if model is not None else None,
         model_name=model.model_name if model else "Сеть не указана",
         training_dataset_name=dataset.name if dataset else (model.class_display_name if model else "Не указан"),
+        class_name=class_row.name if class_row else None,
         source_dataset_name=result.source_dataset_name, created_at=result.created_at,
         geojson_url=f"/api/v1/files/{result.geojson_file_id}/download",
         object_count=result.geojson_file.object_count, expected_image_count=result.image_count,

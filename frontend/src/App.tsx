@@ -85,6 +85,7 @@ import type {
   TestSampleSummary,
 } from "./api/types";
 import { TrainingContinuationForm } from "./TrainingContinuationForm";
+import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
 import { trainingResultFamilies } from "./utils/trainingResults";
 import {
   defaultTrainingZipModelName,
@@ -141,6 +142,7 @@ const DatasetEditorPage = lazy(() =>
   import("./DatasetEditorPage").then((module) => ({ default: module.DatasetEditorPage })),
 );
 const PseudoMarkupPage = lazy(() => import("./PseudoMarkupPage").then((module) => ({ default: module.PseudoMarkupPage })));
+const PseudoComparisonPage = lazy(() => import("./PseudoComparisonPage").then((module) => ({ default: module.PseudoComparisonPage })));
 const TestF1Page = lazy(() => import("./TestF1Page").then((module) => ({ default: module.TestF1Page })));
 
 function BrandLogo() {
@@ -278,10 +280,10 @@ export function App() {
   );
 
   return (
-    <Shell user={user} route={route} onLogout={logout} run={run}>
+    <PseudoComparisonProvider key={user}><Shell user={user} route={route} onLogout={logout} run={run}>
       {page}
       <Modal modal={modal} onClose={closeModal} />
-    </Shell>
+    </Shell></PseudoComparisonProvider>
   );
 }
 
@@ -299,6 +301,7 @@ function RoutedPage(props: {
   const [head, second] = props.route;
   if (head === "news") return <NewsPage slug={second} />;
   if (head === "feedback") return <FeedbackSection feedbackId={second} />;
+  if (head === "pseudo-markup" && second === "compare") return <Suspense fallback={<LoadingPage text="Загрузка сравнения псевдоразметок" />}><PseudoComparisonPage ids={props.route[2] ?? ""} username={props.username} /></Suspense>;
   if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
   if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
@@ -460,7 +463,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
     </div>
   );
 }
@@ -4055,6 +4058,7 @@ function ResultsTable({
                       <td title="GeoJSON">{item.geojson_file ? <span className="pseudo-download-actions">
                         {geojsonDownloadLink(item.geojson_file)}
                         {item.status === "ok" ? <a className="secondary icon-button" href={`#/pseudo-markup/${item.id}`} title="Посмотреть псевдоразметку на мозаике снимков" aria-label="Посмотреть псевдоразметку на мозаике снимков"><MapIcon size={15} /></a> : null}
+                        {item.status === "ok" ? <PseudoCompareButton id={item.id} label={`${payload.class_name || "Класс"} · ${payload.dataset_name} · ${result.model_name} · ${item.source_dataset_name} · ${formatDateTime(item.created_at)}${item.checkpoint_epoch != null ? ` · эпоха ${item.checkpoint_epoch}` : ""}`} /> : null}
                       </span> : "—"}</td>
                       <td title="Создано" data-label="Создано">{pseudoCreatedLabel(item)}</td>
                       <td className="action-cell">

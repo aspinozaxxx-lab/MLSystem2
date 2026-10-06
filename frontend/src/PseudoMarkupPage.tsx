@@ -30,6 +30,11 @@ import "./styles/pseudoViewer.css";
 export type ViewerGeoJson = { type: string; features: { properties?: PseudoProperties | null }[] };
 type GeoJson = ViewerGeoJson;
 type LoadedView = { info: PseudoMarkupViewInfo; geojson: GeoJson };
+type Comparison = {
+  sidebar: ReactNode; summary: ReactNode; title?: string; subtitle?: string; controls?: ReactNode;
+  legend?: ReactNode; hint?: string; layerControls?: ReactNode;
+  featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number } | null;
+};
 
 export function PseudoMarkupPage({ resultId, username }: { resultId: string; username: string }) {
   const [loaded, setLoaded] = useState<LoadedView | null>(null);
@@ -57,7 +62,7 @@ export function PseudoMarkupPage({ resultId, username }: { resultId: string; use
 
 export function PseudoMap({ info, geojson, username, onRetry, comparison }: LoadedView & {
   username: string; onRetry: () => void;
-  comparison?: { sidebar: ReactNode; summary: ReactNode };
+  comparison?: Comparison;
 }) {
   const compact = useCompactLayout();
   const [scenesExpanded, setScenesExpanded] = useState(false);
@@ -75,6 +80,8 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const markupLayer = useRef<VectorImageLayer | null>(null);
   const markupSource = useRef<VectorSource | null>(null);
   const comparisonLayers = useRef({ reference: true, predicted: true });
+  const customStyle = useRef(comparison?.featureStyle);
+  customStyle.current = comparison?.featureStyle;
   const [referenceVisible, setReferenceVisible] = useState(true);
   const allBounds = useRef<Extent>(createEmpty());
   const hiddenClasses = useRef(new Set<string>());
@@ -186,10 +193,10 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
       source: vector, opacity: comparison ? 1 : 0.8,
       style: (feature) => {
         if (comparison) {
-          const appearance = comparisonLayerStyle(String(feature.get("test_f1_layer")),
-            comparisonLayers.current.reference, comparisonLayers.current.predicted);
+          const appearance = customStyle.current ? customStyle.current(feature.getProperties())
+            : comparisonLayerStyle(String(feature.get("test_f1_layer")), comparisonLayers.current.reference, comparisonLayers.current.predicted);
           if (!appearance) return undefined;
-          const key = `${appearance.color}:${appearance.fill}`;
+          const key = `${appearance.color}:${appearance.fill}:${appearance.width}`;
           let style = styles.get(key);
           if (!style) {
             style = new Style({ stroke: new Stroke({ color: appearance.color, width: appearance.width }),
@@ -299,6 +306,8 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
     }
   }, [geojson, info]);
 
+  useEffect(() => { markupLayer.current?.changed(); }, [comparison?.featureStyle]);
+
   const highlightId = hoverSceneId ?? selectedSceneId;
   useEffect(() => {
     const scene = info.scenes.find((item) => item.id === highlightId);
@@ -346,8 +355,8 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const visibleErrors = info.scenes.filter((scene) => rasterErrors[scene.id] && !hiddenSceneIds.has(scene.id));
   return <div ref={workspaceRef} className={`pseudo-workspace${comparison ? " test-f1-workspace" : ""}${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
-      <div className="pseudo-viewer-title"><h1>{comparison ? "Тестовый F1" : "Просмотр псевдоразметки"}</h1><p title={`${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p>
-        <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison && info.checkpoint_epoch != null ? <span>Лучшие веса · эпоха <strong>{info.checkpoint_epoch}</strong></span> : null}{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
+      <div className="pseudo-viewer-title"><h1>{comparison?.title ?? (comparison ? "Тестовый F1" : "Просмотр псевдоразметки")}</h1><p title={comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}</p>
+        {!comparison?.featureStyle ? <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison && info.checkpoint_epoch != null ? <span>Лучшие веса · эпоха <strong>{info.checkpoint_epoch}</strong></span> : null}{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div> : null}
       </div>
       {comparison?.summary}
       {!comparison ? <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a> : null}
@@ -397,12 +406,15 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
         </div>
       </aside>}
       <div className="pseudo-map-area">
-        <div className="pseudo-map" ref={target} aria-label={comparison ? "Тестовый снимок с эталоном, прогнозом и областями TP, FP, FN" : "Мозаика снимков с псевдоразметкой"} tabIndex={0} />
+        <div className="pseudo-map" ref={target} aria-label={comparison?.title ?? (comparison ? "Тестовый снимок с эталоном, прогнозом и областями TP, FP, FN" : "Мозаика снимков с псевдоразметкой")} tabIndex={0} />
+        {comparison?.layerControls}
         <div className="dataset-editor-map-controls">
           <button className="secondary icon-button dataset-editor-map-control" type="button" aria-label={comparison ? "Весь снимок" : "Все снимки"} title={comparison ? "Показать весь снимок" : "Показать все снимки"} onClick={() => fit(allBounds.current)}><Scan size={17} /></button>
           <button className={`${imagesVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label="Снимки" aria-pressed={imagesVisible} title={imagesVisible ? "Скрыть снимки" : "Показать снимки"} onClick={() => { imagesEnabled.current = !imagesVisible; setImagesVisible(!imagesVisible); refreshRasters.current(); }}>{imagesVisible ? <Image size={17} /> : <ImageOff size={17} />}</button>
-          {comparison ? <button className={`${referenceVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label="Эталон" aria-pressed={referenceVisible} title={referenceVisible ? "Скрыть тестовую разметку" : "Показать тестовую разметку"} onClick={() => { setReferenceVisible(!referenceVisible); comparisonLayers.current.reference = !referenceVisible; markupLayer.current?.changed(); }}><ClipboardCheck size={17} /></button> : null}
-          <button className={`${markupVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label={comparison ? "Прогноз" : "Псевдоразметка"} aria-pressed={markupVisible} title={`${markupVisible ? "Скрыть" : "Показать"} ${comparison ? "предсказанную разметку" : "псевдоразметку"}`} onClick={() => { setMarkupVisible(!markupVisible); if (comparison) { comparisonLayers.current.predicted = !markupVisible; markupLayer.current?.changed(); } else markupLayer.current?.setVisible(!markupVisible); }}>{comparison ? <Sparkles size={17} /> : <Layers size={17} />}</button>
+          {comparison?.featureStyle ? comparison.controls : <>
+            {comparison ? <button className={`${referenceVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label="Эталон" aria-pressed={referenceVisible} title={referenceVisible ? "Скрыть тестовую разметку" : "Показать тестовую разметку"} onClick={() => { setReferenceVisible(!referenceVisible); comparisonLayers.current.reference = !referenceVisible; markupLayer.current?.changed(); }}><ClipboardCheck size={17} /></button> : null}
+            <button className={`${markupVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`} type="button" aria-label={comparison ? "Прогноз" : "Псевдоразметка"} aria-pressed={markupVisible} title={`${markupVisible ? "Скрыть" : "Показать"} ${comparison ? "предсказанную разметку" : "псевдоразметку"}`} onClick={() => { setMarkupVisible(!markupVisible); if (comparison) { comparisonLayers.current.predicted = !markupVisible; markupLayer.current?.changed(); } else markupLayer.current?.setVisible(!markupVisible); }}>{comparison ? <Sparkles size={17} /> : <Layers size={17} />}</button>
+          </>}
           {hasNir ? <div className={`dataset-editor-band-picker${bandMenuOpen ? " open" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setBandMenuOpen(false); }} onBlur={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setBandMenuOpen(false); }}>
             <button className="secondary icon-button dataset-editor-map-control" type="button" aria-label={`Сочетание каналов ${bandMode}`} aria-haspopup="menu" aria-expanded={bandMenuOpen} title={`Сочетание каналов снимка: ${bandMode}. Открыть варианты RGB, NRG и NGB`} onClick={() => setBandMenuOpen((open) => !open)}><Blend size={17} /></button>
             <div className="dataset-editor-band-menu" role="menu">{Object.keys(BAND_CHANNELS).map((mode) => <button className={bandMode === mode ? "active" : ""} type="button" role="menuitemradio" aria-checked={bandMode === mode} key={mode} onClick={() => { const selected = mode as BandMode; selectedBandMode.current = selected; setBandMode(selected); setBandMenuOpen(false); resetBackdrop.current(); nirLayer.current?.setStyle(pseudoRasterStyle(selected, false, true)); }}>{mode}</button>)}</div>
@@ -416,13 +428,13 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
             onClick={() => void toggleFullscreen()}
           >{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
         </div>
-        <div className="pseudo-map-legend">{comparison
+        <div className="pseudo-map-legend">{comparison?.featureStyle ? comparison.legend : comparison
           ? Object.entries(TEST_F1_LAYERS).filter(([layer]) => comparisonLayerStyle(layer, referenceVisible, markupVisible)).map(([layer, item]) => <span className="test-f1-legend-item" key={layer}><i style={{ backgroundColor: item.color }} />{item.label}</span>)
           : classes.map((item) => <button type="button" key={item.key} aria-pressed={!hidden.has(item.key)} onClick={() => toggleClass(item.key)}><span style={{ backgroundColor: item.color }} />{item.name} <small>{item.count.toLocaleString("ru-RU")}</small></button>)}</div>
         {!geojson.features.length && !comparison ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
         {outlineError ? <div className="pseudo-outline-error" role="status">{outlineError}</div> : null}
       </div>
     </div>
-    <p className="pseudo-hint">{comparison ? "Два включённых слоя показывают пиксельное сравнение: зелёный — совпадение, красный — лишнее, жёлтый — пропуск. Эталон и прогноз можно отключать независимо. " : `${compact ? "Перемещение — одним пальцем, масштаб — двумя. Список снимков раскрывается стрелкой. " : "Колесо — масштаб, перетаскивание — перемещение. "}Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.`}{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
+    <p className="pseudo-hint">{comparison?.hint ?? (comparison ? "Два включённых слоя показывают пиксельное сравнение: зелёный — совпадение, красный — лишнее, жёлтый — пропуск. Эталон и прогноз можно отключать независимо. " : `${compact ? "Перемещение — одним пальцем, масштаб — двумя. Список снимков раскрывается стрелкой. " : "Колесо — масштаб, перетаскивание — перемещение. "}Снимки на экране подсвечены в списке. Глаз скрывает и показывает снимок; наведение на строку выделяет его контур без nodata. Нажмите на название, чтобы приблизить снимок и оставить контур выделенным; нажмите повторно, чтобы убрать рамку.`)}{hasNir ? " NRG и NGB используют NIR; снимки без него остаются в RGB." : ""} Просмотр не изменяет разметку датасета.</p>
   </div>;
 }

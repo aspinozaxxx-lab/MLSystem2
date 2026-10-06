@@ -292,10 +292,18 @@
 }
 
 .continuation-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pseudo-comparison-tray { padding: 12px 16px; margin-bottom: 14px; }
+.pseudo-comparison-tray-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.pseudo-comparison-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.pseudo-comparison-chips > span { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 8px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 7px; font-size: 11px; max-width: 100%; }
+.pseudo-comparison-chips > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pseudo-comparison-chips .icon-button { min-width: 28px; width: 28px; min-height: 28px; }
 .continuation-options .training-launch-check { min-height: 44px; }
 .continuation-options input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; flex-shrink: 0; padding: 0; }
 
 @media (max-width: 480px) {
+  .pseudo-comparison-tray-heading { flex-wrap: wrap; }
+  .pseudo-comparison-chips .icon-button { min-width: 44px; width: 44px; min-height: 44px; }
   .continuation-options { grid-template-columns: 1fr; gap: 10px; }
   .continuation-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .continuation-fields .field:last-child { grid-column: 1 / -1; }

@@ -25,6 +25,9 @@ from mlsystem2.training_ui_api.contracts import (
     JobDetail,
     PseudoMarkupResultInfo,
     PseudoMarkupViewInfo,
+    PseudoMarkupComparisonRequest,
+    PseudoMarkupComparisonCounts,
+    PseudoMarkupComparisonLayers,
     ResultClassListResponse,
     ResultChangesResponse,
     TrainingResultInfo,
@@ -35,6 +38,7 @@ from mlsystem2.training_ui_api.contracts import (
 
 from .common import RouteContext
 from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, pseudo_markup_raster, pseudo_markup_view
+from mlsystem2.training_ui_api._pseudo_comparison import pseudo_comparison_counts, pseudo_comparison_layers
 from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
 from mlsystem2.training_ui_api._test_f1_viewer import (
     prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
@@ -42,6 +46,18 @@ from mlsystem2.training_ui_api._test_f1_viewer import (
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.post("/api/v1/results/pseudo-markup/compare/counts", response_model=PseudoMarkupComparisonCounts)
+    def post_pseudo_comparison_counts(request: PseudoMarkupComparisonRequest,
+                                     db: Session = Depends(ctx.get_db),
+                                     _: str = Depends(ctx.authenticated)) -> PseudoMarkupComparisonCounts:
+        return pseudo_comparison_counts(db, ctx.config, request)
+
+    @app.post("/api/v1/results/pseudo-markup/compare/{scene_id}/layers", response_model=PseudoMarkupComparisonLayers)
+    def post_pseudo_comparison_layers(scene_id: str, request: PseudoMarkupComparisonRequest,
+                                     db: Session = Depends(ctx.get_db),
+                                     _: str = Depends(ctx.authenticated)) -> PseudoMarkupComparisonLayers:
+        return pseudo_comparison_layers(db, ctx.config, scene_id, request)
+
     @app.get("/api/v1/results/training/{result_id}/continue", response_model=TrainingContinuationOptions)
     def get_training_continuation(
         result_id: uuid.UUID, db: Session = Depends(ctx.get_db),

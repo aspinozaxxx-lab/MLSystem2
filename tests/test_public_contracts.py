@@ -157,7 +157,7 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "footprint_url", "bounds", "has_alpha", "has_nir", "nodata"}
     assert set(PseudoMarkupViewInfo.model_fields) == {
         "id", "training_result_id", "checkpoint_epoch", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
-        "geojson_url", "object_count", "expected_image_count", "scenes", "warnings",
+        "geojson_url", "object_count", "expected_image_count", "scenes", "warnings", "class_name",
     }
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -167,6 +167,24 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
     assert set(paths["/api/v1/results/pseudo-markup/{result_id}/footprint/{scene_id}"]) == {"get"}
     raster_parameters = paths["/api/v1/results/pseudo-markup/{result_id}/raster/{scene_id}"]["get"]["parameters"]
     assert any(item["name"] == "v" and item["in"] == "query" and item["required"] is False for item in raster_parameters)
+
+
+def test_pseudo_markup_comparison_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import (
+        PseudoMarkupComparisonRequest, PseudoMarkupPixelComparison,
+        PseudoMarkupComparisonCounts, PseudoMarkupComparisonLayers,
+    )
+
+    assert set(PseudoMarkupComparisonRequest.model_fields) == {"result_ids", "scene_revisions"}
+    assert set(PseudoMarkupPixelComparison.model_fields) == {"intersection", "only_first", "only_second"}
+    assert set(PseudoMarkupComparisonCounts.model_fields) == {"result_ids", "scenes", "total", "warnings"}
+    assert set(PseudoMarkupComparisonLayers.model_fields) == {"scene_id", "available_result_ids", "geojson", "counts"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    assert set(paths["/api/v1/results/pseudo-markup/compare/counts"]) == {"post"}
+    assert set(paths["/api/v1/results/pseudo-markup/compare/{scene_id}/layers"]) == {"post"}
 
 
 def test_training_test_f1_view_contract(monkeypatch) -> None:

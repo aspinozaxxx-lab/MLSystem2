@@ -4586,6 +4586,93 @@
         }
       }
     },
+    "/api/v1/results/pseudo-markup/compare/counts": {
+      "post": {
+        "summary": "Post Pseudo Comparison Counts",
+        "operationId": "post_pseudo_comparison_counts_api_v1_results_pseudo_markup_compare_counts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PseudoMarkupComparisonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudoMarkupComparisonCounts"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/pseudo-markup/compare/{scene_id}/layers": {
+      "post": {
+        "summary": "Post Pseudo Comparison Layers",
+        "operationId": "post_pseudo_comparison_layers_api_v1_results_pseudo_markup_compare__scene_id__layers_post",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PseudoMarkupComparisonRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PseudoMarkupComparisonLayers"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/training/{result_id}/continue": {
       "get": {
         "summary": "Get Training Continuation",
@@ -9831,6 +9918,138 @@
         ],
         "title": "PrimaryTestSampleInfo"
       },
+      "PseudoMarkupComparisonCounts": {
+        "properties": {
+          "result_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Result Ids"
+          },
+          "scenes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PseudoMarkupPixelComparison"
+            },
+            "type": "object",
+            "title": "Scenes"
+          },
+          "total": {
+            "$ref": "#/components/schemas/PseudoMarkupPixelComparison"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "result_ids",
+          "scenes",
+          "total",
+          "warnings"
+        ],
+        "title": "PseudoMarkupComparisonCounts"
+      },
+      "PseudoMarkupComparisonLayers": {
+        "properties": {
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id"
+          },
+          "available_result_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Available Result Ids"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          },
+          "counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PseudoMarkupPixelComparison"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scene_id",
+          "available_result_ids",
+          "geojson"
+        ],
+        "title": "PseudoMarkupComparisonLayers"
+      },
+      "PseudoMarkupComparisonRequest": {
+        "properties": {
+          "result_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Result Ids"
+          },
+          "scene_revisions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Scene Revisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "result_ids"
+        ],
+        "title": "PseudoMarkupComparisonRequest",
+        "description": "Активные сохранённые разметки и ревизии подложки."
+      },
+      "PseudoMarkupPixelComparison": {
+        "properties": {
+          "intersection": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Intersection"
+          },
+          "only_first": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Only First"
+          },
+          "only_second": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Only Second"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "intersection",
+          "only_first",
+          "only_second"
+        ],
+        "title": "PseudoMarkupPixelComparison"
+      },
       "PseudoMarkupResultInfo": {
         "properties": {
           "id": {
@@ -10111,6 +10330,17 @@
           "training_dataset_name": {
             "type": "string",
             "title": "Training Dataset Name"
+          },
+          "class_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Name"
           },
           "created_at": {
             "type": "string",

@@ -5,6 +5,9 @@ export type FeedbackInfo = components["schemas"]["FeedbackInfo"];
 export type FeedbackListResponse = components["schemas"]["FeedbackListResponse"];
 
 export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];
+export type PseudoMarkupComparisonCounts = components["schemas"]["PseudoMarkupComparisonCounts"];
+export type PseudoMarkupComparisonLayers = components["schemas"]["PseudoMarkupComparisonLayers"];
+export type PseudoMarkupPixelComparison = components["schemas"]["PseudoMarkupPixelComparison"];
 export type TestF1ViewInfo = components["schemas"]["TestF1ViewInfo"];
 export type TestF1SceneInfo = components["schemas"]["TestF1SceneInfo"];
 export type TestF1ScoreInfo = components["schemas"]["TestF1ScoreInfo"];

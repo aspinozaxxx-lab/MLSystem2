@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .catalog import DatasetInfo, ModelInfo
 from .common import JobSource, JobType, ResultStatus, RuntimeProgress, StoredFileInfo
@@ -66,12 +66,54 @@ class PseudoMarkupViewInfo(BaseModel):
     model_name: str
     source_dataset_name: str
     training_dataset_name: str
+    class_name: str | None = None
     created_at: datetime
     geojson_url: str
     object_count: int | None = None
     expected_image_count: int | None = None
     scenes: list[PseudoMarkupSceneInfo]
     warnings: list[str]
+
+
+class PseudoMarkupComparisonRequest(BaseModel):
+    """Активные сохранённые разметки и ревизии подложки."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    result_ids: list[UUID] = Field(min_length=1, max_length=12)
+    scene_revisions: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def unique_results(self):
+        if len(set(self.result_ids)) != len(self.result_ids):
+            raise ValueError("Псевдоразметки в сравнении не должны повторяться.")
+        return self
+
+
+class PseudoMarkupPixelComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intersection: int = Field(ge=0)
+    only_first: int = Field(ge=0)
+    only_second: int = Field(ge=0)
+
+
+class PseudoMarkupComparisonCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result_ids: list[UUID]
+    scenes: dict[str, PseudoMarkupPixelComparison]
+    total: PseudoMarkupPixelComparison
+    warnings: list[str]
+
+
+class PseudoMarkupComparisonLayers(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    available_result_ids: list[UUID]
+    geojson: dict[str, Any]
+    counts: PseudoMarkupPixelComparison | None = None
 
 
 class TrainingResultTestF1Info(BaseModel):
@@ -337,6 +379,10 @@ __all__ = [
     "PseudoMarkupResultInfo",
     "PseudoMarkupSceneInfo",
     "PseudoMarkupViewInfo",
+    "PseudoMarkupComparisonRequest",
+    "PseudoMarkupPixelComparison",
+    "PseudoMarkupComparisonCounts",
+    "PseudoMarkupComparisonLayers",
     "ResultClassInfo",
     "ResultClassListResponse",
     "ResultChangeInfo",
