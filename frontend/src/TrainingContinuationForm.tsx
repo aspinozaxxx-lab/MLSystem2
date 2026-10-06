@@ -23,6 +23,8 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
       additional_time_sec: Math.round(Number(values.get("minutes")) * 60),
       early_stopping_patience: Number(values.get("patience")),
       checkpoint,
+      run_inference_after_training: values.get("run_inference_after_training") === "on",
+      secondary_priority: values.get("secondary_priority") === "on",
       request_id: requestId,
     };
     sending.current = true;
@@ -63,6 +65,14 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
       </label>
     </div>
     <p className="muted">Обучение остановится по первому достигнутому пределу. Время учитывает обучение и валидацию; текущая эпоха завершается полностью.</p>
+    <div className="continuation-options" role="group" aria-label="Очередь и результат">
+      <label className="training-launch-check"><input type="checkbox" name="run_inference_after_training" defaultChecked={options.run_inference_after_training} disabled={busy} />
+        <span>Псевдоразметка после обучения<small>Все снимки датасета, после успешного завершения.</small></span>
+      </label>
+      <label className="training-launch-check"><input type="checkbox" name="secondary_priority" defaultChecked={options.secondary_priority} disabled={busy} />
+        <span>Второстепенный приоритет<small>Обучение и псевдоразметка уступают ресурсы обычным заданиям.</small></span>
+      </label>
+    </div>
     <div className="button-row">
       <button className="secondary" type="button" onClick={closeModal} disabled={busy}>Отмена</button>
       <button className="primary" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}{busy ? "Постановка в очередь…" : "Продолжить обучение"}</button>

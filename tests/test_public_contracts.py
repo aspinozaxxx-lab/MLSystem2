@@ -61,6 +61,7 @@ def test_completed_training_continuation_contract(monkeypatch) -> None:
 
     assert set(TrainingContinuationCreate.model_fields) == {
         "additional_epochs", "additional_time_sec", "early_stopping_patience", "checkpoint", "request_id",
+        "run_inference_after_training", "secondary_priority",
     }
     assert {"can_continue_training", "continued_from_result_id", "continued_from_checkpoint"} <= TrainingResultInfo.model_fields.keys()
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")

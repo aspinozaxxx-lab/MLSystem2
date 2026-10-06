@@ -4850,7 +4850,7 @@ export interface components {
         };
         /**
          * TrainingContinuationCreate
-         * @description Чекпойнт и лимиты нового этапа обучения.
+         * @description Чекпойнт, лимиты и параметры очереди нового этапа обучения.
          */
         TrainingContinuationCreate: {
             /** Additional Epochs */
@@ -4865,6 +4865,10 @@ export interface components {
              * @enum {string}
              */
             checkpoint: "best" | "last";
+            /** Run Inference After Training */
+            run_inference_after_training?: boolean | null;
+            /** Secondary Priority */
+            secondary_priority?: boolean | null;
             /**
              * Request Id
              * Format: uuid
@@ -4884,6 +4888,16 @@ export interface components {
             early_stopping_patience: number;
             /** Last Checkpoint Available */
             last_checkpoint_available: boolean;
+            /**
+             * Run Inference After Training
+             * @default false
+             */
+            run_inference_after_training: boolean;
+            /**
+             * Secondary Priority
+             * @default false
+             */
+            secondary_priority: boolean;
         };
         /** TrainingJobCreate */
         TrainingJobCreate: {

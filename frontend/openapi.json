@@ -13479,6 +13479,28 @@
             "title": "Checkpoint",
             "default": "best"
           },
+          "run_inference_after_training": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Inference After Training"
+          },
+          "secondary_priority": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Priority"
+          },
           "request_id": {
             "type": "string",
             "format": "uuid",
@@ -13494,7 +13516,7 @@
           "request_id"
         ],
         "title": "TrainingContinuationCreate",
-        "description": "Чекпойнт и лимиты нового этапа обучения."
+        "description": "Чекпойнт, лимиты и параметры очереди нового этапа обучения."
       },
       "TrainingContinuationOptions": {
         "properties": {
@@ -13516,6 +13538,16 @@
           "last_checkpoint_available": {
             "type": "boolean",
             "title": "Last Checkpoint Available"
+          },
+          "run_inference_after_training": {
+            "type": "boolean",
+            "title": "Run Inference After Training",
+            "default": false
+          },
+          "secondary_priority": {
+            "type": "boolean",
+            "title": "Secondary Priority",
+            "default": false
           }
         },
         "additionalProperties": false,

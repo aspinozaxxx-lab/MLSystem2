@@ -18,7 +18,10 @@ from mlsystem2.training_ui_api import _training_continuation as continuation, _w
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
-from mlsystem2.training_ui_api._queueing import POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY
+from mlsystem2.training_ui_api._queueing import (
+    POST_TRAINING_INFERENCE_CONFIG_KEY, POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+    SECONDARY_PRIORITY_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY, is_secondary_job,
+)
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import TrainingContinuationCreate, TrainingUIAPIError
 
@@ -136,7 +139,8 @@ def test_continue_api_copies_parameters_and_keeps_original(saved_training, check
     options = env.client.get(url)
     assert options.status_code == 200
     assert options.json() == {"additional_epochs": 30, "additional_time_sec": 1800,
-                              "early_stopping_patience": 7, "last_checkpoint_available": True}
+                              "early_stopping_patience": 7, "last_checkpoint_available": True,
+                              "run_inference_after_training": True, "secondary_priority": False}
     request = _request(checkpoint)
     response = env.client.post(url, json=request)
     assert response.status_code == 200, response.text
@@ -171,6 +175,48 @@ def test_last_checkpoint_is_disabled_and_rejected_when_not_saved(saved_training)
     assert env.client.get(url).json()["last_checkpoint_available"] is False
     assert env.client.post(url, json=_request("last")).status_code == 400
     assert env.client.post(url, json=_request("best")).status_code == 200
+
+
+@pytest.mark.parametrize("run_inference", [False, True])
+@pytest.mark.parametrize("secondary", [False, True])
+def test_continuation_can_change_pseudo_markup_and_queue_priority(saved_training, run_inference, secondary):
+    env = saved_training
+    source_config = {**env.flat, POST_TRAINING_INFERENCE_CONFIG_KEY: not run_inference,
+                     SECONDARY_PRIORITY_CONFIG_KEY: not secondary}
+    with env.factory() as session:
+        session.get(JobRow, env.job_id).config = source_config
+        session.commit()
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    options = env.client.get(url).json()
+    assert options["run_inference_after_training"] is (not run_inference)
+    assert options["secondary_priority"] is (not secondary)
+    request = _request(run_inference_after_training=run_inference, secondary_priority=secondary)
+    response = env.client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    child = response.json()
+    assert child["run_inference_after_training"] is run_inference
+    assert child["secondary_priority"] is secondary
+    with env.factory() as session:
+        row = session.get(JobRow, uuid.UUID(child["id"]))
+        assert row.config[POST_TRAINING_INFERENCE_CONFIG_KEY] is run_inference
+        assert is_secondary_job(row) is secondary
+        assert session.get(JobRow, env.job_id).config == source_config
+    assert env.client.post(url, json=request).json()["id"] == child["id"]
+    for name in ("run_inference_after_training", "secondary_priority"):
+        assert env.client.post(url, json={**request, name: not request[name]}).status_code == 400
+
+
+def test_omitted_continuation_option_inherits_the_original_choice(saved_training):
+    env = saved_training
+    with env.factory() as session:
+        source = session.get(JobRow, env.job_id)
+        source.config = {**source.config, SECONDARY_PRIORITY_CONFIG_KEY: True}
+        session.commit()
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue",
+                               json=_request(run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+    assert response.json()["run_inference_after_training"] is False
+    assert response.json()["secondary_priority"] is True
 
 
 def test_continuation_keeps_pseudo_markup_files_and_their_checkpoint_epoch(saved_training, monkeypatch):

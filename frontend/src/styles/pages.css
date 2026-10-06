@@ -291,7 +291,12 @@
   gap: 12px;
 }
 
+.continuation-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.continuation-options .training-launch-check { min-height: 44px; }
+.continuation-options input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; flex-shrink: 0; padding: 0; }
+
 @media (max-width: 480px) {
+  .continuation-options { grid-template-columns: 1fr; gap: 10px; }
   .continuation-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .continuation-fields .field:last-child { grid-column: 1 / -1; }
 }

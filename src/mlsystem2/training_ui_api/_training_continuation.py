@@ -20,7 +20,9 @@ from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 from ._config import TrainingUIAPIConfig
 from ._models import JobRow, TrainingResultRow
 from ._queueing import (
+    POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+    SECONDARY_PRIORITY_CONFIG_KEY,
     STOP_AND_SAVE_BEST_CONFIG_KEY,
     next_queue_position,
 )
@@ -39,6 +41,10 @@ _LIMIT_KEYS = {
     "additional_epochs": "train.epochs",
     "additional_time_sec": "train.max_training_time_sec",
     "early_stopping_patience": "train.early_stopping_patience",
+}
+_OPTION_KEYS = {
+    "run_inference_after_training": POST_TRAINING_INFERENCE_CONFIG_KEY,
+    "secondary_priority": SECONDARY_PRIORITY_CONFIG_KEY,
 }
 
 
@@ -87,6 +93,8 @@ def continuation_options(
         additional_time_sec=flat.get("train.max_training_time_sec") or 3600,
         early_stopping_patience=flat.get("train.early_stopping_patience") or 10,
         last_checkpoint_available=last_available,
+        run_inference_after_training=bool(flat.get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)),
+        secondary_priority=bool(flat.get(SECONDARY_PRIORITY_CONFIG_KEY, False)),
     )
 
 
@@ -100,9 +108,15 @@ def create_continuation_job(
     session.refresh(source, with_for_update=True)
     if not can_continue_training(result, source):
         raise TrainingUIAPIError("Исходное обучение больше недоступно для продолжения.")
+    # Старые клиенты без этих полей сохраняют прежнее наследование опций.
+    selected_options = {
+        key: bool(source.config.get(key, False)) if getattr(request, name) is None else getattr(request, name)
+        for name, key in _OPTION_KEYS.items()
+    }
     existing = session.scalar(select(JobRow).where(JobRow.dedup_key == dedup_key))
     if existing is not None:
         if (any(existing.config.get(key) != getattr(request, name) for name, key in _LIMIT_KEYS.items())
+            or any(bool(existing.config.get(key, False)) != value for key, value in selected_options.items())
             or existing.config[CONTINUATION_KEY].get("checkpoint") != request.checkpoint):
             raise TrainingUIAPIError("Параметры повторной отправки изменены. Откройте диалог заново.")
         return existing
@@ -111,6 +125,7 @@ def create_continuation_job(
     for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY):
         job_config.pop(transient_key, None)
     job_config.update({key: getattr(request, name) for name, key in _LIMIT_KEYS.items()})
+    job_config.update(selected_options)
     job_config[CONTINUATION_KEY] = {
         "result_id": str(result.id), "job_id": str(source.id),
         "mlflow_run_id": result.mlflow_run_id,

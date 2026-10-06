@@ -26,7 +26,7 @@ class TrainingJobCreate(BaseModel):
 
 
 class TrainingContinuationCreate(BaseModel):
-    """Чекпойнт и лимиты нового этапа обучения."""
+    """Чекпойнт, лимиты и параметры очереди нового этапа обучения."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -34,6 +34,8 @@ class TrainingContinuationCreate(BaseModel):
     additional_time_sec: int = Field(gt=0, strict=True)
     early_stopping_patience: int = Field(gt=0, strict=True)
     checkpoint: Literal["best", "last"] = "best"
+    run_inference_after_training: bool | None = None
+    secondary_priority: bool | None = None
     request_id: UUID
 
 
@@ -46,6 +48,8 @@ class TrainingContinuationOptions(BaseModel):
     additional_time_sec: int = Field(gt=0)
     early_stopping_patience: int = Field(gt=0)
     last_checkpoint_available: bool
+    run_inference_after_training: bool = False
+    secondary_priority: bool = False
 
 
 class QueueEnabledUpdate(BaseModel):
