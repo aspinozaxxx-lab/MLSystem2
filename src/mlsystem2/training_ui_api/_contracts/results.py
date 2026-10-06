@@ -27,6 +27,7 @@ class PseudoMarkupResultInfo(BaseModel):
 
     id: UUID
     job_id: UUID | None = None
+    checkpoint_epoch: int | None = None
     source: JobSource = JobSource.MANUAL
     dataset_key: str | None = None
     dataset_version: str | None = None
@@ -61,6 +62,7 @@ class PseudoMarkupViewInfo(BaseModel):
 
     id: UUID
     training_result_id: UUID | None = None
+    checkpoint_epoch: int | None = None
     model_name: str
     source_dataset_name: str
     training_dataset_name: str
@@ -174,6 +176,10 @@ class TrainingResultInfo(BaseModel):
     pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1"] = "legacy"
     validation_fold: int = Field(default=0, ge=0)
     is_primary: bool = False
+    can_continue_training: bool = False
+    continued_from_result_id: UUID | None = None
+    continued_from_epoch: int | None = None
+    continued_from_checkpoint: Literal["best", "last"] | None = None
     input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     task: Literal["binary", "multiclass"] = "binary"

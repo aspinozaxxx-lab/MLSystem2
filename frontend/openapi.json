@@ -4586,6 +4586,94 @@
         }
       }
     },
+    "/api/v1/results/training/{result_id}/continue": {
+      "get": {
+        "summary": "Get Training Continuation",
+        "operationId": "get_training_continuation_api_v1_results_training__result_id__continue_get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingContinuationOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Training Continuation",
+        "operationId": "post_training_continuation_api_v1_results_training__result_id__continue_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainingContinuationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/training/{result_id}/test-f1/view": {
       "get": {
         "summary": "Get Test F1 View",
@@ -9762,6 +9850,17 @@
             ],
             "title": "Job Id"
           },
+          "checkpoint_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Epoch"
+          },
           "source": {
             "$ref": "#/components/schemas/JobSource",
             "default": "manual"
@@ -9989,6 +10088,17 @@
               }
             ],
             "title": "Training Result Id"
+          },
+          "checkpoint_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Epoch"
           },
           "model_name": {
             "type": "string",
@@ -13343,6 +13453,82 @@
         "type": "object",
         "title": "TestSampleUpdate"
       },
+      "TrainingContinuationCreate": {
+        "properties": {
+          "additional_epochs": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Epochs"
+          },
+          "additional_time_sec": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Time Sec"
+          },
+          "early_stopping_patience": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Early Stopping Patience"
+          },
+          "checkpoint": {
+            "type": "string",
+            "enum": [
+              "best",
+              "last"
+            ],
+            "title": "Checkpoint",
+            "default": "best"
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Request Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "additional_epochs",
+          "additional_time_sec",
+          "early_stopping_patience",
+          "request_id"
+        ],
+        "title": "TrainingContinuationCreate",
+        "description": "Чекпойнт и лимиты нового этапа обучения."
+      },
+      "TrainingContinuationOptions": {
+        "properties": {
+          "additional_epochs": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Epochs"
+          },
+          "additional_time_sec": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Time Sec"
+          },
+          "early_stopping_patience": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Early Stopping Patience"
+          },
+          "last_checkpoint_available": {
+            "type": "boolean",
+            "title": "Last Checkpoint Available"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "additional_epochs",
+          "additional_time_sec",
+          "early_stopping_patience",
+          "last_checkpoint_available"
+        ],
+        "title": "TrainingContinuationOptions",
+        "description": "Начальные значения диалога продолжения обучения."
+      },
       "TrainingJobCreate": {
         "properties": {
           "mlflow_experiment_id": {
@@ -13548,6 +13734,49 @@
             "type": "boolean",
             "title": "Is Primary",
             "default": false
+          },
+          "can_continue_training": {
+            "type": "boolean",
+            "title": "Can Continue Training",
+            "default": false
+          },
+          "continued_from_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continued From Result Id"
+          },
+          "continued_from_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continued From Epoch"
+          },
+          "continued_from_checkpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "best",
+                  "last"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continued From Checkpoint"
           },
           "input_channels": {
             "type": "integer",

@@ -347,7 +347,7 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   return <div ref={workspaceRef} className={`pseudo-workspace${comparison ? " test-f1-workspace" : ""}${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
       <div className="pseudo-viewer-title"><h1>{comparison ? "Тестовый F1" : "Просмотр псевдоразметки"}</h1><p title={`${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{info.source_dataset_name} · {formatDateTime(info.created_at)}</p>
-        <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
+        <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison && info.checkpoint_epoch != null ? <span>Лучшие веса · эпоха <strong>{info.checkpoint_epoch}</strong></span> : null}{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div>
       </div>
       {comparison?.summary}
       {!comparison ? <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a> : null}

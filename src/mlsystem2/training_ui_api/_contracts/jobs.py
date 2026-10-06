@@ -25,6 +25,29 @@ class TrainingJobCreate(BaseModel):
     secondary_priority: bool = False
 
 
+class TrainingContinuationCreate(BaseModel):
+    """Чекпойнт и лимиты нового этапа обучения."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    additional_epochs: int = Field(gt=0, strict=True)
+    additional_time_sec: int = Field(gt=0, strict=True)
+    early_stopping_patience: int = Field(gt=0, strict=True)
+    checkpoint: Literal["best", "last"] = "best"
+    request_id: UUID
+
+
+class TrainingContinuationOptions(BaseModel):
+    """Начальные значения диалога продолжения обучения."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    additional_epochs: int = Field(gt=0)
+    additional_time_sec: int = Field(gt=0)
+    early_stopping_patience: int = Field(gt=0)
+    last_checkpoint_available: bool
+
+
 class QueueEnabledUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -136,4 +159,6 @@ __all__ = [
     "QueueEnabledUpdate",
     "QueueSnapshot",
     "TrainingJobCreate",
+    "TrainingContinuationCreate",
+    "TrainingContinuationOptions",
 ]

@@ -3760,7 +3760,10 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         config_yaml = (run_dir / "run.yml").read_text(encoding="utf-8")
         run_script = (run_dir / "run_training.sh").read_text(encoding="utf-8")
         assert "split_granularity" not in config_yaml
-        assert "num_workers" not in config_yaml
+        run_payload = yaml.safe_load(config_yaml)
+        base_payload = yaml.safe_load(config.training_settings_path.read_text(encoding="utf-8"))
+        # Полный снимок фиксирует и общие параметры для последующего этапа обучения.
+        assert run_payload["tile_preparation"]["num_workers"] == base_payload["tile_preparation"]["num_workers"]
         assert "input_channels: 4" in config_yaml
         assert f"images_dir: {config.images_root / 'kanopus'}" in config_yaml
         assert "inference:" not in config_yaml

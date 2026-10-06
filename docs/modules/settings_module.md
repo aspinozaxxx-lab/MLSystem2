@@ -36,6 +36,10 @@
 batch по архитектуре: B0 — 16/8/4/2, B1 — 8/4/2/1, B2/B3 — 4/2/1/1 соответственно, LR 1e-4,
 weight decay 0.01, loss `cross_entropy_tversky`, alpha/beta 0.75/0.25 и threshold 0.5.
 В UI меняются pretrained, tile_size, epochs, early_stopping_patience и max_training_time_sec. Batch limits запрещены.
+Для продолжения завершённого обучения разрешён `train.initial_checkpoint_uri` также в next-gen2 и object_f1.
+Фиксированные параметры профиля сохраняются; `train_pipeline` проверяет архитектуру, число каналов,
+вариант конвейера и нормализацию загружаемого checkpoint перед обучением. HTTP-диалог выбирает best/last
+исходного результата, прямой путь к файлу через этот диалог не принимается.
 Число workers — параметр исполнения из серверного settings.yml (8), а не ограничение профиля ноутбука.
 
 `load_settings` проверяет файлы, рекурсивно накладывает `run.yml` на стабильный `settings.yml`, запрещает лишние поля и сохраняет результат. Отсутствующий `train.pipeline_variant` означает `legacy`; старые YAML остаются совместимыми. `next_gen` v1 разрешён только для binary, четырёх каналов, одного выхода и `segformer_b0|smp_segformer_b0`; ненулевой `max_val_batches_per_epoch` отклоняется. Pretrained разрешён только HF B0. Gaussian A/B дополнительно требует tile `512` и stride `256`. Остальные проверки и поведение `legacy` не изменены.

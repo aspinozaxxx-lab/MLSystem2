@@ -40,6 +40,7 @@ from ._automation import (
 )
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
+from ._training_continuation import CONTINUATION_KEY, can_continue_training
 from ._dataset_catalog import (
     dataset_training_result,
     create_dataset_class as _create_dataset_class,
@@ -2958,6 +2959,7 @@ def _training_result_info(
         ).all()
     job = _job_from_map(session, row.job_id, jobs_by_id)
     is_primary = _is_primary_training_result(session, row)
+    continuation = (job.config or {}).get(CONTINUATION_KEY, {}) if job is not None else {}
     return TrainingResultInfo(
         id=row.id,
         job_id=row.job_id,
@@ -2969,6 +2971,10 @@ def _training_result_info(
         pipeline_variant=_job_pipeline_variant(job),
         validation_fold=_job_validation_fold(job),
         is_primary=is_primary,
+        can_continue_training=can_continue_training(row, job),
+        continued_from_result_id=continuation.get("result_id"),
+        continued_from_epoch=continuation.get("epoch"),
+        continued_from_checkpoint=continuation.get("checkpoint"),
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         task=row.task,
@@ -3004,6 +3010,7 @@ def _pseudo_markup_info(
     return PseudoMarkupResultInfo(
         id=row.id,
         job_id=row.job_id,
+        checkpoint_epoch=row.training_result.epoch if row.training_result is not None else None,
         source=JobSource(row.source),
         dataset_key=row.dataset_key,
         dataset_version=row.dataset_version,

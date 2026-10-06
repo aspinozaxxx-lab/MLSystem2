@@ -55,6 +55,25 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_completed_training_continuation_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TrainingContinuationCreate, TrainingResultInfo
+
+    assert set(TrainingContinuationCreate.model_fields) == {
+        "additional_epochs", "additional_time_sec", "early_stopping_patience", "checkpoint", "request_id",
+    }
+    assert {"can_continue_training", "continued_from_result_id", "continued_from_checkpoint"} <= TrainingResultInfo.model_fields.keys()
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    path = schema["paths"]["/api/v1/results/training/{result_id}/continue"]
+    assert {"get", "post"} <= path.keys()
+    properties = schema["components"]["schemas"]["TrainingContinuationCreate"]["properties"]
+    assert properties["checkpoint"]["enum"] == ["best", "last"]
+    assert properties["additional_epochs"]["exclusiveMinimum"] == 0
+    assert properties["request_id"]["format"] == "uuid"
+
+
 def test_test_markup_creation_queue_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import TestSampleBatchCreate, TestSampleCreationSettings
@@ -136,7 +155,7 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
 
     assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "footprint_url", "bounds", "has_alpha", "has_nir", "nodata"}
     assert set(PseudoMarkupViewInfo.model_fields) == {
-        "id", "training_result_id", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
+        "id", "training_result_id", "checkpoint_epoch", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
         "geojson_url", "object_count", "expected_image_count", "scenes", "warnings",
     }
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")

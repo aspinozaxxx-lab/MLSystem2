@@ -38,6 +38,7 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
+from ._training_continuation import CONTINUATION_KEY, build_continuation_config
 from ._dataset_catalog import (
     dataset_class_row,
     find_managed_dataset,
@@ -566,7 +567,9 @@ def _start_training_job(
         config_path = run_dir / "run.yml"
         payload = _build_training_config(session, row, config, run_dir)
         _write_yaml(config_path, payload)
-        load_settings(config.training_settings_path, config_path)
+        resolved = load_settings(config.training_settings_path, config_path)
+        # Полный снимок сохраняет параметры даже после изменения общих настроек сервера.
+        _write_yaml(config_path, resolved.model_dump(mode="json", exclude={"inference"}))
         script_path = _write_run_script(row, config, run_dir, config_path)
         process = popen_factory(
             ["bash", str(script_path)],
@@ -695,6 +698,8 @@ def _build_training_config(
     config: TrainingUIAPIConfig,
     run_dir: Path,
 ) -> dict[str, Any]:
+    if CONTINUATION_KEY in (row.config or {}):
+        return build_continuation_config(session, row, config, run_dir)
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
     if pipeline_variant in {"next_gen2", "object_f1"}:

@@ -1657,6 +1657,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/{result_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Training Continuation */
+        get: operations["get_training_continuation_api_v1_results_training__result_id__continue_get"];
+        put?: never;
+        /** Post Training Continuation */
+        post: operations["post_training_continuation_api_v1_results_training__result_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/test-f1/view": {
         parameters: {
             query?: never;
@@ -3489,6 +3507,8 @@ export interface components {
             id: string;
             /** Job Id */
             job_id?: string | null;
+            /** Checkpoint Epoch */
+            checkpoint_epoch?: number | null;
             /** @default manual */
             source: components["schemas"]["JobSource"];
             /** Dataset Key */
@@ -3566,6 +3586,8 @@ export interface components {
             id: string;
             /** Training Result Id */
             training_result_id?: string | null;
+            /** Checkpoint Epoch */
+            checkpoint_epoch?: number | null;
             /** Model Name */
             model_name: string;
             /** Source Dataset Name */
@@ -4826,6 +4848,43 @@ export interface components {
             /** Enabled Tile Indices */
             enabled_tile_indices?: number[] | null;
         };
+        /**
+         * TrainingContinuationCreate
+         * @description Чекпойнт и лимиты нового этапа обучения.
+         */
+        TrainingContinuationCreate: {
+            /** Additional Epochs */
+            additional_epochs: number;
+            /** Additional Time Sec */
+            additional_time_sec: number;
+            /** Early Stopping Patience */
+            early_stopping_patience: number;
+            /**
+             * Checkpoint
+             * @default best
+             * @enum {string}
+             */
+            checkpoint: "best" | "last";
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
+        /**
+         * TrainingContinuationOptions
+         * @description Начальные значения диалога продолжения обучения.
+         */
+        TrainingContinuationOptions: {
+            /** Additional Epochs */
+            additional_epochs: number;
+            /** Additional Time Sec */
+            additional_time_sec: number;
+            /** Early Stopping Patience */
+            early_stopping_patience: number;
+            /** Last Checkpoint Available */
+            last_checkpoint_available: boolean;
+        };
         /** TrainingJobCreate */
         TrainingJobCreate: {
             /** Mlflow Experiment Id */
@@ -4909,6 +4968,17 @@ export interface components {
              * @default false
              */
             is_primary: boolean;
+            /**
+             * Can Continue Training
+             * @default false
+             */
+            can_continue_training: boolean;
+            /** Continued From Result Id */
+            continued_from_result_id?: string | null;
+            /** Continued From Epoch */
+            continued_from_epoch?: number | null;
+            /** Continued From Checkpoint */
+            continued_from_checkpoint?: ("best" | "last") | null;
             /**
              * Input Channels
              * @default 4
@@ -8699,6 +8769,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_training_continuation_api_v1_results_training__result_id__continue_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingContinuationOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_training_continuation_api_v1_results_training__result_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrainingContinuationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
                 };
             };
             /** @description Validation Error */

@@ -72,6 +72,7 @@ import type {
   ResultClassListResponse,
   TrainingResultBatchExportRequest,
   TrainingResultInfo,
+  TrainingContinuationOptions,
   TrainingTemplate,
   TestSampleCatalogResponse,
   TestSampleBulkDownloadRequest,
@@ -83,6 +84,8 @@ import type {
   TestSampleOptimizeRequest,
   TestSampleSummary,
 } from "./api/types";
+import { TrainingContinuationForm } from "./TrainingContinuationForm";
+import { trainingResultFamilies } from "./utils/trainingResults";
 import {
   defaultTrainingZipModelName,
   displayStoredFileName,
@@ -3356,6 +3359,15 @@ function DatasetResultsPage({
     showTrainingResultZipModal(result, bootstrap.datasets, run, showModal, closeModal);
   };
 
+  const showContinuation = async (result: TrainingResultInfo) => {
+    const options = await run(() => apiJson<TrainingContinuationOptions>(`/results/training/${result.id}/continue`));
+    if (options) showModal({
+      title: "Продолжить обучение",
+      body: <TrainingContinuationForm result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
+      footer: null,
+    });
+  };
+
   const togglePrimaryResult = async (result: TrainingResultInfo) => {
     const updated = await run(() =>
       apiJson<TrainingResultInfo>(`/results/training/${result.id}/primary`, {
@@ -3457,6 +3469,7 @@ function DatasetResultsPage({
           imageFolders={bootstrap.image_folders}
           onPseudo={showPseudo}
           onZip={showZip}
+          onContinue={(result) => void showContinuation(result)}
           onPrimary={(result) => void togglePrimaryResult(result)}
           onDeletePseudo={deletePseudo}
           showJobLog={showJobLog}
@@ -3874,6 +3887,7 @@ function ResultsTable({
   imageFolders,
   onPseudo,
   onZip,
+  onContinue,
   onPrimary,
   onDeletePseudo,
   showJobLog,
@@ -3883,6 +3897,7 @@ function ResultsTable({
   imageFolders: ImageFolderInfo[];
   onPseudo: (result: TrainingResultInfo) => void;
   onZip: (result: TrainingResultInfo) => void;
+  onContinue: (result: TrainingResultInfo) => void;
   onPrimary: (result: TrainingResultInfo) => void;
   onDeletePseudo: (item: PseudoMarkupResultInfo) => void;
   showJobLog: (jobId: string) => Promise<void>;
@@ -3890,7 +3905,10 @@ function ResultsTable({
   if (!payload.results.length) return <div className="empty-state">Для датасета пока нет результатов</div>;
   return (
     <div className="form-stack">
-      {payload.results.map((result) => (
+      {trainingResultFamilies(payload.results).map((family) => (
+        <section className={family.stages.length > 1 ? "training-family" : undefined} key={family.id}>
+          {family.stages.length > 1 ? <header className="training-family-heading"><strong>Связанные этапы обучения</strong><span className="muted">У каждого этапа свои веса и псевдоразметки</span></header> : null}
+          {family.stages.map((result, stageIndex) => (
         <section className="result-group" key={result.id}>
           <div className="table-wrap">
             <table className="training-summary-table">
@@ -3933,6 +3951,8 @@ function ResultsTable({
                         {trainingModelLabel(result.model_name, result.pipeline_variant)}
                       </strong>
                       <small className="muted">{result.architecture}</small>
+                      {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}
+                      {result.continued_from_result_id ? <small className="muted">{family.stages.some(stage => stage.id === result.continued_from_result_id) ? `От этапа ${family.stages.findIndex(stage => stage.id === result.continued_from_result_id) + 1}` : "Продолжение"} · {result.continued_from_checkpoint === "last" ? "последние веса" : `лучшие веса${result.continued_from_epoch != null ? ` эпохи ${result.continued_from_epoch}` : ""}`}</small> : null}
                     </span>
                   </td>
                   <td title="Статус">
@@ -3972,11 +3992,12 @@ function ResultsTable({
                       <span className="badge neutral">расчёт</span>
                     ) : "—"}
                   </td>
-                  <td className="technical-value" title="Epoch" data-label="Эпоха">{result.epoch ?? "—"}</td>
+                  <td className="technical-value" title="Эпоха лучших весов этого этапа" data-label="Эпоха этапа">{result.epoch ?? "—"}</td>
                   <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
                     {result.status === "ok" ? (
                       <>
+                        {result.can_continue_training ? <button className="secondary compact-action" type="button" title="Продолжить обучение от выбранного чекпойнта" onClick={() => onContinue(result)}><Play size={14} />Продолжить обучение</button> : null}
                         <button className="secondary compact-action" type="button" title="Запустить псевдоразметку" onClick={() => onPseudo(result)}>
                           <Play size={14} />
                           Pseudo
@@ -4024,7 +4045,7 @@ function ResultsTable({
                 <tbody>
                   {(result.pseudo_markup_results || []).map((item) => (
                     <tr className="pseudo-result-row" key={item.id}>
-                      <td title="ИСТОЧНИК">{imageSourceLabel(item, datasets, imageFolders)}</td>
+                      <td title="ИСТОЧНИК"><span className="source-lines">{imageSourceLabel(item, datasets, imageFolders)}<small className="muted">{item.checkpoint_epoch != null ? `Лучшие веса · эпоха ${item.checkpoint_epoch}${family.stages.length > 1 ? ` этапа ${stageIndex + 1}` : ""}` : "Сохранённые веса сети"}</small></span></td>
                       <td title="Статус">
                         <span className="status-stack">
                           {resultStatusBadge(item.status, "inference", item.progress, item.job_id, undefined, showJobLog)}
@@ -4052,6 +4073,8 @@ function ResultsTable({
               </table>
             </div>
           ) : null}
+        </section>
+          ))}
         </section>
       ))}
     </div>
@@ -4168,13 +4191,13 @@ function Modal({ modal, onClose }: { modal: ModalState | null; onClose: () => vo
           </button>
         </header>
         <div className="modal-body">{modal.body}</div>
-        <footer className="modal-footer">
+        {modal.footer !== null ? <footer className="modal-footer">
           {modal.footer || (
             <button className="secondary" type="button" onClick={onClose}>
               Закрыть
             </button>
           )}
-        </footer>
+        </footer> : null}
       </section>
     </div>
   );

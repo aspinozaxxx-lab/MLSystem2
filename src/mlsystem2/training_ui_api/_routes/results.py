@@ -17,7 +17,9 @@ from mlsystem2.training_ui_api._service import (
     result_changes,
     result_classes,
     set_primary_training_result,
+    _job_detail,
 )
+from mlsystem2.training_ui_api._training_continuation import continuation_options, create_continuation_job
 from mlsystem2.training_ui_api.contracts import (
     DatasetResultsResponse,
     JobDetail,
@@ -26,6 +28,8 @@ from mlsystem2.training_ui_api.contracts import (
     ResultClassListResponse,
     ResultChangesResponse,
     TrainingResultInfo,
+    TrainingContinuationCreate,
+    TrainingContinuationOptions,
     TestF1ViewInfo,
 )
 
@@ -38,6 +42,21 @@ from mlsystem2.training_ui_api._test_f1_viewer import (
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get("/api/v1/results/training/{result_id}/continue", response_model=TrainingContinuationOptions)
+    def get_training_continuation(
+        result_id: uuid.UUID, db: Session = Depends(ctx.get_db),
+        _: str = Depends(ctx.authenticated),
+    ) -> TrainingContinuationOptions:
+        return continuation_options(db, result_id, ctx.config)
+
+    @app.post("/api/v1/results/training/{result_id}/continue", response_model=JobDetail)
+    def post_training_continuation(
+        result_id: uuid.UUID, request: TrainingContinuationCreate,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> JobDetail:
+        row = create_continuation_job(db, result_id, request, ctx.config)
+        return _job_detail(db, row)
+
     @app.get("/api/v1/results/training/{result_id}/test-f1/view", response_model=TestF1ViewInfo)
     def get_test_f1_view(result_id: uuid.UUID, db: Session = Depends(ctx.get_db),
                          _: str = Depends(ctx.authenticated)) -> TestF1ViewInfo:

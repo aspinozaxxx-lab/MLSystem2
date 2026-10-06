@@ -257,7 +257,6 @@ class SystemSettings(BaseModel):
                 (self.train.learning_rate, 1e-4),
                 (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
                 (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),
-                (self.train.initial_checkpoint_uri, None),
             )
             if any(actual != expected for actual, expected in fixed):
                 raise ValueError("next-gen2 использует фиксированный профиль ноутбука; доступны предобученные веса, размер тайла, эпохи, patience и лимит времени")
