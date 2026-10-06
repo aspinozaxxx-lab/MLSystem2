@@ -186,3 +186,17 @@ def test_chunked_comparison_across_window_edges(comparison_environment):
     ids = [_result(env, [image], mask, str(index))[0] for index, mask in enumerate((first, second))]
     response = env.client.post("/api/v1/results/pseudo-markup/compare/counts", json={"result_ids": ids})
     assert response.json()["total"] == {"intersection": 2600, "only_first": 2550, "only_second": 0}
+
+
+def test_projected_image_edge_keeps_pixels_outside_straight_geographic_outline(comparison_environment):
+    env = comparison_environment
+    valid = np.ones((20, 3200), dtype=bool)
+    mask = np.zeros_like(valid); mask[0, 1599] = True
+    image = _image(env, "край_проекционного_снимка.tif", valid)
+    ids = [_result(env, [image], mask, str(index))[0] for index in range(2)]
+    counts = env.client.post("/api/v1/results/pseudo-markup/compare/counts", json={"result_ids": ids})
+    expected = {"intersection": 1, "only_first": 0, "only_second": 0}
+    assert counts.json()["total"] == expected
+    layers = env.client.post(f"/api/v1/results/pseudo-markup/compare/{_scene_id(image)}/layers", json={"result_ids": ids}).json()
+    assert layers["counts"] == expected
+    assert any(feature["properties"]["comparison_kind"] == "intersection" for feature in layers["geojson"]["features"])

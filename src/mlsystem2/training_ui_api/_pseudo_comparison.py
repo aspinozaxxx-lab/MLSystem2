@@ -11,9 +11,9 @@ import rasterio
 from fastapi import HTTPException
 from rasterio.enums import ColorInterp
 from rasterio.features import rasterize, shapes
-from rasterio.warp import transform_geom
+from rasterio.warp import transform_bounds, transform_geom
 from rasterio.windows import Window, transform as window_transform
-from shapely.geometry import Polygon, shape
+from shapely.geometry import Polygon, box, shape
 from shapely.strtree import STRtree
 from sqlalchemy.orm import Session
 
@@ -109,9 +109,10 @@ def _geometries(file_key):
 
 
 def _scene_trees(source, file_keys):
-    corners = Polygon([source.transform * pixel for pixel in
-                       ((0, 0), (source.width, 0), (source.width, source.height), (0, source.height))])
-    geographic = shape(transform_geom(source.crs, "EPSG:4326", corners.__geo_interface__))
+    # В географической системе прямые края проекционного TIFF могут стать дугами.
+    # Плотно преобразованный bbox сохраняет кандидатов у края; точный отбор идёт
+    # уже в нативной системе в каждом окне, поэтому лишние кандидаты безопасны.
+    geographic = box(*transform_bounds(source.crs, "EPSG:4326", *source.bounds, densify_pts=21))
     trees = []
     for key in file_keys:
         tree = _geometries(key)
