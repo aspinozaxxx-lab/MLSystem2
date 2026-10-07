@@ -86,8 +86,7 @@
 - `PUT /api/v1/inference-templates/by-id/{template_id}`
 - `DELETE /api/v1/inference-templates/by-id/{template_id}`
 - `PUT /api/v1/inference-templates/by-id/{template_id}/apply-field-to-all`
-- `GET /api/v1/inference-templates/{architecture}`
-- `PUT /api/v1/inference-templates/{architecture}`
+- `PUT /api/v1/dataset-classes/{class_key}/inference-template`
 - `POST /api/v1/training-jobs`
 - `GET /api/v1/queues`
 - `PUT /api/v1/queues/training/enabled`

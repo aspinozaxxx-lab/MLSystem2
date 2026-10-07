@@ -1384,17 +1384,16 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/inference-templates/{architecture}": {
+    "/api/v1/dataset-classes/{class_key}/inference-template": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Inference Template */
-        get: operations["get_inference_template_api_v1_inference_templates__architecture__get"];
-        /** Put Inference Template */
-        put: operations["put_inference_template_api_v1_inference_templates__architecture__put"];
+        get?: never;
+        /** Put Class Inference Template */
+        put: operations["put_class_inference_template_api_v1_dataset_classes__class_key__inference_template_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3092,16 +3091,12 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Architecture */
-            architecture: string;
-            /** Dataset Key */
-            dataset_key?: string | null;
-            /** Dataset Name */
-            dataset_name?: string | null;
-            /** Parent Template Id */
-            parent_template_id?: string | null;
             /** Display Name */
             display_name: string;
+            /** Description */
+            description?: string | null;
+            /** Class Keys */
+            class_keys: string[];
             config_schema: components["schemas"]["ConfigSchema"];
             /** Default Config */
             default_config: {
@@ -3125,10 +3120,40 @@ export interface components {
              */
             updated_at: string;
         };
+        /** InferenceTemplateClassUpdate */
+        InferenceTemplateClassUpdate: {
+            /** Template Id */
+            template_id: string | null;
+        };
+        /** InferenceTemplateCreate */
+        InferenceTemplateCreate: {
+            /** Display Name */
+            display_name: string;
+            /** Description */
+            description?: string | null;
+        };
         /** InferenceTemplateListResponse */
         InferenceTemplateListResponse: {
             /** Templates */
             templates: components["schemas"]["InferenceTemplate"][];
+        };
+        /** InferenceTemplateUpdate */
+        InferenceTemplateUpdate: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Default Config */
+            default_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Is Active */
+            is_active?: boolean | null;
+            /**
+             * Reset To Baseline
+             * @default false
+             */
+            reset_to_baseline: boolean;
         };
         /** JobDetail */
         JobDetail: {
@@ -8233,7 +8258,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TrainingTemplateCreate"];
+                "application/json": components["schemas"]["InferenceTemplateCreate"];
             };
         };
         responses: {
@@ -8268,7 +8293,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TrainingTemplateUpdate"];
+                "application/json": components["schemas"]["InferenceTemplateUpdate"];
             };
         };
         responses: {
@@ -8358,49 +8383,18 @@ export interface operations {
             };
         };
     };
-    get_inference_template_api_v1_inference_templates__architecture__get: {
+    put_class_inference_template_api_v1_dataset_classes__class_key__inference_template_put: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                architecture: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InferenceTemplate"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_inference_template_api_v1_inference_templates__architecture__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                architecture: string;
+                class_key: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TrainingTemplateUpdate"];
+                "application/json": components["schemas"]["InferenceTemplateClassUpdate"];
             };
         };
         responses: {
@@ -8410,7 +8404,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InferenceTemplate"];
+                    "application/json": components["schemas"]["InferenceTemplateListResponse"];
                 };
             };
             /** @description Validation Error */

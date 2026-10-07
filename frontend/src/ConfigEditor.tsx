@@ -1,7 +1,7 @@
 import type { ConfigField, ConfigSchema, JsonRecord } from "./api/types";
 import { coerceConfigValue, configFieldTooltip, configWithField, trainingConfigFieldVisible } from "./utils/trainingConfig";
 
-export type FieldPresentation = { label?: string; unit?: string; scale?: number };
+export type FieldPresentation = { label?: string; unit?: string; scale?: number; options?: Record<string, string> };
 
 export function ConfigEditor({
   schema,
@@ -90,7 +90,7 @@ export function ConfigEditor({
                 >
                   {options.map((option) => (
                     <option value={option} key={option}>
-                      {field.key === "train.pipeline_variant" ? option === "object_f1" ? "object f1" : option.replace("_", "-") : option}
+                      {display?.options?.[option] || (field.key === "train.pipeline_variant" ? option === "object_f1" ? "object f1" : option.replace("_", "-") : option)}
                     </option>
                   ))}
                 </select>

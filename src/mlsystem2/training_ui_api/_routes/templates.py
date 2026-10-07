@@ -11,14 +11,13 @@ from mlsystem2.training_ui_api._service import (
     apply_inference_template_field_to_all,
     apply_training_template_field_to_all,
     create_inference_template,
+    assign_inference_template,
     create_training_template,
     delete_inference_template,
     delete_training_template,
-    inference_template,
     inference_templates,
     training_template,
     training_templates,
-    update_inference_template,
     update_inference_template_by_id,
     update_training_template,
     update_training_template_by_id,
@@ -27,6 +26,7 @@ from mlsystem2.training_ui_api.contracts import (
     InferenceTemplate,
     InferenceTemplateApplyField,
     InferenceTemplateCreate,
+    InferenceTemplateClassUpdate,
     InferenceTemplateListResponse,
     InferenceTemplateUpdate,
     TrainingTemplate,
@@ -150,22 +150,14 @@ def register_template_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
         )
 
-    @app.get("/api/v1/inference-templates/{architecture}", response_model=InferenceTemplate)
-    def get_inference_template(
-        architecture: str,
+    @app.put("/api/v1/dataset-classes/{class_key}/inference-template", response_model=InferenceTemplateListResponse)
+    def put_class_inference_template(
+        class_key: str,
+        request: InferenceTemplateClassUpdate,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
-    ) -> InferenceTemplate:
-        return inference_template(db, architecture)
-
-    @app.put("/api/v1/inference-templates/{architecture}", response_model=InferenceTemplate)
-    def put_inference_template(
-        architecture: str,
-        request: InferenceTemplateUpdate,
-        db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
-    ) -> InferenceTemplate:
-        return update_inference_template(db, architecture, request, ctx.config)
+    ) -> InferenceTemplateListResponse:
+        return assign_inference_template(db, class_key, request, ctx.config)
 
 
 __all__ = ["register_template_routes"]

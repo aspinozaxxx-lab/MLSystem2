@@ -89,6 +89,7 @@ from ._queueing import (
     next_queue_position,
 )
 from ._templates import sanitize_inference_template_config
+from ._template_selection import effective_inference_template_row
 from .contracts import (
     JobSource,
     JobStatus,
@@ -3267,8 +3268,7 @@ def queue_test_sample_evaluation(
     postprocess_profile = _test_f1_postprocess_profile_name(session, sample, config)
     template, template_config, config_hash = _effective_inference_template(
         session,
-        result.architecture,
-        result.class_key,
+        result.dataset_key or result.class_key,
         postprocess_profile,
         training_result=result,
     )
@@ -3862,8 +3862,7 @@ def _test_metric_needs_reconciliation(
     )
     template, _, config_hash = _effective_inference_template(
         session,
-        result.architecture,
-        result.class_key,
+        result.dataset_key or result.class_key,
         postprocess_profile,
         evaluation_scope=(_training_result_test_scope(plan) if plan.managed else None),
         training_result=result,
@@ -3936,8 +3935,7 @@ def queue_training_result_test_f1(
     )
     template, template_config, config_hash = _effective_inference_template(
         session,
-        result.architecture,
-        result.class_key,
+        result.dataset_key or result.class_key,
         postprocess_profile,
         evaluation_scope=evaluation_scope if plan.managed else None,
         training_result=result,
@@ -4105,8 +4103,7 @@ def training_result_test_f1_info(
     )
     template, _, config_hash = _effective_inference_template(
         session,
-        result.architecture,
-        result.class_key,
+        result.dataset_key or result.class_key,
         postprocess_profile,
         evaluation_scope=(_training_result_test_scope(plan) if plan.managed else None),
         training_result=result,
@@ -4224,26 +4221,13 @@ def _primary_sample(session: Session, dataset_key: str) -> TestSampleRow | None:
 
 def _effective_inference_template(
     session: Session,
-    architecture: str,
     dataset_key: str,
     postprocess_profile: str,
     *,
     evaluation_scope: list[dict[str, Any]] | None = None,
     training_result: TrainingResultRow | None = None,
 ) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
-    template = session.scalar(
-        select(InferenceTemplateRow).where(
-            InferenceTemplateRow.architecture == architecture,
-            InferenceTemplateRow.dataset_key == dataset_key,
-        )
-    )
-    if template is None or not template.is_active:
-        template = session.scalar(
-            select(InferenceTemplateRow).where(
-                InferenceTemplateRow.architecture == architecture,
-                InferenceTemplateRow.dataset_key.is_(None),
-            )
-        )
+    template = effective_inference_template_row(session, dataset_key)
     template_config = (
         sanitize_inference_template_config(template.default_config) if template is not None else {}
     )

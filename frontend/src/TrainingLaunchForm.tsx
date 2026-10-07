@@ -40,6 +40,7 @@ type TrainingLaunchFormProps = {
   value: JsonRecord;
   onChange: (value: JsonRecord) => void;
   runInferenceAfterTraining: boolean;
+  inferenceAvailable?: boolean;
   onRunInferenceChange: (value: boolean) => void;
   secondaryPriority: boolean;
   onSecondaryPriorityChange: (value: boolean) => void;
@@ -50,6 +51,7 @@ type TrainingLaunchFormProps = {
 export function TrainingLaunchForm({
   models, datasets, architecture, onArchitectureChange, datasetKey, onDatasetChange,
   template, schema, value, onChange, runInferenceAfterTraining, onRunInferenceChange,
+  inferenceAvailable = true,
   secondaryPriority, onSecondaryPriorityChange, busy, onSubmit,
 }: TrainingLaunchFormProps) {
   const [openSection, setOpenSection] = useState<TrainingSection | null>("model");
@@ -207,9 +209,10 @@ export function TrainingLaunchForm({
         </div>
 
         <div className="training-launch-options" role="group" aria-label="Очередь и результат">
-          <label className="training-launch-check"><input type="checkbox" checked={runInferenceAfterTraining} onChange={(event) => onRunInferenceChange(event.target.checked)} />
+          <label className="training-launch-check"><input type="checkbox" name="run_inference_after_training" checked={runInferenceAfterTraining && inferenceAvailable} disabled={!inferenceAvailable} onChange={(event) => onRunInferenceChange(event.target.checked)} />
             <span>Псевдоразметка после обучения<small>Все снимки датасета, после успешного завершения.</small></span>
           </label>
+          {!inferenceAvailable ? <p className="inference-template-warning" role="alert">Классу не назначен шаблон инференса. Псевдоразметка недоступна: <a href="#/templates/inference">назначьте шаблон</a> в разделе «Инференс». Обучение можно запустить без псевдоразметки.</p> : null}
           <label className="training-launch-check"><input type="checkbox" checked={secondaryPriority} onChange={(event) => onSecondaryPriorityChange(event.target.checked)} />
             <span>Второстепенный приоритет<small>Обучение и псевдоразметка уступают ресурсы обычным заданиям.</small></span>
           </label>

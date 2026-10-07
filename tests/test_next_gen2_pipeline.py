@@ -184,14 +184,14 @@ def test_inference_revision_invalidates_only_next_gen2_test_metrics():
     source_job = SimpleNamespace(config={"train.pipeline_variant": "legacy"})
     session = SimpleNamespace(scalar=lambda query: None, get=lambda kind, key: source_job)
     result = SimpleNamespace(job_id="test-job")
-    previous = _test_samples._effective_inference_template(session, "segformer_b0", "test", "none")[2]
+    previous = _test_samples._effective_inference_template(session, "test", "none")[2]
     legacy = _test_samples._effective_inference_template(
-        session, "segformer_b0", "test", "none", training_result=result,
+        session, "test", "none", training_result=result,
     )[2]
     assert previous == legacy
     source_job.config["train.pipeline_variant"] = "next_gen2"
     updated = _test_samples._effective_inference_template(
-        session, "segformer_b0", "test", "none", training_result=result,
+        session, "test", "none", training_result=result,
     )[2]
     assert updated != previous
 

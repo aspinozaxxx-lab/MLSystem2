@@ -2047,6 +2047,8 @@ def test_editor_never_falls_back_to_another_dataset_model(editor_environment):
 
 def test_editor_checkpoint_selection_ignores_primary_dataset(editor_environment, monkeypatch):
     from mlsystem2.training_ui_api._pseudolabel import _select_model
+    from mlsystem2.training_ui_api import _service
+    from mlsystem2.training_ui_api.contracts import InferenceTemplateCreate, InferenceTemplateClassUpdate
 
     env = editor_environment
     result_id = _create_primary_training_result(env)
@@ -2055,6 +2057,8 @@ def test_editor_checkpoint_selection_ignores_primary_dataset(editor_environment,
     with create_session_factory(get_config())() as session:
         dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
         class_row = session.get(DatasetClassRow, dataset.class_id)
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки класса"), get_config())
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), get_config())
         class_row.primary_dataset_id = None
         session.flush()
         selected = _select_model(session, get_config(), class_row.key, required=False, preferred_training_result_id=result_id)

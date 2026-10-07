@@ -16,17 +16,21 @@ from sqlalchemy import select
 from shapely.geometry import box, shape
 
 from mlsystem2.mlflow_adapter.contracts import MLflowBestCheckpoint, MLflowRunArtifactInfo
-from mlsystem2.training_ui_api import _markup_export, _pseudolabel, _pseudo_runner, _worker
+from mlsystem2.training_ui_api import _markup_export, _pseudolabel, _pseudo_runner, _service, _worker
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import synchronize_dataset_catalog
 from mlsystem2.training_ui_api._models import DatasetClassRow, DatasetRow, JobRow, TrainingResultRow
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import (
+    InferenceTemplateClassUpdate,
+    InferenceTemplateCreate,
     JobStatus,
     PseudolabelAPIError,
     PseudolabelJobCreate,
     ResultStatus,
+    TrainingJobCreate,
+    TrainingUIAPIError,
 )
 
 
@@ -462,6 +466,8 @@ def test_pseudolabel_pins_external_model_resolution_and_manifest(tmp_path: Path,
         synchronize_dataset_catalog(session, config)
         class_row = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес"))
         dataset_row = session.scalar(select(DatasetRow).where(DatasetRow.class_id == class_row.id))
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки леса"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
         class_row.imagery_type = "ortho"
         source_job = JobRow(
             type="training",
@@ -612,11 +618,32 @@ def _write_raster(path: Path, west: float, north: float) -> None:
 
 
 # Sozdaet kanonicheskii uspeshnyi training result.
+def test_training_and_manual_pseudo_require_assignment_only_for_pseudo(tmp_path, monkeypatch):
+    config, factory = _environment(tmp_path, monkeypatch)
+    class_key, result_id = _seed_model(factory, config)
+    with factory() as session:
+        _service.assign_inference_template(session, class_key, InferenceTemplateClassUpdate(template_id=None), config)
+        dataset = session.scalar(select(DatasetRow))
+        request = TrainingJobCreate(mlflow_experiment_id="проверка", mlflow_experiment_name="Проверка", dataset_key=dataset.key,
+                                    architecture="smp_segformer_b2", config={}, run_inference_after_training=True)
+        with pytest.raises(TrainingUIAPIError, match="назначен шаблон инференса"):
+            _service.create_training_job(session, request, config)
+        with pytest.raises(TrainingUIAPIError, match="назначен шаблон инференса"):
+            _service.create_pseudo_markup_job(session, class_key=dataset.key, dataset_key=dataset.key, image_folder_key=None,
+                training_result_id=result_id, scenes_name=None, scenes_content_type=None, scenes_bytes=None, config=config)
+        assert list(session.scalars(select(JobRow))) == []
+        allowed = _service.create_training_job(session, request.model_copy(update={"run_inference_after_training": False}), config)
+        assert allowed.status == JobStatus.QUEUED
+        assert allowed.run_inference_after_training is False
+
+
 def _seed_model(session_factory, config) -> tuple[str, object]:
     with session_factory() as session:
         synchronize_dataset_catalog(session, config)
         class_row = session.scalar(select(DatasetClassRow).where(DatasetClassRow.name == "Лес"))
         dataset_row = session.scalar(select(DatasetRow).where(DatasetRow.class_id == class_row.id))
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки леса"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
         result = TrainingResultRow(
             source="manual",
             dataset_key=dataset_row.key,

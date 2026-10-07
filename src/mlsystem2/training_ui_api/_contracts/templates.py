@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import ConfigSchema, TemplateSource
 
@@ -40,11 +40,9 @@ class InferenceTemplate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
-    architecture: str
-    dataset_key: str | None = None
-    dataset_name: str | None = None
-    parent_template_id: UUID | None = None
     display_name: str
+    description: str | None = None
+    class_keys: list[str]
     config_schema: ConfigSchema
     default_config: dict[str, Any]
     source: TemplateSource
@@ -83,8 +81,29 @@ class TrainingTemplateApplyField(BaseModel):
     value: Any
 
 
-InferenceTemplateUpdate = TrainingTemplateUpdate
-InferenceTemplateCreate = TrainingTemplateCreate
+class InferenceTemplateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=2000)
+    default_config: dict[str, Any] | None = None
+    is_active: bool | None = None
+    reset_to_baseline: bool = False
+
+
+class InferenceTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class InferenceTemplateClassUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: UUID | None
+
+
 InferenceTemplateApplyField = TrainingTemplateApplyField
 
 
@@ -92,6 +111,7 @@ __all__ = [
     "InferenceTemplate",
     "InferenceTemplateApplyField",
     "InferenceTemplateCreate",
+    "InferenceTemplateClassUpdate",
     "InferenceTemplateListResponse",
     "InferenceTemplateUpdate",
     "TrainingTemplate",

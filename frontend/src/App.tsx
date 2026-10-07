@@ -43,7 +43,6 @@ import {
 
 import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import type {
-  AnyTemplate,
   AutomationRuleInfo,
   AutomationSnapshot,
   BootstrapInfo,
@@ -57,7 +56,6 @@ import type {
   DatasetInfo,
   ImageryType,
   ImageFolderInfo,
-  InferenceTemplate,
   JobDetail,
   JobLogInfo,
   JobSummary,
@@ -120,6 +118,8 @@ import {
 
 import { ConfigEditor } from "./ConfigEditor";
 import { TrainingLaunchForm } from "./TrainingLaunchForm";
+import { InferenceTemplates } from "./InferenceTemplates";
+import { inferenceTemplateForDataset } from "./utils/inferenceTemplates";
 import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
@@ -580,6 +580,8 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
     () => bootstrap.datasets.find((item) => item.key === datasetKey),
     [bootstrap.datasets, datasetKey],
   );
+  const inferenceAvailable = Boolean(inferenceTemplateForDataset(bootstrap.inference_templates, bootstrap.datasets, datasetKey));
+  useEffect(() => { if (!inferenceAvailable) setRunInferenceAfterTraining(false); }, [inferenceAvailable]);
   const trainingSchema = useMemo(
     () => trainingConfigSchema(template?.config_schema, selectedDataset?.task || "binary", String(config["train.pipeline_variant"] || "legacy")),
     [selectedDataset?.task, template?.config_schema, config["train.pipeline_variant"]],
@@ -624,7 +626,7 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           custom_dataset_id: customDatasetId,
           architecture,
           config,
-          run_inference_after_training: runInferenceAfterTraining,
+          run_inference_after_training: runInferenceAfterTraining && inferenceAvailable,
           secondary_priority: secondaryPriority,
         },
       }),
@@ -668,7 +670,8 @@ function StartPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: R
           }
           setConfig(next);
         }}
-        runInferenceAfterTraining={runInferenceAfterTraining}
+        inferenceAvailable={inferenceAvailable}
+        runInferenceAfterTraining={runInferenceAfterTraining && inferenceAvailable}
         onRunInferenceChange={setRunInferenceAfterTraining}
         secondaryPriority={secondaryPriority}
         onSecondaryPriorityChange={setSecondaryPriority}
@@ -2798,142 +2801,45 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
 }
 
 function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
-  const [visibleMode, setVisibleMode] = useState<"training" | "inference">("training");
+  const [visibleMode, setVisibleMode] = useState<"training" | "inference">(currentRoute()[1] === "inference" ? "inference" : "training");
   const [trainingId, setTrainingId] = useState(bootstrap.training_templates[0]?.id || "");
-  const [inferenceId, setInferenceId] = useState(bootstrap.inference_templates[0]?.id || "");
   const trainingTemplate = byId(bootstrap.training_templates, trainingId) || bootstrap.training_templates[0];
-  const inferenceTemplate = byId(bootstrap.inference_templates, inferenceId) || bootstrap.inference_templates[0];
   const [trainingConfig, setTrainingConfig] = useState<JsonRecord>({});
-  const [inferenceConfig, setInferenceConfig] = useState<JsonRecord>({});
-
   useEffect(() => setTrainingConfig({ ...(trainingTemplate?.default_config || {}) }), [trainingTemplate?.id]);
-  useEffect(() => setInferenceConfig({ ...(inferenceTemplate?.default_config || {}) }), [inferenceTemplate?.id]);
-
-  const saveTemplate = async (mode: "training" | "inference", template: AnyTemplate, config: JsonRecord) => {
-    const path = mode === "training" ? "training-templates" : "inference-templates";
-    const updated = await run(() =>
-      apiJson<AnyTemplate>(`/${path}/by-id/${template.id}`, {
-        method: "PUT",
-        body: { default_config: config },
-      }),
-    );
+  const save = async () => {
+    if (!trainingTemplate) return false;
+    const updated = await run(() => apiJson<TrainingTemplate>(`/training-templates/by-id/${trainingTemplate.id}`, { method: "PUT", body: { default_config: trainingConfig } }));
     if (!updated) return false;
     await reloadBootstrap();
     return true;
   };
-
-  const resetTemplate = async (mode: "training" | "inference", template: AnyTemplate) => {
-    const path = mode === "training" ? "training-templates" : "inference-templates";
-    const updated = await run(() =>
-      apiJson<AnyTemplate>(`/${path}/by-id/${template.id}`, {
-        method: "PUT",
-        body: { reset_to_baseline: true },
-      }),
-    );
-    if (updated) await reloadBootstrap();
+  const reset = async () => {
+    if (!trainingTemplate) return;
+    const updated = await run(() => apiJson<TrainingTemplate>(`/training-templates/by-id/${trainingTemplate.id}`, { method: "PUT", body: { reset_to_baseline: true } }));
+    if (updated) { setTrainingConfig({ ...updated.default_config }); await reloadBootstrap(); }
   };
-
-  const deleteTemplate = (mode: "training" | "inference", template: AnyTemplate) => {
-    const path = mode === "training" ? "training-templates" : "inference-templates";
-    showModal({
-      title: "Удалить шаблон",
-      body: <p>{template.display_name}</p>,
-      footer: (
-        <>
-          <button className="secondary" type="button" onClick={closeModal}>
-            Отмена
-          </button>
-          <button
-            className="danger"
-            type="button"
-            onClick={async () => {
-              const deleted = await run(() => apiJson<AnyTemplate>(`/${path}/by-id/${template.id}`, { method: "DELETE" }));
-              if (deleted) {
-                closeModal();
-                await reloadBootstrap();
-              }
-            }}
-          >
-            <Trash2 size={16} />
-            Удалить
-          </button>
-        </>
-      ),
-    });
+  const remove = () => {
+    if (!trainingTemplate) return;
+    showModal({ title: "Удалить шаблон", body: <p>{trainingTemplate.display_name}</p>, footer: <>
+      <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+      <button className="danger" type="button" onClick={async () => {
+        const deleted = await run(() => apiJson(`/training-templates/by-id/${trainingTemplate.id}`, { method: "DELETE" }));
+        if (deleted) { closeModal(); await reloadBootstrap(); }
+      }}>Удалить</button></> });
   };
-
-  const showCreateModal = (mode: "training" | "inference") => {
-    const templates = mode === "training" ? bootstrap.training_templates : bootstrap.inference_templates;
-    showModal({
-      title: mode === "training" ? "Добавить шаблон обучения" : "Добавить шаблон инференса",
-      body: (
-        <CreateTemplateForm
-          mode={mode}
-          models={mode === "training" ? bootstrap.models : templates.filter((item) => !item.dataset_key)}
-          datasets={bootstrap.datasets}
-          templates={templates}
-          run={run}
-          closeModal={closeModal}
-          reloadBootstrap={reloadBootstrap}
-        />
-      ),
-    });
-  };
-
-  return (
-    <>
-      <PageHeader title="Шаблоны" subtitle="Базовые defaults сети и переопределения для конкретных датасетов" actions={<div className="mobile-only template-mode-tabs" role="group" aria-label="Тип шаблонов">
+  return <>
+    <PageHeader title="Шаблоны" subtitle="Обучение — по модели и датасету; инференс — общие параметры для выбранных классов" actions={
+      <div className="template-mode-tabs" role="group" aria-label="Тип шаблонов">
         <button type="button" className={visibleMode === "training" ? "primary" : "secondary"} aria-pressed={visibleMode === "training"} onClick={() => setVisibleMode("training")}>Обучение</button>
         <button type="button" className={visibleMode === "inference" ? "primary" : "secondary"} aria-pressed={visibleMode === "inference"} onClick={() => setVisibleMode("inference")}>Инференс</button>
       </div>} />
-      <section className="two-column templates-layout" data-visible-mode={visibleMode}>
-        <div className="form-stack">
-          <TemplateTree
-            mode="training"
-            title="Шаблоны обучения"
-            templates={bootstrap.training_templates}
-            selectedId={trainingTemplate?.id || ""}
-            onSelect={setTrainingId}
-            onAdd={() => showCreateModal("training")}
-          />
-          <TemplateTree
-            mode="inference"
-            title="Шаблоны инференса"
-            templates={bootstrap.inference_templates}
-            selectedId={inferenceTemplate?.id || ""}
-            onSelect={setInferenceId}
-            onAdd={() => showCreateModal("inference")}
-          />
-        </div>
-        <div className="form-stack">
-          {trainingTemplate ? (
-            <TemplateEditor
-              key={trainingTemplate.id}
-              mode="training"
-              template={trainingTemplate}
-              config={trainingConfig}
-              onConfig={setTrainingConfig}
-              onSave={() => saveTemplate("training", trainingTemplate, trainingConfig)}
-              onReset={() => resetTemplate("training", trainingTemplate)}
-              onDelete={trainingTemplate.dataset_key ? () => deleteTemplate("training", trainingTemplate) : undefined}
-            />
-          ) : null}
-          {inferenceTemplate ? (
-            <TemplateEditor
-              key={inferenceTemplate.id}
-              mode="inference"
-              template={inferenceTemplate}
-              config={inferenceConfig}
-              onConfig={setInferenceConfig}
-              onSave={() => saveTemplate("inference", inferenceTemplate, inferenceConfig)}
-              onReset={() => resetTemplate("inference", inferenceTemplate)}
-              onDelete={inferenceTemplate.dataset_key ? () => deleteTemplate("inference", inferenceTemplate) : undefined}
-            />
-          ) : null}
-        </div>
-      </section>
-    </>
-  );
+    {visibleMode === "inference" ? <InferenceTemplates bootstrap={bootstrap} run={run} reload={reloadBootstrap} showModal={showModal} closeModal={closeModal} /> :
+      <section className="two-column templates-layout" data-visible-mode="training">
+        <TemplateTree mode="training" title="Шаблоны обучения" templates={bootstrap.training_templates} selectedId={trainingTemplate?.id || ""} onSelect={setTrainingId}
+          onAdd={() => showModal({ title: "Добавить шаблон обучения", body: <CreateTemplateForm models={bootstrap.models} datasets={bootstrap.datasets} templates={bootstrap.training_templates} run={run} closeModal={closeModal} reloadBootstrap={reloadBootstrap} /> })} />
+        {trainingTemplate ? <TemplateEditor key={trainingTemplate.id} mode="training" template={trainingTemplate} config={trainingConfig} onConfig={setTrainingConfig} onSave={save} onReset={() => void reset()} onDelete={trainingTemplate.dataset_key ? remove : undefined} /> : null}
+      </section>}
+  </>;
 }
 
 function AutomationPage({ run, showModal, closeModal }: RoutedPageProps) {
@@ -3343,13 +3249,14 @@ function DatasetResultsPage({
 
   const showPseudo = (result: TrainingResultInfo) => {
     showModal({
-      title: "Запустить pseudo-markup",
+      title: "Создать псевдоразметку",
       body: (
         <PseudoMarkupForm
           datasetKey={datasetKey}
           result={result}
           datasets={bootstrap.datasets}
           imageFolders={bootstrap.image_folders}
+          inferenceAvailable={Boolean(inferenceTemplateForDataset(bootstrap.inference_templates, bootstrap.datasets, payload.class_key || datasetKey))}
           run={run}
           closeModal={closeModal}
           reload={load}
@@ -3366,7 +3273,7 @@ function DatasetResultsPage({
     const options = await run(() => apiJson<TrainingContinuationOptions>(`/results/training/${result.id}/continue`));
     if (options) showModal({
       title: "Продолжить обучение",
-      body: <TrainingContinuationForm result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
+      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(bootstrap.inference_templates, bootstrap.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
       footer: null,
     });
   };
@@ -3533,9 +3440,9 @@ function TemplateTree({
   onSelect,
   onAdd,
 }: {
-  mode: "training" | "inference";
+  mode: "training";
   title: string;
-  templates: AnyTemplate[];
+  templates: TrainingTemplate[];
   selectedId: string;
   onSelect: (id: string) => void;
   onAdd: () => void;
@@ -3564,6 +3471,7 @@ function TemplateTree({
             <TreeButton template={base} active={base.id === selectedId} onClick={() => onSelect(base.id)} />
             {templates
               .filter((item) => item.architecture === base.architecture && item.dataset_key)
+              .sort((a, b) => templateTitle(a).localeCompare(templateTitle(b), "ru"))
               .map((child) => (
                 <TreeButton child template={child} active={child.id === selectedId} onClick={() => onSelect(child.id)} key={child.id} />
               ))}
@@ -3574,11 +3482,11 @@ function TemplateTree({
   );
 }
 
-function TreeButton({ template, active, child = false, onClick }: { template: AnyTemplate; active: boolean; child?: boolean; onClick: () => void }) {
+function TreeButton({ template, active, child = false, onClick }: { template: TrainingTemplate; active: boolean; child?: boolean; onClick: () => void }) {
   return (
     <button className={`tree-button ${child ? "child" : ""} ${active ? "active" : ""}`} type="button" onClick={onClick}>
       <span>{templateTitle(template)}</span>
-      <span className={`badge ${template.source === "manual" ? "warning" : "ok"}`}>{template.source}</span>
+      <span className={`badge ${template.source === "manual" ? "warning" : "ok"}`}>{template.source === "manual" ? "Настроен" : "Исходный"}</span>
     </button>
   );
 }
@@ -3592,8 +3500,8 @@ function TemplateEditor({
   onReset,
   onDelete,
 }: {
-  mode: "training" | "inference";
-  template: AnyTemplate;
+  mode: "training";
+  template: TrainingTemplate;
   config: JsonRecord;
   onConfig: (next: JsonRecord) => void;
   onSave: () => Promise<boolean>;
@@ -3616,16 +3524,16 @@ function TemplateEditor({
   return (
     <section className="panel template-editor-panel" data-template-mode={mode}>
       <PanelHeader
-        title={`${mode === "training" ? "Training" : "Inference"}: ${templateTitle(template)}`}
+        title={`Обучение: ${templateTitle(template)}`}
         subtitle={template.dataset_key ? "Шаблон датасета" : "Базовый шаблон сети"}
-        aside={<span className="badge neutral">version={template.version}</span>}
+        aside={<span className="badge neutral">Версия {template.version}</span>}
       />
       <ConfigEditor
         schema={template.config_schema}
         value={config}
         onChange={(next) => { setSavedTemplateName(null); onConfig(next); }}
         readonly={saving}
-        architecture={mode === "training" ? template.architecture : undefined}
+        architecture={template.architecture}
       />
       <div className="button-row">
         <button className="primary" type="button" disabled={saving} aria-busy={saving} onClick={() => void save()}>
@@ -3648,7 +3556,6 @@ function TemplateEditor({
 }
 
 function CreateTemplateForm({
-  mode,
   models,
   datasets,
   templates,
@@ -3656,10 +3563,9 @@ function CreateTemplateForm({
   closeModal,
   reloadBootstrap,
 }: {
-  mode: "training" | "inference";
   models: Pick<ModelInfo, "architecture" | "display_name">[];
   datasets: DatasetInfo[];
-  templates: AnyTemplate[];
+  templates: TrainingTemplate[];
   run: Runner;
   closeModal: () => void;
   reloadBootstrap: () => Promise<void>;
@@ -3678,9 +3584,8 @@ function CreateTemplateForm({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const path = mode === "training" ? "training-templates" : "inference-templates";
     const created = await run(() =>
-      apiJson<AnyTemplate>(`/${path}`, {
+      apiJson<TrainingTemplate>("/training-templates", {
         method: "POST",
         body: { architecture, dataset_key: datasetKey },
       }),
@@ -4090,6 +3995,7 @@ function PseudoMarkupForm({
   result,
   datasets,
   imageFolders,
+  inferenceAvailable,
   run,
   closeModal,
   reload,
@@ -4098,6 +4004,7 @@ function PseudoMarkupForm({
   result: TrainingResultInfo;
   datasets: DatasetInfo[];
   imageFolders: ImageFolderInfo[];
+  inferenceAvailable: boolean;
   run: Runner;
   closeModal: () => void;
   reload: () => Promise<void>;
@@ -4113,6 +4020,7 @@ function PseudoMarkupForm({
     : [];
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!inferenceAvailable) return;
     const source = new FormData(event.currentTarget);
     const sourceDatasetKey = String(source.get("dataset_key") || "");
     const imageFolderKey = String(source.get("image_folder_key") || "");
@@ -4136,6 +4044,7 @@ function PseudoMarkupForm({
   };
   return (
     <form className="form-stack" onSubmit={submit}>
+      {!inferenceAvailable ? <div className="inference-template-warning" role="alert">Классу не назначен шаблон инференса. Чтобы создать псевдоразметку, <a href="#/templates/inference" onClick={closeModal}>назначьте шаблон</a> в разделе «Инференс».</div> : null}
       {imageryType ? (
         <p className="muted">
           Доступны только снимки типа «{imageryTypeLabel(imageryType)}», совместимые с {result.input_channels}-канальной моделью.
@@ -4171,7 +4080,7 @@ function PseudoMarkupForm({
         <span>TXT со снимками</span>
         <input name="scenes_txt" type="file" accept=".txt,text/plain" />
       </label>
-      <button className="primary" type="submit">
+      <button className="primary" type="submit" disabled={!inferenceAvailable}>
         <Play size={16} />
         Запустить
       </button>
@@ -4245,7 +4154,7 @@ function templateFor(templates: TrainingTemplate[], architecture: string, datase
   return datasetTemplate || templates.find((item) => item.architecture === architecture && !item.dataset_key) || templates[0];
 }
 
-function templateTitle(template: AnyTemplate): string {
+function templateTitle(template: TrainingTemplate): string {
   return template.dataset_key ? `${template.display_name} · ${template.dataset_name || template.dataset_key}` : template.display_name;
 }
 

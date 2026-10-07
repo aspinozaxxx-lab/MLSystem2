@@ -21,7 +21,7 @@ def reconcile_dataset_template_keys(session: Session) -> int:
 
     names_by_key, keys_by_name = _active_dataset_identities(session)
     rebound = 0
-    for model in (TrainingTemplateRow, InferenceTemplateRow):
+    for model in (TrainingTemplateRow,):
         rows = list(
             session.scalars(select(model).where(model.dataset_key.is_not(None))).all()
         )
@@ -57,14 +57,6 @@ def dataset_training_template_row(
     return _dataset_template_row(session, TrainingTemplateRow, architecture, dataset_key)
 
 
-def dataset_inference_template_row(
-    session: Session,
-    architecture: str,
-    dataset_key: str,
-) -> InferenceTemplateRow | None:
-    return _dataset_template_row(session, InferenceTemplateRow, architecture, dataset_key)
-
-
 def effective_training_template_row(
     session: Session,
     architecture: str,
@@ -84,17 +76,24 @@ def effective_training_template_row(
 
 def effective_inference_template_row(
     session: Session,
-    architecture: str,
-    dataset_key: str | None,
+    class_or_dataset_key: str,
 ) -> InferenceTemplateRow | None:
-    if dataset_key:
-        row = dataset_inference_template_row(session, architecture, dataset_key)
-        if row is not None and row.is_active:
-            return row
+    class_row = session.scalar(
+        select(DatasetClassRow).where(DatasetClassRow.key == class_or_dataset_key)
+    )
+    if class_row is None:
+        class_row = session.scalar(
+            select(DatasetClassRow)
+            .join(DatasetRow, DatasetRow.class_id == DatasetClassRow.id)
+            .where(DatasetRow.key == class_or_dataset_key)
+        )
+    if class_row is None or class_row.inference_template_id is None:
+        return None
     return session.scalar(
         select(InferenceTemplateRow).where(
-            InferenceTemplateRow.architecture == architecture,
-            InferenceTemplateRow.dataset_key.is_(None),
+            InferenceTemplateRow.id == class_row.inference_template_id,
+            InferenceTemplateRow.archived_at.is_(None),
+            InferenceTemplateRow.is_active.is_(True),
         )
     )
 
@@ -148,7 +147,6 @@ def _active_dataset_identities(
 
 
 __all__ = [
-    "dataset_inference_template_row",
     "dataset_training_template_row",
     "effective_inference_template_row",
     "effective_training_template_row",

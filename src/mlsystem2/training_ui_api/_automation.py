@@ -372,9 +372,10 @@ def _ensure_pseudo_markup_for_rule(
         return
     inference_template = effective_inference_template_row(
         session,
-        training_result.architecture,
         dataset.key,
     )
+    if inference_template is None:
+        return
     inference_template_config = (
         sanitize_inference_template_config(inference_template.default_config)
         if inference_template is not None

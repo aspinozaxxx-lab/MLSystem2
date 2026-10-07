@@ -484,26 +484,6 @@ INFERENCE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
     "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
 }
 
-RIVERS_INFERENCE_CONFIG: dict[str, Any] = {
-    "postprocess.min_area_m2": 10000.0,
-    "postprocess.min_hole_area_m2": 5000.0,
-    "postprocess.smooth.enabled": True,
-    "postprocess.smooth.iterations": 1,
-    "postprocess.smooth.offset": 0.125,
-    "postprocess.simplify_m": 1.0,
-    "postprocess.filter_compact_objects.enabled": True,
-    "postprocess.filter_compact_objects.mode": COMPACT_FILTER_REMOVE,
-    "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
-    "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
-}
-
-LAKES_INFERENCE_CONFIG: dict[str, Any] = {
-    "postprocess.filter_compact_objects.enabled": True,
-    "postprocess.filter_compact_objects.mode": COMPACT_FILTER_KEEP,
-    "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.25,
-    "postprocess.filter_compact_objects.max_bbox_ratio": 3.5,
-}
-
 _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
     "dataset.val_fraction": (
         "Доля подготовленных тайлов, которая уходит в validation. Увеличение делает оценку стабильнее, но оставляет меньше данных для обучения. Связано с общим числом сцен: на маленьких датасетах слишком большая доля может обеднить train.",
@@ -845,83 +825,6 @@ def initial_templates() -> list[dict[str, Any]]:
     return rows
 
 
-def initial_inference_templates() -> list[dict[str, Any]]:
-    rows = [
-        _inference_template(
-            "segformer_b0",
-            "SegFormer B0 HF",
-            source="analogy",
-        ),
-        _inference_template(
-            "external_torchscript",
-            "импортированная TorchScript-модель",
-            source="manual",
-        ),
-        _inference_template(
-            "smp_deeplabv3plus_resnet50",
-            "deeplabV3+",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_segformer_b0",
-            "segformer b0",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_segformer_b1",
-            "segformer b1",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_segformer_b2",
-            "segformer b2",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_segformer_b3",
-            "segformer b3",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_unet_resnet34",
-            "unet + resnet34",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_unet_resnet50",
-            "unet + resnet50",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_unet_resnet101",
-            "unet + resnet101",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_unet_resnet152",
-            "unet + resnet152",
-            source="analogy",
-        ),
-        _inference_template(
-            "smp_segformer_b2",
-            "segformer b2 / Реки\\main",
-            source="analogy",
-            dataset_key="Реки\\main",
-            dataset_name="Реки\\main",
-            overrides=RIVERS_INFERENCE_CONFIG,
-        ),
-        _inference_template(
-            "smp_segformer_b2",
-            "segformer b2 / Озера\\main",
-            source="analogy",
-            dataset_key="Озера\\main",
-            dataset_name="Озера\\main",
-            overrides=LAKES_INFERENCE_CONFIG,
-        ),
-    ]
-    return rows
-
-
 def _template(
     architecture: str,
     display_name: str,
@@ -962,36 +865,6 @@ def _template(
         "baseline_source": source,
         "source_mlflow_run_id": source_mlflow_run_id,
         "baseline_source_mlflow_run_id": source_mlflow_run_id,
-        "is_active": True,
-        "version": 1,
-    }
-
-
-def _inference_template(
-    architecture: str,
-    display_name: str,
-    *,
-    source: str,
-    dataset_key: str | None = None,
-    dataset_name: str | None = None,
-    overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    default_config = deepcopy(INFERENCE_BASE_DEFAULT_CONFIG)
-    if overrides:
-        default_config.update(overrides)
-    return {
-        "architecture": architecture,
-        "dataset_key": dataset_key,
-        "dataset_name": dataset_name,
-        "parent_template_id": None,
-        "display_name": display_name,
-        "config_schema": deepcopy(INFERENCE_CONFIG_SCHEMA),
-        "default_config": default_config,
-        "baseline_default_config": deepcopy(default_config),
-        "source": source,
-        "baseline_source": source,
-        "source_mlflow_run_id": None,
-        "baseline_source_mlflow_run_id": None,
         "is_active": True,
         "version": 1,
     }

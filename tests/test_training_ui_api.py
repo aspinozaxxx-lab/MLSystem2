@@ -27,6 +27,7 @@ from mlsystem2.training_ui_api._routes import export as _export_routes
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
+from mlsystem2.training_ui_api._dataset_catalog import synchronize_dataset_catalog
 from mlsystem2.training_ui_api._models import (
     AutomationRuleRow,
     DatasetClassRow,
@@ -51,6 +52,9 @@ from mlsystem2.training_ui_api._worker import (
 from mlsystem2.training_ui_api.contracts import (
     AutomationEnabledUpdate,
     AutomationRuleUpdate,
+    InferenceTemplateCreate,
+    InferenceTemplateClassUpdate,
+    InferenceTemplateUpdate,
     JobSource,
     JobStatus,
     JobType,
@@ -63,6 +67,14 @@ from mlsystem2.training_ui_api.contracts import (
     TrainingTemplateUpdate,
     TrainingUIAPIError,
 )
+
+
+def _assign_default_inference_template(session, config, dataset_key):
+    synchronize_dataset_catalog(session, config)
+    dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset_key))
+    class_row = session.get(DatasetClassRow, dataset.class_id)
+    template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки псевдоразметки"), config)
+    _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
 
 
 def test_frontend_credentials_accept_configured_username_and_legacy_alias(monkeypatch) -> None:
@@ -129,7 +141,7 @@ def test_retired_hf_is_hidden_and_cannot_train_but_keeps_inference(tmp_path, mon
         templates = _service.training_templates(session).templates
         assert all(item.architecture != "segformer_b0" for item in templates)
         assert retired.default_config == previous
-        assert session.scalar(select(InferenceTemplateRow).where(InferenceTemplateRow.architecture == "segformer_b0"))
+        assert not _service.inference_templates(session).templates
         assert all(item.architecture != "segformer_b0" for item in _service.models().models)
         with pytest.raises(TrainingUIAPIError, match="снята с запуска"):
             create_training_job(session, TrainingJobCreate(
@@ -462,12 +474,10 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
 
         inference_template = _service.create_inference_template(
             session,
-            TrainingTemplateCreate(
-                architecture="smp_segformer_b2",
-                dataset_key=dataset.key,
-            ),
+            InferenceTemplateCreate(display_name="Настройки инференса"),
             config,
         )
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=inference_template.id), config)
         session.refresh(sample)
         templated_job = session.get(JobRow, sample.evaluation_job_id)
         assert direct_job.status == JobStatus.CANCELLED.value
@@ -480,7 +490,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         updated_template = _service.update_inference_template_by_id(
             session,
             inference_template.id,
-            TrainingTemplateUpdate(
+            InferenceTemplateUpdate(
                 default_config={
                     **inference_template.default_config,
                     "postprocess.min_area_m2": 321.0,
@@ -497,118 +507,8 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert updated_template_job.config["inference_template_version"] == 2
 
 
-def test_seed_inference_template_uses_active_dataset_key_after_migration(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
-    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
-    config = get_config()
-    configure_schema(None)
-    session_factory = create_session_factory(config)
-    Base.metadata.create_all(session_factory.kw["bind"])
-    with session_factory() as session:
-        class_row = DatasetClassRow(key="rivers", name="Реки", technical_name="rivers")
-        session.add(class_row)
-        session.flush()
-        active_key = "f9776773-5273-41f8-8d10-0b06c68b19e6"
-        session.add_all(
-            [
-                DatasetRow(
-                    key=active_key,
-                    class_id=class_row.id,
-                    name="main",
-                    source_type="mlmarkup",
-                    source_path="Реки/main",
-                    legacy_version=False,
-                ),
-                DatasetRow(
-                    key="Реки\\main",
-                    class_id=class_row.id,
-                    name="main [legacy]",
-                    source_type="mlmarkup",
-                    source_path="__archive__/Реки/main",
-                    deleted_at=datetime(2026, 8, 15, tzinfo=timezone.utc),
-                ),
-            ]
-        )
-        session.flush()
-
-        ensure_seed_templates(session)
-        session.flush()
-        river_templates = session.scalars(
-            select(InferenceTemplateRow).where(
-                InferenceTemplateRow.architecture == "smp_segformer_b2",
-                InferenceTemplateRow.dataset_key.is_not(None),
-                InferenceTemplateRow.dataset_name == "Реки\\main",
-            )
-        ).all()
-        assert len(river_templates) == 1
-        assert river_templates[0].dataset_key == active_key
-        template_id = river_templates[0].id
-
-        ensure_seed_templates(session)
-        session.flush()
-        river_templates = session.scalars(
-            select(InferenceTemplateRow).where(
-                InferenceTemplateRow.architecture == "smp_segformer_b2",
-                InferenceTemplateRow.dataset_key.is_not(None),
-                InferenceTemplateRow.dataset_name == "Реки\\main",
-            )
-        ).all()
-        assert [(row.id, row.dataset_key) for row in river_templates] == [(template_id, active_key)]
 
 
-def test_seed_inference_template_backfills_defaults_and_preserves_overrides(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
-    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
-    config = get_config()
-    configure_schema(None)
-    session_factory = create_session_factory(config)
-    Base.metadata.create_all(session_factory.kw["bind"])
-
-    with session_factory() as session:
-        ensure_seed_templates(session)
-        river = session.scalar(
-            select(InferenceTemplateRow).where(
-                InferenceTemplateRow.architecture == "smp_segformer_b2",
-                InferenceTemplateRow.dataset_key == "Реки\\main",
-            )
-        )
-        assert river is not None
-        old_baseline = dict(river.baseline_default_config)
-        old_baseline.pop("postprocess.smooth.enabled")
-        old_baseline.pop("postprocess.smooth.iterations")
-        old_baseline.pop("postprocess.smooth.offset")
-        old_baseline.pop("postprocess.filter_compact_objects.mode")
-        old_baseline["postprocess.simplify_m"] = 15.0
-        current = {
-            **old_baseline,
-            "postprocess.filter_compact_objects.max_bbox_ratio": 4.25,
-        }
-        river.baseline_default_config = old_baseline
-        river.default_config = current
-        session.flush()
-
-        ensure_seed_templates(session)
-        session.flush()
-
-        assert river.default_config["postprocess.smooth.enabled"] is True
-        assert river.default_config["postprocess.smooth.iterations"] == 1
-        assert river.default_config["postprocess.smooth.offset"] == 0.125
-        assert river.default_config["postprocess.simplify_m"] == 1.0
-        assert river.default_config["postprocess.filter_compact_objects.mode"] == "remove_compact"
-        assert river.default_config["postprocess.filter_compact_objects.max_bbox_ratio"] == 4.25
-        first_reconciled = dict(river.default_config)
-
-        ensure_seed_templates(session)
-        session.flush()
-
-        assert river.default_config == first_reconciled
-        assert river.baseline_default_config["postprocess.simplify_m"] == 1.0
 
 
 def test_seed_training_template_backfills_background_weight_and_preserves_overrides(
@@ -2508,16 +2408,21 @@ def test_training_result_model_export_api_downloads_best_checkpoint(
     Base.metadata.create_all(session_factory.kw["bind"])
     with session_factory() as session:
         ensure_seed_templates(session)
-        river_template = session.scalar(
-            select(InferenceTemplateRow).where(
-                InferenceTemplateRow.architecture == "smp_segformer_b2",
-                InferenceTemplateRow.dataset_key == "Реки\\main",
-            )
-        )
-        assert river_template is not None
-        river_config = dict(river_template.default_config)
-        river_config["postprocess.smooth.offset"] = 0.2
-        river_template.default_config = river_config
+        class_row = DatasetClassRow(key="rivers", name="Реки", technical_name="rivers")
+        session.add(class_row)
+        session.flush()
+        session.add(DatasetRow(key="Реки\\main", class_id=class_row.id, name="main", source_type="mlmarkup", source_path="Реки/main"))
+        session.flush()
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки инференса"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
+        river_template = session.get(InferenceTemplateRow, template.id)
+        river_template.default_config = {
+            **river_template.default_config,
+            "postprocess.filter_compact_objects.enabled": True,
+            "postprocess.smooth.enabled": True,
+            "postprocess.smooth.offset": 0.2,
+            "postprocess.simplify_m": 1.0,
+        }
         result = TrainingResultRow(
             source=JobSource.MANUAL.value,
             dataset_key="Реки\\main",
@@ -2599,6 +2504,19 @@ def test_training_results_batch_model_export_api_returns_flat_zip(
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     with session_factory() as session:
+        _service.ensure_seed_templates(session)
+        class_row = DatasetClassRow(key="rivers", name="Реки", technical_name="rivers")
+        session.add(class_row)
+        session.flush()
+        session.add(DatasetRow(key="Реки\\main", class_id=class_row.id, name="main", source_type="mlmarkup", source_path="Реки/main"))
+        session.flush()
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки инференса"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
+        _service.update_inference_template_by_id(session, template.id, InferenceTemplateUpdate(default_config={
+            "postprocess.filter_compact_objects.enabled": True,
+            "postprocess.smooth.enabled": True,
+            "postprocess.simplify_m": 1.0,
+        }), config)
         first = TrainingResultRow(
             source=JobSource.MANUAL.value,
             dataset_key="Реки\\main",
@@ -3149,8 +3067,6 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         }
         assert [item["name"] for item in bootstrap["datasets"]] == [
             "Вырубки\\main",
-            "Озера\\main",
-            "Реки\\main",
             "Custom",
         ]
         assert bootstrap["image_folders"][0]["key"] == "kanopus/irkutsk"
@@ -3159,8 +3075,6 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         datasets = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in datasets] == [
             "Вырубки\\main",
-            "Озера\\main",
-            "Реки\\main",
             "Custom",
         ]
         assert datasets[0]["image_count"] == 1
@@ -3188,9 +3102,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         refreshed = client.get("/api/v1/datasets").json()["datasets"]
         assert [item["name"] for item in refreshed] == [
             "Вырубки\\main",
-            "Озера\\main",
             "Пожары\\main",
-            "Реки\\main",
             "Custom",
         ]
 
@@ -3324,18 +3236,12 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert not any(item["architecture"] == "segformer_b0" for item in applied)
 
         inference_templates = client.get("/api/v1/inference-templates").json()["templates"]
-        assert len(inference_templates) == 13
-        assert any(
-            item["architecture"] == "segformer_b0" and item["dataset_key"] is None
-            for item in inference_templates
-        )
-        segformer_b0_inference = client.get("/api/v1/inference-templates/smp_segformer_b0").json()
-        assert segformer_b0_inference["display_name"] == "segformer b0"
-        assert segformer_b0_inference["source"] == "analogy"
-        segformer_b1_inference = client.get("/api/v1/inference-templates/smp_segformer_b1").json()
-        assert segformer_b1_inference["display_name"] == "segformer b1"
-        assert segformer_b1_inference["source"] == "analogy"
-        inference_template = client.get("/api/v1/inference-templates/smp_segformer_b2").json()
+        assert inference_templates == []
+        assert client.get("/api/v1/inference-templates/smp_segformer_b0").status_code == 404
+        inference_template = client.post("/api/v1/inference-templates", json={"display_name": "Подробные контуры", "description": "Общие параметры"}).json()
+        assert inference_template["display_name"] == "Подробные контуры"
+        assert inference_template["class_keys"] == []
+        assert inference_template["description"] == "Общие параметры"
         inference_keys = {item["key"] for item in inference_template["config_schema"]["fields"]}
         assert "postprocess.min_area_m2" in inference_keys
         assert "postprocess.smooth.enabled" in inference_keys
@@ -3344,51 +3250,11 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "postprocess.filter_compact_objects.enabled" in inference_keys
         assert "postprocess.filter_compact_objects.mode" in inference_keys
         assert "train.batch_size" not in inference_keys
-        river_inference_template = next(
-            item for item in inference_templates if item.get("dataset_key") == "Реки\\main"
-        )
-        assert river_inference_template["default_config"]["postprocess.min_area_m2"] == 10000.0
-        assert river_inference_template["default_config"]["postprocess.min_hole_area_m2"] == 5000.0
-        assert river_inference_template["default_config"]["postprocess.smooth.enabled"] is True
-        assert river_inference_template["default_config"]["postprocess.smooth.iterations"] == 1
-        assert river_inference_template["default_config"]["postprocess.smooth.offset"] == 0.125
-        assert river_inference_template["default_config"]["postprocess.simplify_m"] == 1.0
-        assert (
-            river_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"]
-            is True
-        )
-        assert (
-            river_inference_template["default_config"]["postprocess.filter_compact_objects.mode"]
-            == "remove_compact"
-        )
-        lake_inference_template = next(
-            item for item in inference_templates if item.get("dataset_key") == "Озера\\main"
-        )
-        assert (
-            lake_inference_template["default_config"]["postprocess.filter_compact_objects.enabled"]
-            is True
-        )
-        assert (
-            lake_inference_template["default_config"]["postprocess.filter_compact_objects.mode"]
-            == "keep_compact"
-        )
-        assert (
-            lake_inference_template["default_config"][
-                "postprocess.filter_compact_objects.min_isoperimetric_quotient"
-            ]
-            == 0.25
-        )
-        assert (
-            lake_inference_template["default_config"][
-                "postprocess.filter_compact_objects.max_bbox_ratio"
-            ]
-            == 3.5
-        )
-        inference_dataset_template = client.post(
-            "/api/v1/inference-templates",
-            json={"architecture": "smp_segformer_b2", "dataset_key": "Вырубки\\main"},
-        ).json()
-        assert inference_dataset_template["parent_template_id"] == inference_template["id"]
+        deforestation_class = next(item for item in client.get("/api/v1/bootstrap").json()["classes"] if item["name"] == "Вырубки")
+        assigned = client.put(f"/api/v1/dataset-classes/{deforestation_class['key']}/inference-template", json={"template_id": inference_template["id"]})
+        assert assigned.status_code == 200
+        inference_dataset_template = assigned.json()["templates"][0]
+        assert inference_dataset_template["class_keys"] == [deforestation_class["key"]]
         updated_inference_dataset_template = client.put(
             f"/api/v1/inference-templates/by-id/{inference_dataset_template['id']}",
             json={
@@ -3403,6 +3269,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             updated_inference_dataset_template["default_config"]["postprocess.min_area_m2"]
             == 2222.0
         )
+        inference_template = updated_inference_dataset_template
 
         custom = client.post(
             "/api/v1/custom-datasets",
@@ -3426,8 +3293,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             json={
                 "mlflow_experiment_id": "45",
                 "mlflow_experiment_name": "Segformer-b2-HPO-deforest-2605",
-                "dataset_key": "custom",
-                "custom_dataset_id": custom["id"],
+                "dataset_key": "Вырубки\\main",
                 "architecture": "smp_segformer_b2",
                 "config": reset["default_config"],
                 "run_inference_after_training": True,
@@ -3435,7 +3301,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             },
         ).json()
         assert job["status"] == "queued"
-        assert job["dataset_name"] == "Custom"
+        assert job["dataset_name"] == "Вырубки\\main"
         assert job["mlflow_run_name"] is None
         assert job["mlflow_run_url"] is None
         assert "train.device" not in job["config"]
@@ -3457,10 +3323,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert detail["run_inference_after_training"] is True
         assert detail["secondary_priority"] is True
 
-        custom_results = client.get("/api/v1/results/datasets/custom").json()
+        custom_results = client.get("/api/v1/results/datasets/Вырубки\\main").json()
         training_result_id = custom_results["results"][0]["id"]
         pseudo = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
         ).json()
         assert pseudo["type"] == "inference"
@@ -3470,7 +3336,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             == inference_template["default_config"]["postprocess.min_area_m2"]
         )
         conflict = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={
                 "dataset_key": "Вырубки\\main",
                 "image_folder_key": "kanopus/irkutsk",
@@ -3480,7 +3346,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert conflict.status_code == 400
         assert conflict.json()["detail"] == "Выберите только один источник снимков"
         folder_pseudo = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={"image_folder_key": "kanopus/irkutsk", "training_result_id": training_result_id},
         ).json()
         assert folder_pseudo["type"] == "inference"
@@ -3489,7 +3355,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert folder_pseudo["config"]["input_channels"] == 4
         assert folder_pseudo["config"]["inference_template_id"] == inference_template["id"]
         second_folder_pseudo = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={
                 "image_folder_key": "kanopus/toguchinsk",
                 "training_result_id": training_result_id,
@@ -3498,7 +3364,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert second_folder_pseudo["type"] == "inference"
         assert second_folder_pseudo["config"]["image_folder_key"] == "kanopus/toguchinsk"
         uploaded_txt_pseudo = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={"training_result_id": training_result_id},
             files={"scenes_txt": ("manual.txt", b"kanopus/irkutsk\n", "text/plain")},
         ).json()
@@ -3506,7 +3372,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         inference_queue = client.get("/api/v1/queues").json()["inference_jobs"]
         assert len(inference_queue) == 4
         pseudo_with_empty_upload = client.post(
-            "/api/v1/results/datasets/custom/pseudo-markup",
+            "/api/v1/results/datasets/Вырубки\\main/pseudo-markup",
             data={"dataset_key": "Вырубки\\main", "training_result_id": training_result_id},
             files={"scenes_txt": ("", b"", "application/octet-stream")},
         ).json()
@@ -3516,7 +3382,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
             raise AssertionError("class_results must use stored pseudo image_count")
 
         monkeypatch.setattr(_service, "count_scenes_file_images", fail_runtime_image_count)
-        class_results = client.get("/api/v1/results/datasets/custom").json()
+        class_results = client.get("/api/v1/results/datasets/Вырубки\\main").json()
         pseudo_results = class_results["results"][0]["pseudo_markup_results"]
         pseudo_scenes = next(
             item["scenes_file"]
@@ -3584,13 +3450,13 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert changes[0]["status"] in {"queued", "running"}
         completed_change = next(item for item in changes if item["action"] == "обучена сеть")
         assert completed_change["item_type"] == "training_result"
-        assert completed_change["class_key"] == "custom"
+        assert completed_change["class_key"] == deforestation_class["key"]
 
         deleted = client.delete(f"/api/v1/jobs/{job['id']}").json()
         assert deleted["status"] == "cancelled"
         assert client.get(f"/api/v1/jobs/{job['id']}").status_code == 400
         assert client.get("/api/v1/queues").json()["training_jobs"] == []
-        assert client.get("/api/v1/results/datasets/custom").json()["results"] == []
+        assert client.get("/api/v1/results/datasets/Вырубки\\main").json()["results"] == []
         deleted_template = client.delete(
             f"/api/v1/training-templates/by-id/{dataset_template['id']}"
         ).json()
@@ -3598,7 +3464,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         deleted_inference_template = client.delete(
             f"/api/v1/inference-templates/by-id/{inference_dataset_template['id']}"
         ).json()
-        assert deleted_inference_template["dataset_key"] == "Вырубки\\main"
+        assert deleted_inference_template["class_keys"] == [deforestation_class["key"]]
 
 
 def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, monkeypatch) -> None:
@@ -3874,6 +3740,7 @@ def test_training_ui_worker_snapshots_per_image_annotations(
             from mlsystem2.settings.api import load_settings
 
             assert load_settings(settings_path, run_path).tile_preparation.num_workers == 8
+        _assign_default_inference_template(session, config, "Реки\\test")
         pseudo = _service.create_pseudo_markup_job(
             session,
             class_key="Реки\\test",
@@ -3964,16 +3831,19 @@ def test_training_ui_builds_ortho_training_config_with_three_channels(
         assert training_result is not None
         training_result.status = ResultStatus.OK.value
         inference_template = None
+        if pipeline_variant != "legacy":
+            _assign_default_inference_template(session, config, "Крыши\\main")
         if pipeline_variant == "legacy":
             inference_template = _service.create_inference_template(
                 session,
-                TrainingTemplateCreate(architecture=row.architecture, dataset_key="Крыши\\main"),
+                InferenceTemplateCreate(display_name="Настройки инференса"),
                 config,
             )
+            _service.assign_inference_template(session, _service.dataset_class_row(session, "Крыши\\main").key, InferenceTemplateClassUpdate(template_id=inference_template.id), config)
             inference_template = _service.update_inference_template_by_id(
                 session,
                 inference_template.id,
-                TrainingTemplateUpdate(default_config={
+                InferenceTemplateUpdate(default_config={
                     **inference_template.default_config,
                     "postprocess.min_area_m2": 20.0,
                     "postprocess.simplify_m": 0.5,
@@ -4538,6 +4408,7 @@ def test_training_ui_automation_creates_pseudo_after_training_and_does_not_retry
 
     with session_factory() as session:
         ensure_seed_templates(session)
+        _assign_default_inference_template(session, config, "Вырубки\\main")
         _service.set_automation(session, AutomationEnabledUpdate(enabled=True), config)
         _service.update_automation(
             session,
@@ -4660,6 +4531,7 @@ def test_training_ui_automation_supports_per_image_dataset(
 
     with session_factory() as session:
         ensure_seed_templates(session)
+        _assign_default_inference_template(session, config, "Реки\\test")
         _service.set_automation(
             session,
             AutomationEnabledUpdate(enabled=True),
@@ -4843,6 +4715,7 @@ def test_training_ui_worker_records_best_mlflow_metric(tmp_path: Path, monkeypat
         assert _service.job_detail(session, job.id).mlflow_run_url == result.mlflow_run_url
 
         monkeypatch.setattr(_service, "get_best_training_checkpoint", fake_best_checkpoint)
+        _assign_default_inference_template(session, config, "Вырубки\\main")
         pseudo_job = _service.create_pseudo_markup_job(
             session,
             class_key="Вырубки\\main",

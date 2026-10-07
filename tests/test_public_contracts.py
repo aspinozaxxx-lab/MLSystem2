@@ -55,6 +55,22 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_inference_template_imagery_and_class_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import InferenceTemplate, InferenceTemplateCreate
+
+    assert set(InferenceTemplateCreate.model_fields) == {"display_name", "description"}
+    assert {"display_name", "description", "class_keys"} <= InferenceTemplate.model_fields.keys()
+    assert not {"architecture", "dataset_key", "dataset_name"} & InferenceTemplate.model_fields.keys()
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    assert "/api/v1/inference-templates/{architecture}" not in schema["paths"]
+    assert "put" in schema["paths"]["/api/v1/dataset-classes/{class_key}/inference-template"]
+    assert "/api/v1/inference-templates/roots/{imagery_type}" not in schema["paths"]
+    assert schema["components"]["schemas"]["ImageryType"]["enum"] == ["kanopus", "ortho"]
+
+
 def test_completed_training_continuation_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import TrainingContinuationCreate, TrainingResultInfo

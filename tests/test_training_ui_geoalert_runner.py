@@ -25,7 +25,6 @@ from mlsystem2.training_ui_api._geoalert_runner import (
 )
 from mlsystem2.training_ui_api._templates import (
     INFERENCE_BASE_DEFAULT_CONFIG,
-    initial_inference_templates,
 )
 from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 from mlsystem2.training_ui_api._inference_backend import (
@@ -251,8 +250,8 @@ def test_geoalert_effective_postprocess_keeps_smooth_settings() -> None:
 
 
 @pytest.mark.parametrize("image_count", [1, 24, 100])
-def test_hf_template_disables_implicit_postprocess_but_preserves_area_override(image_count):
-    template = next(item for item in initial_inference_templates() if item["architecture"] == "segformer_b0")
+def test_common_template_disables_implicit_postprocess_but_preserves_area_override(image_count):
+    template = {"default_config": INFERENCE_BASE_DEFAULT_CONFIG}
     config = {"pipeline_variant": "next_gen2", "postprocess_config": template["default_config"]}
     defaults = _effective_postprocess_config(config, image_count, external=False)
     assert defaults["postprocess.min_area_m2"] is None
@@ -321,18 +320,18 @@ def test_base_default_pipeline_has_no_compact_filter_or_smoothing() -> None:
     assert "RemoveTags" not in pipeline_bricks
 
 
-def test_lake_seed_pipeline_keeps_compact_objects_with_configured_thresholds() -> None:
-    lake_template = next(
-        item
-        for item in initial_inference_templates()
-        if item.get("dataset_key") == "Озера\\main"
-    )
+def test_lake_class_pipeline_keeps_compact_objects_with_configured_thresholds() -> None:
+    lake_config = {
+        **INFERENCE_BASE_DEFAULT_CONFIG,
+        "postprocess.filter_compact_objects.enabled": True,
+        "postprocess.filter_compact_objects.mode": "keep_compact",
+    }
     pipeline = yaml.safe_load(
         _model_export._pipeline_yaml(
             "lakes_kanopus",
             768,
             4,
-            postprocess_config=lake_template["default_config"],
+            postprocess_config=lake_config,
         )
     )
     bricks = pipeline["config"]["bricks"]

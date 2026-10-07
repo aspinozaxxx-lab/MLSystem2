@@ -91,6 +91,10 @@ class DatasetClassRow(Base):
         ForeignKey("training_results.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
+    inference_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("inference_templates.id", use_alter=True), nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -276,10 +280,17 @@ class InferenceTemplateRow(Base):
         ),
         Index("ix_inference_templates_architecture", "architecture"),
         Index("ix_inference_templates_dataset_key", "dataset_key"),
+        CheckConstraint(
+            "archived_at IS NOT NULL OR (architecture IS NULL AND dataset_key IS NULL "
+            "AND dataset_name IS NULL AND parent_template_id IS NULL)",
+            name="ck_inference_templates_scope",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    architecture: Mapped[str] = mapped_column(String(96))
+    architecture: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dataset_key: Mapped[str | None] = mapped_column(String(180), nullable=True)
     dataset_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
     parent_template_id: Mapped[uuid.UUID | None] = mapped_column(

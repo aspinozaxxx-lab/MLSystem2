@@ -14,16 +14,16 @@ from mlsystem2.settings.api import load_settings
 from mlsystem2.models.contracts import CheckpointArtifact, LoadedCheckpoint, ModelHandle
 from mlsystem2.train_pipeline import _runner
 
-from mlsystem2.training_ui_api import _training_continuation as continuation, _worker
+from mlsystem2.training_ui_api import _training_continuation as continuation, _worker, _service
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
-from mlsystem2.training_ui_api._models import JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import DatasetClassRow, JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
 from mlsystem2.training_ui_api._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY, POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY, is_secondary_job,
 )
 from mlsystem2.training_ui_api.api import create_app
-from mlsystem2.training_ui_api.contracts import TrainingContinuationCreate, TrainingUIAPIError
+from mlsystem2.training_ui_api.contracts import InferenceTemplateClassUpdate, InferenceTemplateCreate, TrainingContinuationCreate, TrainingUIAPIError
 
 
 @pytest.fixture
@@ -69,6 +69,11 @@ def saved_training(tmp_path, monkeypatch):
             "ui.run_inference_after_training": True, POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY: ["старое-задание"],
             STOP_AND_SAVE_BEST_CONFIG_KEY: True}
     with factory() as session:
+        class_row = DatasetClassRow(key="образец", name="Учебный класс", technical_name="образец", imagery_type="kanopus", quality_metric="pixel")
+        session.add(class_row)
+        session.flush()
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки учебного класса"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
         job = JobRow(type="training", source="manual", status="completed", queue_position=30001,
                      dataset_key="образец", dataset_version="старая-версия", dataset_name="Учебный датасет",
                      model_name="Учебная сеть", architecture="smp_unet_resnet34", tile_size=512,
@@ -130,6 +135,21 @@ def saved_training(tmp_path, monkeypatch):
 def _request(checkpoint="best", **changes):
     return {"additional_epochs": 8, "additional_time_sec": 600, "early_stopping_patience": 3,
             "checkpoint": checkpoint, "request_id": str(uuid.uuid4()), **changes}
+
+
+def test_unassigned_class_can_continue_only_without_pseudo_markup(saved_training):
+    env = saved_training
+    with env.factory() as session:
+        class_row = session.scalar(select(DatasetClassRow).where(DatasetClassRow.key == "образец"))
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=None), env.config)
+        session.commit()
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    rejected = env.client.post(url, json=_request(run_inference_after_training=True))
+    assert rejected.status_code == 400
+    assert "назначен шаблон инференса" in rejected.json()["detail"]
+    allowed = env.client.post(url, json=_request(run_inference_after_training=False))
+    assert allowed.status_code == 200
+    assert allowed.json()["run_inference_after_training"] is False
 
 
 @pytest.mark.parametrize("checkpoint", ["best", "last"])

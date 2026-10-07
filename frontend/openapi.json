@@ -3748,7 +3748,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TrainingTemplateCreate"
+                "$ref": "#/components/schemas/InferenceTemplateCreate"
               }
             }
           },
@@ -3799,7 +3799,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TrainingTemplateUpdate"
+                "$ref": "#/components/schemas/InferenceTemplateUpdate"
               }
             }
           }
@@ -3916,55 +3916,18 @@
         }
       }
     },
-    "/api/v1/inference-templates/{architecture}": {
-      "get": {
-        "summary": "Get Inference Template",
-        "operationId": "get_inference_template_api_v1_inference_templates__architecture__get",
-        "parameters": [
-          {
-            "name": "architecture",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Architecture"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InferenceTemplate"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
+    "/api/v1/dataset-classes/{class_key}/inference-template": {
       "put": {
-        "summary": "Put Inference Template",
-        "operationId": "put_inference_template_api_v1_inference_templates__architecture__put",
+        "summary": "Put Class Inference Template",
+        "operationId": "put_class_inference_template_api_v1_dataset_classes__class_key__inference_template_put",
         "parameters": [
           {
-            "name": "architecture",
+            "name": "class_key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Architecture"
+              "title": "Class Key"
             }
           }
         ],
@@ -3973,7 +3936,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TrainingTemplateUpdate"
+                "$ref": "#/components/schemas/InferenceTemplateClassUpdate"
               }
             }
           }
@@ -3984,7 +3947,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InferenceTemplate"
+                  "$ref": "#/components/schemas/InferenceTemplateListResponse"
                 }
               }
             }
@@ -8753,47 +8716,27 @@
             "format": "uuid",
             "title": "Id"
           },
-          "architecture": {
-            "type": "string",
-            "title": "Architecture"
-          },
-          "dataset_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dataset Key"
-          },
-          "dataset_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dataset Name"
-          },
-          "parent_template_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Template Id"
-          },
           "display_name": {
             "type": "string",
             "title": "Display Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "class_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Class Keys"
           },
           "config_schema": {
             "$ref": "#/components/schemas/ConfigSchema"
@@ -8840,8 +8783,8 @@
         "type": "object",
         "required": [
           "id",
-          "architecture",
           "display_name",
+          "class_keys",
           "config_schema",
           "default_config",
           "source",
@@ -8851,6 +8794,56 @@
           "updated_at"
         ],
         "title": "InferenceTemplate"
+      },
+      "InferenceTemplateClassUpdate": {
+        "properties": {
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "title": "InferenceTemplateClassUpdate"
+      },
+      "InferenceTemplateCreate": {
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Display Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "title": "InferenceTemplateCreate"
       },
       "InferenceTemplateListResponse": {
         "properties": {
@@ -8868,6 +8861,66 @@
           "templates"
         ],
         "title": "InferenceTemplateListResponse"
+      },
+      "InferenceTemplateUpdate": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "default_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Config"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "reset_to_baseline": {
+            "type": "boolean",
+            "title": "Reset To Baseline",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "InferenceTemplateUpdate"
       },
       "JobDetail": {
         "properties": {

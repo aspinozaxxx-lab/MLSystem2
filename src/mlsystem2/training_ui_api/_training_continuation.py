@@ -19,6 +19,7 @@ from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 
 from ._config import TrainingUIAPIConfig
 from ._models import JobRow, TrainingResultRow
+from ._template_selection import effective_inference_template_row
 from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
@@ -120,6 +121,8 @@ def create_continuation_job(
             or existing.config[CONTINUATION_KEY].get("checkpoint") != request.checkpoint):
             raise TrainingUIAPIError("Параметры повторной отправки изменены. Откройте диалог заново.")
         return existing
+    if selected_options[POST_TRAINING_INFERENCE_CONFIG_KEY] and effective_inference_template_row(session, source.dataset_key) is None:
+        raise TrainingUIAPIError("Классу не назначен шаблон инференса. Назначьте шаблон или отключите создание псевдоразметки.")
     _check_artifact(config, result.mlflow_run_id, LAST_ARTIFACT if request.checkpoint == "last" else BEST_ARTIFACT)
     job_config = copy.deepcopy(source.config)
     for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY):

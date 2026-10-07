@@ -47,7 +47,8 @@ from ._external_models import (
 from ._imagery_sources import find_imagery_source, list_imagery_sources
 from ._models import JobRow, StoredFileRow, TrainingResultRow
 from ._queueing import next_queue_position
-from ._service import delete_job, inference_template_row_for_dataset
+from ._service import delete_job
+from ._template_selection import effective_inference_template_row
 from ._templates import sanitize_inference_template_config
 from .contracts import (
     JobSource,
@@ -494,11 +495,15 @@ def _select_model(
             )
             target_resolution_m = _dataset_target_resolution_m(model_dataset)
             input_channels = model_dataset.input_channels
-        template = inference_template_row_for_dataset(
-            session,
-            row.architecture,
-            model_dataset.key,
-        )
+        template = effective_inference_template_row(session, model_dataset.key)
+        if template is None:
+            if required:
+                raise PseudolabelAPIError(
+                    "INFERENCE_TEMPLATE_NOT_ASSIGNED",
+                    "Классу не назначен шаблон инференса. Назначьте его на странице шаблонов, чтобы создать псевдоразметку.",
+                    status_code=409,
+                )
+            return None
         template_config = (
             sanitize_inference_template_config(template.default_config)
             if template is not None

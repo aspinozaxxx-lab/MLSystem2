@@ -3,12 +3,13 @@ import { type FormEvent, useRef, useState } from "react";
 import { apiJson } from "./api/client";
 import type { JobDetail, TrainingContinuationCreate, TrainingContinuationOptions, TrainingResultInfo } from "./api/types";
 
-export function TrainingContinuationForm({ result, options, run, closeModal, reload }: {
+export function TrainingContinuationForm({ result, options, run, closeModal, reload, inferenceAvailable = true }: {
   result: TrainingResultInfo;
   options: TrainingContinuationOptions;
   run: <T>(operation: () => Promise<T>) => Promise<T | undefined>;
   closeModal: () => void;
   reload: () => Promise<void>;
+  inferenceAvailable?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [checkpoint, setCheckpoint] = useState<"best" | "last">("best");
@@ -66,9 +67,10 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
     </div>
     <p className="muted">Обучение остановится по первому достигнутому пределу. Время учитывает обучение и валидацию; текущая эпоха завершается полностью.</p>
     <div className="continuation-options" role="group" aria-label="Очередь и результат">
-      <label className="training-launch-check"><input type="checkbox" name="run_inference_after_training" defaultChecked={options.run_inference_after_training} disabled={busy} />
+      <label className="training-launch-check"><input type="checkbox" name="run_inference_after_training" defaultChecked={options.run_inference_after_training && inferenceAvailable} disabled={busy || !inferenceAvailable} />
         <span>Псевдоразметка после обучения<small>Все снимки датасета, после успешного завершения.</small></span>
       </label>
+      {!inferenceAvailable ? <p className="inference-template-warning" role="alert">Классу не назначен шаблон инференса. Чтобы создать псевдоразметку после обучения, <a href="#/templates/inference" onClick={closeModal}>назначьте шаблон</a> в разделе «Инференс».</p> : null}
       <label className="training-launch-check"><input type="checkbox" name="secondary_priority" defaultChecked={options.secondary_priority} disabled={busy} />
         <span>Второстепенный приоритет<small>Обучение и псевдоразметка уступают ресурсы обычным заданиям.</small></span>
       </label>

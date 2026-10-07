@@ -23,17 +23,29 @@ const value: JsonRecord = {
 const dataset = { key: "forest", name: "Вырубки / Основной", task: "binary", imagery_type: "kanopus", input_channels: 4 } as DatasetInfo;
 const template = { id: "base", display_name: "segformer b0", version: 1, config_schema: schema, default_config: value } as TrainingTemplate;
 const ignore = () => {};
-function render(config = value, architecture = "smp_segformer_b0") {
+function render(config = value, architecture = "smp_segformer_b0", inferenceAvailable = true) {
   return renderToStaticMarkup(<TrainingLaunchForm
     models={[0, 1, 2, 3].map((index) => ({ architecture: `smp_segformer_b${index}`, display_name: `segformer b${index}`, input_channels: 4, output_channels: 1, pretrained: false }))}
     datasets={[dataset]} architecture={architecture} datasetKey="forest" template={template} schema={schema} value={config}
     onArchitectureChange={ignore} onDatasetChange={ignore} onChange={ignore}
     runInferenceAfterTraining={false} onRunInferenceChange={ignore} secondaryPriority={false} onSecondaryPriorityChange={ignore}
     busy={false} onSubmit={ignore}
+    inferenceAvailable={inferenceAvailable}
   />);
 }
 
 describe("форма запуска обучения", () => {
+  it("предупреждает возле галочки псевдоразметки и оставляет обучение доступным без шаблона", () => {
+    const html = render(value, "smp_segformer_b0", false);
+    const options = html.split('class="training-launch-options"')[1];
+    expect(options).toContain('role="alert"');
+    expect(options).toContain("Классу не назначен шаблон инференса");
+    expect(options).toContain('href="#/templates/inference"');
+    expect(options.match(/<input[^>]+name="run_inference_after_training"[^>]*>/)?.[0]).toContain("disabled");
+    expect(options.match(/<input[^>]+name="run_inference_after_training"[^>]*>/)?.[0]).not.toContain("checked");
+    expect(html.match(/<button[^>]+type="submit"[^>]*>/)?.[0]).not.toContain("disabled");
+    expect(render()).not.toContain("Классу не назначен шаблон инференса");
+  });
   it.each(["smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3"])("для %s открывает выбор модели первым и оставляет две опции вне сворачиваемых разделов", (architecture) => {
     const html = render(value, architecture);
     expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);

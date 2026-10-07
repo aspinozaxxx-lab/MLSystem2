@@ -2079,3 +2079,45 @@
 .home-heading .page-header > .button-row { width: auto; flex: none; margin-left: auto; justify-content: flex-end; }
 .home-service-link { min-width: 140px; min-height: 44px; padding: 0 20px; font-size: 14px; white-space: nowrap; }
 .home-service-link svg { flex-shrink: 0; }
+.inference-templates-page { display: grid; gap: 20px; }
+.inference-templates-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; border: 1px solid var(--border); border-radius: 18px; background: linear-gradient(105deg, var(--accent-soft), var(--surface)); }
+.inference-templates-toolbar strong { font-size: 17px; }
+.inference-templates-toolbar p { margin: 5px 0 0; color: var(--muted); }
+.inference-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; align-items: start; }
+.inference-template-card { position: relative; padding: 22px; border-top: 3px solid var(--grovika-cyan); box-shadow: var(--shadow); min-width: 0; }
+.inference-template-card:has(.inference-chip-menu) { z-index: 20; }
+.inference-template-card > header { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: start; gap: 12px; }
+.inference-template-card h2 { font-size: 18px; line-height: 24px; margin: 0 0 4px; overflow-wrap: anywhere; }
+.inference-template-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong); }
+.inference-card-actions { display: flex; gap: 4px; }
+.inference-card-actions .icon-button { width: 32px; height: 32px; }
+.inference-template-description { margin: 16px 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inference-class-chips { display: flex; flex-wrap: wrap; gap: 9px; }
+.inference-class-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 13px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--grovika-cyan) 40%, var(--border)); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.inference-class-chip > span { overflow-wrap: anywhere; min-width: 0; }
+.inference-chip-action { display: grid; place-items: center; background: transparent; color: var(--muted); border: 0; border-radius: 50%; width: 29px; min-width: 29px; height: 29px; padding: 0; }
+.inference-chip-action:hover, .inference-chip-action[aria-expanded="true"] { background: var(--surface); color: var(--accent); }
+.inference-chip-menu { position: fixed; z-index: 30; overflow-y: auto; width: 270px; max-width: calc(100vw - 36px); display: grid; gap: 3px; padding: 9px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow-overlay); }
+.inference-chip-menu button { display: flex; align-items: center; gap: 8px; padding: 9px 10px; text-align: left; border: 0; border-radius: 8px; background: transparent; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+.inference-chip-menu button:hover, .inference-chip-menu button:focus-visible { background: var(--accent-soft); }
+.inference-chip-menu button > span { min-width: 0; }
+.inference-template-form .field { min-width: 0; }
+.inference-template-form .field span, .inference-template-form p { overflow-wrap: anywhere; }
+.inference-chip-menu small, .inference-menu-caption { padding: 6px 10px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.inference-chip-menu .inference-menu-detach { border-top: 1px solid var(--border); color: var(--danger); }
+.inference-empty-classes { color: var(--muted); font-size: 13px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; }
+.inference-template-card.is-unassigned { border-top-color: var(--border); background: var(--surface-soft); }
+.inference-template-card.is-unassigned.has-classes { border-top-color: var(--warn); }
+.is-unassigned .inference-template-icon, .is-unassigned .inference-class-chip { background: var(--warn-soft); border-color: var(--warn); }
+.inference-template-warning { grid-column: 1 / -1; margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--warn-soft); color: var(--text); font-size: 13px; line-height: 20px; }
+@media (max-width: 700px) {
+  .inference-templates-toolbar { padding: 14px; gap: 12px; }
+  .inference-template-card { padding: 16px; }
+  .inference-template-card > header { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 9px; }
+  .inference-template-icon { width: 36px; height: 36px; }
+  .inference-template-card h2 { font-size: 16px; line-height: 22px; }
+  .inference-card-actions .icon-button { width: 38px; height: 38px; }
+  .inference-chip-action { width: 36px; min-width: 36px; height: 36px; }
+  .inference-chip-menu button { min-height: 42px; }
+  .inference-template-form .field:has(select[name="postprocess.filter_compact_objects.mode"]) { grid-column: 1 / -1; }
+}

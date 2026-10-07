@@ -2727,6 +2727,8 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from mlsystem2.training_ui_api.contracts import InferenceTemplateCreate, InferenceTemplateClassUpdate
+
     config = _configure_export_environment(tmp_path, monkeypatch)
     _write_export_dataset(config.mlmarkup_root, config.images_root)
     configure_schema(None)
@@ -2764,6 +2766,10 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         second_row.dataset_name = "Вырубки\\strict"
         second_row.dataset_short_name = "strict"
 
+        class_row = dataset_class_row(session, first.class_key)
+        assert class_row is not None
+        template = _service.create_inference_template(session, InferenceTemplateCreate(display_name="Настройки оценки"), config)
+        _service.assign_inference_template(session, class_row.key, InferenceTemplateClassUpdate(template_id=template.id), config)
         first_result = TrainingResultRow(
             source="manual",
             dataset_key="Вырубки\\main",
@@ -4743,6 +4749,7 @@ def test_test_f1_view_keeps_exact_masks_after_worker_cleanup_and_prepares_legacy
     factory = create_session_factory(config)
     Base.metadata.create_all(factory.kw["bind"])
     with factory() as session:
+        _service.ensure_seed_templates(session)
         sample = create_test_sample(session, _TestSampleCreate(
             name="Проверка карты", dataset_key="Вырубки\\main", tile_width=16, tile_height=16,
             image_count=2, object_count=4,
