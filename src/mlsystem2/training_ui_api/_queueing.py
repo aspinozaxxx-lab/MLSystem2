@@ -14,6 +14,7 @@ from .contracts import JobSource, JobStatus, JobType
 
 DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
+TEST_F1_PRIORITY_CONFIG_KEY = "ui.test_f1_priority"
 POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
 SECONDARY_PRIORITY_CONFIG_KEY = "ui.secondary_priority"
@@ -58,10 +59,22 @@ def job_priority(row: _QueueRow) -> int:
 
 
 def is_secondary_job(row: _QueueRow) -> bool:
-    return bool((row.config or {}).get(SECONDARY_PRIORITY_CONFIG_KEY, False))
+    return is_background_test_f1_job(row) or bool(
+        (row.config or {}).get(SECONDARY_PRIORITY_CONFIG_KEY, False)
+    )
+
+
+def is_background_test_f1_job(row: _QueueRow) -> bool:
+    config = row.config or {}
+    return (
+        config.get("operation") == TEST_SAMPLE_F1_OPERATION
+        and config.get(TEST_F1_PRIORITY_CONFIG_KEY) == "background"
+    )
 
 
 def is_urgent_job(row: _QueueRow) -> bool:
+    if is_background_test_f1_job(row):
+        return False
     config = row.config or {}
     return (
         config.get(URGENT_PRIORITY_CONFIG_KEY) == URGENT_PRIORITY_VALUE
@@ -72,7 +85,7 @@ def is_urgent_job(row: _QueueRow) -> bool:
 def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, int, int, datetime]:
     status_rank = 0 if row.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value} else 1
     urgent_rank = 0 if is_urgent_job(row) else 1
-    secondary_rank = 1 if is_secondary_job(row) else 0
+    secondary_rank = 2 if is_background_test_f1_job(row) else int(is_secondary_job(row))
     return (
         status_rank,
         urgent_rank,
@@ -85,7 +98,7 @@ def queue_sort_key(row: _QueueRow) -> tuple[int, int, int, int, int, datetime]:
 
 def dispatch_sort_key(row: _QueueRow) -> tuple[int, int, int, int, datetime]:
     urgent_rank = 0 if is_urgent_job(row) else 1
-    secondary_rank = 1 if is_secondary_job(row) else 0
+    secondary_rank = 2 if is_background_test_f1_job(row) else int(is_secondary_job(row))
     return urgent_rank, secondary_rank, row.queue_position, -job_priority(row), row.created_at
 
 

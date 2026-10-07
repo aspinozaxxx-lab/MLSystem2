@@ -3245,6 +3245,7 @@ function DatasetResultsPage({
   showJobLog,
 }: RoutedPageProps & { datasetKey: string }) {
   const [payload, setPayload] = useState<DatasetResultsResponse | null>(null);
+  const [recalculatingTestF1, setRecalculatingTestF1] = useState(false);
   const load = useCallback(async () => {
     const data = await run(() => apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}`));
     if (data) setPayload(data);
@@ -3331,12 +3332,18 @@ function DatasetResultsPage({
   };
 
   const recalculateTestF1 = async () => {
-    const updated = await run(() =>
-      apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}/test-f1`, {
-        method: "POST",
-      }),
-    );
-    if (updated) setPayload(updated);
+    if (recalculatingTestF1) return;
+    setRecalculatingTestF1(true);
+    try {
+      const updated = await run(() =>
+        apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}/test-f1`, {
+          method: "POST",
+        }),
+      );
+      if (updated) setPayload(updated);
+    } finally {
+      setRecalculatingTestF1(false);
+    }
   };
   const primaryTestSamples = payload.primary_test_samples?.length
     ? payload.primary_test_samples
@@ -3379,9 +3386,9 @@ function DatasetResultsPage({
               ))}
             </span>
           </div>
-          <button className="primary" type="button" disabled={payload.test_f1_status === "running"} onClick={() => void recalculateTestF1()}>
+          <button className="primary" type="button" disabled={recalculatingTestF1} onClick={() => void recalculateTestF1()}>
             <RefreshCw size={16} />
-            {payload.test_f1_status === "running" ? "Пересчёт..." : "Пересчитать по всем сетям датасета"}
+            {recalculatingTestF1 ? "Постановка в очередь..." : "Пересчитать по всем сетям датасета"}
           </button>
         </section>
       ) : (

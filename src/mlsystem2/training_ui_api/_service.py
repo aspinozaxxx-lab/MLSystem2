@@ -96,6 +96,7 @@ from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
+    TEST_F1_PRIORITY_CONFIG_KEY,
     STOP_AND_SAVE_BEST_CONFIG_KEY,
     ensure_queue_positions,
     is_secondary_job,
@@ -121,6 +122,7 @@ from ._template_selection import (
     effective_training_template_row,
 )
 from ._test_samples import (
+    _class_scope_keys,
     TEST_SAMPLE_F1_OPERATION,
     dataset_test_sample_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
@@ -1174,7 +1176,7 @@ def move_job(session: Session, job_id: uuid.UUID, *, direction: int) -> JobDetai
     queued = [
         item
         for item in _queue_rows(session, manual_only=True, queued_only=True)
-        if is_secondary_job(item) == is_secondary_job(row)
+        if queue_sort_key(item)[1:3] == queue_sort_key(row)[1:3]
     ]
     index = next((i for i, item in enumerate(queued) if item.id == row.id), None)
     if index is None:
@@ -1336,6 +1338,9 @@ def set_primary_training_result(
             config,
             class_keys={class_row.key},
         )
+        reconcile_training_result_test_f1(
+            session, config, dataset_keys=_class_scope_keys(session, class_row.key)
+        )
     return _training_result_info(session, row, config=config)
 
 
@@ -1367,6 +1372,9 @@ def clear_primary_training_result(
             session,
             config,
             class_keys={class_row.key},
+        )
+        reconcile_training_result_test_f1(
+            session, config, dataset_keys=_class_scope_keys(session, class_row.key)
         )
     return _training_result_info(session, row, config=config)
 
@@ -2622,6 +2630,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
                 POST_TRAINING_INFERENCE_CONFIG_KEY,
                 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
                 SECONDARY_PRIORITY_CONFIG_KEY,
+                TEST_F1_PRIORITY_CONFIG_KEY,
                 STOP_AND_SAVE_BEST_CONFIG_KEY,
             }
         },

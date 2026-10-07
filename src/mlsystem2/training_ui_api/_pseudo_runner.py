@@ -74,7 +74,7 @@ PAUSED_MARKER_FILE = "paused"
 
 
 class _InferencePauseController:
-    """Кооперативно освобождает GPU между снимками псевдоразметки."""
+    """Кооперативно освобождает GPU между снимками инференса и оценки F1."""
 
     def __init__(
         self,
@@ -100,18 +100,20 @@ class _InferencePauseController:
             pause_token = request_path.read_text(encoding="utf-8").strip()
             if not pause_token:
                 return
-            cpu = self._torch.device("cpu")
-            for model in self._models:
-                model.to(cpu)
+            if self._models:
+                cpu = self._torch.device("cpu")
+                for model in self._models:
+                    model.to(cpu)
             _release_cuda_cache(self._torch, self._device)
             temporary = marker_path.with_suffix(".tmp")
             temporary.write_text(f"{pause_token}\n", encoding="utf-8")
             os.replace(temporary, marker_path)
             while request_path.is_file():
                 time.sleep(0.2)
-            target_device = self._torch.device(self._device)
-            for model in self._models:
-                model.to(target_device)
+            if self._models:
+                target_device = self._torch.device(self._device)
+                for model in self._models:
+                    model.to(target_device)
         finally:
             marker_path.unlink(missing_ok=True)
 
@@ -327,6 +329,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
     loaded = None
     external_loaded = None
     model = None
+    pause_controller = None
     try:
         external_manifest = None if precomputed else external_model_manifest(config)
         threshold_value = config.get("threshold")
@@ -393,7 +396,14 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         class_ids = [int(item["id"]) for item in object_types] if task == "multiclass" else []
         class_pixel_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
         class_object_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
+        pause_controller = _InferencePauseController(
+            torch,
+            [getattr(external_loaded, "model", None) if external_loaded is not None else model],
+            device,
+            str(config.get("control_dir") or "") or None,
+        )
         for number, tile in enumerate(tiles, start=1):
+            pause_controller.pause_if_requested()
             tile_started = time.time()
             if tile.get("precomputed_prediction_path"):
                 prediction = np.load(Path(str(tile["precomputed_prediction_path"]))).astype(
@@ -682,6 +692,8 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             "elapsed_sec": round(time.time() - started, 3),
         }
     finally:
+        if pause_controller is not None:
+            pause_controller.close()
         try:
             del model
             del loaded

@@ -22,7 +22,7 @@ from mlsystem2.mlflow_adapter.contracts import (
     MLflowTrainingProgress,
 )
 from mlsystem2.models.contracts import ModelsError
-from mlsystem2.training_ui_api import _auth, _automation, _model_export, _service, _worker
+from mlsystem2.training_ui_api import _auth, _automation, _model_export, _queueing, _service, _worker
 from mlsystem2.training_ui_api._routes import export as _export_routes
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api._config import get_config
@@ -819,7 +819,7 @@ def test_successful_training_does_not_assign_primary_star(
 
     monkeypatch.setattr(
         _worker,
-        "queue_training_result_test_f1",
+        "reconcile_training_result_test_f1",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
@@ -1717,9 +1717,11 @@ def test_secondary_training_pauses_for_regular_job_and_resumes(
         assert secondary.process_pid == 4321
 
 
-def test_secondary_inference_pauses_for_regular_training_and_resumes(
+@pytest.mark.parametrize("background_f1", [False, True])
+def test_secondary_inference_pauses_for_preferred_training_and_resumes(
     tmp_path: Path,
     monkeypatch,
+    background_f1: bool,
 ) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -1743,11 +1745,18 @@ def test_secondary_inference_pauses_for_regular_training_and_resumes(
     with session_factory() as session:
         secondary = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 1, created_at)
         secondary.config = {"ui.secondary_priority": True}
+        if background_f1:
+            secondary.config = {
+                **secondary.config,
+                "operation": "test_sample_f1",
+                _queueing.TEST_F1_PRIORITY_CONFIG_KEY: "background",
+            }
         secondary.status = JobStatus.RUNNING.value
         secondary.process_pid = 4321
         secondary.tmp_path = str(tmp_path / "secondary-inference")
         Path(secondary.tmp_path).mkdir(parents=True)
         regular = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 2, created_at)
+        regular.config = {"ui.secondary_priority": background_f1}
         session.add_all([secondary, regular])
         session.flush()
 
@@ -1788,6 +1797,129 @@ def test_secondary_inference_pauses_for_regular_training_and_resumes(
         dispatch_queue_once(session, config)
         assert secondary.status == JobStatus.RUNNING.value
         assert secondary.process_pid == 4321
+
+
+@pytest.mark.parametrize("preferred_secondary", [False, True])
+def test_background_test_f1_waits_for_other_jobs(
+    tmp_path: Path,
+    monkeypatch,
+    preferred_secondary: bool,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    started: list[UUID] = []
+
+    def fake_start(session, row, config, *, popen_factory) -> None:
+        del session, config, popen_factory
+        started.append(row.id)
+        row.status = JobStatus.RUNNING.value
+
+    monkeypatch.setattr(_worker, "_start_training_job", fake_start)
+    monkeypatch.setattr(_worker, "_start_inference_job", fake_start)
+    created_at = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    with session_factory() as session:
+        background = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 10_001, created_at)
+        background.config = {
+            "operation": "test_sample_f1",
+            "priority": "urgent",
+            _queueing.TEST_F1_PRIORITY_CONFIG_KEY: "background",
+        }
+        preferred = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 40_001, created_at)
+        preferred.config = {"ui.secondary_priority": preferred_secondary}
+        session.add_all([background, preferred])
+        session.flush()
+
+        assert _queueing.queue_sort_key(preferred) < _queueing.queue_sort_key(background)
+        dispatch_queue_once(session, config)
+        assert started == [preferred.id]
+        assert background.status == JobStatus.QUEUED.value
+
+
+@pytest.mark.parametrize("training_secondary", [False, True])
+def test_paused_training_resumes_before_paused_background_f1(
+    tmp_path: Path,
+    monkeypatch,
+    training_secondary: bool,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setattr(_worker, "job_process_is_alive", lambda _pid: True)
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    with session_factory() as session:
+        background = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 10_001, created_at)
+        background.config = {
+            "operation": "test_sample_f1",
+            _queueing.TEST_F1_PRIORITY_CONFIG_KEY: "background",
+        }
+        training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 20_001, created_at)
+        training.config = {"ui.secondary_priority": training_secondary}
+        for index, row in enumerate([background, training]):
+            row.status = JobStatus.PAUSED.value
+            row.process_pid = 4300 + index
+            row.tmp_path = str(tmp_path / str(index))
+        session.add_all([background, training])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        assert training.status == JobStatus.RUNNING.value
+        assert background.status == JobStatus.PAUSED.value
+
+
+def test_manually_promoted_paused_f1_preempts_training_without_restarting(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    monkeypatch.setattr(_worker, "job_process_is_alive", lambda _pid: True)
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    created_at = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    with session_factory() as session:
+        training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 20_001, created_at)
+        training.status = JobStatus.RUNNING.value
+        training.process_pid = 4321
+        training.tmp_path = str(tmp_path / "training")
+        f1 = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 10_001, created_at)
+        f1.status = JobStatus.PAUSED.value
+        f1.process_pid = 5678
+        f1.tmp_path = str(tmp_path / "f1")
+        f1.config = {
+            "operation": "test_sample_f1", "priority": "urgent",
+            _queueing.TEST_F1_PRIORITY_CONFIG_KEY: "manual",
+        }
+        control = Path(f1.tmp_path) / "control"
+        control.mkdir(parents=True)
+        (control / "pause.request").write_text("f1-token", encoding="utf-8")
+        (control / "paused").write_text("f1-token", encoding="utf-8")
+        session.add_all([training, f1])
+        session.flush()
+
+        dispatch_queue_once(session, config)
+        training_control = Path(training.tmp_path) / "control"
+        assert (training_control / "pause.request").is_file()
+        assert (control / "pause.request").is_file()
+        (training_control / "paused").write_text(
+            (training_control / "pause.request").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        dispatch_queue_once(session, config)
+        assert training.status == JobStatus.PAUSED.value
+        assert not (control / "pause.request").exists()
+        (control / "paused").unlink()
+        dispatch_queue_once(session, config)
+        assert f1.status == JobStatus.RUNNING.value
+        assert f1.process_pid == 5678
+        assert training.status == JobStatus.PAUSED.value
 
 
 def _queue_test_job(

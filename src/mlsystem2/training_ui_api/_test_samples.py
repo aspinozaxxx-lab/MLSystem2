@@ -83,6 +83,8 @@ from ._models import (
 from ._processes import terminate_job_process
 from ._pseudo_runner import postprocess_profile_name
 from ._queueing import (
+    SECONDARY_PRIORITY_CONFIG_KEY,
+    TEST_F1_PRIORITY_CONFIG_KEY,
     TEST_SAMPLE_F1_OPERATION,
     URGENT_PRIORITY_CONFIG_KEY,
     URGENT_PRIORITY_VALUE,
@@ -3678,7 +3680,7 @@ def queue_class_test_f1(
     dataset_key: str,
     config: TrainingUIAPIConfig,
 ) -> int:
-    """Поставить оценки трёх последних успешных сетей каждого датасета класса."""
+    """Поставить основную оценку и две фоновые для каждого датасета класса."""
 
     class_keys = _class_scope_keys(session, dataset_key)
     results = session.scalars(
@@ -3698,7 +3700,7 @@ def queue_class_test_f1(
     ).all()
     return _queue_training_results_test_f1(
         session,
-        _latest_training_results_per_dataset(session, results),
+        _automatic_training_results_per_dataset(session, results),
         config,
         dataset_key=dataset_key,
     )
@@ -3731,6 +3733,7 @@ def queue_dataset_test_f1_all(
         results,
         config,
         dataset_key=dataset_key,
+        manual=True,
     )
 
 
@@ -3740,6 +3743,7 @@ def _queue_training_results_test_f1(
     config: TrainingUIAPIConfig,
     *,
     dataset_key: str,
+    manual: bool = False,
 ) -> int:
     created = 0
     first_error: str | None = None
@@ -3754,7 +3758,8 @@ def _queue_training_results_test_f1(
             session,
             result,
             config,
-            source=JobSource.MANUAL,
+            source=JobSource.MANUAL if manual else JobSource(result.source),
+            manual=manual,
         ):
             created += 1
     session.flush()
@@ -3771,20 +3776,89 @@ def _queue_training_results_test_f1(
     return created
 
 
-def _latest_training_results_per_dataset(
+def _automatic_training_results_per_dataset(
     session: Session,
     results: list[TrainingResultRow],
 ) -> list[TrainingResultRow]:
     selected: list[TrainingResultRow] = []
-    counts: dict[str, int] = defaultdict(int)
+    grouped: dict[str, list[TrainingResultRow]] = defaultdict(list)
     for result in results:
         dataset = _training_result_dataset_row(session, result)
         group_key = dataset.key if dataset is not None else result.dataset_key or result.class_key
-        if counts[group_key] >= AUTOMATIC_TEST_F1_RESULTS_PER_DATASET:
-            continue
-        counts[group_key] += 1
-        selected.append(result)
+        grouped[group_key].append(result)
+    for dataset_key, candidates in grouped.items():
+        preferred = dataset_training_result(session, dataset_key)
+        preferred = next(
+            (row for row in candidates if preferred is not None and row.id == preferred.id),
+            candidates[0],
+        )
+        selected.append(preferred)
+        selected.extend(
+            [row for row in candidates if row.id != preferred.id][
+                : AUTOMATIC_TEST_F1_RESULTS_PER_DATASET - 1
+            ]
+        )
     return selected
+
+
+def _set_test_f1_job_priority(
+    session: Session,
+    job: JobRow,
+    result: TrainingResultRow,
+    *,
+    manual: bool = False,
+) -> None:
+    if (
+        (
+            job.status != JobStatus.QUEUED.value
+            and not (manual and job.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value})
+        )
+        or (job.config or {}).get("operation") != TEST_SAMPLE_F1_OPERATION
+    ):
+        return
+    state = dict(job.config or {})
+    if not manual and state.get(TEST_F1_PRIORITY_CONFIG_KEY) == "manual":
+        return
+    dataset = _training_result_dataset_row(session, result)
+    preferred = dataset_training_result(
+        session, dataset.key if dataset is not None else result.dataset_key or result.class_key
+    )
+    background = not manual and preferred is not None and preferred.id != result.id
+    state[TEST_F1_PRIORITY_CONFIG_KEY] = (
+        "manual" if manual else "background" if background else "primary"
+    )
+    state[SECONDARY_PRIORITY_CONFIG_KEY] = background
+    if background:
+        state.pop(URGENT_PRIORITY_CONFIG_KEY, None)
+    else:
+        state[URGENT_PRIORITY_CONFIG_KEY] = URGENT_PRIORITY_VALUE
+    if manual and job.source != JobSource.MANUAL.value:
+        job.source = JobSource.MANUAL.value
+        job.queue_position = next_queue_position(session, JobType.INFERENCE, JobSource.MANUAL)
+    if state != job.config:
+        job.config = state
+
+
+def _reconcile_queued_test_f1_priorities(
+    session: Session,
+    dataset_keys: set[str] | None,
+) -> None:
+    statement = (
+        select(JobRow, TrainingResultRow)
+        .join(TrainingResultTestMetricRow, TrainingResultTestMetricRow.job_id == JobRow.id)
+        .join(
+            TrainingResultRow,
+            TrainingResultRow.id == TrainingResultTestMetricRow.training_result_id,
+        )
+        .where(JobRow.status == JobStatus.QUEUED.value)
+    )
+    if dataset_keys is not None:
+        statement = statement.where(
+            TrainingResultRow.class_key.in_(dataset_keys)
+            | TrainingResultRow.dataset_key.in_(dataset_keys)
+        )
+    for job, result in session.execute(statement):
+        _set_test_f1_job_priority(session, job, result)
 
 
 def reconcile_training_result_test_f1(
@@ -3813,7 +3887,8 @@ def reconcile_training_result_test_f1(
             TrainingResultRow.id.desc(),
         )
     ).all()
-    results = _latest_training_results_per_dataset(session, results)
+    _reconcile_queued_test_f1_priorities(session, dataset_keys)
+    results = _automatic_training_results_per_dataset(session, results)
     created = 0
     for result in results:
         plan = _training_result_test_plan(session, result)
@@ -3884,6 +3959,7 @@ def queue_training_result_test_f1(
     source: JobSource | None = None,
     managed_class_keys: set[str] | None = None,
     force: bool = False,
+    manual: bool = False,
 ) -> bool:
     """Создаёт задание F1 для одной сети, если её оценка неактуальна."""
 
@@ -3949,6 +4025,9 @@ def queue_training_result_test_f1(
         if metric.status == "current" and not force:
             return False
         if metric.status in {"queued", "running"} and _metric_job_is_active(session, metric):
+            job = session.get(JobRow, metric.job_id)
+            if job is not None:
+                _set_test_f1_job_priority(session, job, result, manual=manual)
             return False
 
     if not result.mlflow_run_id:
@@ -3976,7 +4055,7 @@ def queue_training_result_test_f1(
         _cancel_test_metric_job(session, metric)
 
     sample = plan.targets[0].sample
-    job_source = source or JobSource(result.source)
+    job_source = JobSource.MANUAL if manual else source or JobSource(result.source)
     inference_tile_size = _training_result_inference_tile_size(session, result)
     job = JobRow(
         type=JobType.INFERENCE.value,
@@ -4018,6 +4097,7 @@ def queue_training_result_test_f1(
             "mlflow_run_id": result.mlflow_run_id,
         },
     )
+    _set_test_f1_job_priority(session, job, result, manual=manual)
     session.add(job)
     session.flush()
     metric.sample_id = None if plan.managed else sample.id

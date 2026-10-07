@@ -51,6 +51,12 @@ from mlsystem2.training_ui_api._models import (
 from mlsystem2.training_ui_api._raster_valid_data import (
     clip_geometries_to_valid_data,
 )
+from mlsystem2.training_ui_api._queueing import (
+    TEST_F1_PRIORITY_CONFIG_KEY,
+    is_background_test_f1_job,
+    is_secondary_job,
+    is_urgent_job,
+)
 from mlsystem2.training_ui_api._test_samples import (
     _object_counts,
     build_test_sample_download,
@@ -2406,9 +2412,13 @@ def test_test_sample_batch_request_rejects_unlisted_tile_size() -> None:
         )
 
 
-def test_automatic_test_f1_uses_latest_three_and_manual_dataset_action_uses_all(
+@pytest.mark.parametrize("primary_index", [None, 0])
+@pytest.mark.parametrize("source", ["manual", "automation"])
+def test_automatic_test_f1_prioritizes_primary_and_manual_action_promotes_all(
     tmp_path: Path,
     monkeypatch,
+    primary_index: int | None,
+    source: str,
 ) -> None:
     config = _configure_export_environment(tmp_path, monkeypatch)
     _write_export_dataset(config.mlmarkup_root, config.images_root)
@@ -2437,7 +2447,7 @@ def test_automatic_test_f1_uses_latest_three_and_manual_dataset_action_uses_all(
         base_time = datetime(2026, 8, 1, tzinfo=timezone.utc)
         results = [
             TrainingResultRow(
-                source="manual",
+                source=source,
                 dataset_key="Вырубки\\main",
                 class_key="Вырубки\\main",
                 class_display_name="Вырубки\\main",
@@ -2451,20 +2461,87 @@ def test_automatic_test_f1_uses_latest_three_and_manual_dataset_action_uses_all(
         ]
         session.add_all(results)
         session.flush()
+        class_row = dataset_class_row(session, "Вырубки\\main")
+        assert class_row is not None
+        preferred = results[-1] if primary_index is None else results[primary_index]
+        if primary_index is not None:
+            class_row.primary_training_result_id = preferred.id
+            session.flush()
 
         assert queue_class_test_f1(session, "Вырубки\\main", config) == 3
         queued_ids = {
             metric.training_result_id
             for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
         }
-        assert queued_ids == {result.id for result in results[-3:]}
+        alternatives = [result for result in reversed(results) if result.id != preferred.id][:2]
+        assert queued_ids == {preferred.id, *(result.id for result in alternatives)}
+        jobs = {
+            uuid.UUID(job.config["training_result_id"]): job
+            for job in session.scalars(select(JobRow)).all()
+            if job.config.get("metric_target") == "training_result"
+        }
+        job_ids = {result_id: job.id for result_id, job in jobs.items()}
+        assert is_urgent_job(jobs[preferred.id])
+        assert not is_secondary_job(jobs[preferred.id])
+        assert all(is_background_test_f1_job(jobs[row.id]) for row in alternatives)
+        assert all(not is_urgent_job(jobs[row.id]) for row in alternatives)
+        assert all(is_secondary_job(jobs[row.id]) for row in alternatives)
 
-        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 2
+        new_primary = alternatives[0]
+        _service.set_primary_training_result(session, new_primary.id, config)
+        assert is_urgent_job(jobs[new_primary.id])
+        assert is_background_test_f1_job(jobs[preferred.id])
+        if primary_index is None:
+            _service.clear_primary_training_result(session, new_primary.id, config)
+        else:
+            _service.set_primary_training_result(session, preferred.id, config)
+        assert is_urgent_job(jobs[preferred.id])
+        assert is_background_test_f1_job(jobs[new_primary.id])
+
+        # Старые ожидающие задания получают тот же порядок без повторного инференса.
+        for job in jobs.values():
+            job.config = {
+                key: value for key, value in job.config.items()
+                if key not in {TEST_F1_PRIORITY_CONFIG_KEY, "ui.secondary_priority"}
+            }
+            job.config = {**job.config, "priority": "urgent"}
+        session.flush()
+        assert reconcile_training_result_test_f1(session, config) == 0
+        assert all(is_background_test_f1_job(jobs[row.id]) for row in alternatives)
+        assert is_urgent_job(jobs[preferred.id])
+
+        running = jobs[alternatives[0].id]
+        running.status = "running"
+        running.config = {
+            key: value for key, value in running.config.items()
+            if key not in {TEST_F1_PRIORITY_CONFIG_KEY, "ui.secondary_priority"}
+        }
+        running.config = {**running.config, "priority": "urgent"}
+        session.flush()
+        running_config = dict(running.config)
+        assert reconcile_training_result_test_f1(session, config) == 0
+        assert running.config == running_config
+
+        queued_before_manual = len(session.scalars(select(TrainingResultTestMetricRow)).all())
+        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 5 - queued_before_manual
+        assert running.status == "running"
         all_ids = {
             metric.training_result_id
             for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
         }
         assert all_ids == {result.id for result in results}
+        all_jobs = {
+            uuid.UUID(job.config["training_result_id"]): job
+            for job in session.scalars(select(JobRow)).all()
+            if job.config.get("metric_target") == "training_result"
+        }
+        assert len(all_jobs) == 5
+        assert all(all_jobs[result_id].id == job_id for result_id, job_id in job_ids.items())
+        assert all(is_urgent_job(job) and not is_secondary_job(job) for job in all_jobs.values())
+        assert all(job.config[TEST_F1_PRIORITY_CONFIG_KEY] == "manual" for job in all_jobs.values())
+        assert all(job.source == "manual" for job in all_jobs.values())
+        assert reconcile_training_result_test_f1(session, config) == 0
+        assert all(is_urgent_job(job) for job in all_jobs.values())
 
 
 def test_persistent_test_sample_metrics_and_stale_revision(

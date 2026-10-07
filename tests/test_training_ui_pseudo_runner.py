@@ -1241,9 +1241,11 @@ def test_run_pseudo_markup_uses_external_torchscript_adapter(tmp_path, monkeypat
     assert fake_torch.cuda.empty_cache_calls == 1
 
 
+@pytest.mark.parametrize("pause_between_tiles", [False, True])
 def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independently(
     tmp_path,
     monkeypatch,
+    pause_between_tiles: bool,
 ) -> None:
     checkpoint_path = tmp_path / "best.pt"
     checkpoint_path.write_bytes(b"checkpoint")
@@ -1292,11 +1294,32 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
         "load_checkpoint",
         lambda request: SimpleNamespace(model=SimpleNamespace(model=fake_model)),
     )
-    monkeypatch.setattr(
-        _pseudo_runner,
-        "_infer_test_tile_mask",
-        lambda **kwargs: predictions[int(Path(kwargs["image_path"]).stem[-3:]) - 1],
-    )
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    request_path = control_dir / "pause.request"
+    pause_observed: list[tuple[str, int, int]] = []
+    processed_tiles: list[int] = []
+
+    def predict(**kwargs):
+        index = int(Path(kwargs["image_path"]).stem[-3:])
+        processed_tiles.append(index)
+        if pause_between_tiles and index == 1:
+            request_path.write_text("f1-pause-token\n", encoding="utf-8")
+        return predictions[index - 1]
+
+    def release_pause() -> None:
+        marker = control_dir / "paused"
+        deadline = time.monotonic() + 5
+        while not marker.is_file() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if marker.is_file():
+            pause_observed.append((fake_model.device, len(processed_tiles), fake_torch.cuda.empty_cache_calls))
+        request_path.unlink(missing_ok=True)
+
+    monkeypatch.setattr(_pseudo_runner, "_infer_test_tile_mask", predict)
+    responder = threading.Thread(target=release_pause) if pause_between_tiles else None
+    if responder is not None:
+        responder.start()
 
     report = run_test_sample_f1(
         {
@@ -1307,11 +1330,20 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
             "tile_size": 4,
             "stride": 4,
             "device": "cuda",
+            "control_dir": str(control_dir),
             "postprocess_profile": "strong",
             "test_f1_evaluator_version": 2,
             "tiles": tiles,
         }
     )
+
+    if responder is not None:
+        responder.join(timeout=6)
+        assert not responder.is_alive()
+        assert pause_observed == [("cpu", 1, 1)]
+        assert fake_model.device == "cuda"
+        assert processed_tiles == [1, 2]
+        assert not (control_dir / "paused").exists()
 
     assert report["status"] == "ok"
     assert report["processed"] == 2
@@ -1324,7 +1356,7 @@ def test_test_sample_f1_sums_tiles_with_identical_geographic_bounds_independentl
     assert report["postprocess_profile"] == "strong"
     assert report["test_f1_evaluator_version"] == 2
     assert report["preserve_boundary_components"] is True
-    assert fake_torch.cuda.empty_cache_calls == 1
+    assert fake_torch.cuda.empty_cache_calls == 1 + int(pause_between_tiles)
 
 
 def test_test_sample_f1_prefers_checkpoint_window_over_test_tile_size(

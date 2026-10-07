@@ -169,7 +169,9 @@ def prepare_test_f1_view(session: Session, config: TrainingUIAPIConfig, result_i
         raise TrainingUIAPIError("Успешная сеть для просмотра тестового F1 не найдена.")
     view = test_f1_view(session, config, result_id)
     if view.status not in {"ready", "queued", "running"}:
-        queue_training_result_test_f1(session, result, config, source=JobSource.MANUAL, force=True)
+        queue_training_result_test_f1(
+            session, result, config, source=JobSource.MANUAL, force=True, manual=True,
+        )
         session.commit()
     return test_f1_view(session, config, result_id)
 

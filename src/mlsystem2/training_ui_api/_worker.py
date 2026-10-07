@@ -83,6 +83,7 @@ from ._queueing import (
     SECONDARY_PRIORITY_CONFIG_KEY,
     dispatch_sort_key,
     ensure_queue_positions,
+    is_background_test_f1_job,
     is_secondary_job,
     is_urgent_job,
 )
@@ -102,7 +103,6 @@ from ._test_samples import (
     current_primary_training_result,
     evaluate_test_samples_for_pseudo_markup,
     primary_test_sample,
-    queue_training_result_test_f1,
     reconcile_test_sample_evaluations,
     reconcile_training_result_test_f1,
     test_sample_model_compatibility_error,
@@ -308,10 +308,10 @@ def _coordinate_job_preemption(
         .where(JobRow.status == JobStatus.RUNNING.value)
         .order_by(JobRow.started_at, JobRow.created_at)
     )
-    paused = session.scalar(
-        select(JobRow)
-        .where(JobRow.status == JobStatus.PAUSED.value)
-        .order_by(JobRow.started_at, JobRow.created_at)
+    paused = min(
+        session.scalars(select(JobRow).where(JobRow.status == JobStatus.PAUSED.value)).all(),
+        key=dispatch_sort_key,
+        default=None,
     )
     if running is not None:
         preemptor = _preempting_job(session, running)
@@ -330,7 +330,7 @@ def _coordinate_job_preemption(
     if paused is None:
         return False
     if is_secondary_job(paused):
-        preemptor = _next_urgent_inference_job(session) or _next_non_secondary_job(session)
+        preemptor = _next_urgent_inference_job(session) or _next_preferred_job(session, paused)
         if preemptor is not None:
             token = _request_job_pause(paused)
             if not _job_pause_confirmed(paused, token):
@@ -343,7 +343,7 @@ def _coordinate_job_preemption(
             token = _request_job_pause(paused)
             if not _job_pause_confirmed(paused, token):
                 return True
-            _start_inference_job(session, urgent, config, popen_factory=popen_factory)
+            _start_job(session, urgent, config, popen_factory=popen_factory)
             return True
     _request_job_resume(paused)
     if not _job_paused_marker(paused).is_file():
@@ -358,17 +358,21 @@ def _preempting_job(session: Session, running: JobRow) -> JobRow | None:
         if urgent is not None:
             return urgent
     if is_secondary_job(running):
-        return _next_non_secondary_job(session)
+        return _next_preferred_job(session, running)
     return None
 
 
-def _next_non_secondary_job(session: Session) -> JobRow | None:
+def _next_preferred_job(session: Session, current: JobRow) -> JobRow | None:
     rows = session.scalars(select(JobRow).where(JobRow.status == JobStatus.QUEUED.value)).all()
     automation_enabled = _automation_enabled(session)
     candidates = [
         row
         for row in rows
-        if not is_secondary_job(row) and _dispatch_allowed(session, row, automation_enabled)
+        if (
+            not is_secondary_job(row)
+            or (is_background_test_f1_job(current) and not is_background_test_f1_job(row))
+        )
+        and _dispatch_allowed(session, row, automation_enabled)
     ]
     candidates.sort(key=dispatch_sort_key)
     return candidates[0] if candidates else None
@@ -381,6 +385,12 @@ def _start_job(
     *,
     popen_factory: ProcessLauncher,
 ) -> None:
+    if row.status == JobStatus.PAUSED.value:
+        _request_job_resume(row)
+        if not _job_paused_marker(row).is_file():
+            row.status = JobStatus.RUNNING.value
+            session.flush()
+        return
     if row.type == JobType.INFERENCE.value:
         _start_inference_job(session, row, config, popen_factory=popen_factory)
     else:
@@ -391,7 +401,7 @@ def _next_urgent_inference_job(session: Session) -> JobRow | None:
     rows = session.scalars(
         select(JobRow).where(
             JobRow.type == JobType.INFERENCE.value,
-            JobRow.status == JobStatus.QUEUED.value,
+            JobRow.status.in_({JobStatus.QUEUED.value, JobStatus.PAUSED.value}),
         )
     ).all()
     candidates = [
@@ -1574,11 +1584,10 @@ def _finish_training_job(
             if class_row is not None:
                 affected_class_keys.add(class_row.key)
             try:
-                queue_training_result_test_f1(
+                reconcile_training_result_test_f1(
                     session,
-                    result,
                     config,
-                    source=JobSource(result.source),
+                    dataset_keys={result.dataset_key or result.class_key},
                 )
             except Exception:  # noqa: BLE001
                 LOGGER.exception(
