@@ -2079,24 +2079,35 @@
 .home-heading .page-header > .button-row { width: auto; flex: none; margin-left: auto; justify-content: flex-end; }
 .home-service-link { min-width: 140px; min-height: 44px; padding: 0 20px; font-size: 14px; white-space: nowrap; }
 .home-service-link svg { flex-shrink: 0; }
-.inference-templates-page { display: grid; gap: 20px; }
-.inference-templates-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; border: 1px solid var(--border); border-radius: 18px; background: linear-gradient(105deg, var(--accent-soft), var(--surface)); }
-.inference-templates-toolbar strong { font-size: 17px; }
-.inference-templates-toolbar p { margin: 5px 0 0; color: var(--muted); }
-.inference-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; align-items: start; }
-.inference-template-card { position: relative; padding: 22px; border-top: 3px solid var(--grovika-cyan); box-shadow: var(--shadow); min-width: 0; }
+.page:has(> .templates-page) { padding-top: 20px; padding-bottom: 24px; }
+.templates-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; margin-bottom: 14px; }
+.templates-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.templates-heading h1 { margin: 0; font-size: 28px; line-height: 36px; }
+.templates-help-button { display: grid; place-items: center; flex-shrink: 0; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
+.templates-help-button:hover, .templates-help-button:focus-visible { background: var(--accent-soft); color: var(--accent-strong); }
+.templates-header .template-mode-tabs { display: flex; gap: 4px; }
+.templates-header .template-mode-tabs button, .templates-header .templates-create-button { min-height: 32px; padding: 0 11px; font-size: 13px; white-space: nowrap; }
+.templates-help h3 { margin: 0 0 4px; font-size: 14px; line-height: 20px; }
+.templates-help p { margin: 0; overflow-wrap: anywhere; }
+.inference-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; align-items: start; }
+.inference-template-card.has-many-classes { grid-column: span 2; grid-row: span 2; }
+.panel.inference-template-card { position: relative; margin: 0; padding: 14px; border-radius: 12px; border-top: 2px solid var(--grovika-cyan); box-shadow: var(--shadow); min-width: 0; }
 .inference-template-card:has(.inference-chip-menu) { z-index: 20; }
-.inference-template-card > header { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: start; gap: 12px; }
-.inference-template-card h2 { font-size: 18px; line-height: 24px; margin: 0 0 4px; overflow-wrap: anywhere; }
-.inference-template-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong); }
-.inference-card-actions { display: flex; gap: 4px; }
-.inference-card-actions .icon-button { width: 32px; height: 32px; }
-.inference-template-description { margin: 16px 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.inference-class-chips { display: flex; flex-wrap: wrap; gap: 9px; }
-.inference-class-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 13px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--grovika-cyan) 40%, var(--border)); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.inference-template-card > header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: 7px; }
+.inference-template-card h2 { font-size: 14px; line-height: 19px; margin: 0 0 2px; overflow-wrap: anywhere; }
+.inference-template-card header .muted { display: block; font-size: 11px; line-height: 16px; }
+.inference-template-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-strong); }
+.inference-template-icon svg { width: 17px; height: 17px; }
+.inference-card-actions { display: flex; gap: 3px; }
+.inference-card-actions .icon-button { width: 26px; min-width: 26px; height: 28px; min-height: 28px; border-radius: 7px; }
+.inference-template-description { margin: 8px 0; color: var(--muted); font-size: 12px; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inference-class-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.inference-class-item { position: relative; min-width: 0; max-width: 100%; }
+.inference-class-chip { max-width: 100%; border: 0; white-space: normal; text-align: left; cursor: pointer; }
+.inference-class-chip::before { content: none; }
+.badge.inference-class-chip:hover, .badge.inference-class-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--grovika-cyan) 22%, var(--surface)); }
+.inference-class-chip svg { flex-shrink: 0; }
 .inference-class-chip > span { overflow-wrap: anywhere; min-width: 0; }
-.inference-chip-action { display: grid; place-items: center; background: transparent; color: var(--muted); border: 0; border-radius: 50%; width: 29px; min-width: 29px; height: 29px; padding: 0; }
-.inference-chip-action:hover, .inference-chip-action[aria-expanded="true"] { background: var(--surface); color: var(--accent); }
 .inference-chip-menu { position: fixed; z-index: 30; overflow-y: auto; width: 270px; max-width: calc(100vw - 36px); display: grid; gap: 3px; padding: 9px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow-overlay); }
 .inference-chip-menu button { display: flex; align-items: center; gap: 8px; padding: 9px 10px; text-align: left; border: 0; border-radius: 8px; background: transparent; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
 .inference-chip-menu button:hover, .inference-chip-menu button:focus-visible { background: var(--accent-soft); }
@@ -2105,19 +2116,25 @@
 .inference-template-form .field span, .inference-template-form p { overflow-wrap: anywhere; }
 .inference-chip-menu small, .inference-menu-caption { padding: 6px 10px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .inference-chip-menu .inference-menu-detach { border-top: 1px solid var(--border); color: var(--danger); }
-.inference-empty-classes { color: var(--muted); font-size: 13px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; }
-.inference-template-card.is-unassigned { border-top-color: var(--border); background: var(--surface-soft); }
-.inference-template-card.is-unassigned.has-classes { border-top-color: var(--warn); }
-.is-unassigned .inference-template-icon, .is-unassigned .inference-class-chip { background: var(--warn-soft); border-color: var(--warn); }
+.inference-empty-classes { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 17px; }
+.inference-template-card.is-unassigned { border-top-color: var(--warn); background: var(--surface-soft); }
+.is-unassigned .inference-template-icon, .is-unassigned .badge.inference-class-chip { background: var(--warn-soft); color: var(--warn); }
 .inference-template-warning { grid-column: 1 / -1; margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--warn-soft); color: var(--text); font-size: 13px; line-height: 20px; }
-@media (max-width: 700px) {
-  .inference-templates-toolbar { padding: 14px; gap: 12px; }
-  .inference-template-card { padding: 16px; }
-  .inference-template-card > header { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 9px; }
-  .inference-template-icon { width: 36px; height: 36px; }
-  .inference-template-card h2 { font-size: 16px; line-height: 22px; }
-  .inference-card-actions .icon-button { width: 38px; height: 38px; }
-  .inference-chip-action { width: 36px; min-width: 36px; height: 36px; }
-  .inference-chip-menu button { min-height: 42px; }
+@media (max-width: 700px), (max-width: 1000px) and (max-height: 500px) {
+  .page:has(> .templates-page) { padding-top: 10px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .templates-header { grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-bottom: 10px; }
+  .templates-heading h1 { font-size: 22px; line-height: 28px; }
+  .templates-header .template-mode-tabs { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+  .templates-header .templates-create-button { grid-column: 2; grid-row: 1; font-size: 12px; padding: 0 8px; }
+  .templates-header .template-mode-tabs button { min-height: 28px; padding: 0 9px; font-size: 12px; }
+  .inference-template-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
+  .inference-template-card.has-many-classes { grid-column: 1 / -1; grid-row: auto; }
+  .panel.inference-template-card { padding: 10px; }
+  .inference-template-card > header { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .inference-template-icon { display: none; }
+  .inference-template-card h2 { font-size: 13px; line-height: 18px; }
+  .inference-template-description { font-size: 11px; line-height: 16px; margin: 6px 0; }
+  .inference-class-chips { gap: 4px; margin-top: 6px; }
+  .inference-chip-menu button { min-height: 32px; padding: 6px 8px; font-size: 12px; }
   .inference-template-form .field:has(select[name="postprocess.filter_compact_objects.mode"]) { grid-column: 1 / -1; }
 }

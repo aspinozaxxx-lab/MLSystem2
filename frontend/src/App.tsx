@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  CircleHelp,
   Copy,
   Database,
   Download,
@@ -2827,19 +2828,33 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
         if (deleted) { closeModal(); await reloadBootstrap(); }
       }}>Удалить</button></> });
   };
-  return <>
-    <PageHeader title="Шаблоны" subtitle="Обучение — по модели и датасету; инференс — общие параметры для выбранных классов" actions={
+  const help = () => showModal({
+    title: "Как работают шаблоны",
+    body: <div className="form-stack templates-help">
+      <div><h3>Обучение</h3><p>Базовый шаблон задаёт параметры сети. Шаблон для конкретного датасета уточняет их и используется вместо базового. При запуске выбранные параметры сохраняются в задании.</p></div>
+      <div><h3>Инференс</h3><p>Именованный шаблон задаёт обработку прогнозов: фильтры маски, минимальную площадь объектов, сглаживание и упрощение контуров. Его можно назначить нескольким классам независимо от сети, датасета и типа снимков. У каждого класса один шаблон.</p></div>
+      <div><h3>Назначение классов</h3><p>Нажмите на плашку класса, чтобы перенести его в другой шаблон или снять привязку. Создание шаблона не назначает классы автоматически. После удаления шаблона его классы остаются без назначения; создание псевдоразметки требует нового назначения.</p></div>
+      <div><h3>На что влияют изменения</h3><p>Параметры инференса используются при создании псевдоразметки, обработке области, оценке F1 на тестовой разметке и экспорте модели. Изменения действуют для будущих операций всех привязанных классов. Запущенные задания и готовые псевдоразметки сохраняют свои параметры. Обучение сети от шаблона инференса не зависит.</p></div>
+    </div>,
+    footer: <button type="button" className="secondary" onClick={closeModal}>Понятно</button>,
+  });
+  const header = (create?: () => void) => <header className="templates-header">
+      <div className="templates-heading"><h1>Шаблоны</h1><button type="button" className="templates-help-button" onClick={help} title="Как работают шаблоны" aria-label="Как работают шаблоны" aria-haspopup="dialog"><CircleHelp size={19} /></button></div>
       <div className="template-mode-tabs" role="group" aria-label="Тип шаблонов">
         <button type="button" className={visibleMode === "training" ? "primary" : "secondary"} aria-pressed={visibleMode === "training"} onClick={() => setVisibleMode("training")}>Обучение</button>
         <button type="button" className={visibleMode === "inference" ? "primary" : "secondary"} aria-pressed={visibleMode === "inference"} onClick={() => setVisibleMode("inference")}>Инференс</button>
-      </div>} />
-    {visibleMode === "inference" ? <InferenceTemplates bootstrap={bootstrap} run={run} reload={reloadBootstrap} showModal={showModal} closeModal={closeModal} /> :
+      </div>
+      {create ? <button type="button" className="primary templates-create-button" onClick={create}><Plus size={16} />Новый шаблон</button> : null}
+    </header>;
+  return <div className="templates-page">
+    {visibleMode === "inference" ? <InferenceTemplates bootstrap={bootstrap} run={run} reload={reloadBootstrap} showModal={showModal} closeModal={closeModal} renderHeader={header} /> : <>
+      {header()}
       <section className="two-column templates-layout" data-visible-mode="training">
         <TemplateTree mode="training" title="Шаблоны обучения" templates={bootstrap.training_templates} selectedId={trainingTemplate?.id || ""} onSelect={setTrainingId}
           onAdd={() => showModal({ title: "Добавить шаблон обучения", body: <CreateTemplateForm models={bootstrap.models} datasets={bootstrap.datasets} templates={bootstrap.training_templates} run={run} closeModal={closeModal} reloadBootstrap={reloadBootstrap} /> })} />
         {trainingTemplate ? <TemplateEditor key={trainingTemplate.id} mode="training" template={trainingTemplate} config={trainingConfig} onConfig={setTrainingConfig} onSave={save} onReset={() => void reset()} onDelete={trainingTemplate.dataset_key ? remove : undefined} /> : null}
-      </section>}
-  </>;
+      </section></>}
+  </div>;
 }
 
 function AutomationPage({ run, showModal, closeModal }: RoutedPageProps) {
