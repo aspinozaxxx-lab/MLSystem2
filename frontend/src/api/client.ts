@@ -30,6 +30,7 @@ export async function apiJson<T>(path: string, options: JsonOptions = {}): Promi
   if (response.status === 401 && options.authOptional) {
     return null as T;
   }
+  usageAction(response);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -45,6 +46,7 @@ export async function apiForm<T>(path: string, form: FormData): Promise<T> {
     credentials: "same-origin",
     body: form,
   });
+  usageAction(response);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -57,6 +59,7 @@ export async function apiDownload(path: string, form: FormData): Promise<{ blob:
     credentials: "same-origin",
     body: form,
   });
+  usageAction(response);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -73,6 +76,7 @@ export async function apiDownloadJson(path: string, body: unknown): Promise<{ bl
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  usageAction(response);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -87,6 +91,7 @@ export async function apiDownloadGet(path: string): Promise<{ blob: Blob; filena
     method: "GET",
     credentials: "same-origin",
   });
+  usageAction(response);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -123,6 +128,15 @@ export function downloadFilename(response: Response): string {
 
 function apiUrl(path: string): string {
   return path === API_PREFIX || path.startsWith(`${API_PREFIX}/`) ? path : `${API_PREFIX}${path}`;
+}
+
+function usageAction(response: Response): void {
+  const name = response.headers.get("X-Grovika-Action");
+  if (name && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("grovika:action", {
+      detail: { name, status: response.status, userId: response.headers.get("X-Grovika-User") },
+    }));
+  }
 }
 
 async function responseError(response: Response): Promise<ApiError> {

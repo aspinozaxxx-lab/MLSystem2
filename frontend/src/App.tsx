@@ -124,6 +124,8 @@ import { inferenceTemplateForDataset } from "./utils/inferenceTemplates";
 import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
+import { useUsage } from "./useUsage";
+import { usagePageViewed } from "./utils/usage";
 import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
@@ -158,6 +160,7 @@ export function App() {
   const [modal, setModal] = useState<ModalState | null>(null);
   const routeGuardRef = useRef<(() => boolean) | null>(null);
   const acceptedHashRef = useRef(window.location.hash);
+  useUsage(user, route);
 
   const closeModal = useCallback(() => setModal(null), []);
   const registerRouteGuard = useCallback((guard: (() => boolean) | null) => {
@@ -2841,8 +2844,8 @@ function TemplatesPage({ bootstrap, run, reloadBootstrap, showModal, closeModal 
   const header = (create?: () => void) => <header className="templates-header">
       <div className="templates-heading"><h1>Шаблоны</h1><button type="button" className="templates-help-button" onClick={help} title="Как работают шаблоны" aria-label="Как работают шаблоны" aria-haspopup="dialog"><CircleHelp size={19} /></button></div>
       <div className="template-mode-tabs" role="group" aria-label="Тип шаблонов">
-        <button type="button" className={visibleMode === "training" ? "primary" : "secondary"} aria-pressed={visibleMode === "training"} onClick={() => setVisibleMode("training")}>Обучение</button>
-        <button type="button" className={visibleMode === "inference" ? "primary" : "secondary"} aria-pressed={visibleMode === "inference"} onClick={() => setVisibleMode("inference")}>Инференс</button>
+        <button type="button" className={visibleMode === "training" ? "primary" : "secondary"} aria-pressed={visibleMode === "training"} onClick={() => { setVisibleMode("training"); usagePageViewed("training_templates"); }}>Обучение</button>
+        <button type="button" className={visibleMode === "inference" ? "primary" : "secondary"} aria-pressed={visibleMode === "inference"} onClick={() => { setVisibleMode("inference"); usagePageViewed("inference_templates"); }}>Инференс</button>
       </div>
       {create ? <button type="button" className="primary templates-create-button" onClick={create}><Plus size={16} />Новый шаблон</button> : null}
     </header>;

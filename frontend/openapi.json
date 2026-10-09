@@ -6,6 +6,24 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/usage/config": {
+      "get": {
+        "summary": "Настройки Яндекс Метрики",
+        "operationId": "configuration_api_v1_usage_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageConfig"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "summary": "Health",
@@ -14884,6 +14902,31 @@
         "additionalProperties": false,
         "type": "object",
         "title": "TrainingTemplateUpdate"
+      },
+      "UsageConfig": {
+        "properties": {
+          "metrica_counter_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrica Counter Id"
+          },
+          "metrica_user_id": {
+            "type": "string",
+            "title": "Metrica User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "metrica_counter_id",
+          "metrica_user_id"
+        ],
+        "title": "UsageConfig"
       },
       "ValidationError": {
         "properties": {

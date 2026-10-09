@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from ._auth import require_pseudolabel_user, require_user
+from ._auth import current_principal, require_pseudolabel_user, require_user
 from ._config import get_config
 from ._database import Base, configure_schema, create_session_factory, session_scope
 from ._dataset_catalog import synchronize_dataset_catalog
@@ -34,6 +34,7 @@ from ._routes.pseudolabel import register_pseudolabel_routes
 from ._routes.results import register_result_routes
 from ._routes.templates import register_template_routes
 from ._routes.test_samples import register_test_sample_routes
+from ._routes.usage import register_usage_routes
 from ._service import ensure_seed_templates
 from ._test_samples import (
     cleanup_test_sample_storage,
@@ -42,6 +43,7 @@ from ._test_samples import (
     run_test_sample_batch_worker,
 )
 from ._worker import run_queue_worker
+from ._usage import action_for_request, metrica_user_id
 from .contracts import PseudolabelAPIError, TrainingUIAPIError
 
 
@@ -96,6 +98,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_timing(request: Request, call_next):
         started_at = time.perf_counter()
+        principal = current_principal(request, config)
         try:
             response = await call_next(request)
         except Exception:
@@ -107,6 +110,11 @@ def create_app() -> FastAPI:
                 duration_ms,
             )
             raise
+        route = getattr(request.scope.get("route"), "path", "")
+        action = action_for_request(request.method, route)
+        if principal is not None and action is not None and config.usage_metrica_counter_id:
+            response.headers["X-Grovika-Action"] = action
+            response.headers["X-Grovika-User"] = metrica_user_id(principal.username, config)
         duration_ms = (time.perf_counter() - started_at) * 1000
         response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
         response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
@@ -140,6 +148,7 @@ def create_app() -> FastAPI:
         authenticated=authenticated,
         pseudolabel_authenticated=pseudolabel_authenticated,
     )
+    register_usage_routes(app, route_context)
 
     @app.exception_handler(PseudolabelAPIError)
     def pseudolabel_error_handler(_: Request, exc: PseudolabelAPIError):

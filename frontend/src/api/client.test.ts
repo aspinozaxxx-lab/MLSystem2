@@ -5,6 +5,19 @@ import { apiJson, downloadFilename } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ошибки API", () => {
+  it("передаёт действие с ID серверной сессии и не считает обычное чтение", async () => {
+    const events = new EventTarget();
+    const listener = vi.fn();
+    events.addEventListener("grovika:action", listener);
+    vi.stubGlobal("window", events);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("{}", { headers: { "X-Grovika-Action": "training_start", "X-Grovika-User": "one" } }))
+      .mockResolvedValueOnce(new Response("{}")));
+    await apiJson("/training-jobs", { method: "POST", body: {} });
+    await apiJson("/queues/count");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0].detail).toEqual({ name: "training_start", status: 200, userId: "one" });
+  });
   it("передаёт отмену запроса серверу без замены AbortError на ошибку API", async () => {
     const controller = new AbortController();
     const aborted = new DOMException("Запрос отменён", "AbortError");

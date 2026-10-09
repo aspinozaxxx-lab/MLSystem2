@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/usage/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Настройки Яндекс Метрики */
+        get: operations["configuration_api_v1_usage_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -5321,6 +5338,13 @@ export interface components {
              */
             reset_to_baseline: boolean;
         };
+        /** UsageConfig */
+        UsageConfig: {
+            /** Metrica Counter Id */
+            metrica_counter_id: number | null;
+            /** Metrica User Id */
+            metrica_user_id: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -5339,6 +5363,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    configuration_api_v1_usage_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageConfig"];
+                };
+            };
+        };
+    };
     health_api_v1_health_get: {
         parameters: {
             query?: never;

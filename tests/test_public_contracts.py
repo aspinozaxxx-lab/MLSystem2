@@ -55,6 +55,18 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_usage_config_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import UsageConfig
+
+    assert set(UsageConfig.model_fields) == {"metrica_counter_id", "metrica_user_id"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()
+    assert "get" in schema["paths"]["/api/v1/usage/config"]
+    assert "/api/v1/usage/report" not in schema["paths"]
+
+
 def test_inference_template_imagery_and_class_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import InferenceTemplate, InferenceTemplateCreate

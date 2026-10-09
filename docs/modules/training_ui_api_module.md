@@ -52,6 +52,15 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 
 ## Публичные контракты
 
+`UsageConfig`: `metrica_counter_id` — номер счётчика Яндекс Метрики или `null` при отключении;
+`metrica_user_id` — стабильный обезличенный ID текущего канонического пользователя.
+`GET /api/v1/usage/config` доступен только по пользовательской сессии и не кэшируется.
+Настройка — `MLSYSTEM2_METRICA_COUNTER_ID`. Явные операции API помечаются заголовком
+`X-Grovika-Action` и `X-Grovika-User` для передачи события frontend в Метрику; тела запросов и ключи сущностей
+не включаются в событие. Обработка запроса не зависит от доступности Метрики. Отчётов и
+хранения аналитики в UI-БД нет; правила — в `docs/architecture.md` и
+`docs/runbooks/grovika_usage_metrica.md`.
+
 `FeedbackKind=remark|improvement|feature`, `FeedbackStatus=waiting|preparing|implementing|implemented`.
 `FeedbackCreate`: `submission_id` — UUID отправки; `kind`, `title`, `message` — тип, заголовок и текст;
 `page_path`, `page_title` — внутренний hash-адрес без query и название страницы; `credit_name` — добровольная

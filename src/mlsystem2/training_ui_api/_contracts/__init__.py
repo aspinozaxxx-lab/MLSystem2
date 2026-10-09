@@ -16,6 +16,7 @@ _MODULES = (
     "results",
     "test_samples",
     "templates",
+    "usage",
 )
 
 __all__: list[str] = []
