@@ -2,7 +2,7 @@
 
 from fastapi import Depends, FastAPI, Response
 
-from .._usage import metrica_user_id
+from mlsystem2.training_ui_api._usage import metrica_user_id
 from ..contracts import UsageConfig
 from .common import RouteContext
 
