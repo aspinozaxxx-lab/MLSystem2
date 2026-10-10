@@ -37,7 +37,9 @@
 
 Для `next_gen2` оркестратор создаёт train/val/test loaders: полные окна 512/768/1024/1536 с шагом в половину окна, случайное
 разбиение 60/20/20 без spatial purge. TrainConfig получает веса классов только по train-маскам.
-Модель — выбранная двухклассовая SegFormer (SMP B0/B1/B2/B3, исторически HF B0) с внешним бинарным выходом, RGB или RGB+NIR по типу датасета. Предобученные веса определяются train.pretrained в обоих конвейерах.
+Модель — выбранная SegFormer (SMP B0/B1/B2/B3, исторически HF B0): бинарная либо N+1 выходов для multiclass,
+RGB или RGB+NIR по типу датасета. TrainConfig получает N+1 train-весов и схему всех типов.
+Предобученные веса определяются train.pretrained в обоих конвейерах.
 Metadata содержит фактический band contract, размер окна, SHA-256
 segFormer_train_hlam_main_v2.ipynb, split, sampler 7/8/1 и scheduler по validation loss.
 Tag checkpoint_selection_metric=val_loss задаётся до первой эпохи; выбор весов и ранняя остановка

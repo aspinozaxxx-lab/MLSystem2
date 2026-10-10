@@ -43,13 +43,12 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
   }, [endpoint]);
   const scene = view?.scenes?.find((item) => item.id === sceneId) ?? view?.scenes?.[0];
   const effectiveClassId = scene?.target_class_id ?? (scene?.class_schema?.some((item) => Number(item.id) === classId) ? classId : null);
-  const quality = selectedMetric ?? (view?.metric?.quality_metric === "objects" && scene?.object_layers_available ? "objects" : "pixel");
-  const objectMapMissing = quality === "objects" && !scene?.object_layers_available;
+  const quality = selectedMetric ?? (view?.metric?.quality_metric === "objects" ? "objects" : "pixel");
   const layerKey = `${scene?.id ?? ""}:${effectiveClassId ?? "foreground"}:${quality}`;
   useEffect(() => {
     let active = true;
     setLayerError("");
-    if (!scene || objectMapMissing) { setLoaded(null); return; }
+    if (!scene) { setLoaded(null); return; }
     const cached = layerCache.current.get(layerKey);
     if (cached) { setLoaded({ key: layerKey, geojson: cached }); return; }
     const controller = new AbortController();
@@ -67,7 +66,7 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
         if (active) setLayerError(reason instanceof Error ? reason.message : "Не удалось прочитать сохранённые слои.");
       });
     return () => { active = false; controller.abort(); };
-  }, [scene, effectiveClassId, layerKey, quality, objectMapMissing, attempt]);
+  }, [scene, effectiveClassId, layerKey, quality, attempt]);
   const info = useMemo<PseudoMarkupViewInfo | null>(() => view && scene ? {
     id: view.training_result_id, training_result_id: view.training_result_id,
     model_name: view.model_name, training_dataset_name: view.training_dataset_name,
@@ -101,9 +100,6 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
               <button type="button" aria-label="Пиксельная F1" aria-pressed={quality === "pixel"} onClick={() => setSelectedMetric("pixel")}>Пиксельная</button>
               <button type="button" aria-label="Объектовая F1" aria-pressed={quality === "objects"} onClick={() => setSelectedMetric("objects")}>Объектовая</button>
             </div>
-            {objectMapMissing ? <div className="test-f1-map-notice" role="status">Оценка объектов сохранена, но в старом расчёте нет их карты.
-              <button className="secondary compact-action" type="button" disabled={preparing || view.status === "queued" || view.status === "running"} onClick={() => void prepare()}>{preparing || view.status === "queued" || view.status === "running" ? "Подготовка…" : "Подготовить объектовую карту"}</button>
-            </div> : null}
           </>,
           hint: quality === "objects" ? "Объектовая F1: сопоставление один к одному при IoU ≥ 0,5. Зелёным показаны целиком найденные объекты и их эталоны, красным — лишние прогнозы, жёлтым — пропущенные эталоны. Слои можно отключать независимо." : "Пиксельная F1: зелёный — пересечение масок, красный — лишние пиксели прогноза, жёлтый — пропущенные пиксели эталона. Слои можно отключать независимо.",
           sidebar: <>
@@ -112,7 +108,7 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
               {scene.target_class_id == null ? <option value="foreground">Все объекты — без различения типов</option> : null}
               {(scene.class_schema ?? []).filter((item) => scene.target_class_id == null || Number(item.id) === scene.target_class_id).map((item) => <option key={String(item.id)} value={String(item.id)}>{String(item.name)}</option>)}
             </select></label> : null}
-            {loaded?.key !== layerKey && !objectMapMissing ? <p className="test-f1-metric-note" role="status">Загружаем эталон и прогноз снимка…</p> : null}
+            {loaded?.key !== layerKey ? <p className="test-f1-metric-note" role="status">{quality === "objects" ? "Сопоставляем объекты сохранённого прогноза…" : "Загружаем эталон и прогноз снимка…"}</p> : null}
           </>,
           summary: <div className="test-f1-summary" role="group" aria-label="Оценки тестового F1">
             <div className="test-f1-summary-labels"><span>F1</span><span title={view.metric?.aggregation === "macro" ? "Среднее F1 по классам всей выборки" : "F1 всей тестовой выборки"}>Выборка</span><span>Снимок</span></div>

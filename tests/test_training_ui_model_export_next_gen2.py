@@ -76,3 +76,34 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         assert vectorize["value_property_name"] == "class_id"
     finally:
         archive.cleanup()
+
+
+def test_multiclass_archive_keeps_background_and_named_class_outputs(monkeypatch):
+    schema = [{"id": i, "slug": f"type_{i}", "name": f"Тип {i}", "color": "#00ff66", "priority": 0} for i in range(1, 4)]
+    loaded = SimpleNamespace(artifact=SimpleNamespace(metadata={"pipeline_variant": "next_gen2", "sample_size": 512,
+        "inference_context": 0, "task": "multiclass", "class_schema": schema, "confidence_threshold": 0.9}),
+        model=SimpleNamespace(model=object(), spec=SimpleNamespace(input_channels=3, output_channels=4, parameters={})))
+    monkeypatch.setattr(_model_export, "_load_binary_checkpoint", lambda _: loaded)
+    calls = []
+    def export(**kwargs):
+        calls.append(kwargs)
+        kwargs["onnx_path"].write_bytes(b"test-onnx")
+    monkeypatch.setattr(_model_export, "_export_segmentation_mask_onnx", export)
+    archive = _model_export.build_triton_model_export_zip(model_name="multitype", checkpoint_filename="best.pt", checkpoint_bytes=b"weights", sample_size=None)
+    try:
+        with zipfile.ZipFile(archive.zip_path) as outer:
+            info = json.loads(outer.read("export_metadata.json"))
+            pipeline = yaml.safe_load(outer.read("pipelines/multitype_triton.yaml"))["config"]
+            assert "runtime/mlsystem2/training_ui_api/_geoalert_notebook.py" in outer.namelist()
+            with zipfile.ZipFile(io.BytesIO(outer.read("models-serving-service/multitype.zip"))) as inner:
+                config = inner.read("multitype/config.pbtxt").decode()
+        assert calls[0]["output_channels"] == 4 and calls[0]["probability_output"]
+        assert info["task"] == "multiclass" and info["output_channels"] == ["background", "type_1", "type_2", "type_3"]
+        assert "dims: [ -1, 4, -1, -1 ]" in config
+        _, windows, choose, vectorize = pipeline["bricks"]
+        assert len(windows["output_labels"]) == 4
+        assert choose["_class"] == "MulticlassProbabilityMasks" and choose["threshold"] == 0.9
+        assert choose["output_masks"] == ["type_1", "type_2", "type_3"]
+        assert vectorize["output_fcs"] == ["type_1", "type_2", "type_3"]
+    finally:
+        archive.cleanup()

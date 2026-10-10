@@ -39,7 +39,9 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 `next_gen2` строит полные окна 512/768/1024/1536 с шагом в половину окна без контекста; исторические незональные наборы без RGB+alpha сохраняют отсутствие фильтрации nodata. Случайное разбиение
 60/20/20 с seed 42 воспроизводит два train_test_split ноутбука; пересечения не исключаются.
 Manifest содержит все координаты и индексы train/val/test. По сырым train-маскам вычисляются
-обратные частоты классов и sampler 7/8/1 для positive/hard negative/фона; порог positive 0.001.
+обратные частоты всех классов и фона и sampler 7/8/1 для любого positive/hard negative/фона; порог positive 0.001.
+Multiclass сохраняет ID 1..N, а class-specific отрицательные области исключены из частот; общий negative — фон.
+Albumentations синхронно переносит семантическую маску и все class-specific negative каналы.
 Hard negative перекрывает positive. Ко всем train-тайлам применяются геометрия и фотометрия
 Albumentations до нормализации в модели. Val/test не балансируются и не аугментируются.
 Workers берутся из серверных settings (8); prefetch_factor=2, persistent_workers=False, при CUDA — pinned memory.

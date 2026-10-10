@@ -7,12 +7,14 @@ export function trainingConfigForTemplate(
   pretrainedChoice: boolean | null = null,
 ): JsonRecord {
   const next = { ...(template?.default_config || {}) };
-  const variant = task === "multiclass" ? "legacy" : pipelineChoice;
+  const available = template?.config_schema.fields.find((field) => field.key === "train.pipeline_variant")?.options ?? ["legacy"];
+  const choice = pipelineChoice ?? String(next["train.pipeline_variant"] ?? "legacy");
+  const variant = available.includes(choice) && !(task === "multiclass" && choice === "object_f1") ? choice : "legacy";
   const preset = variant ? template?.config_schema.pipeline_defaults?.[variant] : undefined;
   if (preset && next["train.pipeline_variant"] !== variant) Object.assign(next, preset);
   if (task === "multiclass") {
-    next["train.pipeline_variant"] = "legacy";
-    next["train.loss"] = "cross_entropy_dice";
+    next["train.pipeline_variant"] = variant;
+    next["train.loss"] = variant === "next_gen2" ? "cross_entropy_tversky" : "cross_entropy_dice";
   }
   if (pretrainedChoice !== null && template?.architecture.startsWith("smp_segformer_")) {
     next["train.pretrained"] = pretrainedChoice;
@@ -34,16 +36,19 @@ export function trainingConfigSchema(
       : ["bce_dice", "focal_dice", "focal_tversky"];
   return {
     ...schema,
+    pipeline_defaults: task === "multiclass" ? {
+      ...schema.pipeline_defaults, legacy: { ...schema.pipeline_defaults?.legacy, "train.loss": "cross_entropy_dice" },
+    } : schema.pipeline_defaults,
     fields: schema.fields.map((field) =>
       field.key === "train.pipeline_variant" && task === "multiclass"
-        ? { ...field, options: ["legacy"] }
+        ? { ...field, options: field.options?.filter((variant) => variant !== "object_f1") }
         : field.key === "train.loss"
         ? {
             ...field,
             options: allowedLosses,
             tooltip:
-              task === "multiclass"
-                ? "Multiclass loss: cross entropy, отдельно или вместе с Dice."
+              task === "multiclass" && pipelineVariant === "legacy"
+                ? "Мультиклассовая функция потерь: CrossEntropy отдельно или вместе с Dice."
                 : field.tooltip,
           }
         : field,

@@ -13,6 +13,7 @@ def register_notebook_bricks() -> None:
     from pydantic import Field
     from urban import SplitRaster as OriginalSplitRaster
     from urban.bricks.model_bricks.modelbrick import ModelBrick
+    from urban.base.brick import Brick
 
     class SplitRaster(OriginalSplitRaster):
         apply_mask: bool = True
@@ -57,6 +58,14 @@ def register_notebook_bricks() -> None:
                             target.write(result.instances[y:y+h, x:x+w], 1, window=window)
                 finally:
                     accumulator.close()
+
+    class MulticlassProbabilityMasks(Brick):
+        input_rasters: list[str] = Field(min_length=2)
+        output_masks: list[str] = Field(min_length=1)
+        threshold: float = Field(default=0.9, ge=0, le=1)
+
+        def __call__(self, path):
+            _multiclass_probability_masks(Path(path), self.input_rasters, self.output_masks, self.threshold)
 
     from mlsystem2.training_ui_api._geoalert_vector import register_vector_bricks
 
@@ -132,3 +141,23 @@ def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, str
             zeros = np.zeros((count, width), dtype=np.float32)
             for target in targets:
                 target.write(zeros, 1, window=Window(0, y, width, count))
+
+
+def _multiclass_probability_masks(directory, inputs, outputs, threshold):
+    """Выбрать один класс после объединения всех вероятностей, включая фон."""
+    if len(inputs) != len(outputs) + 1:
+        raise ValueError("Число вероятностей должно соответствовать типам объектов и фону.")
+    with ExitStack() as stack:
+        sources = [stack.enter_context(rasterio.open(directory / f"{name}.tif")) for name in inputs]
+        source = sources[0]
+        if any((s.width, s.height, s.transform, s.crs) != (source.width, source.height, source.transform, source.crs) for s in sources):
+            raise ValueError("Вероятности классов должны иметь одинаковую растровую сетку.")
+        targets = [stack.enter_context(rasterio.open(directory / f"{name}.tif", "w", **_raster_profile(source, "uint8"))) for name in outputs]
+        for _, window in source.block_windows(1):
+            probabilities = np.stack([s.read(1, window=window) for s in sources])
+            if not np.isfinite(probabilities).all():
+                raise ValueError("Вероятности классов содержат некорректные значения.")
+            labels = probabilities.argmax(axis=0)
+            labels[probabilities.max(axis=0) <= threshold] = 0
+            for class_id, target in enumerate(targets, start=1):
+                target.write((labels == class_id).astype(np.uint8), 1, window=window)

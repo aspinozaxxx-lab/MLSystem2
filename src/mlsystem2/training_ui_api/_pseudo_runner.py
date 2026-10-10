@@ -1996,14 +1996,21 @@ def _infer_notebook_scene_mask(
             torch, model, images, threshold=threshold, device=device,
             metrics=performance, notebook=True,
         )
+        if probabilities.ndim == 4 and probability_sum.ndim == 2:
+            probability_sum = np.zeros((probabilities.shape[1], dataset.height, dataset.width), dtype=np.float32)
         for window, probability in zip(pending, probabilities, strict=True):
             x, y = int(window.col_off), int(window.row_off)
-            probability_sum[y:y + tile_size, x:x + tile_size] += probability * weight
+            probability_sum[..., y:y + tile_size, x:x + tile_size] += probability * weight
             weight_sum[y:y + tile_size, x:x + tile_size] += weight
         index += len(pending)
         performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
     np.maximum(weight_sum, 1e-6, out=weight_sum)
     probability_sum /= weight_sum
+    if probability_sum.ndim == 3:
+        labels = np.argmax(probability_sum, axis=0).astype(np.uint8)
+        confidence = np.max(probability_sum, axis=0)
+        labels[(labels > 0) & (confidence <= threshold)] = 0
+        return labels, confidence
     return (probability_sum > threshold).astype(np.uint8), probability_sum
 
 
@@ -2653,7 +2660,12 @@ def _predict_tiles(
                     mode="bilinear",
                     align_corners=False,
                 )
-            if notebook or int(logits.shape[1]) == 1:
+            if notebook and (int(logits.shape[1]) > 2 or getattr(model, "multiclass_output", False)):
+                probabilities = torch.softmax(logits, dim=1).detach().cpu().numpy().astype(np.float32, copy=False)
+                confidence = probabilities.max(axis=1)
+                labels = probabilities.argmax(axis=1).astype(np.uint8)
+                labels[(labels > 0) & (confidence <= threshold)] = 0
+            elif notebook or int(logits.shape[1]) == 1:
                 probabilities_tensor = (
                     torch.softmax(logits, dim=1)[:, 1:2]
                     if notebook else torch.sigmoid(logits[:, :1, :, :])

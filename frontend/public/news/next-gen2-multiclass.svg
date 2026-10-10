@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="850" viewBox="0 0 1440 850" role="img" aria-labelledby="title desc">
+  <title id="title">Схема мультиклассового next-gen2</title>
+  <desc id="desc">Несколько типов разметки обучают одну сеть SegFormer. После объединения вероятностей выбирается один класс каждого пикселя. Проверка показывает оценки каждого типа.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101d35"/><stop offset="1" stop-color="#071322"/></linearGradient>
+    <linearGradient id="card" x2="0.9" y2="1"><stop stop-color="#213655"/><stop offset="1" stop-color="#172941"/></linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#6bddc4" stroke-width="2"/></marker>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#fff" stroke-opacity=".055"/></pattern>
+    <filter id="glow"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <rect width="1440" height="850" rx="32" fill="url(#bg)"/>
+  <circle cx="1180" cy="270" r="215" fill="#0b574d" opacity=".18" filter="url(#glow)"/>
+  <g font-family="Arial, sans-serif" fill="#f4f9ff">
+    <rect x="64" y="48" width="198" height="30" rx="15" fill="#2a4660"/>
+    <text x="83" y="69" font-size="15" letter-spacing="1.1">СХЕМА ВОЗМОЖНОСТИ</text>
+    <text x="64" y="137" font-size="43" font-weight="700">Несколько классов. Одна сеть.</text>
+    <text x="65" y="175" font-size="21" fill="#b9cce0">Next-gen2 для мультиклассовых датасетов Канопус и ортофото</text>
+    <g stroke="#34506c" stroke-width="1">
+      <rect x="64" y="224" width="365" height="452" rx="24" fill="url(#card)"/>
+      <rect x="538" y="224" width="365" height="452" rx="24" fill="url(#card)"/>
+      <rect x="1012" y="224" width="365" height="452" rx="24" fill="url(#card)"/>
+    </g>
+    <g font-size="20" font-weight="700"><text x="89" y="269">01  Разметка по типам</text><text x="565" y="269">02  Обучение SegFormer</text><text x="1038" y="269">03  Общий прогноз</text></g>
+    <path d="M453 443H509M927 443H983" fill="none" stroke="#6bddc4" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="89" y="294" width="315" height="219" rx="16" fill="#102335"/>
+    <rect x="89" y="294" width="315" height="219" rx="16" fill="url(#grid)"/>
+    <path d="M104 346C149 318 167 440 220 380S306 338 388 354M124 482L379 319" fill="none" stroke="#34505a" stroke-width="20"/>
+    <path d="M118 331H172V380H118ZM286 422H361V476H286Z" fill="#00ecae" opacity=".85"/>
+    <path d="M177 463Q211 390 249 426T282 348" fill="none" stroke="#44c6ff" stroke-width="14"/>
+    <path d="M282 309L359 304L348 359L302 379L269 352Z" fill="#d69cff" opacity=".9"/>
+    <g font-size="18"><rect x="89" y="539" width="13" height="13" rx="4" fill="#00ecae"/><text x="114" y="552">Тип 1</text><rect x="195" y="539" width="13" height="13" rx="4" fill="#44c6ff"/><text x="220" y="552">Тип 2</text><rect x="301" y="539" width="13" height="13" rx="4" fill="#d69cff"/><text x="326" y="552">Тип 3</text></g>
+    <text x="89" y="600" font-size="17" fill="#b9cce0">Все типы из схемы датасета</text><text x="89" y="630" font-size="17" fill="#b9cce0">и отдельный канал фона</text>
+    <g fill="none" stroke="#6bddc4" stroke-opacity=".35" stroke-width="2">
+      <path d="M589 338L645 381L700 331L756 371L823 344M589 338L645 447L700 421L756 371L823 473M589 478L645 381L700 421L756 480L823 407M589 478L645 447L700 331L756 480L823 344"/>
+    </g>
+    <g fill="#6bddc4"><circle cx="589" cy="338" r="9"/><circle cx="589" cy="478" r="9"/><circle cx="645" cy="381" r="9"/><circle cx="645" cy="447" r="9"/><circle cx="700" cy="331" r="9"/><circle cx="700" cy="421" r="9"/><circle cx="756" cy="371" r="9"/><circle cx="756" cy="480" r="9"/></g>
+    <g><circle cx="823" cy="344" r="11" fill="#00ecae"/><circle cx="823" cy="407" r="11" fill="#44c6ff"/><circle cx="823" cy="473" r="11" fill="#d69cff"/></g>
+    <rect x="564" y="525" width="312" height="44" rx="12" fill="#0d2533"/><text x="584" y="553" font-size="17" fill="#6bddc4">60% обучение · 20% / 20%</text>
+    <text x="565" y="600" font-size="17" fill="#b9cce0">Веса классов только по train</text><text x="565" y="630" font-size="17" fill="#b9cce0">Лучшие веса по validation loss</text>
+    <rect x="1037" y="294" width="315" height="219" rx="16" fill="#102335"/>
+    <rect x="1037" y="294" width="315" height="219" rx="16" fill="url(#grid)"/>
+    <path d="M1052 348C1103 317 1118 437 1167 382S1259 337 1338 354M1070 482L1325 319" fill="none" stroke="#34505a" stroke-width="20"/>
+    <path d="M1067 334H1117V377H1067ZM1237 425H1306V472H1237Z" fill="#00ecae"/>
+    <path d="M1124 463Q1159 393 1198 426T1231 350" fill="none" stroke="#44c6ff" stroke-width="14"/>
+    <path d="M1233 312L1305 307L1293 359L1248 375L1219 352Z" fill="#d69cff"/>
+    <text x="1038" y="548" font-size="17" fill="#6bddc4">Один пиксель — один класс</text>
+    <text x="1038" y="600" font-size="17" fill="#b9cce0">Gaussian → выбор класса</text><text x="1038" y="630" font-size="17" fill="#b9cce0">F1 каждого типа и средняя F1</text>
+    <path d="M64 719H1377" stroke="#2d455f"/>
+    <text x="65" y="761" font-size="18" fill="#b9cce0">В мастере обучения: мультиклассовый датасет → SegFormer B0–B3 → next-gen2</text>
+    <text x="65" y="799" font-size="15" fill="#88a5bd">Условная иллюстрация: геометрии и типы показаны для объяснения механизма.</text>
+  </g>
+</svg>

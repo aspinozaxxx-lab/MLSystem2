@@ -1,4 +1,4 @@
-﻿# Модуль train
+# Модуль train
 
 ## Назначение
 
@@ -12,7 +12,7 @@
 
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
-- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два вычисленных веса для next-gen2/object_f1, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
+- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два веса для binary next-gen2/object_f1, N+1 для multiclass next-gen2, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
 - `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
@@ -34,11 +34,14 @@
 
 `object_f1` получает три logits, сохраняет loss области next-gen2 и добавляет половину BCE/Dice границ. `EpochMetrics` дополняется train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss. Validation/test использует общий `inference.api`: Gaussian сборку полных сцен и watershed. Best/early stopping — максимум object F1, scheduler — минимум суммарного val_loss. Пороги 0.5; компоненты loss и объектовая test-метрика сохраняются.
 
-`next_gen2` получает два logits, использует 25% weighted CrossEntropy + 75% SMP multiclass
+`next_gen2` получает два binary logits либо N+1 multiclass logits, использует 25% weighted CrossEntropy + 75% SMP multiclass
 Tversky (alpha/beta 0.75/0.25), AdamW без clipping и ReduceLROnPlateau(min, patience=3, factor=0.5).
 Loss усредняется по числу примеров; validation полная каждую эпоху. Best и early stopping используют
 минимум validation loss, при равенстве сохраняется ранняя эпоха. После штатного завершения best
 загружается локально и один раз оценивается через optional test_loader; test не влияет на обучение.
+Multiclass validation/test используют фиксированный порог 0.5 и per-class/macro/micro/foreground оценки.
+Частичная отрицательная разметка исключена из CE/Tversky и добавляет штраф только назначенному классу;
+полностью невалидный batch даёт конечный нулевой loss. Общая геометрия масок сохраняется в loader.
 Диагностика содержит checkpoint_selection и test_metrics (loss, pixel precision/recall/F1, порог и эпоху).
 Пауза и остановка с сохранением остаются на границе пакетов; при ручной остановке test не запускается.
 
@@ -56,7 +59,7 @@ Dice масштабирует foreground probability на фоне, Tversky — 
 детерминированно ограниченным CPU-пулом. Для pixel-primary object F1 считается точным вторым проходом на
 выбранном pixel threshold; приближение ближайшим порогом не используется.
 
-Multiclass режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`. Logits имеют форму `[B,num_classes,H,W]`, mask — `[B,H,W] long`. Перед loss общий hard-negative `-1` заменяется на background class `0`; `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. Nodata и padding уже представлены background class `0` и участвуют в loss и validation. `background_weight` задаёт вес класса `0`, а `hard_negative_weight` дополнительно усиливает общий hard negative для всех foreground-каналов. Class-specific hard negative исключается из базового multiclass loss и добавляет штраф `-log(1-p_class) × background_weight × hard_negative_weight` только выбранному foreground-каналу; другие типы в этой области не считаются ошибкой. В validation такой пиксель участвует как отрицательный только для назначенного класса, исключается из остальных поклассовых и агрегированной foreground-метрики. Validation применяет `softmax → argmax → confidence threshold`, считает precision/recall/F1/IoU отдельно по типам, macro pixel F1/precision/recall/IoU, micro F1 и foreground-vs-background F1. Один threshold выбирается по максимуму macro pixel F1, затем macro precision, затем по большему threshold.
+В legacy мультиклассовый режим требует `task=multiclass` и `loss=cross_entropy` или `loss=cross_entropy_dice`; next-gen2 использует `cross_entropy_tversky`. Logits имеют форму `[B,num_classes,H,W]`, mask — `[B,H,W] long`. Перед loss общий hard-negative `-1` заменяется на background class `0`; `cross_entropy` считается через `torch.nn.functional.cross_entropy`; `cross_entropy_dice` добавляет Dice loss по softmax probabilities для foreground классов `1..N`, исключая background `0`. Nodata и padding уже представлены background class `0` и участвуют в loss и validation. `background_weight` задаёт вес класса `0`, а `hard_negative_weight` дополнительно усиливает общий hard negative для всех foreground-каналов. Class-specific hard negative исключается из базового multiclass loss и добавляет штраф `-log(1-p_class) × background_weight × hard_negative_weight` только выбранному foreground-каналу; другие типы в этой области не считаются ошибкой. В validation такой пиксель участвует как отрицательный только для назначенного класса, исключается из остальных поклассовых и агрегированной foreground-метрики. Validation применяет `softmax → argmax → confidence threshold`, считает precision/recall/F1/IoU отдельно по типам, macro pixel F1/precision/recall/IoU, micro F1 и foreground-vs-background F1. Один threshold выбирается по максимуму macro pixel F1, затем macro precision, затем по большему threshold.
 
 В остальных вариантах best checkpoint и early stopping используют `val_quality_f1`; для multiclass это macro pixel F1. Для `quality_metric=objects` требуется binary val batch с `object_instances`; multiclass с объектовой метрикой отклоняется валидацией. Metadata checkpoint сохраняет task, полную class schema, выбранный confidence threshold, структурированные validation-метрики, loss, входной `sample_size`, `inference_context`, `inference_core_size`, `seed` и `train_config`. Старые checkpoint без новых полей остаются совместимыми и при экспорте получают `context=0`, если оператор не задал его вручную.
 

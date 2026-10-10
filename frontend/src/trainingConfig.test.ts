@@ -32,7 +32,7 @@ describe("trainingConfigSchema", () => {
     const template: Pick<TrainingTemplate, "architecture" | "default_config" | "config_schema"> = {
       architecture: "smp_segformer_b0",
       default_config: { "train.pipeline_variant": "legacy", "train.batch_size": 9 },
-      config_schema: { ...schema, pipeline_defaults: {
+      config_schema: { ...schema, fields: [...schema.fields, { key: "train.pipeline_variant", label: "Конвейер", value_type: "select", tooltip: "", required: true, options: ["legacy", "next_gen2", "object_f1"] }], pipeline_defaults: {
         legacy: { "train.pipeline_variant": "legacy", "train.loss": "bce_dice" },
         next_gen2: { "train.pipeline_variant": "next_gen2", "train.batch_size": 4 },
       } },
@@ -42,7 +42,12 @@ describe("trainingConfigSchema", () => {
     expect(chosen["train.pipeline_variant"]).toBe("next_gen2");
     expect(chosen["train.batch_size"]).toBe(4);
     expect(trainingConfigForTemplate({ ...template, default_config: chosen }, "binary", "legacy")["train.loss"]).toBe("bce_dice");
-    expect(trainingConfigForTemplate(template, "multiclass", "next_gen2")["train.pipeline_variant"]).toBe("legacy");
+    expect(trainingConfigForTemplate(template, "multiclass", "next_gen2")["train.pipeline_variant"]).toBe("next_gen2");
+    expect(trainingConfigForTemplate(template, "multiclass", "next_gen2")["train.loss"]).toBe("cross_entropy_tversky");
+    expect(trainingConfigForTemplate(template, "multiclass", "object_f1")["train.pipeline_variant"]).toBe("legacy");
+    const multiSchema = trainingConfigSchema(template.config_schema, "multiclass", "next_gen2")!;
+    expect(multiSchema.fields.find((item) => item.key === "train.pipeline_variant")?.options).toEqual(["legacy", "next_gen2"]);
+    expect(configWithField({ "train.pipeline_variant": "next_gen2", "train.loss": "cross_entropy_tversky" }, "train.pipeline_variant", "legacy", multiSchema.pipeline_defaults)["train.loss"]).toBe("cross_entropy_dice");
     const unsupported = { ...template, config_schema: { ...schema, pipeline_defaults: {} } };
     expect(trainingConfigForTemplate(unsupported, "binary", "next_gen2")["train.pipeline_variant"]).toBe("legacy");
   });

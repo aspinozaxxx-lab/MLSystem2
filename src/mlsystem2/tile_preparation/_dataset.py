@@ -350,11 +350,14 @@ class TileDataset:
             if object_instances is not None:
                 extra.update(instances=object_instances.astype(np.float32), ambiguous=ambiguous.astype(np.uint8))
             transformed = notebook_transform(
-                image=np.moveaxis(image_raw, 0, -1), mask=mask[0],
+                image=np.moveaxis(image_raw, 0, -1), mask=mask if self.uses_multiclass_masks else mask[0],
+                **({"masks": list(class_hard_negative_masks)} if class_hard_negative_masks is not None else {}),
                 **extra,
             )
             image = np.moveaxis(transformed["image"], -1, 0).astype(np.float32)
-            mask = transformed["mask"][None, :, :]
+            mask = transformed["mask"] if self.uses_multiclass_masks else transformed["mask"][None, :, :]
+            if class_hard_negative_masks is not None:
+                class_hard_negative_masks = np.asarray(transformed["masks"], dtype=bool)
             augmented = bool(transformed["applied_transforms"])
             if masked or object_instances is not None:
                 nodata_pixels = ~transformed["valid"].astype(bool)
@@ -552,7 +555,8 @@ class TileDataset:
     def _compute_notebook_statistics(self) -> None:
         ratios = []
         hard_negatives = []
-        valid_counts = np.zeros(2, dtype=np.float64)
+        class_count = 1 + len(self._classes or self._class_annotations) if self.uses_multiclass_masks else 2
+        valid_counts = np.zeros(class_count, dtype=np.float64)
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
             window = Window(item.window.x, item.window.y, self._tile_size, self._tile_size)
@@ -566,17 +570,28 @@ class TileDataset:
                 item.scene_index, dataset, window,
                 invalid,
             )
+            semantic = mask if self.uses_multiclass_masks else mask[0]
+            class_negatives = (
+                self._read_class_hard_negative_masks(item.scene_index, dataset, window, invalid, mask)
+                if self._has_class_specific_hard_negatives else None
+            )
+            if self.uses_multiclass_masks:
+                valid = ~invalid
+                if class_negatives is not None:
+                    valid &= ~class_negatives.any(axis=0)
+                labels = np.maximum(semantic[valid], 0)
+                valid_counts += np.bincount(labels, minlength=class_count)
             if self._pipeline_variant == "object_f1":
                 valid = ~invalid if zoned else ~self._read_invalid_data_pixels(dataset, window)
                 positive_count = int(((mask[0] == 1) & valid).sum())
                 valid_counts += [int(valid.sum()) - positive_count, positive_count]
-            ratios.append(float(np.count_nonzero((mask[0] == 1) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha else float(np.mean(mask == 1, dtype=np.float32)))
-            hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL)))
+            ratios.append(float(np.count_nonzero((semantic > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha else float(np.mean(semantic > 0, dtype=np.float32)))
+            hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL) or (class_negatives is not None and class_negatives.any())))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
         self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
         positive = self._notebook_positive_ratios.sum()
         negative = (1 - self._notebook_positive_ratios).sum()
-        counts = valid_counts if self._pipeline_variant == "object_f1" else np.asarray([negative, positive])
+        counts = valid_counts if self._pipeline_variant == "object_f1" or self.uses_multiclass_masks else np.asarray([negative, positive])
         weights = 1.0 / (counts + 1e-6)
         self._notebook_class_weights = (weights / weights.mean()).astype(np.float32).tolist()
 

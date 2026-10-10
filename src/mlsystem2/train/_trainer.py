@@ -355,6 +355,9 @@ def train_model(
                 "pixel_precision": test["best_threshold_pixel_precision"],
                 "pixel_recall": test["best_threshold_pixel_recall"],
                 "threshold": test["best_threshold"], "checkpoint_epoch": best_metrics.epoch,
+                **({"per_class_metrics": test["per_class_metrics"], "macro_pixel_f1": test["macro_pixel_f1"],
+                    "micro_pixel_f1": test["micro_pixel_f1"], "foreground_pixel_f1": test["foreground_pixel_f1"]}
+                   if config.task == "multiclass" else {}),
                 **({"object_f1": test["best_threshold_object_f1"], "object_precision": test["best_threshold_object_precision"], "object_recall": test["best_threshold_object_recall"]} if config.pipeline_variant == "object_f1" else {}),
             }
             test_model.to(torch.device("cpu"))
@@ -699,7 +702,7 @@ def _train_epoch(
             _validate_binary_targets(torch, masks, epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(
-            torch, model, images, masks, binary_two_logits=config.pipeline_variant == "next_gen2"
+            torch, model, images, masks, binary_two_logits=config.pipeline_variant == "next_gen2" and config.task == "binary"
         )
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         logits, masks, hard_negative_pixels = _crop_supervision_tensors(
@@ -1390,12 +1393,14 @@ def _validate_multiclass_epoch(
         pause_controller.pause_if_requested()
     model.eval()
     total_loss = 0.0
+    loss_denominator = 0
     batches = 0
+    thresholds = (0.5,) if config.pipeline_variant == "next_gen2" else MULTICLASS_THRESHOLD_CANDIDATES
     threshold_stats: dict[float, dict[int, dict[str, int]]] = {
-        threshold: {} for threshold in MULTICLASS_THRESHOLD_CANDIDATES
+        threshold: {} for threshold in thresholds
     }
     foreground_stats: dict[float, dict[str, int]] = {
-        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in MULTICLASS_THRESHOLD_CANDIDATES
+        threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in thresholds
     }
     expected_num_classes = len(config.class_schema) + 1
 
@@ -1445,14 +1450,17 @@ def _validate_multiclass_epoch(
                 valid_pixels,
             )
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
-            total_loss += float(loss.detach().item())
+            loss_weight = int(images.shape[0]) if config.pipeline_variant == "next_gen2" else 1
+            total_loss += float(loss.detach().item()) * loss_weight
+            loss_denominator += loss_weight
             batches += 1
 
             probabilities = torch.softmax(logits, dim=1)
             confidence, raw_labels = torch.max(probabilities, dim=1)
-            for threshold in MULTICLASS_THRESHOLD_CANDIDATES:
+            for threshold in thresholds:
+                below_threshold = confidence <= threshold if config.pipeline_variant == "next_gen2" else confidence < threshold
                 labels = torch.where(
-                    (raw_labels > 0) & (confidence < threshold),
+                    (raw_labels > 0) & below_threshold,
                     torch.zeros_like(raw_labels),
                     raw_labels,
                 )
@@ -1516,14 +1524,14 @@ def _validate_multiclass_epoch(
         raise TrainError("Val DataLoader не вернул ни одного batch.")
 
     evaluated: dict[float, dict[str, Any]] = {}
-    for threshold in MULTICLASS_THRESHOLD_CANDIDATES:
+    for threshold in thresholds:
         evaluated[threshold] = _multiclass_metrics(
             threshold_stats[threshold],
             foreground_stats[threshold],
             config,
         )
     best_threshold = max(
-        MULTICLASS_THRESHOLD_CANDIDATES,
+        thresholds,
         key=lambda threshold: (
             evaluated[threshold]["macro_f1"],
             evaluated[threshold]["macro_precision"],
@@ -1533,7 +1541,7 @@ def _validate_multiclass_epoch(
     best = evaluated[best_threshold]
 
     return {
-        "loss": total_loss / batches,
+        "loss": total_loss / loss_denominator,
         "best_threshold": best_threshold,
         "best_pixel_threshold": best_threshold,
         "best_threshold_pixel_f1": best["macro_f1"],
@@ -1775,19 +1783,26 @@ def _loss(
     if config.pipeline_variant == "next_gen2":
         from segmentation_models_pytorch.losses import TverskyLoss
 
-        target = masks[:, 0].long()
+        target = masks.long() if config.task == "multiclass" else masks[:, 0].long()
+        valid = torch.ones_like(target, dtype=torch.bool)
         if valid_pixels is not None:
-            if not valid_pixels.any():
-                return logits.sum() * 0.0
-            target = target.masked_fill(~valid_pixels[:, 0], -100)
-        cross_entropy = torch.nn.functional.cross_entropy(
-            logits, target,
-            weight=torch.as_tensor(config.class_weights, dtype=logits.dtype, device=logits.device),
-        )
-        tversky = TverskyLoss(mode="multiclass", alpha=0.75, beta=0.25, from_logits=True, ignore_index=-100)(
-            logits, target,
-        )
-        return 0.25 * cross_entropy + 0.75 * tversky
+            valid &= valid_pixels if config.task == "multiclass" else valid_pixels[:, 0]
+        if class_hard_negative_pixels is not None:
+            valid &= ~class_hard_negative_pixels.any(dim=1)
+            if valid_pixels is not None:
+                class_hard_negative_pixels = class_hard_negative_pixels & valid_pixels.unsqueeze(1)
+        target = target.masked_fill(~valid, -100)
+        region_loss = logits.sum() * 0.0
+        if valid.any():
+            cross_entropy = torch.nn.functional.cross_entropy(
+                logits, target,
+                weight=torch.as_tensor(config.class_weights, dtype=logits.dtype, device=logits.device),
+            )
+            tversky = TverskyLoss(mode="multiclass", alpha=0.75, beta=0.25, from_logits=True, ignore_index=-100)(
+                logits, target,
+            )
+            region_loss = 0.25 * cross_entropy + 0.75 * tversky
+        return region_loss + _class_hard_negative_loss(torch, logits, class_hard_negative_pixels, config, valid_pixels)
     if config.task == "multiclass":
         if config.loss not in {"cross_entropy", "cross_entropy_dice"}:
             raise TrainError(

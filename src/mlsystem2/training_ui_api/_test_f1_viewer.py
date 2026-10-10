@@ -13,10 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ._config import TrainingUIAPIConfig
-from ._models import JobRow, TrainingResultRow, TrainingResultTestMetricRow
+from ._models import JobRow, TrainingResultRow, TrainingResultTestMetricRow, TestSampleRow
 from ._pseudo_viewer import _raster_metadata
 from ._raster_http import raster_revision
-from ._test_f1_artifacts import test_f1_layers
+from ._test_f1_artifacts import test_f1_layers, test_f1_object_score
 from ._test_samples import queue_training_result_test_f1, training_result_test_f1_info
 from .contracts import JobSource, TestF1SceneInfo, TestF1ScoreInfo, TestF1ViewInfo, TrainingUIAPIError
 
@@ -119,6 +119,66 @@ def _score(report: dict[str, Any], prefix: str = "") -> TestF1ScoreInfo:
     )
 
 
+def _object_source(session: Session, config: TrainingUIAPIConfig, scene: dict[str, Any]):
+    """Использовать исходные объекты только при совпадении ревизии эталона."""
+    try:
+        sample = session.get(TestSampleRow, uuid.UUID(str(scene.get("sample_id"))))
+        if sample is None or sample.content_revision != scene["sample_revision"]:
+            return None
+        image = _image_path(config, scene)
+        source = image.with_suffix(".geojson").resolve()
+        if not source.is_relative_to((config.stored_files_root / "test-samples").resolve()):
+            return None
+        stat = source.stat()
+        return str(source), stat.st_mtime_ns, stat.st_size, str(image)
+    except (OSError, ValueError, TrainingUIAPIError, HTTPException):
+        return None
+
+
+def _object_schema(scene: dict[str, Any]):
+    return tuple((int(item["id"]), str(item["slug"])) for item in scene["class_schema"]) if scene.get("target_class_id") is None else ()
+
+
+def _restore_object_report(session: Session, config: TrainingUIAPIConfig, root: Path, scene: dict[str, Any]):
+    path = root / f"{scene['id']}.npz"
+    stat = path.stat()
+    source, schema = _object_source(session, config, scene), _object_schema(scene)
+    counts, reconstructed = test_f1_object_score(str(path), stat.st_mtime_ns, stat.st_size, scene.get("target_class_id"), source, schema)
+    report = {**scene["report"], **{f"object_{key}": int(value) for key, value in counts.items()}}
+    if schema:
+        per_class = {}
+        for class_id, slug in schema:
+            values, fallback = test_f1_object_score(str(path), stat.st_mtime_ns, stat.st_size, class_id, source, schema)
+            per_class[slug] = _score(values).model_dump()
+            reconstructed |= bool(fallback)
+        metrics = dict(report.get("metrics") or {})
+        metrics["objects"] = {**dict(metrics.get("objects") or {}), "per_class": per_class}
+        report["metrics"] = metrics
+    return report, bool(reconstructed)
+
+
+def _restored_object_metric(metric, scenes):
+    """Агрегировать восстановленные оценки просмотра, сохраняя историю в БД."""
+    counts = {key: sum(getattr(scene.objects, key) for scene in scenes) for key in ("true_positive", "false_positive", "false_negative")}
+    score = _score(counts)
+    if metric.aggregation == "macro":
+        groups = {}
+        for scene in scenes:
+            per_class = (scene.metrics.get("objects") or {}).get("per_class") or {}
+            if scene.target_class_id is not None:
+                per_class = {str(scene.target_class_id): scene.objects.model_dump()}
+            for slug, values in per_class.items():
+                group = groups.setdefault(slug, {key: 0 for key in counts})
+                for key in counts:
+                    group[key] += values[key]
+        scores = [_score(values) for values in groups.values()]
+        if scores:
+            score = score.model_copy(update={key: sum(getattr(value, key) for value in scores) / len(scores) for key in ("f1", "precision", "recall")})
+    fields = score.model_dump()
+    return metric.model_copy(update={**{f"object_{key}": value for key, value in fields.items()},
+                                     **(fields if metric.quality_metric == "objects" else {})})
+
+
 def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID) -> TestF1ViewInfo:
     result = _result(session, result_id)
     metric = training_result_test_f1_info(session, result, config)
@@ -126,7 +186,14 @@ def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.
     complete = not warnings
     scenes = []
     base = f"/api/v1/results/training/{result_id}/test-f1"
-    for _, scene in saved:
+    restored = False
+    for root, scene in saved:
+        report = scene["report"]
+        if not scene.get("object_layers_available"):
+            report, reconstructed = _restore_object_report(session, config, root, scene)
+            restored = True
+            if reconstructed:
+                warnings.append("Для старого расчёта исходные экземпляры эталона недоступны: объектовая карта и её F1 восстановлены по связным областям сохранённых масок. Историческая запись результата сохранена.")
         available = True
         metadata = (scene["bounds"], False, False, None)
         try:
@@ -145,12 +212,14 @@ def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.
             raster_url=f"{base}/raster/{scene_id}?v={scene['image_revision']}",
             footprint_url=f"{base}/footprint/{scene_id}?v={scene['image_revision']}",
             layers_url=f"{base}/layers/{scene_id}", raster_available=available,
-            object_layers_available=bool(scene.get("object_layers_available")),
+            object_layers_available=True,
             bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,
             target_class_id=scene.get("target_class_id"), class_schema=scene["class_schema"],
-            pixel=_score(scene["report"]), objects=_score(scene["report"], "object_"),
-            metrics=scene["report"].get("metrics") or {},
+            pixel=_score(report), objects=_score(report, "object_"),
+            metrics=report.get("metrics") or {},
         ))
+    if restored and metric is not None and complete:
+        metric = _restored_object_metric(metric, scenes)
     status = "ready" if scenes and complete else "missing"
     if metric is None or metric.status == "unavailable":
         status = "ready" if scenes and complete else "missing" if scenes else "unavailable"
@@ -169,9 +238,7 @@ def prepare_test_f1_view(session: Session, config: TrainingUIAPIConfig, result_i
     if result is None or result.status != "ok":
         raise TrainingUIAPIError("Успешная сеть для просмотра тестового F1 не найдена.")
     view = test_f1_view(session, config, result_id)
-    if view.status not in {"queued", "running"} and (
-        view.status != "ready" or not all(scene.object_layers_available for scene in view.scenes)
-    ):
+    if view.status not in {"queued", "running"} and view.status != "ready":
         queue_training_result_test_f1(
             session, result, config, source=JobSource.MANUAL, force=True, manual=True,
         )
@@ -208,4 +275,5 @@ def test_f1_scene_layers(
         raise TrainingUIAPIError("Класс отсутствует в сохранённом расчёте.")
     path = root / f"{scene['id']}.npz"
     stat = path.stat()
-    return test_f1_layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id, metric)
+    source = _object_source(session, config, scene) if metric == "objects" and not scene.get("object_layers_available") else None
+    return test_f1_layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id, metric, source, _object_schema(scene))

@@ -300,7 +300,7 @@ def test_source_notebook_is_fixed_and_ui_profile_is_compatible():
 
 
 @pytest.mark.parametrize("key,value", [
-    ("dataset.task", "multiclass"), ("dataset.imagery_type", "ortho"),
+    ("dataset.task", "unknown"), ("dataset.imagery_type", "ortho"),
     ("tile_preparation.context", 128), ("tile_preparation.augmentation_level", 1),
     ("train.loss", "bce_dice"), ("train.max_train_batches_per_epoch", 1),
     ("dataset.val_fraction", 0.3), ("train.batch_size", 32), ("train.learning_rate", 0.001),

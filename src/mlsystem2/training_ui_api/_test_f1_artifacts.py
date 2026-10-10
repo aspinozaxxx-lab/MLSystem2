@@ -14,7 +14,8 @@ from rasterio.features import shapes
 from rasterio.warp import transform_bounds, transform_geom
 
 from ._raster_http import raster_revision
-from .contracts import TrainingUIAPIError
+from mlsystem2.metrics.api import compute_object_f1
+from mlsystem2.metrics.contracts import ObjectF1Request
 
 
 def save_test_f1_scene(
@@ -63,21 +64,64 @@ def save_test_f1_manifest(root: Path, result_id: str, scenes: list[dict[str, Any
     )
 
 
+@lru_cache(maxsize=2)
+def _object_snapshot(mask_path: str, mtime_ns: int, size: int, class_id: int | None,
+                     source: tuple[str, int, int, str] | None, schema: tuple[tuple[int, str], ...]):
+    """Восстановить экземпляры из сохранённого прогноза без загрузки сети."""
+    from scipy.ndimage import label
+
+    with np.load(mask_path, allow_pickle=False) as masks:
+        prefix = f"objects_{class_id if class_id is not None else 0}"
+        if f"{prefix}_matches" in masks:
+            return masks[f"{prefix}_reference"], masks[f"{prefix}_predicted"], masks[f"{prefix}_matches"], None
+        reference, predicted = masks["reference"], masks["predicted"]
+    truth = reference == class_id if class_id is not None else reference > 0
+    prediction = predicted == class_id if class_id is not None else predicted > 0
+    true_instances = None
+    if source is not None:
+        from ._pseudo_runner import _test_tile_instance_mask, _test_tile_class_instance_masks, _combine_class_instance_masks
+
+        geojson_path, _, _, image_path = source
+        try:
+            if schema:
+                instances = _test_tile_class_instance_masks(Path(geojson_path), Path(image_path), truth.shape,
+                                                            [{"id": key, "slug": slug} for key, slug in schema])
+                candidate = instances[class_id] if class_id is not None else _combine_class_instance_masks(instances)
+            else:
+                candidate = _test_tile_instance_mask(Path(geojson_path), Path(image_path), truth.shape)
+            # Никогда не смешивать новый эталон со старым прогнозом.
+            if np.array_equal(candidate > 0, truth):
+                true_instances = candidate
+        except (OSError, ValueError, RuntimeError):
+            pass
+    reconstructed = true_instances is None
+    if reconstructed:
+        true_instances = label(truth, structure=np.ones((3, 3), dtype=np.uint8))[0]
+    predicted_instances = label(prediction, structure=np.ones((3, 3), dtype=np.uint8))[0]
+    score = compute_object_f1(ObjectF1Request(y_true_instances=true_instances, y_pred_instances=predicted_instances))
+    return true_instances, predicted_instances, np.asarray(score.matched_pairs, np.int32).reshape(-1, 2), reconstructed
+
+
+@lru_cache(maxsize=128)
+def test_f1_object_score(mask_path: str, mtime_ns: int, size: int, class_id: int | None,
+                         source: tuple[str, int, int, str] | None, schema: tuple[tuple[int, str], ...]):
+    reference, predicted, pairs, reconstructed = _object_snapshot(mask_path, mtime_ns, size, class_id, source, schema)
+    tp = len(pairs)
+    return {"true_positive": tp, "false_positive": np.count_nonzero(np.unique(predicted)) - tp,
+            "false_negative": np.count_nonzero(np.unique(reference)) - tp}, reconstructed
+
+
 @lru_cache(maxsize=4)
 def test_f1_layers(
     mask_path: str, mtime_ns: int, size: int, transform_values: tuple[float, ...],
     crs: str, class_id: int | None, metric: str = "pixel",
+    source: tuple[str, int, int, str] | None = None, schema: tuple[tuple[int, str], ...] = (),
 ) -> dict[str, Any]:
     """Точные TP/FP/FN в исходной сетке, без объединения разных тестовых TIFF."""
     with np.load(mask_path, allow_pickle=False) as masks:
         reference, predicted = masks["reference"], masks["predicted"]
-        if metric == "objects":
-            prefix = f"objects_{class_id if class_id is not None else 0}"
-            if f"{prefix}_matches" not in masks:
-                raise TrainingUIAPIError("В прежнем расчёте не сохранены экземпляры объектов. Подготовьте визуализацию заново.")
-            true_instances = masks[f"{prefix}_reference"]
-            predicted_instances = masks[f"{prefix}_predicted"]
-            pairs = masks[f"{prefix}_matches"]
+    if metric == "objects":
+        true_instances, predicted_instances, pairs, _ = _object_snapshot(mask_path, mtime_ns, size, class_id, source, schema)
     truth = reference == class_id if class_id is not None else reference > 0
     prediction = predicted == class_id if class_id is not None else predicted > 0
     masks = {

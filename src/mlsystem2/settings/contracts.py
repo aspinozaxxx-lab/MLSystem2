@@ -153,11 +153,13 @@ class TrainSettings(BaseModel):
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
-        if self.task == "multiclass" and self.loss not in multiclass_losses:
+        if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.pipeline_variant in {"next_gen2", "object_f1"}:
-            if self.task != "binary" or self.loss != "cross_entropy_tversky":
-                raise ValueError("next-gen2 требует binary и CrossEntropy + Tversky")
+            if self.loss != "cross_entropy_tversky":
+                raise ValueError("next-gen2 требует CrossEntropy + Tversky")
+            if self.pipeline_variant == "object_f1" and self.task != "binary":
+                raise ValueError("object f1 требует бинарную разметку")
         elif self.loss == "cross_entropy_tversky":
             raise ValueError("CrossEntropy + Tversky доступен только в next-gen2")
         elif self.task == "binary" and self.loss in multiclass_losses:
@@ -243,9 +245,9 @@ class SystemSettings(BaseModel):
             if (
                 self.train.model_name not in batch_sizes
                 or self.train.input_channels not in (3, 4)
-                or self.train.output_channels != 1
+                or (self.train.task == "binary" and self.train.output_channels != 1)
             ):
-                raise ValueError("next-gen2 требует SegFormer с входом 3 или 4 и выходом 1")
+                raise ValueError("next-gen2 требует SegFormer с входом RGB или RGB+NIR и выходами по схеме классов")
             if self.tile_preparation.tile_size not in (512, 768, 1024, 1536):
                 raise ValueError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
             fixed = (

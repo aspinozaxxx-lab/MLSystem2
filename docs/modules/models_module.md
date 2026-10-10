@@ -32,7 +32,8 @@
 HF использует transformers, SMP — Segformer с MiT B0/B1/B2/B3.
 В legacy HF делит raw на 255; SMP без предобучения получает raw, с предобучением —
 raw/255 и ImageNet mean/std (NIR как RED), без маски nodata. Режим задан ModelSpec.pretrained.
-Next-gen2 принимает RGB/RGB+NIR: два внутренних logits, снаружи разность foreground/background.
+Next-gen2 принимает RGB/RGB+NIR: для binary два внутренних logits, снаружи разность foreground/background;
+для multiclass все N+1 logits по схеме, включая фон. При восстановлении проверяется размер головы.
 Нормализация каналов окна — min-max; постоянный канал даёт нули.
 HF B0 сохраняет веса ноутбука; SMP с pretrained=true — encoder ImageNet и новую голову,
 с false — случайные веса. При предобучении копируются RGB и RED→NIR, смещение новой свёртки случайное.

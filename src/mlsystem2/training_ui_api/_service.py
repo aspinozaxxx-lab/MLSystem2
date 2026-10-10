@@ -991,11 +991,13 @@ def _validate_training_pipeline_variant(
         if imagery_type not in {"kanopus", "ortho"}:
             raise TrainingUIAPIError("next-gen2 поддерживает Канопус и RGB-ортофотопланы.")
         required = {
-            "dataset.task": "binary", "train.input_channels": 3 if imagery_type == "ortho" else 4,
+            "train.input_channels": 3 if imagery_type == "ortho" else 4,
             **{key: value for key, value in fixed_pipeline_defaults(variant).items() if key not in NEXT_GEN2_EDITABLE_KEYS},
             "tile_preparation.stride": tile_size // 2,
             "train.batch_size": next_gen2_train_batch_size(tile_size, architecture),
         }
+        if job_config.get("dataset.task") not in {"binary", "multiclass"} or (variant == "object_f1" and job_config.get("dataset.task") != "binary"):
+            raise TrainingUIAPIError("next-gen2 поддерживает бинарную и мультиклассовую разметку; object f1 — только бинарную.")
         for key, expected in required.items():
             if job_config.get(key) != expected:
                 raise TrainingUIAPIError(f"next-gen2: параметр {key} должен быть {expected}.")

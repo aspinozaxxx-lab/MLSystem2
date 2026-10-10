@@ -60,15 +60,18 @@ class TrainConfig(BaseModel):
         if self.pipeline_variant == "object_f1" and self.quality_metric != "objects":
             raise ValueError("object f1 требует объектовую метрику")
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
-        if self.task == "multiclass" and self.loss not in multiclass_losses:
+        if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
         if self.pipeline_variant in {"next_gen2", "object_f1"}:
-            if self.task != "binary" or self.loss != "cross_entropy_tversky":
-                raise ValueError("next-gen2 требует binary и CrossEntropy + Tversky")
-            if len(self.class_weights) != 2 or any(
+            if self.loss != "cross_entropy_tversky":
+                raise ValueError("next-gen2 требует CrossEntropy + Tversky")
+            if self.pipeline_variant == "object_f1" and self.task != "binary":
+                raise ValueError("object f1 требует бинарную разметку")
+            expected_weights = 2 if self.task == "binary" else 1 + len(self.class_schema or self.class_slugs)
+            if len(self.class_weights) != expected_weights or any(
                 not (0 < value < float("inf")) for value in self.class_weights
             ):
-                raise ValueError("next-gen2 требует два положительных конечных веса классов")
+                raise ValueError("next-gen2 требует положительные конечные веса всех классов, включая фон")
             if (
                 self.max_train_batches_per_epoch is not None
                 or self.max_val_batches_per_epoch is not None

@@ -17,7 +17,6 @@ from mlsystem2.training_ui_api._test_f1_artifacts import (
 from mlsystem2.training_ui_api._test_f1_viewer import _saved_scenes, store_test_f1_view
 from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
-from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 
 
 def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
@@ -29,7 +28,8 @@ def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
     prediction = np.array([[2, 1], [0, 0]], np.uint8)
     scene = save_test_f1_scene(tmp_path / "view", {"object_types": []},
         {"index": 1, "image_path": str(image_path), "target_class_id": 1}, truth, prediction, {})
-    path = tmp_path / "view" / "tile-1.npz"; stat = path.stat()
+    path = tmp_path / "view" / "tile-1.npz"
+    stat = path.stat()
     layers = _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], 1)
     for layer, expected in {"tp": 0, "fp": 1, "fn": 1, "reference": 1, "predicted": 1}.items():
         shapes = [(feature["geometry"], 1) for feature in layers["features"] if feature["properties"]["test_f1_layer"] == layer]
@@ -38,7 +38,8 @@ def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
 
 
 def test_partial_view_publication_preserves_other_class_job(tmp_path: Path):
-    source = tmp_path / "run" / "scratch" / "test_f1_view"; source.mkdir(parents=True)
+    source = tmp_path / "run" / "scratch" / "test_f1_view"
+    source.mkdir(parents=True)
     job_id, old_id = uuid.uuid4(), uuid.uuid4()
     save_test_f1_manifest(source, str(uuid.uuid4()), [{"id": "tile-1", "target_class_slug": "second"}])
     np.savez_compressed(source / "tile-1.npz", reference=np.zeros((1, 1)), predicted=np.zeros((1, 1)))
@@ -80,17 +81,18 @@ def test_object_layers_use_saved_matches_instead_of_pixel_intersection(tmp_path:
             assert int(rasterize(geometry, out_shape=truth.shape, transform=transform).sum()) == count
 
 
-def test_legacy_object_layers_require_explicit_preparation(tmp_path: Path):
+def test_legacy_object_layers_reuse_saved_inference(tmp_path: Path):
     path = tmp_path / "legacy.npz"
     np.savez_compressed(path, reference=np.ones((2, 2), np.uint8), predicted=np.ones((2, 2), np.uint8))
     stat = path.stat()
-    with pytest.raises(TrainingUIAPIError, match="не сохранены экземпляры"):
-        _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(from_origin(0, 2, 1, 1))[:6], "EPSG:3857", None, "objects")
+    layers = _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(from_origin(0, 2, 1, 1))[:6], "EPSG:3857", None, "objects")
+    assert {item["properties"]["test_f1_layer"] for item in layers["features"]} == {"tp", "reference", "predicted"}
 
 
 def test_view_requires_snapshots_for_every_class_after_legacy_partial_update(tmp_path: Path):
     job_id, result_id = uuid.uuid4(), uuid.uuid4()
-    root = tmp_path / "test-f1" / str(job_id); root.mkdir(parents=True)
+    root = tmp_path / "test-f1" / str(job_id)
+    root.mkdir(parents=True)
     scene = {"id": "tile-1", "target_class_slug": "second", "source_tile_index": 1}
     save_test_f1_manifest(root, str(result_id), [scene])
     np.savez_compressed(root / "tile-1.npz", reference=np.zeros((1, 1)), predicted=np.zeros((1, 1)))
@@ -100,3 +102,48 @@ def test_view_requires_snapshots_for_every_class_after_legacy_partial_update(tmp
     scenes, warnings = _saved_scenes(session, SimpleNamespace(stored_files_root=tmp_path), result_id)
     assert len(scenes) == 1
     assert warnings
+
+
+def test_legacy_view_preparation_and_metric_switch_never_enqueue_inference(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api import _test_f1_viewer as viewer
+    from mlsystem2.training_ui_api.contracts import TrainingResultTestF1Info
+    from mlsystem2.training_ui_api._models import TrainingResultRow, TestSampleRow
+    from shapely.geometry import box, mapping
+
+    result_id, sample_id = uuid.uuid4(), uuid.uuid4()
+    config = SimpleNamespace(stored_files_root=tmp_path)
+    sample_root = tmp_path / "test-samples" / str(sample_id)
+    sample_root.mkdir(parents=True)
+    image_path = sample_root / "tile_001.tif"
+    transform = from_origin(0, 4, 1, 1)
+    with rasterio.open(image_path, "w", driver="GTiff", width=4, height=4, count=3, dtype="uint8", crs="EPSG:3857", transform=transform) as image:
+        image.write(np.ones((3, 4, 4), np.uint8))
+    # Два соприкасающихся эталона должны оставаться двумя объектами.
+    image_path.with_suffix(".geojson").write_text(json.dumps({"type": "FeatureCollection",
+        "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [{"type": "Feature", "properties": {}, "geometry": mapping(box(0, 2, 2, 4))},
+                     {"type": "Feature", "properties": {}, "geometry": mapping(box(2, 2, 4, 4))}]}))
+    truth = np.zeros((4, 4), np.uint8)
+    truth[:2] = 1
+    root = tmp_path / "view"
+    scene = save_test_f1_scene(root, {}, {"index": 1, "image_path": str(image_path), "test_sample_id": str(sample_id)},
+                               truth, truth, {"true_positive": 8})
+    scene["public_id"] = "saved_tile-1"
+    result = SimpleNamespace(id=result_id, status="ok", model_name="Проверка", class_display_name="Датасет")
+    sample = SimpleNamespace(content_revision=1)
+    session = SimpleNamespace(scalar=lambda *_: result,
+                              get=lambda model, key: result if model is TrainingResultRow else sample if model is TestSampleRow else None)
+    monkeypatch.setattr(viewer, "training_result_test_f1_info", lambda *_: TrainingResultTestF1Info(status="current", pixel_f1=1, object_f1=0))
+    monkeypatch.setattr(viewer, "_saved_scenes", lambda *_: ([(root, scene)], []))
+    monkeypatch.setattr(viewer, "queue_training_result_test_f1", lambda *_args, **_kwargs: pytest.fail("Повторный инференс запрещён"))
+    view = viewer.prepare_test_f1_view(session, config, result_id)
+    assert view.status == "ready" and view.scenes[0].object_layers_available
+    assert view.scenes[0].objects.true_positive == 1 and view.scenes[0].objects.false_negative == 1
+    assert view.metric.object_f1 == pytest.approx(2 / 3)
+    assert not view.warnings
+    for mode in ("pixel", "objects", "pixel", "objects"):
+        assert viewer.test_f1_scene_layers(session, config, result_id, scene["public_id"], None, mode)["features"]
+    sample.content_revision = 2
+    restored = viewer.test_f1_view(session, config, result_id)
+    assert restored.scenes[0].objects.f1 == 1
+    assert any("связным областям" in message for message in restored.warnings)

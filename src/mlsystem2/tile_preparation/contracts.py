@@ -134,8 +134,6 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("next-gen2 требует разбиение по тайлам")
             if self.tile_split.spatial_purge or self.tile_split.test_fraction != 0.2 or self.tile_split.val_fraction != 0.2:
                 raise ValueError("next-gen2 требует случайное разбиение 60/20/20 без исключения пересечений")
-            if has_legacy_multiclass or has_per_image_multiclass:
-                raise ValueError("next-gen2 поддерживает только бинарную разметку")
             if self.max_batches_per_epoch is not None:
                 raise ValueError("next-gen2 не допускает ограничение числа пакетов")
         elif self.mode == "test" or (self.tile_split and self.tile_split.test_fraction):

@@ -86,8 +86,8 @@ def build_triton_model_export_zip(
         parameters = getattr(loaded.model.spec, "parameters", None) or {}
         next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "next_gen2"
         object_f1 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "object_f1"
-        if (next_gen2 or object_f1) and task != "binary":
-            raise TrainingUIAPIError("Экспорт next_gen2 поддерживает только бинарную модель.")
+        if object_f1 and task != "binary":
+            raise TrainingUIAPIError("Экспорт object f1 поддерживает только бинарную модель.")
         class_schema = _export_class_schema_override(
             task,
             class_schema,
@@ -133,7 +133,7 @@ def build_triton_model_export_zip(
             _export_segmentation_mask_onnx(
                 model=loaded.model.model,
                 input_channels=input_channels,
-                output_channels=1,
+                output_channels=int(loaded.model.spec.output_channels),
                 sample_size=parsed_sample_size,
                 threshold=effective_threshold,
                 onnx_path=onnx_path,
@@ -162,7 +162,7 @@ def build_triton_model_export_zip(
             _triton_config(
                 parsed_model_name,
                 input_channels,
-                foreground_channels=(2 if object_f1 else len(class_schema) if task == "multiclass" else 1),
+                foreground_channels=(2 if object_f1 else len(class_schema) + int(next_gen2) if task == "multiclass" else 1),
                 instance_kind=parsed_instance_kind,
                 probability_output=next_gen2 or object_f1,
             ),
@@ -182,8 +182,8 @@ def build_triton_model_export_zip(
                 object_output=object_f1,
             ),
         )
-        if object_f1:
-            _write_object_runtime(export_root)
+        if object_f1 or next_gen2:
+            _write_probability_runtime(export_root)
         service_zip_path = service_zip_dir / f"{parsed_model_name}.zip"
         _zip_directory(service_root, service_zip_path)
         _write_json(
@@ -208,7 +208,7 @@ def build_triton_model_export_zip(
                 ),
                 "output_kind": "object_probabilities" if object_f1 else "probabilities" if next_gen2 else "binary_masks",
                 "pipeline_variant": "object_f1" if object_f1 else "next_gen2" if next_gen2 else "legacy",
-                "output_channels": ["foreground", "boundary"] if object_f1 else None,
+                "output_channels": ["foreground", "boundary"] if object_f1 else ["background", *[str(item["slug"]) for item in class_schema]] if next_gen2 and task == "multiclass" else None,
                 "object_separation": parameters.get("object_separation") if object_f1 else None,
                 "inference_merge": "gaussian_probabilities" if next_gen2 or object_f1 else "drop",
                 "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 or object_f1 else inference_core_size,
@@ -825,8 +825,6 @@ def _export_segmentation_mask_onnx(
     probability_output: bool = False,
     object_output: bool = False,
 ) -> None:
-    if probability_output and output_channels != 1:
-        raise TrainingUIAPIError("Выход вероятностей поддерживается для бинарной модели.")
     try:
         import torch
     except ImportError as exc:
@@ -861,6 +859,8 @@ def _export_segmentation_mask_onnx(
                     return probability
                 return (probability > self.threshold_value).to(torch.uint8)
             probabilities = torch.softmax(logits, dim=1)
+            if probability_output:
+                return probabilities
             confidence, labels = torch.max(probabilities, dim=1)
             labels = torch.where(
                 (labels > 0) & (confidence < self.threshold_value),
@@ -903,7 +903,7 @@ def _export_segmentation_mask_onnx(
         raise TrainingUIAPIError("Не удалось экспортировать checkpoint в ONNX.") from exc
     if not onnx_path.is_file():
         raise TrainingUIAPIError("ONNX exporter не создал model.onnx.")
-    foreground_channels = 2 if object_output else 1 if output_channels == 1 else output_channels - 1
+    foreground_channels = 2 if object_output else 1 if output_channels == 1 else output_channels if probability_output else output_channels - 1
     _normalize_onnx_for_triton(
         onnx_path,
         foreground_channels=foreground_channels,
@@ -1125,10 +1125,11 @@ config:
         for key in ("bounds", "sample_size", "nodata"):
             segmentation.pop(key, None)
         mask_labels = segmentation["output_labels"]
-        probability_labels = [f"mlsystem2_probability_{index}" for index in range(len(mask_labels))]
+        probability_labels = [f"mlsystem2_probability_{index}" for index in range(len(mask_labels) + int(bool(schema)))]
         segmentation["output_labels"] = probability_labels
         segmentation["adapter"]["output_dtype"] = "float32"
-        thresholds = [
+        thresholds = [{"_class": "MulticlassProbabilityMasks", "input_rasters": probability_labels,
+                       "output_masks": mask_labels, "threshold": threshold}] if schema else [
             {"_class": "MultiThresholding", "input_raster": probability_label,
              "thresholds": [threshold], "strict_more": True,
              "out_masks": [f"mlsystem2_background_{index}", mask_label]}
@@ -1330,7 +1331,7 @@ def _vector_postprocess_yaml(
     )
 
 
-def _write_object_runtime(export_root: Path) -> None:
+def _write_probability_runtime(export_root: Path) -> None:
     """Включить тот же CPU-код в переносимый экспорт, без копии алгоритма."""
     package_root = Path(__file__).resolve().parent.parent
     files = ["__init__.py", "inference/__init__.py", "inference/api.py", "inference/contracts.py",
@@ -1344,9 +1345,12 @@ def _write_object_runtime(export_root: Path) -> None:
         shutil.copyfile(package_root / relative, target)
     _write_text(export_root / "runtime" / "requirements.txt",
                 "numpy\nscipy\nscikit-image>=0.24,<0.27\npydantic>=2\nrasterio\n")
-    _write_text(export_root / "README.md", """# Экспорт object f1
+    _write_text(export_root / "README.md", """# Экспорт оконного инференса
 
-ONNX возвращает два канала вероятностей: область и граница. Их нельзя обрабатывать как обычную бинарную маску.
+ONNX возвращает вероятности; порог применяется после Gaussian-объединения окон.
+Мультиклассовая сеть возвращает фон и типы в порядке схемы. Блок MulticlassProbabilityMasks
+выбирает наиболее вероятный класс и применяет строгий порог только к объектам.
+У object f1 два канала: область и граница; ObjectF1Segmentation выделяет экземпляры через watershed.
 
 Модель размещается в штатном репозитории Triton. Для Geoalert добавьте каталог `runtime` этого архива
 в `PYTHONPATH`, установите `runtime/requirements.txt` в его окружение и перед `Compose.load` вызовите:

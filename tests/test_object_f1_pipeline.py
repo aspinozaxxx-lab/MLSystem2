@@ -401,8 +401,8 @@ def test_native_inference_preserves_instance_ids_and_small_scene(tmp_path):
 def test_export_runtime_contains_same_cpu_implementation(tmp_path):
     from pathlib import Path
     import mlsystem2.inference._objects as shared
-    from mlsystem2.training_ui_api._model_export import _write_object_runtime
-    _write_object_runtime(tmp_path)
+    from mlsystem2.training_ui_api._model_export import _write_probability_runtime
+    _write_probability_runtime(tmp_path)
     assert (tmp_path / "runtime/mlsystem2/inference/_objects.py").read_bytes() == Path(shared.__file__).read_bytes()
     assert "register_notebook_bricks" in (tmp_path / "README.md").read_text(encoding="utf-8")
 

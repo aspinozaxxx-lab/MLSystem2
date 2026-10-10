@@ -165,10 +165,10 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
     if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1"} and (
         spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
         or spec.input_channels not in (3, 4)
-        or spec.output_channels != 1
+        or (spec.parameters.get("pipeline_variant") == "object_f1" and spec.output_channels != 1)
         or spec.parameters.get("preprocessing") != {"mode": "window_minmax", "epsilon": 1e-6}
     ):
-        raise ModelsError("next-gen2 требует SegFormer с входом 3 или 4, выходом 1 и оконной min-max нормализацией")
+        raise ModelsError("next-gen2 требует SegFormer с входом RGB или RGB+NIR и оконной min-max нормализацией")
     if spec.name in _SMP_ENCODERS:
         model = _create_smp_segformer(spec, initialize_pretrained=initialize_pretrained)
         if spec.pretrained and spec.parameters.get("pipeline_variant", "legacy") == "legacy":
@@ -180,7 +180,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") == "next_gen2":
+        if spec.parameters.get("pipeline_variant") == "next_gen2" and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -225,7 +225,7 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
         encoder_name=_SMP_ENCODERS[spec.name],
         encoder_weights="imagenet" if pretrained else None,
         in_channels=3 if pretrained else spec.input_channels,
-        classes=3 if spec.parameters.get("pipeline_variant") == "object_f1" else 2 if notebook else spec.output_channels,
+        classes=3 if spec.parameters.get("pipeline_variant") == "object_f1" else 2 if notebook and spec.output_channels == 1 else spec.output_channels,
         activation=None,
     )
     if pretrained and spec.input_channels == 4:
@@ -283,34 +283,35 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
     is_next_gen2 = spec.parameters.get("pipeline_variant") == "next_gen2"
     if is_next_gen2:
+        head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
             raw_config = spec.parameters.get("hf_config")
             if not isinstance(raw_config, dict) or raw_config.get("num_channels") != spec.input_channels:
                 raise ModelsError("Checkpoint next-gen2 не содержит корректную HF-конфигурацию")
             config = SegformerConfig(**raw_config)
-            if config.num_labels != 2:
-                raise ModelsError("Checkpoint next-gen2 должен содержать двухклассовую голову")
+            if config.num_labels != head_channels:
+                raise ModelsError("Голова checkpoint next-gen2 не соответствует схеме классов")
             return _wrap_next_gen(spec, SegformerForSemanticSegmentation(config))
         if spec.pretrained:
             model = SegformerForSemanticSegmentation.from_pretrained(
                 _PRETRAINED_B0,
                 revision=_PRETRAINED_B0_REVISION,
-                num_labels=2,
+                num_labels=head_channels,
                 ignore_mismatched_sizes=True,
                 use_safetensors=True,
             )
             if spec.input_channels == 4:
-                _adapt_pretrained_segformer(model, 4, 2, notebook=True)
+                _adapt_pretrained_segformer(model, 4, head_channels, notebook=True)
         else:
             model = SegformerForSemanticSegmentation(SegformerConfig(
-                num_channels=spec.input_channels, num_labels=2,
+                num_channels=spec.input_channels, num_labels=head_channels,
                 **{key: value for key, value in model_config.items() if key != "pretrained"},
             ))
         parameters = dict(spec.parameters)
         parameters.update({
             "hf_config": model.config.to_dict(),
             "input_adapter": "rgb_copy_plus_red_to_nir_random_bias" if spec.input_channels == 4 else "pretrained_rgb",
-            "binary_output": "foreground_logit_minus_background_logit",
+            **({"binary_output": "foreground_logit_minus_background_logit"} if spec.output_channels == 1 else {}),
         })
         if spec.pretrained:
             parameters.update({
@@ -437,17 +438,18 @@ def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
         raise ModelsError("next_gen ModelSpec не содержит preprocessing")
     return ModelHandle(
         spec=spec,
-        model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") == "object_f1"),
+        model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") == "object_f1", multiclass_output=spec.output_channels > 1),
     )
 
 
 if torch is not None:
 
     class _InputPreprocessingWrapper(torch.nn.Module):
-        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False) -> None:
+        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False, multiclass_output: bool = False) -> None:
             super().__init__()
             self.model = model
             self.object_output = object_output
+            self.multiclass_output = multiclass_output
             self.mode = str(preprocessing.get("mode") or "scale_255")
             self.nodata = float(preprocessing.get("nodata", 0.0))
             self.mask_nodata = bool(preprocessing.get("mask_nodata", True))
@@ -490,7 +492,7 @@ if torch is not None:
                     align_corners=False,
                 )
             if self.mode == "window_minmax":
-                if self.object_output:
+                if self.object_output or self.multiclass_output:
                     return logits
                 if return_two_class_logits:
                     return logits
@@ -512,7 +514,7 @@ if torch is not None:
 else:
 
     class _InputPreprocessingWrapper:
-        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False) -> None:
+        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False, multiclass_output: bool = False) -> None:
             raise ModelsError(
                 "Для создания next_gen модели требуется optional dependency torch."
             )
