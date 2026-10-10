@@ -93,6 +93,25 @@ def test_ortho_uses_geoalert_backend_and_kanopus_keeps_compatible_backend() -> N
     assert inference_backend_for_imagery(None) == PYTORCH_INFERENCE_BACKEND
 
 
+def test_compose_load_failure_is_saved_as_an_actionable_report(tmp_path: Path, monkeypatch) -> None:
+    from mlsystem2.training_ui_api import _geoalert_notebook
+
+    result_path = tmp_path / "result.json"
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps({"pipeline_path": "pipeline.yaml", "result_path": str(result_path)}), encoding="utf-8")
+    def load(*args, **kwargs):
+        raise ValueError("Brick name FilterCompactObjects not found in registry")
+    urban = ModuleType("urban")
+    urban.Compose = SimpleNamespace(load=load)
+    monkeypatch.setitem(sys.modules, "urban", urban)
+    monkeypatch.setattr(_geoalert_notebook, "register_notebook_bricks", lambda: None)
+    assert _geoalert_compose_runner.main(["--spec", str(spec_path)]) == 1
+    report = json.loads(result_path.read_text(encoding="utf-8"))
+    assert report["status"] == "error"
+    assert "FilterCompactObjects" in report["error"]
+    assert report["reports"] == []
+
+
 @pytest.mark.parametrize("blocked", [False, True], ids=["plain", "required_blocks"])
 def test_compose_runner_supports_required_blocks(tmp_path: Path, monkeypatch, blocked: bool) -> None:
     from mlsystem2.training_ui_api import _geoalert_notebook

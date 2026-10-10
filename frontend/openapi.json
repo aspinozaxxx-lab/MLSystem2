@@ -4970,6 +4970,20 @@
               ],
               "title": "Class Id"
             }
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "pixel",
+                "objects"
+              ],
+              "type": "string",
+              "default": "pixel",
+              "title": "Metric"
+            }
           }
         ],
         "responses": {
@@ -11708,6 +11722,11 @@
             "type": "boolean",
             "title": "Raster Available",
             "default": true
+          },
+          "object_layers_available": {
+            "type": "boolean",
+            "title": "Object Layers Available",
+            "default": false
           },
           "sample_name": {
             "type": "string",

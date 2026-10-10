@@ -1336,6 +1336,7 @@ def _write_object_runtime(export_root: Path) -> None:
     files = ["__init__.py", "inference/__init__.py", "inference/api.py", "inference/contracts.py",
              "inference/_objects.py", "models/__init__.py", "models/contracts.py",
              "training_ui_api/__init__.py", "training_ui_api/_geoalert_notebook.py",
+             "training_ui_api/_geoalert_vector.py", "training_ui_api/_compact_geometry.py",
              "training_ui_api/_object_inference.py"]
     for relative in files:
         target = export_root / "runtime" / "mlsystem2" / relative

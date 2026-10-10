@@ -23,7 +23,7 @@ import { rasterBackdrop } from "./utils/rasterBackdrop";
 import { rasterLoadCancelled, rasterResponseError, watchRasterLoading } from "./utils/rasterLoading";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { useCompactLayout } from "./utils/useCompactLayout";
-import { comparisonLayerStyle, TEST_F1_LAYERS } from "./utils/testF1Viewer";
+import { comparisonLayerLabel, comparisonLayerStyle, TEST_F1_LAYERS } from "./utils/testF1Viewer";
 import "ol/ol.css";
 import "./styles/pseudoViewer.css";
 
@@ -33,6 +33,7 @@ type LoadedView = { info: PseudoMarkupViewInfo; geojson: GeoJson };
 type Comparison = {
   sidebar: ReactNode; summary: ReactNode; title?: string; subtitle?: string; controls?: ReactNode;
   legend?: ReactNode; hint?: string; layerControls?: ReactNode;
+  metric?: "pixel" | "objects";
   featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number } | null;
   onViewport?: (viewport: PseudoMarkupComparisonViewport) => void;
 };
@@ -445,7 +446,7 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
           >{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
         </div>
         <div className="pseudo-map-legend">{comparison?.featureStyle ? comparison.legend : comparison
-          ? Object.entries(TEST_F1_LAYERS).filter(([layer]) => comparisonLayerStyle(layer, referenceVisible, markupVisible)).map(([layer, item]) => <span className="test-f1-legend-item" key={layer}><i style={{ backgroundColor: item.color }} />{item.label}</span>)
+          ? Object.entries(TEST_F1_LAYERS).filter(([layer]) => comparisonLayerStyle(layer, referenceVisible, markupVisible)).map(([layer, item]) => <span className="test-f1-legend-item" key={layer}><i style={{ backgroundColor: item.color }} />{comparisonLayerLabel(layer, comparison.metric)}</span>)
           : classes.map((item) => <button type="button" key={item.key} aria-pressed={!hidden.has(item.key)} onClick={() => toggleClass(item.key)}><span style={{ backgroundColor: item.color }} />{item.name} <small>{item.count.toLocaleString("ru-RU")}</small></button>)}</div>
         {!geojson.features.length && !comparison ? <div className="pseudo-empty">На этих снимках сеть не нашла объектов</div> : null}
         {outlineError ? <div className="pseudo-outline-error" role="status">{outlineError}</div> : null}

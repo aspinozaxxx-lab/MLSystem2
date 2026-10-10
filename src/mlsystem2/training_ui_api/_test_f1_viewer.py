@@ -145,6 +145,7 @@ def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.
             raster_url=f"{base}/raster/{scene_id}?v={scene['image_revision']}",
             footprint_url=f"{base}/footprint/{scene_id}?v={scene['image_revision']}",
             layers_url=f"{base}/layers/{scene_id}", raster_available=available,
+            object_layers_available=bool(scene.get("object_layers_available")),
             bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,
             target_class_id=scene.get("target_class_id"), class_schema=scene["class_schema"],
             pixel=_score(scene["report"]), objects=_score(scene["report"], "object_"),
@@ -168,7 +169,9 @@ def prepare_test_f1_view(session: Session, config: TrainingUIAPIConfig, result_i
     if result is None or result.status != "ok":
         raise TrainingUIAPIError("Успешная сеть для просмотра тестового F1 не найдена.")
     view = test_f1_view(session, config, result_id)
-    if view.status not in {"ready", "queued", "running"}:
+    if view.status not in {"queued", "running"} and (
+        view.status != "ready" or not all(scene.object_layers_available for scene in view.scenes)
+    ):
         queue_training_result_test_f1(
             session, result, config, source=JobSource.MANUAL, force=True, manual=True,
         )
@@ -192,6 +195,7 @@ def test_f1_raster(session: Session, config: TrainingUIAPIConfig, result_id: uui
 
 def test_f1_scene_layers(
     session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID, scene_id: str, class_id: int | None,
+    metric: str = "pixel",
 ) -> dict[str, Any]:
     root, scene = _scene(session, config, result_id, scene_id)
     target = scene.get("target_class_id")
@@ -204,4 +208,4 @@ def test_f1_scene_layers(
         raise TrainingUIAPIError("Класс отсутствует в сохранённом расчёте.")
     path = root / f"{scene['id']}.npz"
     stat = path.stat()
-    return test_f1_layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id)
+    return test_f1_layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id, metric)

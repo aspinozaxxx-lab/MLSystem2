@@ -8,6 +8,15 @@ export const TEST_F1_LAYERS = {
   predicted: { color: "#00d9ff", label: "Прогноз" },
 } as const;
 
+export function comparisonLayerLabel(layer: string, metric: "pixel" | "objects" = "pixel"): string {
+  if (metric === "objects") {
+    if (layer === "tp") return "TP · Найденные объекты";
+    if (layer === "fp") return "FP · Лишние объекты";
+    if (layer === "fn") return "FN · Пропущенные объекты";
+  }
+  return TEST_F1_LAYERS[layer as keyof typeof TEST_F1_LAYERS]?.label ?? layer;
+}
+
 export function comparisonLayerStyle(layer: string, reference: boolean, predicted: boolean) {
   if (!(layer in TEST_F1_LAYERS)) return null;
   const name = layer as keyof typeof TEST_F1_LAYERS;

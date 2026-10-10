@@ -54,6 +54,7 @@ class ObjectF1Result(BaseModel):
     true_positive: int = Field(ge=0)
     false_positive: int = Field(ge=0)
     false_negative: int = Field(ge=0)
+    matched_pairs: list[tuple[int, int]] = Field(default_factory=list)
 
 
 class EpochMetrics(BaseModel):

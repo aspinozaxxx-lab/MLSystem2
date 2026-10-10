@@ -48,7 +48,19 @@ def test_object_f1_preserves_explicit_adjacent_instances() -> None:
 
     assert explicit.true_positive == 2
     assert explicit.f1 == 1.0
+    assert explicit.matched_pairs == [(1, 10), (2, 20)]
     assert binary.true_positive == 1
+    assert len(binary.matched_pairs) == binary.true_positive
+
+
+def test_object_f1_pairs_use_original_sparse_ids_and_maximum_matching() -> None:
+    result = compute_object_f1(ObjectF1Request(
+        y_true_instances=[[4, 4, 0, 95, 95, 0]],
+        y_pred_instances=[[0, 80, 0, 777, 777, 1000]],
+    ))
+    assert result.matched_pairs == [(4, 80), (95, 777)]
+    assert result.true_positive == 2
+    assert result.false_positive == 1
 
 
 def test_object_f1_requires_exactly_one_prediction_representation() -> None:

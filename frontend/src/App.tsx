@@ -196,7 +196,7 @@ export function App() {
   }, [run]);
   const loadBootstrap = useCallback(async () => { await fetchBootstrap(); }, [fetchBootstrap]);
   const getBootstrap = useCallback(() => bootstrap ? Promise.resolve(bootstrap) : fetchBootstrap(), [bootstrap, fetchBootstrap]);
-  const independentCatalogPage = route[0] === "test-markups" || route[0] === "results";
+  const independentCatalogPage = route[0] === "test-markups" || route[0] === "results" || route[0] === "test-f1";
 
   useEffect(() => {
     const onHashChange = () => {
@@ -317,13 +317,13 @@ function RoutedPage(context: {
   if (head === "test-markups" && second) return <TestSampleEditorPage {...context} sampleId={second} />;
   if (head === "results" && second) return <DatasetResultsPage {...context} datasetKey={decodeURIComponent(second)} />;
   if (head === "results") return <ResultsPage {...context} />;
+  if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={context.username} /></Suspense>;
   if (!context.bootstrap) return <LoadingPage text="Загрузка справочников" />;
   const props = { ...context, bootstrap: context.bootstrap };
   if (head === "news") return <NewsPage slug={second} />;
   if (head === "feedback") return <FeedbackSection feedbackId={second} />;
   if (head === "pseudo-markup" && second === "compare") return <Suspense fallback={<LoadingPage text="Загрузка сравнения псевдоразметок" />}><PseudoComparisonPage ids={props.route[2] ?? ""} username={props.username} /></Suspense>;
   if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
-  if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
   if (head === "queue") return <QueuePage {...props} />;
   if (head === "templates") return <TemplatesPage {...props} />;
@@ -2170,7 +2170,7 @@ function qualityMetricLabel(metric: "pixel" | "objects" | null | undefined): str
 }
 
 function qualityMetricShort(metric: "pixel" | "objects" | null | undefined): string {
-  return metric === "objects" ? "F1 obj" : "F1 pix";
+  return metric === "objects" ? "F1 объект." : "F1 пикс.";
 }
 
 function parseExportSampleSize(value: string): number | null | undefined {
@@ -3135,19 +3135,19 @@ function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJob
   }, [run]);
 
   return (
-    <>
+    <div className="results-page results-classes-page">
       <PageHeader title="Результаты" subtitle="Классы, датасеты и последние изменения" />
-      <section className="content-grid">
+      <section className="content-grid results-class-grid">
         {(classes || []).map((item) => (
           <ResultClassCard item={item} key={item.key} />
         ))}
         {classes === null ? <div className="empty-state">Загрузка классов...</div> : null}
       </section>
-      <section className="panel">
+      <section className="panel results-changes">
         <PanelHeader title="Последние изменения" />
         <ResultChangesTable changes={changes} showJobLog={showJobLog} />
       </section>
-    </>
+    </div>
   );
 }
 
@@ -3280,7 +3280,7 @@ function DatasetResultsPage({
   const resultMetricLabel = managedTestEvaluation ? "F1 сред." : qualityMetricShort(payload.quality_metric);
 
   return (
-    <>
+    <div className="results-page results-dataset-page">
       <PageHeader
         title={payload.dataset_name}
         subtitle={`Обновление датасета: ${formatDate(payload.dataset_updated_at)}`}
@@ -3314,13 +3314,13 @@ function DatasetResultsPage({
           </div>
           <button className="primary" type="button" disabled={recalculatingTestF1} onClick={() => void recalculateTestF1()}>
             <RefreshCw size={16} />
-            {recalculatingTestF1 ? "Постановка в очередь..." : "Пересчитать по всем сетям датасета"}
+            {recalculatingTestF1 ? "Постановка в очередь…" : "Пересчитать все сети"}
           </button>
         </section>
       ) : (
         <section className="status-banner neutral"><strong>Основная тестовая разметка не назначена</strong></section>
       )}
-      <section className="panel">
+      <section className="panel results-networks">
         <ResultsTable
           payload={payload}
           datasets={bootstrap?.datasets || []}
@@ -3333,7 +3333,7 @@ function DatasetResultsPage({
           showJobLog={showJobLog}
         />
       </section>
-    </>
+    </div>
   );
 }
 
@@ -3674,6 +3674,7 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
                     <CompactPerClassF1
                       metrics={dataset.test_f1_metrics}
                       section={dataset.quality_metric === "objects" ? "objects" : "pixel"}
+                      collapsible
                     />
                   </span>
                 ) : null}
@@ -3735,6 +3736,14 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
       </table>
     </div>
   );
+}
+
+function TestF1CalculationState({ result }: { result: TrainingResultInfo }) {
+  const metric = result.test_f1;
+  if (!metric || metric.status === "current" || metric.status === "unavailable") return null;
+  const failed = metric.status === "error" || Boolean(metric.error) && metric.status === "stale";
+  const text = metric.status === "running" ? "F1 считается" : metric.status === "queued" ? "F1 в очереди" : failed ? "Ошибка F1" : "F1 устарел";
+  return <a className={`badge result-f1-state ${failed ? "error" : metric.status === "stale" ? "warning" : "neutral"}`} href={`#/test-f1/${result.id}`} title={metric.error || text}>{text}</a>;
 }
 
 function ResultsTable({
@@ -3826,6 +3835,7 @@ function ResultsTable({
                       <CompactPerClassF1
                         metrics={validationPerClassMetrics(result.training_metrics)}
                         section="pixel"
+                        collapsible
                       />
                     </span>
                   </td>
@@ -3842,36 +3852,34 @@ function ResultsTable({
                         <CompactPerClassF1
                           metrics={result.test_f1.metrics}
                           section={result.quality_metric === "objects" ? "objects" : "pixel"}
+                          collapsible
                         />
                       </span>
-                    ) : result.test_f1?.status === "queued" || result.test_f1?.status === "running" ? (
-                      <span className="badge neutral">расчёт</span>
-                    ) : "—"}
+                    ) : result.test_f1?.status !== "queued" && result.test_f1?.status !== "running" && result.test_f1?.status !== "error" ? "—" : null}
+                    <TestF1CalculationState result={result} />
                   </td>
                   <td className="technical-value" title="Эпоха лучших весов этого этапа" data-label="Эпоха этапа">{result.epoch ?? "—"}</td>
                   <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
                     {result.status === "ok" ? (
                       <>
-                        {result.can_continue_training ? <button className="secondary compact-action" type="button" title="Продолжить обучение от выбранного чекпойнта" onClick={() => onContinue(result)}><Play size={14} />Продолжить обучение</button> : null}
-                        <button className="secondary compact-action" type="button" title="Запустить псевдоразметку" onClick={() => onPseudo(result)}>
-                          <Play size={14} />
-                          Pseudo
+                        {result.can_continue_training ? <button className="secondary icon-button" type="button" title="Продолжить обучение от выбранного чекпойнта" aria-label={`Продолжить обучение сети ${result.model_name}`} onClick={() => onContinue(result)}><Play size={15} /></button> : null}
+                        <button className="secondary icon-button" type="button" title="Создать псевдоразметку" aria-label={`Создать псевдоразметку сетью ${result.model_name}`} onClick={() => onPseudo(result)}>
+                          <MapIcon size={15} />
                         </button>
-                        <button className="secondary compact-action" type="button" title="Скачать Triton zip" onClick={() => onZip(result)}>
-                          <Archive size={14} />
-                          Zip
+                        <button className="secondary icon-button" type="button" title="Скачать архив Triton" aria-label={`Скачать архив сети ${result.model_name}`} onClick={() => onZip(result)}>
+                          <Archive size={15} />
                         </button>
                       </>
                     ) : null}
                     {result.mlflow_run_url ? (
-                      <a className="secondary compact-action" href={result.mlflow_run_url} target="_blank" rel="noreferrer" title="Открыть MLflow run">
-                        MLflow
+                      <a className="secondary icon-button" href={result.mlflow_run_url} target="_blank" rel="noreferrer" title="Открыть запуск в MLflow" aria-label={`Открыть запуск сети ${result.model_name} в MLflow`}>
+                        <BarChart3 size={15} />
                       </a>
                     ) : null}
                     {result.job_id ? (
-                      <a className="secondary compact-action" href={`#/jobs/${result.job_id}`} title="Открыть job обучения">
-                        Job
+                      <a className="secondary icon-button" href={`#/jobs/${result.job_id}`} title="Открыть задание обучения" aria-label={`Открыть задание обучения сети ${result.model_name}`}>
+                        <FileText size={15} />
                       </a>
                     ) : null}
                   </td>
@@ -4531,11 +4539,14 @@ function PerClassF1Table({ metrics }: { metrics: unknown }) {
   );
 }
 
-function CompactPerClassF1({ metrics, section }: { metrics: unknown; section: "pixel" | "objects" }) {
+function CompactPerClassF1({ metrics, section, collapsible = false }: { metrics: unknown; section: "pixel" | "objects"; collapsible?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   const values = perClassF1Values(metrics, section);
   if (!values.length) return null;
+  if (collapsible && values.length > 1 && !expanded) return <button className="result-class-scores-toggle" type="button" aria-expanded={false} onClick={() => setExpanded(true)}>По классам · {values.length}<ChevronDown size={12} /></button>;
   return (
     <span className="compact-class-f1-list">
+      {collapsible && values.length > 1 ? <button className="result-class-scores-toggle" type="button" aria-expanded={true} onClick={() => setExpanded(false)}>Свернуть по классам<ChevronUp size={12} /></button> : null}
       {values.map((item) => (
         <small className="compact-class-f1-chip" key={item.slug} title={`${item.name} · ${item.slug}`}>
           <span className="class-color-dot" style={{ backgroundColor: item.color }} />

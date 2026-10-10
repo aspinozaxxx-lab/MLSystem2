@@ -7,6 +7,7 @@ import uuid
 from contextlib import suppress
 from functools import partial
 from threading import Event
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -113,8 +114,9 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}")
     def get_test_f1_layers(result_id: uuid.UUID, scene_id: str, class_id: int | None = None,
+                           metric: Literal["pixel", "objects"] = "pixel",
                            db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> JSONResponse:
-        return JSONResponse(test_f1_scene_layers(db, ctx.config, result_id, scene_id, class_id),
+        return JSONResponse(test_f1_scene_layers(db, ctx.config, result_id, scene_id, class_id, metric),
                             headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/raster/{scene_id}")

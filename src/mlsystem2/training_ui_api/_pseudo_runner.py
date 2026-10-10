@@ -47,6 +47,7 @@ from mlsystem2.mlflow_adapter.api import download_run_artifact
 from mlsystem2.models.api import load_checkpoint
 from mlsystem2.models.contracts import LoadCheckpointRequest
 
+from ._compact_geometry import is_compact_polygon
 from ._external_models import (
     ExternalModelManifest,
     external_model_manifest,
@@ -454,6 +455,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     f"Размер эталонной маски тайла {tile.get('index')} не совпадает с TIFF."
                 )
             tile_metrics: dict[str, Any] | None = None
+            object_snapshots = {}
             if task == "multiclass":
                 geojson_path = tile.get("geojson_path")
                 target_class_value = tile.get("target_class_id")
@@ -491,12 +493,15 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                             structure=np.ones((3, 3), dtype=np.uint8),
                         )[0]
                     )
+                    class_predicted_instances = label_components(predicted, structure=np.ones((3, 3), dtype=np.uint8))[0]
                     objects = compute_object_f1(
                         ObjectF1Request(
                             y_true_instances=ground_truth_instances,
-                            y_pred_mask=predicted,
+                            y_pred_instances=class_predicted_instances,
                         )
                     )
+                    if config.get("save_test_f1_view"):
+                        object_snapshots[target_class_id] = (ground_truth_instances, class_predicted_instances, objects.matched_pairs)
                     tile_objects = {
                         target_class_id: {
                             "true_positive": int(objects.true_positive),
@@ -543,12 +548,15 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     )
                     tile_objects = {}
                     for class_id in class_ids:
+                        class_predicted_instances = label_components(prediction == class_id, structure=np.ones((3, 3), dtype=np.uint8))[0]
                         class_objects = compute_object_f1(
                             ObjectF1Request(
                                 y_true_instances=ground_truth_by_class[class_id],
-                                y_pred_mask=prediction == class_id,
+                                y_pred_instances=class_predicted_instances,
                             )
                         )
+                        if config.get("save_test_f1_view"):
+                            object_snapshots[class_id] = (ground_truth_by_class[class_id], class_predicted_instances, class_objects.matched_pairs)
                         values = {
                             "true_positive": int(class_objects.true_positive),
                             "false_positive": int(class_objects.false_positive),
@@ -558,14 +566,16 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                         _add_metric_counts(class_object_counts[class_id], values)
                     ground_truth = ground_truth_labels > 0
                     predicted = prediction > 0
+                    ground_truth_instances = _combine_class_instance_masks(ground_truth_by_class)
+                    predicted_instances = label_components(predicted, structure=np.ones((3, 3), dtype=np.uint8))[0]
                     objects = compute_object_f1(
                         ObjectF1Request(
-                            y_true_instances=_combine_class_instance_masks(
-                                ground_truth_by_class
-                            ),
-                            y_pred_mask=predicted,
+                            y_true_instances=ground_truth_instances,
+                            y_pred_instances=predicted_instances,
                         )
                     )
+                    if config.get("save_test_f1_view"):
+                        object_snapshots[None] = (ground_truth_instances, predicted_instances, objects.matched_pairs)
                     true_positive = int(np.count_nonzero(ground_truth & predicted))
                     false_positive = int(np.count_nonzero(~ground_truth & predicted))
                     false_negative = int(np.count_nonzero(ground_truth & ~predicted))
@@ -601,16 +611,16 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                         structure=np.ones((3, 3), dtype=np.uint8),
                     )[0]
                 )
+                if predicted_instances is None:
+                    predicted_instances = label_components(predicted, structure=np.ones((3, 3), dtype=np.uint8))[0]
                 objects = compute_object_f1(
                     ObjectF1Request(
                         y_true_instances=ground_truth_instances,
-                        **(
-                            {"y_pred_instances": predicted_instances}
-                            if predicted_instances is not None
-                            else {"y_pred_mask": predicted}
-                        ),
+                        y_pred_instances=predicted_instances,
                     )
                 )
+                if config.get("save_test_f1_view"):
+                    object_snapshots[None] = (ground_truth_instances, predicted_instances, objects.matched_pairs)
                 true_positive = int(np.count_nonzero(ground_truth & predicted))
                 false_positive = int(np.count_nonzero(~ground_truth & predicted))
                 false_negative = int(np.count_nonzero(ground_truth & ~predicted))
@@ -661,6 +671,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 view_scenes.append(save_test_f1_scene(
                     Path(config["test_f1_view_root"]), config, tile,
                     ground_truth_labels, prediction, reports[-1],
+                    object_snapshots=object_snapshots,
                 ))
             _write_test_f1_progress(
                 progress_path,
@@ -3647,7 +3658,7 @@ def _filter_compact_geometry(
             polygon
             for polygon in _iter_polygons(geometry)
             if (
-                _is_compact_polygon(
+                is_compact_polygon(
                     polygon,
                     min_isoperimetric_quotient=profile.filter_compact_min_isoperimetric_quotient,
                     max_bbox_ratio=profile.filter_compact_max_bbox_ratio,
@@ -3656,55 +3667,6 @@ def _filter_compact_geometry(
             )
         ]
     )
-
-
-def _is_compact_polygon(
-    polygon: Polygon,
-    *,
-    min_isoperimetric_quotient: float,
-    max_bbox_ratio: float,
-) -> bool:
-    return (
-        _isoperimetric_quotient(polygon) >= min_isoperimetric_quotient
-        and _minimum_rectangle_ratio(polygon) < max_bbox_ratio
-    )
-
-
-def _isoperimetric_quotient(geometry: BaseGeometry) -> float:
-    if geometry.length <= 0:
-        return 0.0
-    return float(4.0 * math.pi * geometry.area / (geometry.length * geometry.length))
-
-
-def _minimum_rectangle_ratio(geometry: BaseGeometry) -> float:
-    rectangle = geometry.minimum_rotated_rectangle
-    exterior = getattr(rectangle, "exterior", None)
-    if exterior is None:
-        return _bounds_ratio(geometry)
-    coords = list(exterior.coords)
-    if len(coords) < 4:
-        return _bounds_ratio(geometry)
-    lengths = [
-        math.hypot(coords[index + 1][0] - coords[index][0], coords[index + 1][1] - coords[index][1])
-        for index in range(min(4, len(coords) - 1))
-    ]
-    positive = [value for value in lengths if value > 0]
-    if not positive:
-        return 0.0
-    shortest = min(positive)
-    if shortest <= 0:
-        return math.inf
-    return max(positive) / shortest
-
-
-def _bounds_ratio(geometry: BaseGeometry) -> float:
-    min_x, min_y, max_x, max_y = geometry.bounds
-    width = abs(max_x - min_x)
-    height = abs(max_y - min_y)
-    shortest = min(width, height)
-    if shortest <= 0:
-        return math.inf if max(width, height) > 0 else 0.0
-    return max(width, height) / shortest
 
 
 def _smooth_geometry(

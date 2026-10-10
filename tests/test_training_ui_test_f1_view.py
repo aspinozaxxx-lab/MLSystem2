@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
@@ -14,6 +15,9 @@ from mlsystem2.training_ui_api._test_f1_artifacts import (
     save_test_f1_manifest, save_test_f1_scene, test_f1_layers as _layers,
 )
 from mlsystem2.training_ui_api._test_f1_viewer import _saved_scenes, store_test_f1_view
+from mlsystem2.metrics.api import compute_object_f1
+from mlsystem2.metrics.contracts import ObjectF1Request
+from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 
 
 def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
@@ -44,6 +48,44 @@ def test_partial_view_publication_preserves_other_class_job(tmp_path: Path):
     assert refs == {"first": str(old_id), "second": str(job_id)}
     assert json.loads((config.stored_files_root / "test-f1" / str(job_id) / "manifest.json").read_text())["version"] == 1
     assert (config.stored_files_root / "test-f1" / str(job_id) / "tile-1.npz").is_file()
+
+
+@pytest.mark.parametrize("target", [None, 7])
+def test_object_layers_use_saved_matches_instead_of_pixel_intersection(tmp_path: Path, target):
+    image_path = tmp_path / "image.tif"
+    transform = from_origin(100, 200, 1, 1)
+    with rasterio.open(image_path, "w", driver="GTiff", width=12, height=8, count=3,
+                       dtype="uint8", crs="EPSG:3857", transform=transform) as image:
+        image.write(np.ones((3, 8, 12), np.uint8))
+    truth = np.zeros((8, 12), np.int32)
+    truth[1:4, 1:4] = 4
+    truth[1:4, 7:10] = 95
+    prediction = np.zeros_like(truth)
+    prediction[1:4, 2:5] = 80
+    prediction[1:4, 10:12] = 1000
+    score = compute_object_f1(ObjectF1Request(y_true_instances=truth, y_pred_instances=prediction))
+    assert score.matched_pairs == [(4, 80)]
+    scene = save_test_f1_scene(tmp_path / "view", {},
+        {"index": 1, "image_path": str(image_path), "target_class_id": target},
+        (truth > 0).astype(np.uint8), (prediction > 0).astype(np.uint8) * (target or 1), {},
+        object_snapshots={target: (truth, prediction, score.matched_pairs)})
+    assert scene["object_layers_available"]
+    path = tmp_path / "view" / "tile-1.npz"
+    stat = path.stat()
+    for metric, expected in [("pixel", {"tp": 6, "fp": 9, "fn": 12}),
+                              ("objects", {"tp": 12, "fp": 6, "fn": 9})]:
+        layers = _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], target, metric)
+        for layer, count in expected.items():
+            geometry = [(feature["geometry"], 1) for feature in layers["features"] if feature["properties"]["test_f1_layer"] == layer]
+            assert int(rasterize(geometry, out_shape=truth.shape, transform=transform).sum()) == count
+
+
+def test_legacy_object_layers_require_explicit_preparation(tmp_path: Path):
+    path = tmp_path / "legacy.npz"
+    np.savez_compressed(path, reference=np.ones((2, 2), np.uint8), predicted=np.ones((2, 2), np.uint8))
+    stat = path.stat()
+    with pytest.raises(TrainingUIAPIError, match="не сохранены экземпляры"):
+        _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(from_origin(0, 2, 1, 1))[:6], "EPSG:3857", None, "objects")
 
 
 def test_view_requires_snapshots_for_every_class_after_legacy_partial_update(tmp_path: Path):

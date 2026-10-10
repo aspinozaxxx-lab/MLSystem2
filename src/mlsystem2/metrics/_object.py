@@ -62,6 +62,7 @@ def compute_object_f1(request: ObjectF1Request) -> ObjectF1Result:
         true_positive=true_positive,
         false_positive=int(predicted_count) - true_positive,
         false_negative=len(true_ids) - true_positive,
+        matched_pairs=[(true_ids[i], predicted_ids[j]) for i, j in enumerate(matching) if j >= 0],
     )
 
 
@@ -70,6 +71,7 @@ def _result(
     true_positive: int,
     false_positive: int,
     false_negative: int,
+    matched_pairs: list[tuple[int, int]] | None = None,
 ) -> ObjectF1Result:
     precision_denominator = true_positive + false_positive
     recall_denominator = true_positive + false_negative
@@ -83,4 +85,5 @@ def _result(
         true_positive=true_positive,
         false_positive=false_positive,
         false_negative=false_negative,
+        matched_pairs=matched_pairs or [],
     )

@@ -201,6 +201,7 @@ class TestF1SceneInfo(PseudoMarkupSceneInfo):
 
     layers_url: str
     raster_available: bool = True
+    object_layers_available: bool = False
     sample_name: str
     sample_revision: int = Field(ge=1)
     target_class_id: int | None = None

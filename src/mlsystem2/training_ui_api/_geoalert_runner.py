@@ -323,7 +323,7 @@ def _run_test_sample_f1(config: dict[str, Any], run_root: Path) -> dict[str, Any
             "geoalert_bricks": runtime_export.bricks,
             "processed": sum(item.get("status") == "ok" for item in reports),
             "total": len(tiles),
-            "error": "Geoalert не обработал все тестовые тайлы.",
+            "error": child_result.get("error") or "Geoalert не обработал все тестовые тайлы.",
             "failures": list(child_result.get("failures") or []),
         }
 

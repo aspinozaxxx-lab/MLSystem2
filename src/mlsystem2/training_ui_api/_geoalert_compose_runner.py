@@ -26,15 +26,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
 
-    from urban import Compose
-    if __package__:
-        from ._geoalert_notebook import register_notebook_bricks
-    else:
-        from _geoalert_notebook import register_notebook_bricks
+    try:
+        from urban import Compose
+        if __package__:
+            from ._geoalert_notebook import register_notebook_bricks
+        else:
+            from _geoalert_notebook import register_notebook_bricks
 
-    register_notebook_bricks()
-    # Geoalert требует словарь даже для конвейера только с обязательными блоками.
-    pipeline = Compose.load(str(spec["pipeline_path"]), enable_blocks={})
+        register_notebook_bricks()
+        # Geoalert требует словарь даже для конвейера только с обязательными блоками.
+        pipeline = Compose.load(str(spec["pipeline_path"]), enable_blocks={})
+    except Exception as exc:
+        _write_json_atomic(Path(spec["result_path"]), {
+            "status": "error", "reports": [], "failures": [],
+            "error": f"Не удалось загрузить конвейер Geoalert: {exc}",
+        })
+        return 1
     compose_root = Path(spec["compose_root"]).resolve()
     compose_root.mkdir(parents=True, exist_ok=True)
     progress_path = Path(spec["progress_path"])

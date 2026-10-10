@@ -14,7 +14,7 @@
 
 - `MetricsError` - ошибка входных масок.
 - `PixelF1Request`, `PixelF1Result` - порог, precision, recall, F1 и pixel TP/FP/FN.
-- `ObjectF1Request`, `ObjectF1Result` - instance mask эталона, ровно одно из бинарной маски или instance mask прогноза, IoU threshold, precision, recall, F1 и object TP/FP/FN.
+- `ObjectF1Request` — instance mask эталона, ровно одно из бинарной маски или instance mask прогноза, IoU threshold. `ObjectF1Result` — precision, recall, F1, object TP/FP/FN и `matched_pairs`: пары исходных ID эталона и прогноза, выбранные тем же сопоставлением.
 - `EpochMetrics`, `MetricsSummary` - совместимые DTO сводки pixel-истории.
 
 ## Список используемых данным модулем модулей и с какой целью

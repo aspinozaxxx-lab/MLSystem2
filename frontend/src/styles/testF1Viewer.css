@@ -1,9 +1,14 @@
 .test-f1-summary { display: grid; flex: 0 0 auto; gap: 2px; padding: 4px 8px; border: 1px solid var(--border); background: var(--surface-soft); border-radius: 8px; }
-.test-f1-summary > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
+.test-f1-summary > div { display: grid; grid-template-columns: minmax(74px, 1fr) repeat(2, minmax(55px, auto)); gap: 2px 10px; align-items: baseline; }
 .test-f1-summary span { font-size: 11px; line-height: 14px; color: var(--muted); }
 .test-f1-summary strong { font-size: 16px; line-height: 19px; font-variant-numeric: tabular-nums; }
-.test-f1-image-score strong { color: var(--accent-strong); }
-.test-f1-image-score small { grid-column: 1 / -1; font-size: 10px; line-height: 12px; color: var(--muted); }
+.test-f1-summary strong, .test-f1-summary-labels span:not(:first-child) { text-align: right; }
+.test-f1-summary .selected strong { color: var(--accent-strong); }
+.test-f1-counts { font-size: 10px; line-height: 12px; color: var(--muted); text-align: right; }
+.test-f1-metric-switch { position: absolute; top: 10px; left: 10px; display: flex; gap: 2px; padding: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.test-f1-metric-switch button { min-height: 31px; padding: 4px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+.test-f1-metric-switch button[aria-pressed="true"] { color: var(--accent-strong); background: var(--accent-soft); font-weight: 600; }
+.test-f1-map-notice { position: absolute; top: 57px; left: 10px; max-width: calc(100% - 20px); background: var(--surface); padding: 8px; border-radius: 7px; font-size: 12px; display: grid; gap: 6px; }
 .test-f1-class { display: grid; gap: 4px; font-size: 12px; color: var(--muted); margin-top: 10px; }
 .test-f1-class select { width: 100%; min-width: 0; padding: 6px 10px; min-height: 36px; }
 .test-f1-metric-note { margin: 8px 0 0; font-size: 11px; line-height: 16px; color: var(--muted); }
@@ -11,11 +16,15 @@
 .test-f1-sidebar h2 { font-size: 14px; margin: 0 0 8px; }
 .test-f1-sidebar h2 span { font-weight: 400; color: var(--muted); }
 .test-f1-scene-list { min-height: 0; overflow-y: auto; }
-.test-f1-scene-list button { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 10px; text-align: left; padding: 10px; margin-bottom: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.test-f1-scene-list button { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 7px; text-align: left; padding: 7px; margin-bottom: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
 .test-f1-scene-list button[aria-pressed="true"] { border-color: var(--accent-strong); background: var(--accent-soft); }
 .test-f1-scene-list button > span { display: grid; gap: 4px; min-width: 0; }
 .test-f1-scene-list small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .test-f1-scene-list strong, .test-f1-scene-list b { font-size: 13px; }
+.test-f1-scene-scores { flex-shrink: 0; }
+.test-f1-scene-scores small { display: flex; justify-content: space-between; gap: 5px; font-size: 9px; }
+.test-f1-scene-scores b { font-size: 11px; }
+.test-f1-scene-scores .selected { color: var(--accent-strong); }
 .test-f1-mobile-scenes { display: none; }
 .test-f1-legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 11px; }
 .test-f1-legend-item i { width: 9px; height: 9px; border-radius: 50%; }
@@ -26,6 +35,9 @@
   .test-f1-sidebar h2 { display: none; }
   .test-f1-class { margin-top: 6px; }
   .test-f1-class select { min-height: 44px; font-size: 16px; }
+  .test-f1-metric-switch { top: 51px; left: 7px; }
+  .test-f1-metric-switch button { min-height: 35px; }
+  .test-f1-map-notice { top: 96px; }
 }
 @media (max-width: 700px) {
   .test-f1-summary { padding: 5px 7px; }

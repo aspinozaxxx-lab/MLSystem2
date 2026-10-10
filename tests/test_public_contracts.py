@@ -246,7 +246,7 @@ def test_training_test_f1_view_contract(monkeypatch) -> None:
         "precision", "recall", "f1", "true_positive", "false_positive", "false_negative",
     }
     assert set(TestF1SceneInfo.model_fields) == set(PseudoMarkupSceneInfo.model_fields) | {
-        "layers_url", "raster_available", "sample_name", "sample_revision", "target_class_id",
+        "layers_url", "raster_available", "object_layers_available", "sample_name", "sample_revision", "target_class_id",
         "class_schema", "pixel", "objects", "metrics",
     }
     assert set(TestF1ViewInfo.model_fields) == {
@@ -261,3 +261,12 @@ def test_training_test_f1_view_contract(monkeypatch) -> None:
         assert set(paths[f"{prefix}/{suffix}/{{scene_id}}"] ) == {"get"}
     parameters = paths[f"{prefix}/layers/{{scene_id}}"]["get"]["parameters"]
     assert any(item["name"] == "class_id" and not item["required"] for item in parameters)
+    assert any(item["name"] == "metric" and item["schema"]["enum"] == ["pixel", "objects"] for item in parameters)
+
+
+def test_object_f1_matching_contract() -> None:
+    from mlsystem2.metrics.contracts import ObjectF1Result
+
+    assert set(ObjectF1Result.model_fields) == {
+        "precision", "recall", "f1", "true_positive", "false_positive", "false_negative", "matched_pairs",
+    }

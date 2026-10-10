@@ -58,6 +58,10 @@ def register_notebook_bricks() -> None:
                 finally:
                     accumulator.close()
 
+    from mlsystem2.training_ui_api._geoalert_vector import register_vector_bricks
+
+    register_vector_bricks()
+
 
 def _raster_profile(source, dtype):
     return {

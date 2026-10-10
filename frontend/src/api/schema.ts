@@ -4215,6 +4215,11 @@ export interface components {
              * @default true
              */
             raster_available: boolean;
+            /**
+             * Object Layers Available
+             * @default false
+             */
+            object_layers_available: boolean;
             /** Sample Name */
             sample_name: string;
             /** Sample Revision */
@@ -9333,6 +9338,7 @@ export interface operations {
         parameters: {
             query?: {
                 class_id?: number | null;
+                metric?: "pixel" | "objects";
             };
             header?: never;
             path: {
