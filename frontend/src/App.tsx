@@ -74,6 +74,7 @@ import type {
   TrainingContinuationOptions,
   TrainingTemplate,
   TestSampleCatalogResponse,
+  TestSampleCard,
   TestSampleBulkDownloadRequest,
   TestSampleDetail,
   TestSampleDownloadRequest,
@@ -81,7 +82,6 @@ import type {
   TestSampleEvaluationInfo,
   TestSampleMetric,
   TestSampleOptimizeRequest,
-  TestSampleSummary,
 } from "./api/types";
 import { TrainingContinuationForm } from "./TrainingContinuationForm";
 import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
@@ -108,7 +108,6 @@ import {
   applyTestMarkupPreview,
   changeTestMarkupDownloadSelection,
   containedImageOneToOneScale,
-  flattenTestMarkups,
   initialTestMarkupDownloadSelection,
   testMarkupDownloadOptions,
   testMarkupDraft,
@@ -122,6 +121,7 @@ import { TrainingLaunchForm } from "./TrainingLaunchForm";
 import { InferenceTemplates } from "./InferenceTemplates";
 import { inferenceTemplateForDataset } from "./utils/inferenceTemplates";
 import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
+import { useTestMarkupClasses } from "./useTestMarkupClasses";
 import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { useUsage } from "./useUsage";
@@ -190,6 +190,7 @@ export function App() {
       setBootstrap(payload);
     }
   }, [run]);
+  const independentTestMarkupPage = route[0] === "test-markups" && (!route[1] || route[1] === "create");
 
   useEffect(() => {
     const onHashChange = () => {
@@ -224,10 +225,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (user && !bootstrap) {
+    if (user && !bootstrap && !independentTestMarkupPage) {
       void loadBootstrap();
     }
-  }, [bootstrap, loadBootstrap, user]);
+  }, [bootstrap, loadBootstrap, user, independentTestMarkupPage]);
 
   const logout = async () => {
     if (routeGuardRef.current && !routeGuardRef.current()) return;
@@ -267,7 +268,7 @@ export function App() {
     return <LoginPage onLogin={setUser} run={run} />;
   }
 
-  const page = bootstrap ? (
+  const page = (
     <RoutedPage
       route={route}
       username={user}
@@ -279,8 +280,6 @@ export function App() {
       showJobLog={showJobLog}
       registerRouteGuard={registerRouteGuard}
     />
-  ) : (
-    <LoadingPage text="Загрузка справочников" />
   );
 
   return (
@@ -291,10 +290,10 @@ export function App() {
   );
 }
 
-function RoutedPage(props: {
+function RoutedPage(context: {
   route: string[];
   username: string;
-  bootstrap: BootstrapInfo;
+  bootstrap: BootstrapInfo | null;
   run: Runner;
   reloadBootstrap: () => Promise<void>;
   showModal: (modal: ModalState) => void;
@@ -302,7 +301,11 @@ function RoutedPage(props: {
   showJobLog: (jobId: string) => Promise<void>;
   registerRouteGuard: (guard: (() => boolean) | null) => void;
 }) {
-  const [head, second] = props.route;
+  const [head, second] = context.route;
+  if (head === "test-markups" && second === "create") return <TestMarkupCreatePage run={context.run} />;
+  if (head === "test-markups" && !second) return <TestMarkupCatalogPage {...context} />;
+  if (!context.bootstrap) return <LoadingPage text="Загрузка справочников" />;
+  const props = { ...context, bootstrap: context.bootstrap };
   if (head === "news") return <NewsPage slug={second} />;
   if (head === "feedback") return <FeedbackSection feedbackId={second} />;
   if (head === "pseudo-markup" && second === "compare") return <Suspense fallback={<LoadingPage text="Загрузка сравнения псевдоразметок" />}><PseudoComparisonPage ids={props.route[2] ?? ""} username={props.username} /></Suspense>;
@@ -326,13 +329,9 @@ function RoutedPage(props: {
   }
   if (head === "model-export") return <ModelExportPage {...props} />;
   if (head === "scene-list-export") return <SceneListExportPage {...props} />;
-  if (head === "test-markups" && second === "create") {
-    return <TestMarkupCreatePage {...props} />;
-  }
   if (head === "test-markups" && second) {
     return <TestSampleEditorPage {...props} sampleId={second} />;
   }
-  if (head === "test-markups") return <TestMarkupCatalogPage {...props} />;
   if (head === "results" && second) return <DatasetResultsPage {...props} datasetKey={decodeURIComponent(second)} />;
   if (head === "results") return <ResultsPage {...props} />;
   if (head === "jobs" && second) return <JobPage {...props} jobId={second} />;
@@ -467,7 +466,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) || (route[0] === "test-markups" && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
     </div>
   );
 }
@@ -1000,32 +999,51 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
   );
 }
 
-function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) {
-  const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
+function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPageProps, "run" | "showModal" | "closeModal">) {
+  const { index, classKey, setClassKey, loadClasses } = useTestMarkupClasses(run);
+  const [cards, setCards] = useState<Record<string, TestSampleCard[]>>({});
   const [downloadingAll, setDownloadingAll] = useState(false);
+  const [loadingDownload, setLoadingDownload] = useState(false);
+  const requests = useRef(new Map<string, number>());
 
-  const loadCatalog = useCallback(async (reconcile = false) => {
-    const payload = await run(() => apiJson<TestSampleCatalogResponse>(
-      reconcile ? "/test-samples/reconcile" : "/test-samples",
-      reconcile ? { method: "POST" } : undefined,
-    ));
-    if (payload) setCatalog(payload);
+  const loadCatalog = useCallback(async (key: string, signal?: AbortSignal) => {
+    if (!key) return;
+    const revision = (requests.current.get(key) || 0) + 1;
+    requests.current.set(key, revision);
+    const payload = await run(async () => {
+      try {
+        return await apiJson<TestSampleCard[]>(`/test-samples/cards?class_key=${encodeURIComponent(key)}`, { signal });
+      } catch (error) { if (!signal?.aborted) throw error; }
+    });
+    if (payload && !signal?.aborted && requests.current.get(key) === revision) setCards((current) => ({ ...current, [key]: payload }));
+    return Boolean(payload);
   }, [run]);
 
   useEffect(() => {
-    void loadCatalog(true);
-  }, [loadCatalog]);
+    if (!classKey || !index) return;
+    const controller = new AbortController();
+    void loadCatalog(classKey, controller.signal).then(async (loaded) => {
+      if (!loaded || controller.signal.aborted) return;
+      await run(async () => {
+        try {
+          await apiJson(`/test-samples/classes/${encodeURIComponent(classKey)}/reconcile`, { method: "POST", signal: controller.signal });
+        } catch (error) { if (!controller.signal.aborted) throw error; }
+      });
+      if (!controller.signal.aborted) void loadCatalog(classKey, controller.signal);
+    });
+    return () => controller.abort();
+  }, [classKey, Boolean(index), loadCatalog, run]);
 
-  const samples = flattenTestMarkups(catalog);
-  const evaluationActive = samples.some(
+  const samples = cards[classKey];
+  const evaluationActive = samples?.some(
     (sample) => sample.evaluation.status === "queued" || sample.evaluation.status === "running",
   );
 
   useEffect(() => {
     if (!evaluationActive) return undefined;
-    const timer = window.setTimeout(() => void loadCatalog(), PROGRESS_REFRESH_MS);
+    const timer = window.setTimeout(() => void loadCatalog(classKey), PROGRESS_REFRESH_MS);
     return () => window.clearTimeout(timer);
-  }, [evaluationActive, loadCatalog, catalog]);
+  }, [evaluationActive, loadCatalog, samples, classKey]);
 
   const downloadSelected = async (sampleIds: string[], includePreviews: boolean): Promise<boolean> => {
     const request: TestSampleBulkDownloadRequest = {
@@ -1043,7 +1061,11 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
     }
   };
 
-  const openBulkDownload = () => {
+  const openBulkDownload = async () => {
+    setLoadingDownload(true);
+    const catalog = await run(() => apiJson<TestSampleCard[]>("/test-samples/cards"));
+    setLoadingDownload(false);
+    if (!catalog) return;
     showModal({
       title: "Скачать тестовые разметки",
       wide: true,
@@ -1058,7 +1080,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
     });
   };
 
-  const removeSample = (sample: TestSampleSummary) => {
+  const removeSample = (sample: TestSampleCard) => {
     showModal({
       title: "Удалить тестовую разметку",
       body: (
@@ -1077,7 +1099,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
               const deleted = await run(() => apiJson<null>(`/test-samples/${sample.id}`, { method: "DELETE" }));
               if (deleted !== undefined) {
                 closeModal();
-                await loadCatalog();
+                await Promise.all([loadCatalog(classKey), loadClasses()]);
               }
             }}
           >
@@ -1090,28 +1112,41 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: RoutedPageProps) 
   };
 
   return (
-    <>
-      <PageHeader title="Тестовые разметки" subtitle="Каталог постоянных разметок для независимой оценки сетей" />
-      <section className="panel test-sample-catalog">
-        <PanelHeader
-          title="Каталог тестовых разметок"
-          subtitle="Одна карточка соответствует одной сохранённой разметке"
-          aside={
+    <div className="test-markup-browser">
+      <header className="test-markup-browser-header">
+        <div><h1>Тестовые разметки</h1><p>Каталог тестовых разметок по классам</p></div>
+        <div className="button-row">
+          <a className="primary compact-action" href="#/test-markups/create"><Plus size={15} />Создать</a>
             <button
               className="secondary compact-action"
               type="button"
-              disabled={downloadingAll || samples.length === 0}
-              title={samples.length ? "Выбрать тестовые разметки для скачивания" : "Тестовые разметки ещё не созданы"}
-              onClick={openBulkDownload}
+              disabled={downloadingAll || loadingDownload || !index?.classes?.length}
+              title="Выбрать разметки всех классов для скачивания"
+              onClick={() => void openBulkDownload()}
             >
               <Download size={15} />
-              {downloadingAll ? "Скачивание..." : "Скачать разметки"}
+              {downloadingAll ? "Скачивание…" : loadingDownload ? "Подготовка…" : "Скачать"}
             </button>
-          }
-        />
-        {catalog ? <TestSampleCatalog catalog={catalog} onDelete={removeSample} /> : <div className="empty-state">Загрузка каталога...</div>}
-      </section>
-    </>
+        </div>
+      </header>
+      <div className="test-markup-browser-layout">
+        <nav className="test-markup-class-nav" aria-label="Классы тестовых разметок">
+          <span className="field-label">Классы</span>
+          {index?.classes?.map((item) => <button key={item.key} type="button" className={classKey === item.key ? "selected" : ""} aria-current={classKey === item.key ? "true" : undefined} onClick={() => setClassKey(item.key)} title={item.name}>
+            <span>{item.name}</span><small>{item.sample_count}</small>
+          </button>)}
+          {!index ? <span className="muted" role="status">Загрузка классов…</span> : null}
+        </nav>
+        <section className="test-markup-class-content">
+          <label className="field test-markup-mobile-class"><span>Класс</span><select aria-label="Класс тестовых разметок" value={classKey} onChange={(event) => setClassKey(event.target.value)} disabled={!index?.classes?.length}>
+            {!index?.classes?.length ? <option>{index ? "Нет разметок" : "Загрузка…"}</option> : null}
+            {index?.classes?.map((item) => <option key={item.key} value={item.key}>{item.name} · {item.sample_count}</option>)}
+          </select></label>
+          {classKey && index ? <div className="test-markup-class-header"><h2>{(index.classes || []).find((item) => item.key === classKey)?.name}</h2><span className="muted">Разметок: {samples?.length ?? "…"}</span></div> : null}
+          {samples ? <TestSampleCatalog samples={samples} onDelete={removeSample} /> : <div className="empty-state" role="status">{index && !(index.classes || []).length ? "Тестовые разметки ещё не созданы." : "Загрузка разметок выбранного класса…"}</div>}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -1157,7 +1192,7 @@ function BulkTestSampleDownloadForm({
   onCancel,
   onSubmit,
 }: {
-  catalog: TestSampleCatalogResponse | null;
+  catalog: TestSampleCatalogResponse | TestSampleCard[] | null;
   onCancel: () => void;
   onSubmit: (sampleIds: string[], includePreviews: boolean) => Promise<boolean>;
 }) {
@@ -1284,30 +1319,16 @@ function DownloadModeFields({
 }
 
 function TestSampleCatalog({
-  catalog,
+  samples,
   onDelete,
 }: {
-  catalog: TestSampleCatalogResponse;
-  onDelete: (sample: TestSampleSummary) => void;
+  samples: TestSampleCard[];
+  onDelete: (sample: TestSampleCard) => void;
 }) {
-  const classes = (catalog.classes || [])
-    .map((item) => ({
-      ...item,
-      samples: [...(item.samples || [])].sort((left, right) => right.created_at.localeCompare(left.created_at)),
-    }))
-    .filter((item) => item.samples.length)
-    .sort((left, right) => left.name.localeCompare(right.name, "ru"));
-  if (!classes.length) return <div className="empty-state">Тестовые разметки ещё не созданы.</div>;
+  if (!samples.length) return <div className="empty-state">В этом классе пока нет тестовых разметок.</div>;
   return (
-    <div className="test-markup-class-list">
-      {classes.map((classGroup) => (
-        <section className="test-markup-class-group" key={classGroup.key}>
-          <div className="test-markup-class-header">
-            <h3>{classGroup.name}</h3>
-            <span className="muted">Разметок: {classGroup.samples.length}</span>
-          </div>
-          <div className="test-markup-card-grid">
-            {classGroup.samples.map((sample) => (
+    <div className="test-markup-card-grid">
+            {samples.map((sample) => (
               <article className="test-markup-card" key={sample.id}>
                 <div className="test-markup-card-header">
                   <a href={`#/test-markups/${sample.id}`}>
@@ -1332,8 +1353,8 @@ function TestSampleCatalog({
                   </div>
                 </div>
                 <a className="test-markup-card-body" href={`#/test-markups/${sample.id}`}>
-                  <span><small>F1 pix</small><strong>{formatF1Score(sample.evaluation.pixel?.f1)}</strong></span>
-                  <span><small>F1 obj</small><strong>{formatF1Score(sample.evaluation.objects?.f1)}</strong></span>
+                  <span><small>F1 пиксельная</small><strong>{formatF1Score(sample.evaluation.pixel?.f1)}</strong></span>
+                  <span><small>F1 объектовая</small><strong>{formatF1Score(sample.evaluation.objects?.f1)}</strong></span>
                   <span><small>Тайлы</small><strong>{sample.enabled_image_count}/{sample.image_count}</strong></span>
                 </a>
                 <CompactPerClassF1
@@ -1348,9 +1369,6 @@ function TestSampleCatalog({
                 </div>
               </article>
             ))}
-          </div>
-        </section>
-      ))}
     </div>
   );
 }

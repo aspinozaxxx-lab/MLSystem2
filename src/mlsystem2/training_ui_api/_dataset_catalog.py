@@ -347,16 +347,20 @@ def list_managed_datasets(
     *,
     include_custom: bool = True,
     materialize_managed: bool = True,
+    class_key: str | None = None,
 ) -> list[DatasetInfo]:
     _synchronize_dataset_catalog_if_stale(session, config)
-    rows = session.execute(
+    statement = (
         select(DatasetRow, DatasetClassRow)
         .join(
             DatasetClassRow,
             DatasetClassRow.id == DatasetRow.class_id,
         )
         .where(DatasetRow.deleted_at.is_(None))
-    ).all()
+    )
+    if class_key is not None:
+        statement = statement.where(DatasetClassRow.key == class_key)
+    rows = session.execute(statement).all()
     image_indexes: dict[Path, dict[str, list[Path]]] = {}
     per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
     datasets = [

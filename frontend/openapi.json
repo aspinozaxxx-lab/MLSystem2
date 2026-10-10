@@ -2490,6 +2490,24 @@
       "get": {
         "summary": "Get Test Sample Batch Options",
         "operationId": "get_test_sample_batch_options_api_v1_test_sample_batches_options_get",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Class Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2497,6 +2515,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestSampleBatchOptionsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2601,6 +2629,128 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/classes": {
+      "get": {
+        "summary": "Get Test Sample Classes",
+        "operationId": "get_test_sample_classes_api_v1_test_samples_classes_get",
+        "parameters": [
+          {
+            "name": "include_empty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Empty"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSampleClassIndexResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/cards": {
+      "get": {
+        "summary": "Get Test Sample Cards",
+        "operationId": "get_test_sample_cards_api_v1_test_samples_cards_get",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Class Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TestSampleCard"
+                  },
+                  "title": "Response Get Test Sample Cards Api V1 Test Samples Cards Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/classes/{class_key}/reconcile": {
+      "post": {
+        "summary": "Post Test Sample Class Reconcile",
+        "operationId": "post_test_sample_class_reconcile_api_v1_test_samples_classes__class_key__reconcile_post",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Class Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -12484,6 +12634,215 @@
         ],
         "title": "TestSampleBulkDownloadRequest"
       },
+      "TestSampleCard": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "content_revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Content Revision",
+            "default": 1
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "source_dataset_key": {
+            "type": "string",
+            "title": "Source Dataset Key"
+          },
+          "source_dataset_name": {
+            "type": "string",
+            "title": "Source Dataset Name"
+          },
+          "source_dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Dataset Version"
+          },
+          "source_training_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Training Result Id"
+          },
+          "source_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Model Name"
+          },
+          "source_trained_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Trained At"
+          },
+          "source_pseudo_markup_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Pseudo Markup Result Id"
+          },
+          "class_key": {
+            "type": "string",
+            "title": "Class Key"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "multiclass"
+            ],
+            "title": "Task",
+            "default": "binary"
+          },
+          "class_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Class Schema"
+          },
+          "class_object_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Class Object Counts"
+          },
+          "quality_metric": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "objects"
+            ],
+            "title": "Quality Metric",
+            "default": "pixel"
+          },
+          "image_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Count"
+          },
+          "enabled_image_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Image Count"
+          },
+          "actual_object_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Actual Object Count"
+          },
+          "enabled_object_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enabled Object Count"
+          },
+          "exclude_boundary_objects": {
+            "type": "boolean",
+            "title": "Exclude Boundary Objects",
+            "default": false
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "default": false
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/TestSampleEvaluationInfo"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "dataset_key",
+          "dataset_name",
+          "source_dataset_key",
+          "source_dataset_name",
+          "class_key",
+          "class_name",
+          "image_count",
+          "enabled_image_count",
+          "actual_object_count",
+          "enabled_object_count",
+          "evaluation",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TestSampleCard",
+        "description": "Карточка без проверки готовности файлов исходной псевдоразметки."
+      },
       "TestSampleCatalogResponse": {
         "properties": {
           "classes": {
@@ -12530,6 +12889,50 @@
           "name"
         ],
         "title": "TestSampleClassGroup"
+      },
+      "TestSampleClassIndexItem": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sample_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Sample Count"
+          },
+          "has_primary": {
+            "type": "boolean",
+            "title": "Has Primary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "sample_count",
+          "has_primary"
+        ],
+        "title": "TestSampleClassIndexItem"
+      },
+      "TestSampleClassIndexResponse": {
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/TestSampleClassIndexItem"
+            },
+            "type": "array",
+            "title": "Classes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TestSampleClassIndexResponse"
       },
       "TestSampleCreate": {
         "properties": {
@@ -12847,9 +13250,6 @@
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
           },
-          "pseudo_markup": {
-            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -12859,6 +13259,9 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "pseudo_markup": {
+            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
           },
           "tile_width": {
             "type": "integer",
@@ -12915,9 +13318,9 @@
           "actual_object_count",
           "enabled_object_count",
           "evaluation",
-          "pseudo_markup",
           "created_at",
           "updated_at",
+          "pseudo_markup",
           "tile_width",
           "tile_height",
           "requested_object_count",
@@ -13622,9 +14025,6 @@
           "evaluation": {
             "$ref": "#/components/schemas/TestSampleEvaluationInfo"
           },
-          "pseudo_markup": {
-            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -13634,6 +14034,9 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "pseudo_markup": {
+            "$ref": "#/components/schemas/TestSamplePseudoMarkupInfo"
           }
         },
         "additionalProperties": false,
@@ -13652,9 +14055,9 @@
           "actual_object_count",
           "enabled_object_count",
           "evaluation",
-          "pseudo_markup",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "pseudo_markup"
         ],
         "title": "TestSampleSummary"
       },

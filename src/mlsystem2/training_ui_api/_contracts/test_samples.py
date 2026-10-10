@@ -180,7 +180,9 @@ class TestSamplePseudoMarkupInfo(BaseModel):
     error: str | None = None
 
 
-class TestSampleSummary(BaseModel):
+class TestSampleCard(BaseModel):
+    """Карточка без проверки готовности файлов исходной псевдоразметки."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
@@ -209,9 +211,27 @@ class TestSampleSummary(BaseModel):
     exclude_boundary_objects: bool = False
     is_primary: bool = False
     evaluation: TestSampleEvaluationInfo
-    pseudo_markup: TestSamplePseudoMarkupInfo
     created_at: datetime
     updated_at: datetime
+
+
+class TestSampleSummary(TestSampleCard):
+    pseudo_markup: TestSamplePseudoMarkupInfo
+
+
+class TestSampleClassIndexItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    sample_count: int = Field(ge=0)
+    has_primary: bool
+
+
+class TestSampleClassIndexResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    classes: list[TestSampleClassIndexItem] = Field(default_factory=list)
 
 
 class TestSampleDatasetGroup(BaseModel):
@@ -435,6 +455,9 @@ class TestSampleBatchInfo(BaseModel):
 
 
 __all__ = [
+    "TestSampleCard",
+    "TestSampleClassIndexItem",
+    "TestSampleClassIndexResponse",
     "TestSampleCreationSettings",
     "TestSampleBatchMove",
     "TestSampleAnnotationsMerge",

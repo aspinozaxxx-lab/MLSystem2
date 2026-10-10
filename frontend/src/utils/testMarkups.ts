@@ -1,5 +1,6 @@
 import type {
   DatasetInfo,
+  TestSampleCard,
   TestSampleCatalogResponse,
   TestSampleDetail,
   TestSampleDraftPreview,
@@ -19,7 +20,7 @@ export type TestMarkupStats = {
 
 export type TestMarkupDownloadOption = {
   datasetName: string;
-  sample: TestSampleSummary;
+  sample: TestSampleCard;
 };
 
 export type TestMarkupDownloadSelectionChange =
@@ -45,18 +46,13 @@ export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): T
 }
 
 export function testMarkupDownloadOptions(
-  catalog: TestSampleCatalogResponse | null,
+  catalog: TestSampleCatalogResponse | TestSampleCard[] | null,
 ): TestMarkupDownloadOption[] {
-  return (catalog?.classes || [])
-    .flatMap((classGroup) => {
-      const samples = (classGroup.samples || []).length
-        ? classGroup.samples || []
-        : (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []);
-      return samples.map((sample) => ({
-        datasetName: sample.source_dataset_name || sample.dataset_name,
-        sample,
-      }));
-    })
+  return (Array.isArray(catalog) ? catalog : flattenTestMarkups(catalog))
+    .map((sample) => ({
+      datasetName: sample.source_dataset_name || sample.dataset_name,
+      sample,
+    }))
     .sort((left, right) => {
       const classOrder = left.sample.class_name.localeCompare(right.sample.class_name, "ru");
       if (classOrder) return classOrder;

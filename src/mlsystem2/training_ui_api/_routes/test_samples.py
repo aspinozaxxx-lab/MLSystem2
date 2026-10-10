@@ -36,6 +36,8 @@ from mlsystem2.training_ui_api._test_samples import (
     test_sample_batch_options,
     test_sample_batch_detail,
     test_sample_catalog,
+    test_sample_cards,
+    test_sample_class_index,
     test_sample_detail,
     test_sample_preview_path,
     test_sample_thumbnail_path,
@@ -57,6 +59,8 @@ from mlsystem2.training_ui_api.contracts import (
     TestSampleCreationSettings,
     TestSampleBulkDownloadRequest,
     TestSampleCatalogResponse,
+    TestSampleCard,
+    TestSampleClassIndexResponse,
     TestSampleCreate,
     TestSampleDetail,
     TestSampleDownloadRequest,
@@ -117,10 +121,11 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         response_model=TestSampleBatchOptionsResponse,
     )
     def get_test_sample_batch_options(
+        class_key: str | None = None,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleBatchOptionsResponse:
-        return test_sample_batch_options(db, ctx.config)
+        return test_sample_batch_options(db, ctx.config, class_key=class_key)
 
     @app.post(
         "/api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup",
@@ -170,6 +175,29 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleCatalogResponse:
         return test_sample_catalog(db, ctx.config)
+
+    @app.get("/api/v1/test-samples/classes", response_model=TestSampleClassIndexResponse)
+    def get_test_sample_classes(
+        include_empty: bool = False,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> TestSampleClassIndexResponse:
+        return test_sample_class_index(db, include_empty=include_empty)
+
+    @app.get("/api/v1/test-samples/cards", response_model=list[TestSampleCard])
+    def get_test_sample_cards(
+        class_key: str | None = None,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> list[TestSampleCard]:
+        return test_sample_cards(db, class_key=class_key)
+
+    @app.post("/api/v1/test-samples/classes/{class_key}/reconcile", status_code=204)
+    def post_test_sample_class_reconcile(
+        class_key: str,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> Response:
+        reconcile_test_sample_evaluations(db, ctx.config, class_keys={class_key})
+        db.commit()
+        return Response(status_code=204)
 
     @app.post("/api/v1/test-samples/reconcile", response_model=TestSampleCatalogResponse)
     def post_test_samples_reconcile(

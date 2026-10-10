@@ -985,6 +985,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/classes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Classes */
+        get: operations["get_test_sample_classes_api_v1_test_samples_classes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/cards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test Sample Cards */
+        get: operations["get_test_sample_cards_api_v1_test_samples_cards_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/test-samples/classes/{class_key}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Test Sample Class Reconcile */
+        post: operations["post_test_sample_class_reconcile_api_v1_test_samples_classes__class_key__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/reconcile": {
         parameters: {
             query?: never;
@@ -4506,6 +4557,97 @@ export interface components {
              */
             include_previews: boolean;
         };
+        /**
+         * TestSampleCard
+         * @description Карточка без проверки готовности файлов исходной псевдоразметки.
+         */
+        TestSampleCard: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Content Revision
+             * @default 1
+             */
+            content_revision: number;
+            /** Name */
+            name: string;
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Source Dataset Key */
+            source_dataset_key: string;
+            /** Source Dataset Name */
+            source_dataset_name: string;
+            /** Source Dataset Version */
+            source_dataset_version?: string | null;
+            /** Source Training Result Id */
+            source_training_result_id?: string | null;
+            /** Source Model Name */
+            source_model_name?: string | null;
+            /** Source Trained At */
+            source_trained_at?: string | null;
+            /** Source Pseudo Markup Result Id */
+            source_pseudo_markup_result_id?: string | null;
+            /** Class Key */
+            class_key: string;
+            /** Class Name */
+            class_name: string;
+            /**
+             * Task
+             * @default binary
+             * @enum {string}
+             */
+            task: "binary" | "multiclass";
+            /** Class Schema */
+            class_schema?: {
+                [key: string]: unknown;
+            }[];
+            /** Class Object Counts */
+            class_object_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Quality Metric
+             * @default pixel
+             * @enum {string}
+             */
+            quality_metric: "pixel" | "objects";
+            /** Image Count */
+            image_count: number;
+            /** Enabled Image Count */
+            enabled_image_count: number;
+            /** Actual Object Count */
+            actual_object_count: number;
+            /** Enabled Object Count */
+            enabled_object_count: number;
+            /**
+             * Exclude Boundary Objects
+             * @default false
+             */
+            exclude_boundary_objects: boolean;
+            /**
+             * Is Primary
+             * @default false
+             */
+            is_primary: boolean;
+            evaluation: components["schemas"]["TestSampleEvaluationInfo"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** TestSampleCatalogResponse */
         TestSampleCatalogResponse: {
             /** Classes */
@@ -4521,6 +4663,22 @@ export interface components {
             samples?: components["schemas"]["TestSampleSummary"][];
             /** Datasets */
             datasets?: components["schemas"]["TestSampleDatasetGroup"][];
+        };
+        /** TestSampleClassIndexItem */
+        TestSampleClassIndexItem: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Sample Count */
+            sample_count: number;
+            /** Has Primary */
+            has_primary: boolean;
+        };
+        /** TestSampleClassIndexResponse */
+        TestSampleClassIndexResponse: {
+            /** Classes */
+            classes?: components["schemas"]["TestSampleClassIndexItem"][];
         };
         /** TestSampleCreate */
         TestSampleCreate: {
@@ -4689,7 +4847,6 @@ export interface components {
              */
             is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
-            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /**
              * Created At
              * Format: date-time
@@ -4700,6 +4857,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /** Tile Width */
             tile_width: number;
             /** Tile Height */
@@ -4931,7 +5089,6 @@ export interface components {
              */
             is_primary: boolean;
             evaluation: components["schemas"]["TestSampleEvaluationInfo"];
-            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /**
              * Created At
              * Format: date-time
@@ -4942,6 +5099,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
         };
         /** TestSampleTileInfo */
         TestSampleTileInfo: {
@@ -7294,7 +7452,9 @@ export interface operations {
     };
     get_test_sample_batch_options_api_v1_test_sample_batches_options_get: {
         parameters: {
-            query?: never;
+            query?: {
+                class_key?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7308,6 +7468,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestSampleBatchOptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7404,6 +7573,97 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TestSampleDetail"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_classes_api_v1_test_samples_classes_get: {
+        parameters: {
+            query?: {
+                include_empty?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleClassIndexResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_sample_cards_api_v1_test_samples_cards_get: {
+        parameters: {
+            query?: {
+                class_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestSampleCard"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_test_sample_class_reconcile_api_v1_test_samples_classes__class_key__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                class_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

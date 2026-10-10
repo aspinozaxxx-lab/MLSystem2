@@ -1740,6 +1740,84 @@ def test_markup_export_http_flow_and_expiry(tmp_path: Path, monkeypatch) -> None
         assert client.get(payload["download_url"]).status_code == 404
 
 
+def test_fast_test_sample_catalog_filters_class_without_reading_source_files(tmp_path, monkeypatch):
+    from sqlalchemy import event
+
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    with TestClient(create_app()) as client:
+        assert client.get("/api/v1/test-samples/cards").status_code == 401
+        assert client.get("/api/v1/test-samples/classes").status_code == 401
+        _login(client)
+        factory = create_session_factory(config)
+        with factory() as session:
+            dataset = session.scalar(select(DatasetRow))
+            source_class = session.get(DatasetClassRow, dataset.class_id)
+            training = TrainingResultRow(source="manual", dataset_key=dataset.key, class_key=dataset.key,
+                class_display_name="Вырубки\\main", architecture="segformer_b2", model_name="Исходная сеть", status="ok")
+            session.add(training)
+            session.flush()
+            for number in range(12):
+                sample = _TestSampleRow(name=f"Выборка {number}", dataset_key=dataset.key, dataset_name="Вырубки\\main",
+                    dataset_short_name="main", class_key=source_class.key if number < 11 else "другой",
+                    class_name="Вырубки" if number < 11 else "Другой класс", tile_width=512, tile_height=512,
+                    image_count=2, requested_object_count=4, actual_object_count=4, territory_count=1,
+                    source_training_result_id=training.id, is_primary=number == 0)
+                session.add(sample)
+                session.flush()
+                session.add_all([_TestSampleTileRow(test_sample_id=sample.id, tile_index=i, source_name="снимок",
+                    territory="территория", object_count=2, enabled=i == 1) for i in (1, 2)])
+            key = source_class.key
+            session.commit()
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("Карточки не должны читать файлы датасетов и псевдоразметки")
+        monkeypatch.setattr(_test_samples, "find_managed_dataset", forbidden)
+        monkeypatch.setattr(_test_samples, "pseudo_markup_covers_dataset", forbidden)
+        with factory() as session:
+            statements = []
+            event.listen(session.bind, "before_cursor_execute", lambda *args: statements.append(args[2]))
+            cards = _test_samples.test_sample_cards(session, class_key=key)
+            assert len(cards) == 11
+            assert all(card.class_key == key and card.enabled_image_count == 1 and card.enabled_object_count == 2 for card in cards)
+            assert all(card.source_model_name == "Исходная сеть" for card in cards)
+            assert len(statements) <= 12
+            assert not any("test_sample_tiles.evaluation_metrics" in sql for sql in statements)
+        cards_response = client.get("/api/v1/test-samples/cards", params={"class_key": key})
+        assert cards_response.status_code == 200
+        assert len(cards_response.json()) == 11
+        assert "pseudo_markup" not in cards_response.json()[0]
+        classes = client.get("/api/v1/test-samples/classes").json()["classes"]
+        assert next(item for item in classes if item["key"] == key)["sample_count"] == 11
+        assert next(item for item in classes if item["key"] == key)["has_primary"] is True
+        assert client.get("/api/v1/test-samples/cards", params={"class_key": "нет"}).json() == []
+        assert len(client.get("/api/v1/test-samples/cards").json()) == 12
+
+
+def test_test_sample_creation_options_prepare_only_selected_class(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api import _dataset_catalog
+
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    with TestClient(create_app()) as client:
+        _login(client)
+        with create_session_factory(config)() as session:
+            dataset = session.scalar(select(DatasetRow))
+            key = session.get(DatasetClassRow, dataset.class_id).key
+        original = _dataset_catalog._dataset_info
+        prepared = []
+        def record(session, dataset, class_row, *args, **kwargs):
+            prepared.append(class_row.key)
+            return original(session, dataset, class_row, *args, **kwargs)
+        monkeypatch.setattr(_dataset_catalog, "_dataset_info", record)
+        assert client.get("/api/v1/test-sample-batches/options", params={"class_key": "нет"}).json() == {"classes": []}
+        assert prepared == []
+        response = client.get("/api/v1/test-sample-batches/options", params={"class_key": key})
+        assert response.status_code == 200
+        assert {item["class_key"] for item in response.json()["classes"]} == {key}
+        assert prepared and set(prepared) == {key}
+
+
 def test_persistent_test_sample_http_catalog_editor_and_delete(
     tmp_path: Path,
     monkeypatch,

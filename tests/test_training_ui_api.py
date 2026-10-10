@@ -3070,7 +3070,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "metric: previous.metric" not in app_tsx
     assert 'head === "classes"' in app_tsx
     assert "/dataset-catalog/sync" in app_tsx
-    assert '"/test-sample-batches/options"' in creation_tsx
+    assert '/test-sample-batches/options?class_key=' in creation_tsx
     assert "/test-samples" in app_tsx
     assert "apiDownloadJson" in app_tsx
     assert "/results/training/triton-zip" in app_tsx

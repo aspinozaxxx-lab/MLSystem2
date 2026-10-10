@@ -125,6 +125,21 @@ def test_test_markup_creation_queue_contract(monkeypatch) -> None:
     assert "delete" in paths["/api/v1/test-sample-batches/{batch_id}"]
     move = paths["/api/v1/test-sample-batches/{batch_id}/move"]["post"]
     assert move["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/TestSampleBatchMove")
+
+
+def test_test_markup_fast_catalog_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TestSampleCard, TestSampleSummary, TestSampleClassIndexItem
+
+    assert set(TestSampleCard.model_fields) == set(TestSampleSummary.model_fields) - {"pseudo_markup"}
+    assert set(TestSampleClassIndexItem.model_fields) == {"key", "name", "sample_count", "has_primary"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    assert {p["name"] for p in paths["/api/v1/test-samples/classes"]["get"]["parameters"]} == {"include_empty"}
+    assert {p["name"] for p in paths["/api/v1/test-samples/cards"]["get"]["parameters"]} == {"class_key"}
+    assert "204" in paths["/api/v1/test-samples/classes/{class_key}/reconcile"]["post"]["responses"]
+    assert {p["name"] for p in paths["/api/v1/test-sample-batches/options"]["get"]["parameters"]} == {"class_key"}
     assert "post" in paths["/api/v1/test-sample-batches/{batch_id}/cancel"]
 
 

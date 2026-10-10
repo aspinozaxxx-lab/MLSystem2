@@ -1,0 +1,44 @@
+.page:has(> .test-markup-browser) { padding-top: 22px; }
+.test-markup-browser { min-width: 0; }
+.test-markup-browser-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.test-markup-browser-header h1 { margin: 0; font-size: 28px; line-height: 36px; }
+.test-markup-browser-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.test-markup-browser-header .button-row { flex-shrink: 0; margin: 0; }
+.test-markup-browser-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: start; gap: 24px; }
+.test-markup-class-nav { position: sticky; top: 18px; display: grid; gap: 4px; min-width: 0; padding-right: 16px; border-right: 1px solid var(--border); }
+.test-markup-class-nav > .field-label { padding: 0 10px 8px; }
+.test-markup-class-nav button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 38px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; text-align: left; }
+.test-markup-class-nav button > span { min-width: 0; overflow-wrap: anywhere; line-height: 17px; }
+.test-markup-class-nav button > small { flex-shrink: 0; min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+.test-markup-class-nav button:hover { background: var(--surface-strong); color: var(--text); }
+.test-markup-class-nav button.selected { background: var(--grovika-slate); color: var(--grovika-white); font-weight: 600; }
+.test-markup-class-content { min-width: 0; }
+.test-markup-mobile-class { display: none; }
+.test-markup-browser .test-markup-class-header { margin-bottom: 14px; }
+.test-markup-browser .test-markup-class-header h2 { margin: 0; font-size: 20px; line-height: 26px; overflow-wrap: anywhere; }
+.test-markup-browser .test-markup-class-header > span { flex-shrink: 0; font-size: 12px; }
+.test-markup-browser .test-markup-card-grid { grid-template-columns: repeat(auto-fill, minmax(min(310px, 100%), 1fr)); gap: 14px; }
+.test-markup-browser .test-markup-card { padding: 14px; gap: 12px; min-width: 0; align-content: start; }
+.test-markup-browser .test-markup-card-header > a strong,
+.test-markup-browser .test-markup-card-header > a small { white-space: normal; overflow-wrap: anywhere; line-height: 18px; }
+.test-markup-browser .test-markup-card-header > a strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 15px; }
+.test-markup-browser .test-markup-card-body > span { min-width: 0; padding: 8px 6px; }
+.test-markup-browser .test-markup-card-body small { font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+.test-markup-browser .test-markup-card-body strong { font-size: 18px; }
+.test-markup-browser .test-markup-card-footer { flex-wrap: wrap; gap: 6px; }
+@media (max-width: 700px) {
+  .page:has(> .test-markup-browser) { padding: 14px 12px 24px; }
+  .test-markup-browser-header { align-items: start; gap: 8px; margin-bottom: 14px; }
+  .test-markup-browser-header h1 { font-size: 22px; line-height: 27px; }
+  .test-markup-browser-header p { display: none; }
+  .test-markup-browser-header .button-row { gap: 6px; width: auto; }
+  .test-markup-browser-header .compact-action { min-height: 38px; padding: 7px 9px; font-size: 12px; gap: 4px; }
+  .test-markup-browser-layout { display: block; }
+  .test-markup-class-nav { display: none; }
+  .test-markup-mobile-class { display: grid; gap: 5px; margin-bottom: 12px; font-size: 12px; }
+  .test-markup-mobile-class select { width: 100%; min-height: 44px; min-width: 0; font-size: 16px; }
+  .test-markup-browser .test-markup-class-header { display: none; }
+  .test-markup-browser .test-markup-card-grid { gap: 10px; }
+  .test-markup-browser .test-markup-card { padding: 12px; gap: 10px; }
+  .test-markup-browser .test-markup-card-header .icon-button { min-height: 36px; min-width: 36px; }
+}

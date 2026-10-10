@@ -2,9 +2,9 @@ import { CircleAlert, ChevronDown, ChevronUp, Layers3, LoaderCircle, Play, Squar
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { apiJson } from "./api/client";
-import type { JobDetail, TestSampleBatchCreate, TestSampleBatchInfo, TestSampleBatchOptionsResponse, TestSampleCatalogResponse, TestSampleCreationSettings } from "./api/types";
+import type { JobDetail, TestSampleBatchCreate, TestSampleBatchInfo, TestSampleBatchOptionsResponse, TestSampleCreationSettings } from "./api/types";
 import { formatDateTime, shortVersion } from "./utils/format";
-import { testMarkupStats } from "./utils/testMarkups";
+import { useTestMarkupClasses } from "./useTestMarkupClasses";
 
 export const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
 type Settings = Required<TestSampleCreationSettings>;
@@ -15,8 +15,7 @@ const pseudoLabels = { ready: "Псевдоразметка готова", queue
 
 export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const [options, setOptions] = useState<TestSampleBatchOptionsResponse | null>(null);
-  const [catalog, setCatalog] = useState<TestSampleCatalogResponse | null>(null);
-  const [classKey, setClassKey] = useState("");
+  const { index, classKey, setClassKey, loadClasses } = useTestMarkupClasses(run, true);
   const [datasetKey, setDatasetKey] = useState("");
   const [drafts, setDrafts] = useState<Record<string, Settings>>({});
   const [queue, setQueue] = useState<TestSampleBatchInfo[]>([]);
@@ -25,10 +24,17 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const [showNetworkWarning, setShowNetworkWarning] = useState(false);
   const saves = useRef(Promise.resolve());
   const queueRequest = useRef(0);
+  const completedQueueRevision = useRef<string | null>(null);
+  const optionsRequest = useRef(0);
+  const optionsCache = useRef(new Map<string, TestSampleBatchOptionsResponse>());
 
+  const classesLoaded = Boolean(index);
   const loadOptions = useCallback(async () => {
-    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>("/test-sample-batches/options"));
-    if (!payload) return;
+    if (!classKey || !classesLoaded) return;
+    const revision = ++optionsRequest.current;
+    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>(`/test-sample-batches/options?class_key=${encodeURIComponent(classKey)}`));
+    if (!payload || revision !== optionsRequest.current) return;
+    optionsCache.current.set(classKey, payload);
     setOptions(payload);
     setDrafts((current) => {
       const updated = { ...current };
@@ -37,19 +43,23 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
       }
       return updated;
     });
-    setClassKey((current) => (payload.classes || []).some((group) => group.class_key === current) ? current : payload.classes?.[0]?.class_key || "");
-  }, [run]);
+  }, [run, classKey, classesLoaded]);
   const loadQueue = useCallback(async () => {
     const revision = ++queueRequest.current;
     const payload = await run(() => apiJson<TestSampleBatchInfo[]>("/test-sample-batches"));
-    if (payload && revision === queueRequest.current) setQueue(payload);
-  }, [run]);
-  const loadCatalog = useCallback(async () => {
-    const payload = await run(() => apiJson<TestSampleCatalogResponse>("/test-samples"));
-    if (payload) setCatalog(payload);
-  }, [run]);
-
-  useEffect(() => { void loadOptions(); void loadQueue(); }, [loadOptions, loadQueue]);
+    if (payload && revision === queueRequest.current) {
+      setQueue(payload);
+      const completed = payload.filter((job) => job.status === "ok" || job.status === "partial").map((job) => job.id).join("|");
+      if (completedQueueRevision.current !== null && completedQueueRevision.current !== completed) void loadClasses();
+      completedQueueRevision.current = completed;
+    }
+  }, [run, loadClasses]);
+  useEffect(() => { void loadQueue(); }, [loadQueue]);
+  useEffect(() => {
+    setOptions(optionsCache.current.get(classKey) || null);
+    void loadOptions();
+    return () => { optionsRequest.current += 1; };
+  }, [classKey, loadOptions]);
   const selectedClass = options?.classes?.find((group) => group.class_key === classKey);
   const datasets = selectedClass?.datasets || [];
   const dataset = datasets.find((source) => source.dataset_key === datasetKey);
@@ -71,8 +81,6 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
     const timer = window.setInterval(() => void loadOptions(), 2_000);
     return () => window.clearInterval(timer);
   }, [pseudoActive, loadOptions]);
-  const completedRevision = queue.filter((job) => job.status === "ok" || job.status === "partial").map((job) => job.id).join("|");
-  useEffect(() => { void loadCatalog(); }, [completedRevision, loadCatalog]);
 
   const updateSettings = (change: Partial<Settings>) => {
     const next = { ...settings, ...change };
@@ -108,14 +116,14 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
     const result = await run(() => apiJson<JobDetail>(`/test-sample-batches/options/${encodeURIComponent(datasetKey)}/pseudo-markup`, { method: "POST" }));
     if (result) await loadOptions();
   };
-  const stats = testMarkupStats(catalog, classKey);
+  const selectedIndex = index?.classes?.find((item) => item.key === classKey);
 
   return <div className="test-markup-create">
     <header className="page-header"><div><h1>Создание тестовой разметки</h1><p>Один датасет — одно задание</p></div></header>
     <form className={`panel creation-form${settings.use_optimization && dataset?.pseudo_status !== "ready" ? " needs-pseudo" : ""}`} onSubmit={submit}>
       <div className="creation-source-fields">
-        <label className="field creation-class"><span>Класс <small>Разметок: {stats.count}{stats.hasPrimary ? " · есть основная" : ""}</small></span><select aria-label="Класс" value={classKey} onChange={(event) => { setClassKey(event.target.value); setShowNetworkWarning(false); }} disabled={!options?.classes?.length}>
-          {!options ? <option>Загрузка…</option> : null}{options?.classes?.map((group) => <option key={group.class_key} value={group.class_key}>{group.class_name}</option>)}
+        <label className="field creation-class"><span>Класс <small>Разметок: {selectedIndex?.sample_count ?? "…"}{selectedIndex?.has_primary ? " · есть основная" : ""}</small></span><select aria-label="Класс" value={classKey} onChange={(event) => { setClassKey(event.target.value); setShowNetworkWarning(false); }} disabled={!index?.classes?.length}>
+          {!index ? <option>Загрузка…</option> : null}{index?.classes?.map((group) => <option key={group.key} value={group.key}>{group.name}</option>)}
         </select></label>
         <div className="creation-sources" role="radiogroup" aria-label="Датасет">
           {datasets.map((source) => <label className={`creation-source ${source.dataset_key === datasetKey ? "selected" : ""}`} key={source.dataset_key}>
@@ -125,7 +133,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
               {source.training_result_id ? <small title={source.error || undefined}>{pseudoLabels[source.pseudo_status]}</small> : null}
             </span>
           </label>)}
-          {options && !datasets.length ? <p className="muted">Нет готовых датасетов с размеченными снимками.</p> : null}
+          {!options ? <p className="muted" role="status">Загрузка датасетов выбранного класса…</p> : !datasets.length ? <p className="muted">Нет готовых датасетов с размеченными снимками.</p> : null}
         </div>
       </div>
       <div className="creation-settings">

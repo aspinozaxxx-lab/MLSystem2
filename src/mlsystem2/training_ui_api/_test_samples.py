@@ -40,7 +40,7 @@ from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
-from sqlalchemy import func, select, text
+from sqlalchemy import Integer, func, select, text
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
@@ -68,6 +68,7 @@ from ._markup_export import (
 )
 from ._managed_datasets import SOURCE_MANAGED, managed_sources
 from ._models import (
+    DatasetClassRow,
     DatasetRow,
     InferenceTemplateRow,
     JobRow,
@@ -93,6 +94,7 @@ from ._queueing import (
 from ._templates import sanitize_inference_template_config
 from ._template_selection import effective_inference_template_row
 from .contracts import (
+    DatasetInfo,
     JobSource,
     JobStatus,
     JobType,
@@ -107,6 +109,9 @@ from .contracts import (
     TestSampleBatchOptionsResponse,
     TestSampleCreationSettings,
     TestSampleCatalogResponse,
+    TestSampleCard,
+    TestSampleClassIndexItem,
+    TestSampleClassIndexResponse,
     TestSampleClassGroup,
     TestSampleCreate,
     TestSampleDetail,
@@ -333,11 +338,13 @@ def _normalize_test_sample_class(session: Session, row: TestSampleRow) -> None:
 def test_sample_batch_options(
     session: Session,
     config: TrainingUIAPIConfig,
+    *,
+    class_key: str | None = None,
 ) -> TestSampleBatchOptionsResponse:
     """Описать явные пары датасет-сеть-псевдоразметка для создания набора."""
 
     grouped: dict[tuple[str, str], list[TestSampleBatchDatasetOption]] = defaultdict(list)
-    for dataset in list_managed_datasets(session, config, include_custom=False):
+    for dataset in list_managed_datasets(session, config, include_custom=False, class_key=class_key):
         if not _dataset_ready_for_test_sample_batch(dataset):
             continue
         class_key = dataset.class_key or dataset.key
@@ -495,6 +502,7 @@ def _test_sample_batch_dataset_option(
         dataset.key,
         training_result.id,
         config=config,
+        dataset=dataset,
     )
     if ready is not None:
         return TestSampleBatchDatasetOption(
@@ -519,7 +527,7 @@ def _test_sample_batch_dataset_option(
         )
     ).all()
     for candidate in candidates:
-        if not pseudo_markup_covers_dataset(session, candidate, dataset.key, config):
+        if not pseudo_markup_covers_dataset(session, candidate, dataset.key, config, dataset=dataset):
             continue
         job = session.get(JobRow, candidate.job_id) if candidate.job_id is not None else None
         if job is not None and job.status in {
@@ -1022,6 +1030,51 @@ def test_sample_catalog(
         )
     ]
     return TestSampleCatalogResponse(classes=classes)
+
+
+def test_sample_class_index(session: Session, *, include_empty: bool = False) -> TestSampleClassIndexResponse:
+    """Индекс классов из БД, без чтения тайлов и исходных датасетов."""
+
+    groups = session.execute(
+        select(
+            TestSampleRow.class_key, TestSampleRow.class_name,
+            func.count(TestSampleRow.id), func.sum(func.cast(TestSampleRow.is_primary, Integer)),
+        ).group_by(TestSampleRow.class_key, TestSampleRow.class_name)
+    ).all()
+    classes: dict[str, TestSampleClassIndexItem] = {}
+    for key, name, count, primary in groups:
+        item = classes.setdefault(key, TestSampleClassIndexItem(key=key, name=name, sample_count=0, has_primary=False))
+        item.sample_count += count
+        item.has_primary = item.has_primary or bool(primary)
+    for key, name in session.execute(
+        select(DatasetClassRow.key, DatasetClassRow.name)
+        .join(DatasetRow, DatasetRow.class_id == DatasetClassRow.id)
+        .where(DatasetRow.deleted_at.is_(None)).distinct()
+    ):
+        if key in classes:
+            classes[key].name = name
+        elif include_empty:
+            classes[key] = TestSampleClassIndexItem(key=key, name=name, sample_count=0, has_primary=False)
+    return TestSampleClassIndexResponse(classes=sorted(classes.values(), key=lambda item: item.name.casefold()))
+
+
+def test_sample_cards(session: Session, *, class_key: str | None = None) -> list[TestSampleCard]:
+    """Карточки выбранного класса; файлы оптимизатора проверяются только в редакторе."""
+
+    statement = select(TestSampleRow).options(
+        selectinload(TestSampleRow.tiles).load_only(
+            TestSampleTileRow.enabled, TestSampleTileRow.object_count, TestSampleTileRow.class_object_counts,
+        ),
+        selectinload(TestSampleRow.source_training_result),
+        selectinload(TestSampleRow.source_pseudo_result),
+        selectinload(TestSampleRow.evaluation_training_result),
+        selectinload(TestSampleRow.evaluation_job),
+    ).order_by(TestSampleRow.created_at.desc(), TestSampleRow.id.desc())
+    if class_key is not None:
+        statement = statement.where(TestSampleRow.class_key == class_key)
+    rows = session.scalars(statement).all()
+    targets = {key: current_primary_training_result(session, key) for key in {row.class_key for row in rows}}
+    return [_card(session, row, targets=targets) for row in rows]
 
 
 def test_sample_detail(
@@ -2911,6 +2964,7 @@ def dataset_test_sample_pseudo_markup(
     training_result_id: uuid.UUID,
     *,
     config: TrainingUIAPIConfig | None,
+    dataset: DatasetInfo | None = None,
 ) -> PseudoMarkupResultRow | None:
     """Вернуть полную готовую псевдоразметку точной пары датасет-сеть."""
 
@@ -2936,7 +2990,7 @@ def dataset_test_sample_pseudo_markup(
     for candidate in candidates:
         if config is None:
             return candidate
-        if pseudo_markup_covers_dataset(session, candidate, dataset_key, config):
+        if pseudo_markup_covers_dataset(session, candidate, dataset_key, config, dataset=dataset):
             return candidate
     return None
 
@@ -2996,11 +3050,13 @@ def pseudo_markup_covers_dataset(
     pseudo_markup: PseudoMarkupResultRow,
     dataset_key: str,
     config: TrainingUIAPIConfig,
+    *,
+    dataset: DatasetInfo | None = None,
 ) -> bool:
     scenes_file = pseudo_markup.scenes_file
     if scenes_file is None or not Path(scenes_file.path).is_file():
         return False
-    dataset = find_managed_dataset(session, config, dataset_key)
+    dataset = dataset if dataset is not None else find_managed_dataset(session, config, dataset_key)
     if dataset is None or not dataset.images_dir:
         return False
     images_root = Path(dataset.images_dir).resolve()
@@ -4582,15 +4638,30 @@ def _pseudo_markup_training_info(result: TrainingResultRow) -> dict[str, Any]:
     }
 
 
-def _summary(
+def _card(
     session: Session,
     row: TestSampleRow,
     config: TrainingUIAPIConfig | None = None,
-) -> TestSampleSummary:
+    *,
+    targets: dict[str, TrainingResultRow | None] | None = None,
+) -> TestSampleCard:
     enabled = [tile for tile in row.tiles if tile.enabled]
-    source_training_result = test_sample_source_training_result(session, row)
-    source_pseudo_result = test_sample_source_pseudo_markup(session, row, config)
-    return TestSampleSummary(
+    if targets is not None:
+        # Каталог показывает зафиксированный источник, не подставляя новую сеть старой выборке.
+        source_training_result = row.source_training_result
+        if source_training_result is not None and source_training_result.status != "ok":
+            source_training_result = None
+        source_pseudo_result = row.source_pseudo_result
+        if source_pseudo_result is not None and (
+            source_training_result is None or source_pseudo_result.status != "ok"
+            or source_pseudo_result.training_result_id != source_training_result.id
+            or source_pseudo_result.dataset_key != row.dataset_key
+        ):
+            source_pseudo_result = None
+    else:
+        source_training_result = test_sample_source_training_result(session, row)
+        source_pseudo_result = test_sample_source_pseudo_markup(session, row, config)
+    return TestSampleCard(
         id=row.id,
         content_revision=row.content_revision,
         name=row.name,
@@ -4631,10 +4702,20 @@ def _summary(
         enabled_object_count=sum(tile.object_count for tile in enabled),
         exclude_boundary_objects=row.exclude_boundary_objects,
         is_primary=row.is_primary,
-        evaluation=_evaluation_info(session, row),
-        pseudo_markup=test_sample_pseudo_markup_info(session, row, config),
+        evaluation=_evaluation_info(session, row, targets=targets),
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _summary(
+    session: Session,
+    row: TestSampleRow,
+    config: TrainingUIAPIConfig | None = None,
+) -> TestSampleSummary:
+    return TestSampleSummary(
+        **_card(session, row, config).model_dump(),
+        pseudo_markup=test_sample_pseudo_markup_info(session, row, config),
     )
 
 
@@ -4677,7 +4758,10 @@ def _detail(
     )
 
 
-def _evaluation_info(session: Session, row: TestSampleRow) -> TestSampleEvaluationInfo:
+def _evaluation_info(
+    session: Session, row: TestSampleRow,
+    *, targets: dict[str, TrainingResultRow | None] | None = None,
+) -> TestSampleEvaluationInfo:
     status = row.metric_status
     if (
         status not in {"queued", "running"}
@@ -4695,7 +4779,7 @@ def _evaluation_info(session: Session, row: TestSampleRow) -> TestSampleEvaluati
         if row.evaluation_training_result_id is not None
         else None
     )
-    target_result = current_primary_training_result(session, row.class_key)
+    target_result = targets[row.class_key] if targets is not None else current_primary_training_result(session, row.class_key)
     if job is not None and (job.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET:
         try:
             queued_result_id = uuid.UUID(str((job.config or {}).get("training_result_id")))
@@ -4867,6 +4951,8 @@ __all__ = [
     "test_sample_batch_detail",
     "test_sample_batch_options",
     "test_sample_catalog",
+    "test_sample_cards",
+    "test_sample_class_index",
     "test_sample_detail",
     "test_sample_preview_path",
     "test_sample_thumbnail_path",
