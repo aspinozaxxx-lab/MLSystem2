@@ -122,8 +122,8 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
     <header className="page-header"><div><h1>Создание тестовой разметки</h1><p>Один датасет — одно задание</p></div></header>
     <form className={`panel creation-form${settings.use_optimization && dataset?.pseudo_status !== "ready" ? " needs-pseudo" : ""}`} onSubmit={submit}>
       <div className="creation-source-fields">
-        <label className="field creation-class"><span>Класс <small>Разметок: {selectedIndex?.sample_count ?? "…"}{selectedIndex?.has_primary ? " · есть основная" : ""}</small></span><select aria-label="Класс" value={classKey} onChange={(event) => { setClassKey(event.target.value); setShowNetworkWarning(false); }} disabled={!index?.classes?.length}>
-          {!index ? <option>Загрузка…</option> : null}{index?.classes?.map((group) => <option key={group.key} value={group.key}>{group.name}</option>)}
+        <label className="field creation-class"><span>Класс <small>Разметок: {selectedIndex?.sample_count ?? (index ? 0 : "…")}{selectedIndex?.has_primary ? " · есть основная" : ""}</small></span><select aria-label="Класс" value={classKey} onChange={(event) => { setClassKey(event.target.value); setShowNetworkWarning(false); }} disabled={!index?.classes?.length}>
+          {!index?.classes?.length ? <option>{index ? "Нет классов с датасетами" : "Загрузка…"}</option> : null}{index?.classes?.map((group) => <option key={group.key} value={group.key}>{group.name}</option>)}
         </select></label>
         <div className="creation-sources" role="radiogroup" aria-label="Датасет">
           {datasets.map((source) => <label className={`creation-source ${source.dataset_key === datasetKey ? "selected" : ""}`} key={source.dataset_key}>
@@ -133,7 +133,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
               {source.training_result_id ? <small title={source.error || undefined}>{pseudoLabels[source.pseudo_status]}</small> : null}
             </span>
           </label>)}
-          {!options ? <p className="muted" role="status">Загрузка датасетов выбранного класса…</p> : !datasets.length ? <p className="muted">Нет готовых датасетов с размеченными снимками.</p> : null}
+          {index && !index.classes?.length ? <p className="muted">Нет доступных классов с датасетами.</p> : !options ? <p className="muted" role="status">Загрузка датасетов выбранного класса…</p> : !datasets.length ? <p className="muted">Нет готовых датасетов с размеченными снимками.</p> : null}
         </div>
       </div>
       <div className="creation-settings">
