@@ -112,10 +112,16 @@ def test_test_markup_creation_queue_contract(monkeypatch) -> None:
         "tile_size", "min_image_count", "image_count", "min_object_count",
         "use_optimization", "exclude_boundary_objects", "min_object_area_m2",
     }
+    sizes = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584, *range(4096, 8193, 512)]
+    for contract in (TestSampleBatchCreate, TestSampleCreationSettings):
+        assert contract.model_json_schema()["properties"]["tile_size"]["enum"] == sizes
+        assert contract.model_json_schema()["properties"]["tile_size"]["default"] == 1536
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     schema = get_openapi_schema()
     paths = schema["paths"]
+    imagery_type = schema["components"]["schemas"]["TestSampleBatchDatasetOption"]["properties"]["imagery_type"]
+    assert imagery_type["anyOf"] == [{"$ref": "#/components/schemas/ImageryType"}, {"type": "null"}]
     for name in ("TestSampleCreationSettings", "TestSampleBatchItemCreate", "TestSampleCreate"):
         area = schema["components"]["schemas"][name]["properties"]["min_object_area_m2"]
         assert area["minimum"] == 0 and area["default"] == 0

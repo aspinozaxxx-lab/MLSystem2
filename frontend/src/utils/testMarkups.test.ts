@@ -9,6 +9,8 @@ import type {
 import {
   applyTestMarkupPreview,
   containedImageOneToOneScale,
+  estimateTestMarkupImageVolume,
+  formatTestMarkupImageVolume,
   isDatasetReadyForTestMarkup,
   sortTestMarkupDatasets,
   testMarkupDraft,
@@ -32,6 +34,47 @@ function catalog(): TestSampleCatalogResponse {
 }
 
 describe("тестовые разметки", () => {
+  it("оценивает диапазон TIFF по типу снимков и обеим границам количества", () => {
+    expect(estimateTestMarkupImageVolume("kanopus", 1024, 5, 10)).toEqual({
+      minBytes: 15 * 1024 ** 2, maxBytes: 30 * 1024 ** 2,
+    });
+    expect(estimateTestMarkupImageVolume("ortho", 1024, 5, 10)).toEqual({
+      minBytes: 20 * 1024 ** 2, maxBytes: 40 * 1024 ** 2,
+    });
+  });
+
+  it("учитывает площадь тайла, а не только сторону, и не включает запасные тайлы", () => {
+    const small = estimateTestMarkupImageVolume("kanopus", 4096, 2, 2)!;
+    const large = estimateTestMarkupImageVolume("kanopus", 8192, 2, 2)!;
+    expect(small.minBytes).toBe(small.maxBytes);
+    expect(large.minBytes).toBe(small.minBytes * 4);
+    expect(large.maxBytes).toBe(384 * 1024 ** 2);
+    expect(estimateTestMarkupImageVolume("ortho", 8192, 5, 10)).toEqual({
+      minBytes: 1280 * 1024 ** 2, maxBytes: 2560 * 1024 ** 2,
+    });
+  });
+
+  it.each([
+    [0, 1, 2], [NaN, 1, 2], [1024.5, 1, 2], [1024, 0, 2],
+    [1024, -1, 2], [1024, 2, 1], [1024, 1, Infinity], [1024, 1, 2.5],
+    [8192, 1, Number.MAX_SAFE_INTEGER],
+  ])("не показывает оценку при некорректных параметрах %s, %s, %s", (size, minCount, maxCount) => {
+    expect(estimateTestMarkupImageVolume("kanopus", size, minCount, maxCount)).toBeNull();
+  });
+
+  it("не подменяет неизвестный тип снимков Канопусом", () => {
+    expect(estimateTestMarkupImageVolume(null, 1024, 5, 10)).toBeNull();
+    expect(estimateTestMarkupImageVolume(undefined, 1024, 5, 10)).toBeNull();
+    expect(estimateTestMarkupImageVolume("неизвестный" as never, 1024, 5, 10)).toBeNull();
+  });
+
+  it("показывает объём в МБ и ГБ с русским десятичным разделителем", () => {
+    expect(formatTestMarkupImageVolume(768 * 1024)).toBe("0,8 МБ");
+    expect(formatTestMarkupImageVolume(30 * 1024 ** 2)).toBe("30 МБ");
+    expect(formatTestMarkupImageVolume(1024 ** 3)).toBe("1 ГБ");
+    expect(formatTestMarkupImageVolume(2560 * 1024 ** 2)).toBe("2,5 ГБ");
+  });
+
   it("показывает готовые датасеты старого и поснимочного формата при создании", () => {
     const dataset = (update: Partial<DatasetInfo>): DatasetInfo => ({
       key: "dataset",

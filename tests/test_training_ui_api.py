@@ -3064,7 +3064,9 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "/optimize-preview" in app_tsx
     assert "/evaluate-preview" in app_tsx
     assert "Не сохранено" in app_tsx
-    assert "[512, 768, 1024, 1536, 2048, 2560, 3072, 3584]" in creation_tsx
+    assert "[512, 768, 1024, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192]" in creation_tsx
+    assert "Примерный объём снимков (TIFF)" in creation_tsx
+    assert "estimateTestMarkupImageVolume(dataset?.imagery_type" in creation_tsx
     assert "Не учитывать объекты, выходящие за тайл" in creation_tsx
     assert "defaultTrainingZipModelName" in app_tsx
     assert "metric: previous.metric" not in app_tsx

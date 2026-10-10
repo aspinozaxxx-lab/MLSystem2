@@ -4300,7 +4300,7 @@ export interface components {
              * @default 1536
              * @enum {integer}
              */
-            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584;
+            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584 | 4096 | 4608 | 5120 | 5632 | 6144 | 6656 | 7168 | 7680 | 8192;
             /**
              * Min Image Count
              * @description Минимальное число включённых тайлов; без поля используется image_count.
@@ -4330,6 +4330,7 @@ export interface components {
             class_name: string;
             /** Image Count */
             image_count: number;
+            imagery_type?: components["schemas"]["ImageryType"] | null;
             /**
              * Quality Metric
              * @default pixel
@@ -4698,7 +4699,7 @@ export interface components {
              * @default 1536
              * @enum {integer}
              */
-            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584;
+            tile_size: 512 | 768 | 1024 | 1536 | 2048 | 2560 | 3072 | 3584 | 4096 | 4608 | 5120 | 5632 | 6144 | 6656 | 7168 | 7680 | 8192;
             /**
              * Min Image Count
              * @default 5

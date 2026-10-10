@@ -466,6 +466,7 @@ def _test_sample_batch_dataset_option(
         "class_key": class_key,
         "class_name": class_name,
         "image_count": int(dataset.image_count),
+        "imagery_type": dataset.imagery_type,
         "quality_metric": dataset.quality_metric,
         "task": dataset.task,
     }

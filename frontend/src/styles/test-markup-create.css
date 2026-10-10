@@ -31,6 +31,9 @@
 .creation-warning:hover [role="tooltip"], .creation-warning:focus-within [role="tooltip"], .creation-warning [role="tooltip"].visible { display: block; }
 .creation-boundary { font-size: 12px; line-height: 17px; }
 .creation-hint { color: var(--muted); font-size: 12px; line-height: 17px; }
+.creation-size-estimate { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 18px; }
+.creation-size-range { display: flex; flex-wrap: wrap; gap: 4px; font-variant-numeric: tabular-nums; }
+.creation-size-estimate small { color: var(--muted); font-size: 12px; line-height: 17px; }
 .creation-pseudo button { width: 100%; min-height: 44px; }
 .creation-submit { width: 100%; min-height: 44px; }
 .creation-queue { display: flex; flex-direction: column; gap: 8px; min-height: 0; }

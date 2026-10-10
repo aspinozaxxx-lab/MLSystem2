@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .catalog import ImageryType
 from .common import RuntimeProgress
 
 
@@ -276,7 +277,10 @@ class TestSampleDraftPreview(BaseModel):
 class TestSampleCreationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tile_size: Literal[512, 768, 1024, 1536, 2048, 2560, 3072, 3584] = 1536
+    tile_size: Literal[
+        512, 768, 1024, 1536, 2048, 2560, 3072, 3584,
+        4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192,
+    ] = 1536
     min_image_count: int = Field(default=5, gt=0)
     image_count: int = Field(default=10, gt=0)
     min_object_count: int = Field(default=150, gt=0)
@@ -326,7 +330,10 @@ class TestSampleBatchItemCreate(BaseModel):
 class TestSampleBatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tile_size: Literal[512, 768, 1024, 1536, 2048, 2560, 3072, 3584] = 1536
+    tile_size: Literal[
+        512, 768, 1024, 1536, 2048, 2560, 3072, 3584,
+        4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192,
+    ] = 1536
     min_image_count: int | None = Field(
         default=None,
         gt=0,
@@ -389,6 +396,7 @@ class TestSampleBatchDatasetOption(BaseModel):
     class_key: str
     class_name: str
     image_count: int = Field(gt=0)
+    imagery_type: ImageryType | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"
     task: Literal["binary", "multiclass"] = "binary"
     training_result_id: UUID | None = None

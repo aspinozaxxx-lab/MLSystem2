@@ -82,10 +82,12 @@ from mlsystem2.training_ui_api._worker import _finish_test_sample_f1_job
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api.contracts import (
     ImageryType,
+    DatasetInfo,
     JobSource,
     MarkupExportRequest,
     StoredFileKind,
     TestSampleCreate as _TestSampleCreate,
+    TestSampleCreationSettings as _TestSampleCreationSettings,
     TestSampleEvaluationPreviewRequest as _TestSampleEvaluationPreviewRequest,
     TestSampleBatchCreate as _TestSampleBatchCreate,
     TestSampleOptimizeRequest as _TestSampleOptimizeRequest,
@@ -2492,7 +2494,10 @@ def test_test_sample_batch_boundary_exclusion_requires_object_metric() -> None:
         )
 
 
-@pytest.mark.parametrize("tile_size", [2560, 3072, 3584])
+@pytest.mark.parametrize("tile_size", [
+    512, 768, 1024, 1536, 2048, 2560, 3072, 3584,
+    4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192,
+])
 def test_test_sample_batch_request_accepts_large_tile_sizes(tile_size: int) -> None:
     request = _TestSampleBatchCreate(
         tile_size=tile_size,
@@ -2501,15 +2506,39 @@ def test_test_sample_batch_request_accepts_large_tile_sizes(tile_size: int) -> N
     )
 
     assert request.tile_size == tile_size
+    assert _TestSampleCreationSettings(tile_size=tile_size).tile_size == tile_size
 
 
-def test_test_sample_batch_request_rejects_unlisted_tile_size() -> None:
+@pytest.mark.parametrize("tile_size", [0, 1280, 3000, 8193, 8704])
+def test_test_sample_batch_request_rejects_unlisted_tile_size(tile_size: int) -> None:
     with pytest.raises(ValueError):
         _TestSampleBatchCreate(
-            tile_size=3000,
+            tile_size=tile_size,
             image_count=3,
             items=[{"dataset_key": "Вырубки\\main"}],
         )
+    with pytest.raises(ValueError):
+        _TestSampleCreationSettings(tile_size=tile_size)
+
+
+@pytest.mark.parametrize("imagery_type", [ImageryType.KANOPUS, ImageryType.ORTHO, None])
+def test_test_sample_batch_option_preserves_source_imagery_type(tmp_path, monkeypatch, imagery_type):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    dataset = DatasetInfo(
+        key="Класс\\main", name="Класс\\main", dataset_name="main", image_count=2,
+        imagery_type=imagery_type,
+    )
+    with session_factory() as session:
+        option = _test_samples._test_sample_batch_dataset_option(
+            session, dataset, class_key="Класс", class_name="Класс",
+            training_result=None, config=config,
+        )
+    assert option.imagery_type == imagery_type
+    assert option.creation_settings.tile_size == 1536
+    assert option.pseudo_status == "unavailable"
 
 
 @pytest.mark.parametrize("primary_index", [None, 0])
@@ -4531,7 +4560,8 @@ def test_annotations_merge_requires_authentication(tmp_path, monkeypatch):
         assert response.status_code == 404
 
 
-def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tile_size", [2048, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192])
+def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_path, monkeypatch, tile_size):
     from urllib.parse import quote
 
     config = _configure_export_environment(tmp_path, monkeypatch)
@@ -4541,18 +4571,20 @@ def test_test_markup_queue_is_independent_and_preserves_dataset_settings(tmp_pat
     for path in (config.mlmarkup_root / "Вырубки" / "main").iterdir():
         (second_root / path.name).write_bytes(path.read_bytes())
     request = {
-        "tile_size": 512, "min_image_count": 1, "image_count": 2,
+        "tile_size": tile_size, "min_image_count": 1, "image_count": 2,
         "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 2, "min_object_area_m2": 84.25, "use_optimization": False}],
     }
     with TestClient(create_app()) as client:
         _login(client)
         options = client.get("/api/v1/test-sample-batches/options").json()
         assert all(source["training_result_id"] is None for group in options["classes"] for source in group["datasets"])
-        settings = {"tile_size": 2048, "min_image_count": 2, "image_count": 4, "min_object_count": 12, "min_object_area_m2": 12.5, "use_optimization": False, "exclude_boundary_objects": False}
+        assert all(source["imagery_type"] == "kanopus" for group in options["classes"] for source in group["datasets"])
+        settings = {"tile_size": tile_size, "min_image_count": 2, "image_count": 4, "min_object_count": 12, "min_object_area_m2": 12.5, "use_optimization": False, "exclude_boundary_objects": False}
         changed = client.put(f"/api/v1/test-sample-batches/options/{quote('Вырубки' + chr(92) + 'main', safe='')}/settings", json=settings)
         assert changed.status_code == 200
         queued = [client.post("/api/v1/test-sample-batches", json=request) for _ in range(3)]
         assert [response.status_code for response in queued] == [200, 200, 200]
+        assert all(response.json()["tile_size"] == tile_size for response in queued)
         assert all(response.json()["items"][0]["min_object_area_m2"] == 84.25 for response in queued)
         ids = [response.json()["id"] for response in queued]
         assert client.post(f"/api/v1/test-sample-batches/{ids[2]}/move", json={"direction": "up"}).status_code == 200
@@ -4612,6 +4644,51 @@ def test_random_test_markup_worker_creates_real_tiles_without_network(tmp_path, 
                            for feature in json.loads(path.read_text(encoding="utf-8"))["features"]}
             assert any(identifier >= 101 for identifier in identifiers) is (min_area == 0)
             assert any(identifier <= 8 for identifier in identifiers)
+
+
+def test_random_test_markup_worker_creates_8192_pixel_tile(tmp_path, monkeypatch):
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    size = 8192
+    root = config.mlmarkup_root / "Вырубки" / "main"
+    root.mkdir(parents=True)
+    (root / "scenes.txt").write_text("region_large\n", encoding="utf-8")
+    _write_geojson(root / "deforestation.geojson", [(1, box(2048, 2048, 3072, 3072), "объект")])
+    source_path = config.images_root / "kanopus" / "region_large" / "scene_large.tif"
+    source_path.parent.mkdir(parents=True)
+    # Однотонный растр записывается блоками, чтобы тест не держал исходник целиком в памяти.
+    with rasterio.open(
+        source_path, "w", driver="GTiff", width=size, height=size, count=4, dtype="uint8",
+        crs="EPSG:3857", transform=from_origin(0, size, 1, 1), tiled=True,
+        blockxsize=512, blockysize=512, compress="deflate",
+    ) as source:
+        block = np.full((4, 512, 512), 64, dtype=np.uint8)
+        for row in range(0, size, 512):
+            for column in range(0, size, 512):
+                source.write(block, window=rasterio.windows.Window(column, row, 512, 512))
+    with TestClient(create_app()) as client:
+        _login(client)
+        response = client.post("/api/v1/test-sample-batches", json={
+            "tile_size": size, "min_image_count": 1, "image_count": 1,
+            "items": [{"dataset_key": "Вырубки\\main", "min_object_count": 1, "use_optimization": False}],
+        })
+        assert response.status_code == 200
+        _test_samples.process_test_sample_batch_once(create_session_factory(config), config)
+        job = client.get(f"/api/v1/test-sample-batches/{response.json()['id']}").json()
+        assert job["status"] == "ok", job
+        sample_id = job["items"][0]["sample_id"]
+        detail = client.get(f"/api/v1/test-samples/{sample_id}").json()
+        assert detail["enabled_image_count"] == detail["enabled_object_count"] == 1
+        assert detail["tile_width"] == detail["tile_height"] == size
+        sample_root = config.stored_files_root / "test-samples" / sample_id
+        with rasterio.open(sample_root / "tile_001.tif") as image:
+            assert (image.width, image.height, image.count) == (size, size, 4)
+            assert image.crs.to_epsg() == 3857
+            assert image.overviews(1)
+            assert image.compression.name.lower() == "deflate"
+        with Image.open(sample_root / "tile_001_mask.png") as mask:
+            assert mask.size == (size, size)
+        assert (sample_root / "tile_001.geojson").exists()
+        assert (sample_root / "tile_001_thumbnail.jpg").exists()
 
 
 def test_optimized_test_markup_worker_keeps_fixed_source_pair(tmp_path, monkeypatch):

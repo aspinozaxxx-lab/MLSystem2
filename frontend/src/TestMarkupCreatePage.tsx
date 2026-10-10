@@ -4,9 +4,10 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { apiJson } from "./api/client";
 import type { JobDetail, TestSampleBatchCreate, TestSampleBatchInfo, TestSampleBatchOptionsResponse, TestSampleCreationSettings } from "./api/types";
 import { formatDateTime, shortVersion } from "./utils/format";
+import { estimateTestMarkupImageVolume, formatTestMarkupImageVolume } from "./utils/testMarkups";
 import { useTestMarkupClasses } from "./useTestMarkupClasses";
 
-export const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584] as const;
+export const TEST_SAMPLE_TILE_SIZES = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192] as const;
 type Settings = Required<TestSampleCreationSettings>;
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 const defaults: Settings = { tile_size: 1536, min_image_count: 5, image_count: 10, min_object_count: 150, min_object_area_m2: 0, exclude_boundary_objects: false, use_optimization: true };
@@ -69,6 +70,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const saved = drafts[datasetKey] || defaults;
   const settings: Settings = { ...saved, use_optimization: Boolean(dataset?.training_result_id && saved.use_optimization), exclude_boundary_objects: Boolean(dataset?.quality_metric === "objects" && saved.exclude_boundary_objects) };
   const valid = [settings.min_image_count, settings.image_count, settings.min_object_count].every((value) => Number.isInteger(value) && value > 0) && settings.min_image_count <= settings.image_count && Number.isFinite(settings.min_object_area_m2) && settings.min_object_area_m2 >= 0;
+  const imageVolume = estimateTestMarkupImageVolume(dataset?.imagery_type, settings.tile_size, settings.min_image_count, settings.image_count);
   const active = queue.filter((job) => job.status === "queued" || job.status === "running");
   const pending = active.filter((job) => job.status === "queued");
   const pseudoActive = options?.classes?.some((group) => group.datasets?.some((source) => source.pseudo_status === "queued" || source.pseudo_status === "running"));
@@ -149,6 +151,13 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
           </div>
           {dataset.quality_metric === "objects" ? <label className="creation-boundary"><input type="checkbox" checked={settings.exclude_boundary_objects} onChange={(event) => updateSettings({ exclude_boundary_objects: event.target.checked })} />Не учитывать объекты, выходящие за тайл</label> : null}
           <div className="creation-hint">Настройки сохраняются · запас: до {settings.image_count * 3} тайлов · площадь 0 — без фильтра</div>
+          <div className="creation-size-estimate" role="status" aria-live="polite" aria-atomic="true">
+            <strong>Примерный объём снимков (TIFF)</strong>
+            {imageVolume ? <>
+              <div className="creation-size-range"><span>≈ {formatTestMarkupImageVolume(imageVolume.minBytes)} ({settings.min_image_count.toLocaleString("ru-RU")} шт.)</span><span>— {formatTestMarkupImageVolume(imageVolume.maxBytes)} ({settings.image_count.toLocaleString("ru-RU")} шт.)</span></div>
+              <small>{dataset.imagery_type === "kanopus" ? "Канопус" : "Ортофото"}: ориентир с учётом сжатия и пирамид. Без превью, масок и запасных тайлов; фактический объём может отличаться.</small>
+            </> : <small>{dataset.imagery_type ? "Укажите корректный размер и диапазон количества снимков для оценки." : "Тип снимков не указан — оценка объёма недоступна."}</small>}
+          </div>
           {settings.use_optimization && dataset.pseudo_status !== "ready" ? <div className="creation-pseudo"><button className="secondary" type="button" title="Для оптимизации нужна полная псевдоразметка выбранной сети этого датасета" disabled={dataset.pseudo_status === "queued" || dataset.pseudo_status === "running"} onClick={() => void launchPseudo()}><Play size={14} />Создать псевдоразметку для оптимизации</button></div> : null}
           {!valid ? <small className="error-text">Укажите положительные целые количества и площадь от 0; минимум тайлов должен быть не больше максимума.</small> : null}
           <button className="primary creation-submit" type="submit" disabled={submitting || !valid || (settings.use_optimization && dataset.pseudo_status !== "ready")}>

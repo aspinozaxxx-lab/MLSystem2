@@ -1,5 +1,6 @@
 import type {
   DatasetInfo,
+  ImageryType,
   TestSampleCatalogResponse,
   TestSampleDetail,
   TestSampleDraftPreview,
@@ -16,6 +17,35 @@ export type TestMarkupStats = {
   count: number;
   hasPrimary: boolean;
 };
+
+// Округлённые медианы объёма сохранённых тестовых TIFF, включая пирамиды.
+// Форма использует постоянные коэффициенты и не читает исходные растры.
+const testMarkupBytesPerPixel: Record<ImageryType, number> = { kanopus: 3, ortho: 4 };
+
+export function estimateTestMarkupImageVolume(
+  imageryType: ImageryType | null | undefined,
+  tileSize: number,
+  minImageCount: number,
+  maxImageCount: number,
+): { minBytes: number; maxBytes: number } | null {
+  if (
+    !imageryType || !Object.hasOwn(testMarkupBytesPerPixel, imageryType)
+    || [tileSize, minImageCount, maxImageCount].some((value) => !Number.isSafeInteger(value) || value <= 0)
+    || minImageCount > maxImageCount
+  ) return null;
+
+  const bytesPerImage = tileSize * tileSize * testMarkupBytesPerPixel[imageryType];
+  const minBytes = bytesPerImage * minImageCount;
+  const maxBytes = bytesPerImage * maxImageCount;
+  return Number.isSafeInteger(maxBytes) ? { minBytes, maxBytes } : null;
+}
+
+export function formatTestMarkupImageVolume(bytes: number): string {
+  const gigabyte = 1024 ** 3;
+  const divisor = bytes >= gigabyte ? gigabyte : 1024 ** 2;
+  const unit = bytes >= gigabyte ? "ГБ" : "МБ";
+  return `${(bytes / divisor).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} ${unit}`;
+}
 
 export function isDatasetReadyForTestMarkup(dataset: DatasetInfo): boolean {
   if (dataset.is_custom || (dataset.diagnostics || []).length) return false;

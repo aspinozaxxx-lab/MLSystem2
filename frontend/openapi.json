@@ -11947,7 +11947,16 @@
               2048,
               2560,
               3072,
-              3584
+              3584,
+              4096,
+              4608,
+              5120,
+              5632,
+              6144,
+              6656,
+              7168,
+              7680,
+              8192
             ],
             "title": "Tile Size",
             "default": 1536
@@ -12025,6 +12034,16 @@
             "type": "integer",
             "exclusiveMinimum": 0.0,
             "title": "Image Count"
+          },
+          "imagery_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageryType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "quality_metric": {
             "type": "string",
@@ -12938,7 +12957,16 @@
               2048,
               2560,
               3072,
-              3584
+              3584,
+              4096,
+              4608,
+              5120,
+              5632,
+              6144,
+              6656,
+              7168,
+              7680,
+              8192
             ],
             "title": "Tile Size",
             "default": 1536
