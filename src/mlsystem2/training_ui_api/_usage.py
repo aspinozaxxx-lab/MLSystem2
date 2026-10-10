@@ -33,7 +33,6 @@ def action_for_request(method: str, route: str) -> str | None:
         "managed-datasets/compose": "dataset_create", "managed-datasets/{dataset_key}": "class_save",
         "test-sample-batches": "test_create", "test-samples": "test_create",
         "scene-list-export": "scene_export", "markup-export": "markup_export",
-        "test-samples/download": "markup_export",
     }
     if path == "feedback" and method != "POST":
         return None

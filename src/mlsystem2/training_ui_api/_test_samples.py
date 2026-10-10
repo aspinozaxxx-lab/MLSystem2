@@ -12,19 +12,18 @@ import uuid
 import warnings
 import zipfile
 from collections import defaultdict
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from math import gcd
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from time import monotonic
 from typing import Any
 
 import numpy as np
 import rasterio
+from rasterio.enums import Resampling
 from mlsystem2.dataset_preparing.api import resolve_scene_images
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 from PIL import Image
@@ -41,7 +40,7 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from sqlalchemy import Integer, func, select, text
-from sqlalchemy.orm import Session, selectinload, sessionmaker
+from sqlalchemy.orm import Session, joinedload, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import (
@@ -140,7 +139,6 @@ AUTOMATIC_TEST_F1_RESULTS_PER_DATASET = 3
 OBJECT_IOU_THRESHOLD = 0.5
 _DOWNLOAD_BASE_TILE_SUFFIXES = (".tif", ".geojson")
 _DOWNLOAD_PREVIEW_SOURCE_SUFFIXES = ("_mask.png",)
-_BULK_DOWNLOAD_MAX_WORKERS = 8
 _JPEG_PREVIEW_CHANNELS = {
     "rgb": (0, 1, 2),
     "nrg": (3, 0, 1),
@@ -151,6 +149,7 @@ _JPEG_QUALITY_MIN = 1
 _JPEG_QUALITY_MAX = 95
 _THUMBNAIL_MAX_SIZE = 384
 _THUMBNAIL_JPEG_QUALITY = 82
+_THUMBNAIL_RENDERER_VERSION = f"{_INSTANCE_BOUNDARY_PREVIEW_VERSION}-thumbnail-v2"
 _BATCH_ACTIVE_STATUSES = ("queued", "running")
 _BATCH_FINISHED_ITEM_STATUSES = ("ok", "error", "cancelled")
 LOGGER = logging.getLogger(__name__)
@@ -171,14 +170,6 @@ class TestSampleDownloadArtifact:
 
     def cleanup(self) -> None:
         self.path.unlink(missing_ok=True)
-
-
-@dataclass(frozen=True)
-class _TestSampleDownloadDescriptor:
-    sample_id: uuid.UUID
-    folder: str
-    source_root: Path
-    tile_indices: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -255,7 +246,7 @@ def create_test_sample(
             dataset=dataset,
             min_object_area_m2=request.min_object_area_m2,
         )
-        _build_test_sample_thumbnails(building_root, generated.tiles)
+        _build_test_sample_thumbnails(building_root, generated.tiles, class_schema=generated.class_schema)
         building_root.replace(final_root)
         row = _new_test_sample_row(
             sample_id,
@@ -876,7 +867,7 @@ def _create_grouped_test_sample(
             check_cancelled=check_during_cutting,
         )
         check_cancelled()
-        _build_test_sample_thumbnails(building_root, generated.tiles)
+        _build_test_sample_thumbnails(building_root, generated.tiles, class_schema=generated.class_schema)
         building_root.replace(final_root)
         row = _new_test_sample_row(
             sample_id,
@@ -1083,32 +1074,7 @@ def test_sample_detail(
     config: TrainingUIAPIConfig | None = None,
 ) -> TestSampleDetail:
     row = _sample_row(session, sample_id)
-    if config is not None:
-        _backfill_test_sample_tile_f1(session, row, config)
     return _detail(session, row, config)
-
-
-def _backfill_test_sample_tile_f1(
-    session: Session,
-    row: TestSampleRow,
-    config: TrainingUIAPIConfig,
-) -> None:
-    if all(tile.pixel_f1 is not None and tile.object_f1 is not None for tile in row.tiles):
-        return
-    if row.evaluation_pseudo_result_id is None:
-        return
-    source = session.get(PseudoMarkupResultRow, row.evaluation_pseudo_result_id)
-    if source is None or source.status != "ok" or source.geojson_file is None:
-        return
-    source_path = Path(source.geojson_file.path)
-    if not source_path.is_file():
-        return
-    try:
-        tile_metrics = _calculate_tile_metrics(row, source_path, config)
-    except Exception:  # noqa: BLE001
-        return
-    _apply_test_sample_tile_f1(row, tile_metrics)
-    session.flush()
 
 
 def update_test_sample(
@@ -1962,27 +1928,18 @@ def test_sample_thumbnail_path(
     if not any(tile.tile_index == tile_index for tile in row.tiles):
         raise TestSampleUnavailable(str(tile_index))
     root = _sample_root(config, row.id)
-    preview_path = _ensure_test_sample_preview(
+    return _ensure_test_sample_thumbnail(
         root,
         tile_index,
         class_schema=tuple(row.class_schema or []),
     )
-    thumbnail_path = root / f"tile_{tile_index:03d}_thumbnail.jpg"
-    _ensure_test_sample_thumbnail(preview_path, thumbnail_path)
-    return thumbnail_path
 
 
-def _build_test_sample_thumbnails(root: Path, tiles: list[Any]) -> None:
+def _build_test_sample_thumbnails(
+    root: Path, tiles: list[Any], *, class_schema: tuple[dict[str, Any], ...] = (),
+) -> None:
     for tile in tiles:
-        preview_path = root / f"tile_{tile.index:03d}_preview.png"
-        if not preview_path.is_file():
-            raise TrainingUIAPIError(
-                f"Полноразмерное превью тестового тайла не найдено: {preview_path.name}"
-            )
-        _ensure_test_sample_thumbnail(
-            preview_path,
-            root / f"tile_{tile.index:03d}_thumbnail.jpg",
-        )
+        _ensure_test_sample_thumbnail(root, tile.index, class_schema=class_schema)
 
 
 def _ensure_test_sample_preview(
@@ -2010,7 +1967,12 @@ def _ensure_test_sample_preview(
         and marker_version == _INSTANCE_BOUNDARY_PREVIEW_VERSION
         and preview_path.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in source_paths)
     ):
-        return preview_path
+        try:
+            with rasterio.open(source_paths[0]) as raster, Image.open(preview_path) as preview:
+                if preview.size == (raster.width, raster.height):
+                    return preview_path
+        except OSError:
+            pass
 
     image, mask, object_edge = _test_sample_tile_render_data(root, tile_index)
     overlay = _overlay_image(
@@ -2032,6 +1994,7 @@ def _ensure_test_sample_preview(
 def _test_sample_tile_render_data(
     root: Path,
     tile_index: int,
+    *, max_size: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     base_name = f"tile_{tile_index:03d}"
     tif_path = root / f"{base_name}.tif"
@@ -2043,15 +2006,21 @@ def _test_sample_tile_render_data(
     with rasterio.open(tif_path) as dataset:
         if dataset.crs is None:
             raise TrainingUIAPIError(f"У тайла {base_name} отсутствует CRS.")
-        image = dataset.read()
+        ratio = min(1.0, max_size / max(dataset.width, dataset.height)) if max_size else 1.0
+        native_shape = (dataset.height, dataset.width)
+        out_shape = (max(1, round(dataset.height * ratio)), max(1, round(dataset.width * ratio)))
+        image = dataset.read(out_shape=(dataset.count, *out_shape), resampling=Resampling.bilinear)
         raster_crs = PyprojCRS.from_user_input(dataset.crs)
         tile_footprint = box(*dataset.bounds)
-        raster_transform = dataset.transform
-        out_shape = (dataset.height, dataset.width)
+        raster_transform = dataset.transform * rasterio.Affine.scale(
+            dataset.width / out_shape[1], dataset.height / out_shape[0],
+        )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", NotGeoreferencedWarning)
         with rasterio.open(mask_path) as dataset:
-            mask = dataset.read(1)
+            if (dataset.height, dataset.width) != native_shape:
+                raise TrainingUIAPIError(f"Размер маски не совпадает с TIFF для {base_name}.")
+            mask = dataset.read(1, out_shape=out_shape, resampling=Resampling.nearest)
     ground_truth = _load_geometries(geojson_path, default_crs=str(raster_crs))
     geometries = _geometries_for_tile(
         ground_truth.geometries,
@@ -2067,30 +2036,53 @@ def _test_sample_tile_render_data(
     return image, mask, object_edge
 
 
-def _ensure_test_sample_thumbnail(preview_path: Path, thumbnail_path: Path) -> None:
+def _ensure_test_sample_thumbnail(
+    root: Path, tile_index: int, *, class_schema: tuple[dict[str, Any], ...] = (),
+) -> Path:
+    base_name = f"tile_{tile_index:03d}"
+    thumbnail_path = root / f"{base_name}_thumbnail.jpg"
+    source_paths = tuple(root / f"{base_name}{suffix}" for suffix in (".tif", ".geojson", "_mask.png"))
+    for path in source_paths:
+        if not path.is_file():
+            raise TestSampleUnavailable(str(path))
+    marker_path = _preview_version_path(thumbnail_path)
+    try:
+        version = marker_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        version = ""
+    # Совместимая готовая миниатюра старого набора не требует повторного чтения TIFF.
+    if not version and thumbnail_path.is_file():
+        try:
+            legacy_marker = _preview_version_path(root / f"{base_name}_preview.png")
+            if (
+                legacy_marker.read_text(encoding="utf-8").strip() == _INSTANCE_BOUNDARY_PREVIEW_VERSION
+                and thumbnail_path.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in source_paths)
+            ):
+                with Image.open(thumbnail_path) as thumbnail:
+                    if max(thumbnail.size) <= _THUMBNAIL_MAX_SIZE:
+                        marker_path.write_text(_THUMBNAIL_RENDERER_VERSION, encoding="utf-8")
+                        version = _THUMBNAIL_RENDERER_VERSION
+        except OSError:
+            pass
     if (
         thumbnail_path.is_file()
-        and thumbnail_path.stat().st_mtime_ns >= preview_path.stat().st_mtime_ns
+        and version == _THUMBNAIL_RENDERER_VERSION
+        and thumbnail_path.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in source_paths)
     ):
-        return
+        return thumbnail_path
+    image, mask, object_edge = _test_sample_tile_render_data(root, tile_index, max_size=_THUMBNAIL_MAX_SIZE)
+    overlay = _overlay_image(image, mask, class_schema=class_schema, object_edge=object_edge)
     temporary_path = thumbnail_path.with_name(f".{thumbnail_path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with Image.open(preview_path) as source:
-            thumbnail = source.convert("RGB")
-            thumbnail.thumbnail(
-                (_THUMBNAIL_MAX_SIZE, _THUMBNAIL_MAX_SIZE),
-                Image.Resampling.LANCZOS,
-            )
-            thumbnail.save(
-                temporary_path,
-                format="JPEG",
-                quality=_THUMBNAIL_JPEG_QUALITY,
-                optimize=True,
-                progressive=True,
-            )
+        Image.fromarray(overlay).save(
+            temporary_path, format="JPEG", quality=_THUMBNAIL_JPEG_QUALITY,
+            optimize=True, progressive=True,
+        )
         temporary_path.replace(thumbnail_path)
+        marker_path.write_text(_THUMBNAIL_RENDERER_VERSION, encoding="utf-8")
     finally:
         temporary_path.unlink(missing_ok=True)
+    return thumbnail_path
 
 
 def build_test_sample_download(
@@ -2140,184 +2132,15 @@ def build_test_sample_download(
     )
 
 
-def build_test_samples_download(
-    session: Session,
-    sample_ids: list[uuid.UUID],
-    config: TrainingUIAPIConfig,
-    *,
-    include_previews: bool = True,
-) -> TestSampleDownloadArtifact:
-    if not sample_ids:
-        raise TrainingUIAPIError("Выберите хотя бы одну тестовую разметку.")
-    if len(set(sample_ids)) != len(sample_ids):
-        raise TrainingUIAPIError("Идентификаторы тестовых разметок не должны повторяться.")
-    rows = session.scalars(
-        select(TestSampleRow)
-        .where(TestSampleRow.id.in_(sample_ids))
-        .options(selectinload(TestSampleRow.tiles))
-    ).all()
-    rows_by_id = {row.id: row for row in rows}
-    missing = [sample_id for sample_id in sample_ids if sample_id not in rows_by_id]
-    if missing:
-        raise TestSampleUnavailable(", ".join(str(sample_id) for sample_id in missing))
-    ordered_rows = sorted(
-        rows,
-        key=lambda row: (
-            row.class_name.casefold(),
-            row.dataset_short_name.casefold(),
-            str(row.id),
-        ),
-    )
-    rows_by_class: dict[str, list[TestSampleRow]] = defaultdict(list)
-    for row in ordered_rows:
-        class_row = dataset_class_row(session, row.class_key)
-        rows_by_class[class_row.key if class_row is not None else row.class_key].append(row)
-    duplicate_classes = sorted(
-        {class_rows[0].class_name for class_rows in rows_by_class.values() if len(class_rows) > 1},
-        key=str.casefold,
-    )
-    if duplicate_classes:
-        raise TrainingUIAPIError(
-            "Для группового скачивания можно выбрать не более одной разметки "
-            "каждого класса. Повторяются классы: " + ", ".join(duplicate_classes)
-        )
-    empty = [row.name for row in rows if not any(tile.enabled for tile in row.tiles)]
-    if empty:
-        raise TrainingUIAPIError(
-            "В выбранных тестовых разметках нет включённых тайлов: " + ", ".join(empty)
-        )
-
-    descriptors = _test_sample_download_descriptors(
-        ordered_rows,
-        config,
-    )
-    download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
-    download_root.mkdir(parents=True, exist_ok=True)
-    archive_path = download_root / f"selected-{uuid.uuid4()}.zip"
-    try:
-        with TemporaryDirectory(
-            dir=download_root,
-            prefix=".building-",
-        ) as temporary_directory:
-            staging_root = Path(temporary_directory)
-            worker_count = min(_BULK_DOWNLOAD_MAX_WORKERS, len(descriptors))
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                futures = [
-                    executor.submit(
-                        _prepare_test_sample_download,
-                        descriptor,
-                        staging_root,
-                        include_previews=include_previews,
-                    )
-                    for descriptor in descriptors
-                ]
-                try:
-                    prepared_roots = [future.result() for future in futures]
-                except Exception:
-                    for future in futures:
-                        future.cancel()
-                    raise
-            with zipfile.ZipFile(
-                archive_path,
-                mode="w",
-                compression=zipfile.ZIP_STORED,
-            ) as archive:
-                for descriptor, prepared_root in zip(
-                    descriptors,
-                    prepared_roots,
-                    strict=True,
-                ):
-                    for path in sorted(
-                        (item for item in prepared_root.rglob("*") if item.is_file()),
-                        key=lambda item: item.relative_to(prepared_root).as_posix(),
-                    ):
-                        relative = path.relative_to(prepared_root).as_posix()
-                        archive.write(
-                            path,
-                            f"{descriptor.folder}/{relative}",
-                            compress_type=zipfile.ZIP_STORED,
-                        )
-    except Exception:
-        archive_path.unlink(missing_ok=True)
-        raise
-    return TestSampleDownloadArtifact(
-        path=archive_path,
-        filename="тестовые_разметки.zip",
-    )
-
-
-def _test_sample_download_descriptors(
-    rows: list[TestSampleRow],
-    config: TrainingUIAPIConfig,
-) -> list[_TestSampleDownloadDescriptor]:
-    used_folders: dict[str, tuple[str, str]] = {}
-    result: list[_TestSampleDownloadDescriptor] = []
-    for row in rows:
-        folder = _safe_name(
-            f"{row.class_name}_{row.dataset_short_name}",
-            "test_sample",
-        )
-        collision = used_folders.get(folder.casefold())
-        if collision is not None:
-            previous_dataset_key, previous_dataset_name = collision
-            raise TrainingUIAPIError(
-                "После нормализации разные датасеты получают одинаковое имя "
-                f"папки архива «{folder}»: "
-                f"{previous_dataset_name} ({previous_dataset_key}) и "
-                f"{row.dataset_name} ({row.dataset_key})."
-            )
-        used_folders[folder.casefold()] = (row.dataset_key, row.dataset_name)
-        enabled = tuple(
-            tile.tile_index
-            for tile in sorted(row.tiles, key=lambda tile: tile.tile_index)
-            if tile.enabled
-        )
-        result.append(
-            _TestSampleDownloadDescriptor(
-                sample_id=row.id,
-                folder=folder,
-                source_root=_sample_root(config, row.id),
-                tile_indices=enabled,
-            )
-        )
-    return result
-
-
-def _prepare_test_sample_download(
-    descriptor: _TestSampleDownloadDescriptor,
-    staging_root: Path,
-    *,
-    include_previews: bool,
-) -> Path:
-    output_root = staging_root / str(descriptor.sample_id)
-    output_root.mkdir(parents=True, exist_ok=False)
-    for download_index, tile_index in enumerate(descriptor.tile_indices, start=1):
-        entries = _test_sample_tile_download_entries(
-            descriptor.source_root,
-            tile_index,
-            download_index,
-            include_previews=include_previews,
-        )
-        for archive_name, payload in entries:
-            destination = output_root / archive_name
-            if isinstance(payload, Path):
-                shutil.copy2(payload, destination)
-            else:
-                destination.write_bytes(payload)
-    return output_root
-
-
 def _test_sample_tile_download_entries(
     source_root: Path,
     tile_index: int,
     download_index: int,
     *,
     include_previews: bool,
-    folder: str | None = None,
 ) -> list[tuple[str, Path | bytes]]:
     stored_base_name = f"tile_{tile_index:03d}"
     archive_base_name = f"tile{download_index:03d}"
-    archive_prefix = f"{folder}/" if folder else ""
     suffixes = list(_DOWNLOAD_BASE_TILE_SUFFIXES)
     if include_previews:
         suffixes.extend(_DOWNLOAD_PREVIEW_SOURCE_SUFFIXES)
@@ -2326,7 +2149,7 @@ def _test_sample_tile_download_entries(
     for suffix, path in paths.items():
         if not path.is_file():
             raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
-        entries.append((f"{archive_prefix}{archive_base_name}{suffix}", path))
+        entries.append((f"{archive_base_name}{suffix}", path))
     if not include_previews:
         return entries
 
@@ -2339,7 +2162,7 @@ def _test_sample_tile_download_entries(
     )
     entries.extend(
         (
-            f"{archive_prefix}{archive_base_name}_{suffix}.jpg",
+            f"{archive_base_name}_{suffix}.jpg",
             preview,
         )
         for suffix, preview in previews.items()
@@ -2354,14 +2177,12 @@ def _write_test_sample_tile_to_archive(
     download_index: int,
     *,
     include_previews: bool,
-    folder: str | None = None,
 ) -> None:
     for archive_name, payload in _test_sample_tile_download_entries(
         source_root,
         tile_index,
         download_index,
         include_previews=include_previews,
-        folder=folder,
     ):
         if isinstance(payload, Path):
             archive.write(payload, archive_name)
@@ -3451,11 +3272,16 @@ def test_sample_model_compatibility_error(
     session: Session,
     sample: TestSampleRow,
     result: TrainingResultRow,
+    *,
+    read_context: _TestF1ReadContext | None = None,
 ) -> str | None:
-    sample_class = dataset_class_row(session, sample.class_key)
-    result_class = dataset_class_row(
-        session,
-        result.dataset_key or result.class_key,
+    sample_class = (
+        read_context.classes.get(sample.class_key) if read_context is not None
+        else dataset_class_row(session, sample.class_key)
+    )
+    result_class = (
+        read_context.classes.get(result.dataset_key or result.class_key)
+        if read_context is not None else dataset_class_row(session, result.dataset_key or result.class_key)
     )
     if sample_class is None or result_class is None or sample_class.id != result_class.id:
         return "Основная сеть относится к другому классу датасетов."
@@ -3494,6 +3320,87 @@ def _class_schema_channel_signature(
         return ()
 
 
+@dataclass(slots=True)
+class _TestF1ReadContext:
+    """Снимок данных одного чтения результатов; между HTTP-запросами не сохраняется."""
+
+    datasets: dict[str, DatasetRow]
+    classes: dict[str, DatasetClassRow]
+    primary_samples: dict[str, TestSampleRow]
+    templates: dict[str, InferenceTemplateRow]
+    metrics: dict[uuid.UUID, TrainingResultTestMetricRow]
+    dataset_infos: dict[str, DatasetInfo]
+    jobs: list[JobRow]
+    profiles: dict[uuid.UUID, str] = field(default_factory=dict)
+
+
+def _test_f1_read_context(
+    session: Session,
+    results: list[TrainingResultRow],
+    *,
+    datasets: Sequence[DatasetInfo] = (),
+) -> _TestF1ReadContext:
+    dataset_rows = list(session.scalars(select(DatasetRow)).all())
+    class_rows = list(session.scalars(select(DatasetClassRow)).all())
+    classes = {row.key: row for row in class_rows}
+    classes_by_id = {row.id: row for row in class_rows}
+    for dataset in dataset_rows:
+        if dataset.class_id in classes_by_id:
+            classes.setdefault(dataset.key, classes_by_id[dataset.class_id])
+    result_keys = {key for row in results for key in (row.dataset_key, row.class_key) if key}
+    relevant_class_ids = {classes[key].id for key in result_keys if key in classes}
+    managed_ids = {row.id for row in dataset_rows if row.key in result_keys and row.source_type == SOURCE_MANAGED}
+    if managed_ids:
+        relevant_class_ids.update(session.scalars(
+            select(DatasetRow.class_id).join(
+                ManagedDatasetSourceRow, ManagedDatasetSourceRow.source_dataset_id == DatasetRow.id,
+            ).where(ManagedDatasetSourceRow.managed_dataset_id.in_(managed_ids))
+        ).all())
+    sample_keys = result_keys | {key for key, row in classes.items() if row.id in relevant_class_ids}
+    samples = session.scalars(
+        select(TestSampleRow).where(TestSampleRow.is_primary.is_(True), TestSampleRow.class_key.in_(sample_keys))
+        .options(selectinload(TestSampleRow.tiles))
+    ).all()
+    samples_by_class: dict[uuid.UUID, TestSampleRow] = {}
+    primary = {}
+    for sample in samples:
+        class_row = classes.get(sample.class_key)
+        if class_row is not None:
+            samples_by_class.setdefault(class_row.id, sample)
+        else:
+            primary.setdefault(sample.class_key, sample)
+    for key, class_row in classes.items():
+        if class_row.id in samples_by_class:
+            primary[key] = samples_by_class[class_row.id]
+    templates_by_id = {
+        row.id: row for row in session.scalars(
+            select(InferenceTemplateRow).where(
+                InferenceTemplateRow.archived_at.is_(None),
+                InferenceTemplateRow.is_active.is_(True),
+            )
+        ).all()
+    }
+    metrics = list(session.scalars(
+        select(TrainingResultTestMetricRow)
+        .where(TrainingResultTestMetricRow.training_result_id.in_([row.id for row in results]))
+        .options(joinedload(TrainingResultTestMetricRow.sample))
+    ).all())
+    job_ids = {row.job_id for row in [*results, *metrics] if row.job_id is not None}
+    jobs = list(session.scalars(select(JobRow).where(JobRow.id.in_(job_ids))).all())
+    return _TestF1ReadContext(
+        datasets={row.key: row for row in dataset_rows},
+        classes=classes,
+        primary_samples=primary,
+        templates={
+            key: templates_by_id[row.inference_template_id]
+            for key, row in classes.items() if row.inference_template_id in templates_by_id
+        },
+        metrics={row.training_result_id: row for row in metrics},
+        dataset_infos={row.key: row for row in datasets},
+        jobs=jobs,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _TrainingResultTestTarget:
     sample: TestSampleRow
@@ -3514,12 +3421,20 @@ class _TrainingResultTestPlan:
 def _training_result_test_plan(
     session: Session,
     result: TrainingResultRow,
+    *,
+    read_context: _TestF1ReadContext | None = None,
 ) -> _TrainingResultTestPlan:
     """Выбирает эталоны сети: один для binary либо по одному на класс managed."""
 
-    dataset = _training_result_dataset_row(session, result)
+    dataset = (
+        read_context.datasets.get(result.dataset_key or "") or read_context.datasets.get(result.class_key)
+        if read_context is not None else _training_result_dataset_row(session, result)
+    )
     if dataset is None or dataset.source_type != SOURCE_MANAGED:
-        sample = _primary_sample(session, result.class_key)
+        sample = (
+            read_context.primary_samples.get(result.class_key) if read_context is not None
+            else _primary_sample(session, result.class_key)
+        )
         if sample is None:
             return _TrainingResultTestPlan(
                 managed=False,
@@ -3536,6 +3451,7 @@ def _training_result_test_plan(
             session,
             sample,
             result,
+            read_context=read_context,
         )
         return _TrainingResultTestPlan(
             managed=False,
@@ -3574,7 +3490,10 @@ def _training_result_test_plan(
                 f"ID типа {source.relation.object_type_name} не совпадает с управляемым датасетом."
             )
             continue
-        sample = _primary_sample(session, source.dataset_class.key)
+        sample = (
+            read_context.primary_samples.get(source.dataset_class.key) if read_context is not None
+            else _primary_sample(session, source.dataset_class.key)
+        )
         if sample is None:
             errors.append(
                 f"Для класса «{source.dataset_class.name}» не назначена основная тестовая разметка."
@@ -4201,13 +4120,18 @@ def training_result_test_f1_info(
     session: Session,
     result: TrainingResultRow,
     config: TrainingUIAPIConfig,
+    *,
+    read_context: _TestF1ReadContext | None = None,
 ) -> TrainingResultTestF1Info | None:
-    plan = _training_result_test_plan(session, result)
+    plan = _training_result_test_plan(session, result, read_context=read_context)
     if not plan.managed and not plan.targets:
         return None
     samples = [_training_result_test_target_info(target) for target in plan.targets]
     sample = plan.targets[0].sample if not plan.managed and plan.targets else None
-    metric = session.get(TrainingResultTestMetricRow, result.id)
+    metric = (
+        read_context.metrics.get(result.id) if read_context is not None
+        else session.get(TrainingResultTestMetricRow, result.id)
+    )
     if metric is None:
         return TrainingResultTestF1Info(
             status="unavailable",
@@ -4236,6 +4160,7 @@ def training_result_test_f1_info(
         result,
         plan,
         config,
+        read_context=read_context,
     )
     template, _, config_hash = _effective_inference_template(
         session,
@@ -4243,6 +4168,7 @@ def training_result_test_f1_info(
         postprocess_profile,
         evaluation_scope=(_training_result_test_scope(plan) if plan.managed else None),
         training_result=result,
+        read_context=read_context,
     )
     status = metric.status
     if not _training_metric_matches(metric, plan, template, config_hash):
@@ -4362,8 +4288,12 @@ def _effective_inference_template(
     *,
     evaluation_scope: list[dict[str, Any]] | None = None,
     training_result: TrainingResultRow | None = None,
+    read_context: _TestF1ReadContext | None = None,
 ) -> tuple[InferenceTemplateRow | None, dict[str, Any], str]:
-    template = effective_inference_template_row(session, dataset_key)
+    template = (
+        read_context.templates.get(dataset_key) if read_context is not None
+        else effective_inference_template_row(session, dataset_key)
+    )
     template_config = (
         sanitize_inference_template_config(template.default_config) if template is not None else {}
     )
@@ -4397,14 +4327,17 @@ def _training_result_test_postprocess_profile_name(
     result: TrainingResultRow,
     plan: _TrainingResultTestPlan,
     config: TrainingUIAPIConfig,
+    *,
+    read_context: _TestF1ReadContext | None = None,
 ) -> str:
     if not plan.managed:
-        return _test_f1_postprocess_profile_name(session, plan.targets[0].sample, config)
-    dataset = find_managed_dataset(
-        session,
-        config,
-        result.dataset_key or result.class_key,
-    )
+        return _test_f1_postprocess_profile_name(session, plan.targets[0].sample, config, read_context=read_context)
+    dataset_key = result.dataset_key or result.class_key
+    dataset = read_context.dataset_infos.get(dataset_key) if read_context is not None else None
+    if dataset is None:
+        dataset = find_managed_dataset(session, config, dataset_key)
+        if read_context is not None and dataset is not None:
+            read_context.dataset_infos[dataset_key] = dataset
     image_count = dataset.image_count if dataset is not None else None
     if image_count is None:
         image_count = len(
@@ -4422,7 +4355,11 @@ def _test_f1_postprocess_profile_name(
     session: Session,
     sample: TestSampleRow,
     config: TrainingUIAPIConfig,
+    *,
+    read_context: _TestF1ReadContext | None = None,
 ) -> str:
+    if read_context is not None and sample.id in read_context.profiles:
+        return read_context.profiles[sample.id]
     source = (
         session.get(PseudoMarkupResultRow, sample.evaluation_pseudo_result_id)
         if sample.evaluation_pseudo_result_id is not None
@@ -4432,11 +4369,16 @@ def _test_f1_postprocess_profile_name(
         source = test_sample_source_pseudo_markup(session, sample, config)
     image_count = source.image_count if source is not None else None
     if image_count is None:
-        dataset = find_managed_dataset(session, config, sample.dataset_key)
+        dataset = read_context.dataset_infos.get(sample.dataset_key) if read_context is not None else None
+        if dataset is None:
+            dataset = find_managed_dataset(session, config, sample.dataset_key)
         image_count = dataset.image_count if dataset is not None else None
     if image_count is None:
         image_count = len({tile.source_name for tile in sample.tiles})
-    return postprocess_profile_name(max(0, int(image_count)))
+    profile = postprocess_profile_name(max(0, int(image_count)))
+    if read_context is not None:
+        read_context.profiles[sample.id] = profile
+    return profile
 
 
 def _metric_matches(
@@ -4746,11 +4688,11 @@ def _detail(
                 thumbnail_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/"
                     f"{tile.tile_index}/thumbnail?renderer="
-                    f"{_INSTANCE_BOUNDARY_PREVIEW_VERSION}"
+                    f"{_THUMBNAIL_RENDERER_VERSION}"
                 ),
                 preview_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/{tile.tile_index}/preview"
-                    f"?renderer={_INSTANCE_BOUNDARY_PREVIEW_VERSION}"
+                    f"?renderer={_INSTANCE_BOUNDARY_PREVIEW_VERSION}-native-v1"
                 ),
             )
             for tile in row.tiles
@@ -4924,7 +4866,6 @@ __all__ = [
     "TestSampleDownloadArtifact",
     "TestSampleUnavailable",
     "build_test_sample_download",
-    "build_test_samples_download",
     "cleanup_test_sample_storage",
     "create_test_sample",
     "create_test_sample_batch",

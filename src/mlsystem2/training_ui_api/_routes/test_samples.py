@@ -18,7 +18,6 @@ from mlsystem2.training_ui_api._test_samples import (
     TestSampleBatchUnavailable,
     TestSampleUnavailable,
     build_test_sample_download,
-    build_test_samples_download,
     create_test_sample_batch,
     cancel_test_sample_batch,
     delete_test_sample_batch,
@@ -57,7 +56,6 @@ from mlsystem2.training_ui_api.contracts import (
     TestSampleBatchInfo,
     TestSampleBatchOptionsResponse,
     TestSampleCreationSettings,
-    TestSampleBulkDownloadRequest,
     TestSampleCatalogResponse,
     TestSampleCard,
     TestSampleClassIndexResponse,
@@ -217,36 +215,6 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         detail = create_test_sample(db, request, ctx.config)
         db.commit()
         return detail
-
-    @app.post(
-        "/api/v1/test-samples/download",
-        response_class=FileResponse,
-        responses={
-            200: {
-                "description": "ZIP выбранных сохранённых тестовых разметок.",
-                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
-            }
-        },
-    )
-    def download_test_samples(
-        request: TestSampleBulkDownloadRequest,
-        db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
-    ) -> FileResponse:
-        artifact = _sample_or_404(
-            lambda: build_test_samples_download(
-                db,
-                request.sample_ids,
-                ctx.config,
-                include_previews=request.include_previews,
-            )
-        )
-        return FileResponse(
-            artifact.path,
-            filename=artifact.filename,
-            media_type="application/zip",
-            background=BackgroundTask(artifact.cleanup),
-        )
 
     @app.get("/api/v1/test-samples/{sample_id}", response_model=TestSampleDetail)
     def get_test_sample(

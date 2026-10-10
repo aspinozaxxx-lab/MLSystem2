@@ -108,26 +108,6 @@ class TestSampleDownloadRequest(BaseModel):
     include_previews: bool = True
 
 
-class TestSampleBulkDownloadRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sample_ids: list[UUID] = Field(
-        min_length=1,
-        description=(
-            "Уникальные идентификаторы сохранённых тестовых разметок; "
-            "не более одной разметки для каждого класса."
-        ),
-        json_schema_extra={"uniqueItems": True},
-    )
-    include_previews: bool = True
-
-    @model_validator(mode="after")
-    def validate_unique_sample_ids(self) -> Self:
-        if len(set(self.sample_ids)) != len(self.sample_ids):
-            raise ValueError("Идентификаторы тестовых разметок не должны повторяться.")
-        return self
-
-
 class TestSampleMetric(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -468,7 +448,6 @@ __all__ = [
     "TestSampleBatchItemCreate",
     "TestSampleBatchItemInfo",
     "TestSampleBatchOptionsResponse",
-    "TestSampleBulkDownloadRequest",
     "TestSampleCatalogResponse",
     "TestSampleClassGroup",
     "TestSampleDatasetGroup",

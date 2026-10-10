@@ -1054,7 +1054,7 @@ def _historical_dataset_keys(session: Session) -> set[str]:
         TestSampleBatchItemRow.dataset_key,
     )
     for column in columns:
-        for value in session.scalars(select(column).where(column.is_not(None))).all():
+        for value in session.scalars(select(column).where(column.is_not(None)).distinct()).all():
             normalized = str(value).strip()
             if normalized and normalized.casefold() not in {CUSTOM_KEY, CUSTOM_NAME.casefold()}:
                 values.add(normalized)

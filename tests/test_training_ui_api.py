@@ -575,7 +575,7 @@ def test_result_classes_sort_by_last_successful_training(tmp_path: Path, monkeyp
     monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: [class_info, empty_class])
     metric_calls: list[UUID] = []
 
-    def metric_info(_session, result, _config):
+    def metric_info(_session, result, _config, **_kwargs):
         metric_calls.append(result.id)
         return None
 
@@ -694,7 +694,7 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: [class_info])
 
-    def metric_info(_session, result, _config):
+    def metric_info(_session, result, _config, **_kwargs):
         metric_calls.append(result.id)
         f1, status, per_class = metrics[result.id]
         return SimpleNamespace(f1=f1, status=status, metrics=per_class)

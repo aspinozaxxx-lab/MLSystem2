@@ -1053,23 +1053,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/test-samples/download": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Download Test Samples */
-        post: operations["download_test_samples_api_v1_test_samples_download_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/test-samples/{sample_id}": {
         parameters: {
             query?: never;
@@ -4544,19 +4527,6 @@ export interface components {
             /** Classes */
             classes?: components["schemas"]["TestSampleBatchClassOption"][];
         };
-        /** TestSampleBulkDownloadRequest */
-        TestSampleBulkDownloadRequest: {
-            /**
-             * Sample Ids
-             * @description Уникальные идентификаторы сохранённых тестовых разметок; не более одной разметки для каждого класса.
-             */
-            sample_ids: string[];
-            /**
-             * Include Previews
-             * @default true
-             */
-            include_previews: boolean;
-        };
         /**
          * TestSampleCard
          * @description Карточка без проверки готовности файлов исходной псевдоразметки.
@@ -7692,39 +7662,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestSampleCatalogResponse"];
-                };
-            };
-        };
-    };
-    download_test_samples_api_v1_test_samples_download_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TestSampleBulkDownloadRequest"];
-            };
-        };
-        responses: {
-            /** @description ZIP выбранных сохранённых тестовых разметок. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

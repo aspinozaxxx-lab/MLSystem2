@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import threading
-import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -60,7 +58,6 @@ from mlsystem2.training_ui_api._queueing import (
 from mlsystem2.training_ui_api._test_samples import (
     _object_counts,
     build_test_sample_download,
-    build_test_samples_download,
     cleanup_test_sample_storage,
     create_test_sample,
     evaluate_test_sample_by_id,
@@ -567,6 +564,82 @@ def test_test_sample_jpeg_encoder_enforces_hard_size_limit(monkeypatch) -> None:
             tile_name="tile001",
             preview_name="rgb",
         )
+
+
+def test_test_sample_thumbnail_is_independent_and_native_preview_restores_resolution(tmp_path, monkeypatch):
+    width, height = 800, 400
+    image = np.broadcast_to(np.arange(width, dtype=np.uint16)[None, None, :], (4, height, width)).copy()
+    transform = from_origin(0, height, 1, 1)
+    with rasterio.open(tmp_path / "tile_001.tif", "w", driver="GTiff", width=width, height=height,
+                       count=4, dtype="uint16", crs="EPSG:3857", transform=transform) as raster:
+        raster.write(image)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[100:300, 200:600] = 255
+    Image.fromarray(mask).save(tmp_path / "tile_001_mask.png")
+    (tmp_path / "tile_001.geojson").write_text(json.dumps({
+        "type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+        "features": [{"type": "Feature", "properties": {}, "geometry": mapping(box(200, 100, 600, 300))}],
+    }), encoding="utf-8")
+    thumbnail = _test_samples._ensure_test_sample_thumbnail(tmp_path, 1)
+    with Image.open(thumbnail) as picture:
+        assert picture.size == (384, 192)
+    preview = tmp_path / "tile_001_preview.png"
+    assert not preview.exists()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Готовая миниатюра не должна открывать TIFF или большое PNG")
+    with monkeypatch.context() as patch:
+        patch.setattr(_test_samples.rasterio, "open", forbidden)
+        assert _test_samples._ensure_test_sample_thumbnail(tmp_path, 1) == thumbnail
+        _markup_export._preview_version_path(thumbnail).unlink()
+        _markup_export._write_preview_version(preview)
+        assert _test_samples._ensure_test_sample_thumbnail(tmp_path, 1) == thumbnail
+        assert not preview.exists()
+
+    Image.new("RGB", (80, 40)).save(preview)
+    _markup_export._write_preview_version(preview)
+    _test_samples._ensure_test_sample_preview(tmp_path, 1)
+    with Image.open(preview) as picture:
+        assert picture.size == (width, height)
+        assert picture.format == "PNG"
+
+
+def test_test_f1_results_batch_avoids_queries_per_network(tmp_path, monkeypatch):
+    from sqlalchemy import event
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    factory = create_session_factory(config)
+    Base.metadata.create_all(factory.kw["bind"])
+    with factory() as session:
+        class_row = DatasetClassRow(key="лес", name="Лес", technical_name="forest")
+        session.add(class_row)
+        session.flush()
+        dataset = DatasetRow(key="лес-main", class_id=class_row.id, name="main", source_path="Лес/main")
+        session.add(dataset)
+        sample = _TestSampleRow(name="Основная", dataset_key=dataset.key, dataset_name="Лес\\main",
+            dataset_short_name="main",
+            class_key=class_row.key, class_name=class_row.name, is_primary=True, tile_width=512, tile_height=512,
+            image_count=1, requested_object_count=1, actual_object_count=1, territory_count=1)
+        session.add(sample)
+        session.flush()
+        session.add(_TestSampleTileRow(test_sample_id=sample.id, tile_index=1, source_name="снимок",
+            territory="территория", object_count=1, enabled=True))
+        results = [TrainingResultRow(source="manual", dataset_key=dataset.key, class_key=dataset.key,
+            class_display_name="Лес\\main", architecture="segformer_b2", model_name=f"Сеть {i}", status="ok") for i in range(60)]
+        session.add_all(results)
+        session.commit()
+    with factory() as session:
+        rows = list(session.scalars(select(TrainingResultRow)).all())
+        statements = []
+        listener = lambda *args: statements.append(args[2])
+        event.listen(session.bind, "before_cursor_execute", listener)
+        try:
+            context = _test_samples._test_f1_read_context(session, rows)
+            infos = [training_result_test_f1_info(session, row, config, read_context=context) for row in rows]
+            assert len(statements) <= 8
+            assert all(info.status == "unavailable" and info.sample_name == "Основная" for info in infos)
+            assert infos[0] == training_result_test_f1_info(session, rows[0], config)
+        finally:
+            event.remove(session.bind, "before_cursor_execute", listener)
 
 
 def test_test_sample_jpeg_previews_for_rgb_have_no_nir_compositions() -> None:
@@ -1859,17 +1932,8 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         ]["get"]["responses"]["200"]["content"]
         assert set(thumbnail_contract) == {"image/jpeg"}
         assert "post" in openapi["paths"]["/api/v1/test-samples/{sample_id}/download"]
-        assert "post" in openapi["paths"]["/api/v1/test-samples/download"]
-        assert "/api/v1/test-samples/primary/download" not in openapi["paths"]
-        assert "TestSampleBulkDownloadRequest" in openapi["components"]["schemas"]
-        assert (
-            "не более одной разметки"
-            in (
-                openapi["components"]["schemas"]["TestSampleBulkDownloadRequest"]["properties"][
-                    "sample_ids"
-                ]["description"]
-            )
-        )
+        assert "/api/v1/test-samples/download" not in openapi["paths"]
+        assert "TestSampleBulkDownloadRequest" not in openapi["components"]["schemas"]
         assert (
             openapi["components"]["schemas"]["TestSampleCreate"]["properties"]["tile_width"][
                 "default"
@@ -1932,7 +1996,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert preview.headers["content-type"] == "image/png"
         assert preview.headers["cache-control"] == ("private, max-age=31536000, immutable")
         thumbnail_url = sample["tiles"][0]["thumbnail_url"]
-        assert "renderer=instance-boundaries-v1" in thumbnail_url
+        assert "renderer=instance-boundaries-v1-thumbnail-v2" in thumbnail_url
         thumbnail = client.get(thumbnail_url)
         assert thumbnail.status_code == 200
         assert thumbnail.headers["content-type"] == "image/jpeg"
@@ -1963,7 +2027,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         regenerated = client.get(thumbnail_url)
         assert regenerated.status_code == 200
         with Image.open(BytesIO(regenerated.content)) as regenerated_image:
-            assert regenerated_image.size == (384, 192)
+            assert regenerated_image.size == (16, 16)
         assert thumbnail_path.is_file()
         assert client.get(f"/api/v1/test-samples/{sample_id}/tiles/99/thumbnail").status_code == 404
         renamed = client.patch(
@@ -2020,27 +2084,6 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
                 "tile002.tif",
                 "tile002.geojson",
             }
-        assert (
-            client.post(
-                "/api/v1/test-samples/download",
-                json={"sample_ids": []},
-            ).status_code
-            == 422
-        )
-        assert (
-            client.post(
-                "/api/v1/test-samples/download",
-                json={"sample_ids": [sample_id, sample_id]},
-            ).status_code
-            == 422
-        )
-        assert (
-            client.post(
-                "/api/v1/test-samples/download",
-                json={"sample_ids": [str(uuid.uuid4())]},
-            ).status_code
-            == 404
-        )
         second_sample_response = client.post(
             "/api/v1/test-samples",
             json={
@@ -2069,27 +2112,6 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             is True
         )
         assert client.get(f"/api/v1/test-samples/{sample_id}").json()["is_primary"] is False
-        duplicate_class_response = client.post(
-            "/api/v1/test-samples/download",
-            json={"sample_ids": [sample_id, second_sample_id]},
-        )
-        assert duplicate_class_response.status_code == 400
-        assert "не более одной разметки" in duplicate_class_response.json()["detail"]
-        assert client.delete(f"/api/v1/test-samples/{second_sample_id}").status_code == 204
-        bulk_without_previews = client.post(
-            "/api/v1/test-samples/download",
-            json={
-                "sample_ids": [sample_id],
-                "include_previews": False,
-            },
-        )
-        assert bulk_without_previews.status_code == 200
-        with zipfile.ZipFile(BytesIO(bulk_without_previews.content)) as archive:
-            assert set(archive.namelist()) == {
-                "Вырубки_main/tile001.tif",
-                "Вырубки_main/tile001.geojson",
-            }
-            assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
         persisted_after_download = client.get(f"/api/v1/test-samples/{sample_id}").json()
         assert persisted_after_download["enabled_image_count"] == 1
         assert [tile["enabled"] for tile in persisted_after_download["tiles"]] == [
@@ -2747,8 +2769,14 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             tile.pixel_f1 = None
             tile.object_f1 = None
         session.flush()
-        backfilled = _test_sample_detail(session, sample_id, config)
-        assert all(tile.f1_score == pytest.approx(1.0) for tile in backfilled.tiles)
+        with monkeypatch.context() as reading:
+            def unexpected_calculation(*args, **kwargs):
+                raise AssertionError("Чтение разметки не должно рассчитывать F1")
+            reading.setattr(_test_samples, "_calculate_tile_metrics", unexpected_calculation)
+            snapshot = _test_sample_detail(session, sample_id, config)
+            assert all(tile.f1_score is None for tile in snapshot.tiles)
+        _test_samples.evaluate_test_sample(session, sample_row, config, pseudo_result=pseudo)
+        assert all(tile.f1_score == pytest.approx(1.0) for tile in _test_sample_detail(session, sample_id).tiles)
 
         first_tile = sample_row.tiles[0]
         first_tile.pixel_f1 = 0.25
@@ -3856,7 +3884,7 @@ def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
         assert metric.object_f1 == pytest.approx(0.7)
 
 
-def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
+def test_primary_sample_is_unique_and_single_zip_uses_enabled_tiles(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3902,201 +3930,12 @@ def test_primary_sample_is_unique_and_selected_bulk_zip_uses_enabled_tiles(
         assert _test_sample_detail(session, samples[0].id).is_primary is False
         assert _test_sample_detail(session, samples[1].id).is_primary is True
 
-        first_row = session.get(_TestSampleRow, samples[0].id)
-        assert first_row is not None
-        first_row.dataset_key = "Пожары\\main"
-        first_row.dataset_name = "Пожары\\main"
-        first_row.class_key = "Пожары"
-        first_row.class_name = "Пожары"
-        first_row.dataset_short_name = "main"
-        session.flush()
-        update_test_sample_primary(
-            session,
-            samples[0].id,
-            _TestSamplePrimaryUpdate(is_primary=True),
-        )
-
-        artifact = build_test_samples_download(
-            session,
-            [sample.id for sample in reversed(samples)],
-            config,
-        )
+        artifact = build_test_sample_download(session, samples[1].id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                names = set(archive.namelist())
-                assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
-            assert names == (
-                _downloaded_tile_names(
-                    "tile001",
-                    folder="Вырубки_main",
-                )
-                | _downloaded_tile_names(
-                    "tile001",
-                    folder="Пожары_main",
-                )
-                | _downloaded_tile_names(
-                    "tile002",
-                    folder="Пожары_main",
-                )
-            )
+                assert set(archive.namelist()) == _downloaded_tile_names("tile001")
         finally:
             artifact.cleanup()
-
-
-def test_bulk_download_rejects_duplicate_datasets_and_normalized_folder_collisions(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    config = _configure_export_environment(tmp_path, monkeypatch)
-    _write_export_dataset(config.mlmarkup_root, config.images_root)
-    configure_schema(None)
-    session_factory = create_session_factory(config)
-    Base.metadata.create_all(session_factory.kw["bind"])
-
-    with session_factory() as session:
-        samples = [
-            create_test_sample(
-                session,
-                _TestSampleCreate(
-                    name=f"Выборка {index}",
-                    dataset_key="Вырубки\\main",
-                    tile_width=16,
-                    tile_height=16,
-                    image_count=1,
-                    object_count=1,
-                ),
-                config,
-            )
-            for index in (1, 2)
-        ]
-        sample_ids = [sample.id for sample in samples]
-        with pytest.raises(
-            TrainingUIAPIError,
-            match="не более одной разметки каждого класса",
-        ):
-            build_test_samples_download(session, sample_ids, config)
-
-        rows = [session.get(_TestSampleRow, sample_id) for sample_id in sample_ids]
-        assert all(row is not None for row in rows)
-        first_row, second_row = rows
-        assert first_row is not None
-        assert second_row is not None
-        first_row.dataset_name = "Вырубки\\main/test"
-        first_row.dataset_short_name = "main/test"
-        second_row.dataset_key = "Вырубки\\main test"
-        second_row.dataset_name = "Вырубки\\main test"
-        second_row.dataset_short_name = "main test"
-        second_row.class_key = "другой-класс"
-        session.flush()
-
-        with pytest.raises(
-            TrainingUIAPIError,
-            match="одинаковое имя папки архива «Вырубки_main_test»",
-        ):
-            build_test_samples_download(session, sample_ids, config)
-
-    download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
-    assert not download_root.exists()
-
-
-def test_bulk_download_uses_eight_workers_and_cleans_partial_result(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    config = _configure_export_environment(tmp_path, monkeypatch)
-    _write_export_dataset(config.mlmarkup_root, config.images_root)
-    configure_schema(None)
-    session_factory = create_session_factory(config)
-    Base.metadata.create_all(session_factory.kw["bind"])
-
-    with session_factory() as session:
-        samples = [
-            create_test_sample(
-                session,
-                _TestSampleCreate(
-                    name="Одинаковое имя",
-                    dataset_key="Вырубки\\main",
-                    tile_width=16,
-                    tile_height=16,
-                    image_count=1,
-                    object_count=1,
-                ),
-                config,
-            )
-            for _ in range(9)
-        ]
-        for index, sample in enumerate(samples, start=1):
-            row = session.get(_TestSampleRow, sample.id)
-            assert row is not None
-            row.dataset_key = f"Вырубки\\set-{index:02d}"
-            row.dataset_name = f"Вырубки\\set-{index:02d}"
-            row.dataset_short_name = f"set-{index:02d}"
-            row.class_key = f"класс-{index:02d}"
-        session.flush()
-        original_prepare = _test_samples._prepare_test_sample_download
-        lock = threading.Lock()
-        active = 0
-        maximum_active = 0
-        call_count = 0
-
-        def tracked_prepare(
-            descriptor,
-            staging_root,
-            *,
-            include_previews,
-        ):
-            nonlocal active, maximum_active, call_count
-            with lock:
-                active += 1
-                call_count += 1
-                maximum_active = max(maximum_active, active)
-            try:
-                time.sleep(0.05)
-                return original_prepare(
-                    descriptor,
-                    staging_root,
-                    include_previews=include_previews,
-                )
-            finally:
-                with lock:
-                    active -= 1
-
-        monkeypatch.setattr(
-            _test_samples,
-            "_prepare_test_sample_download",
-            tracked_prepare,
-        )
-        artifact = build_test_samples_download(
-            session,
-            [sample.id for sample in samples],
-            config,
-            include_previews=False,
-        )
-        try:
-            with zipfile.ZipFile(artifact.path) as archive:
-                folders = {name.split("/", maxsplit=1)[0] for name in archive.namelist()}
-                assert len(folders) == 9
-                assert len(archive.namelist()) == 18
-                assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
-        finally:
-            artifact.cleanup()
-
-        assert call_count == 9
-        assert maximum_active == 8
-
-        broken_root = config.stored_files_root / "test-samples" / str(samples[0].id)
-        (broken_root / "tile_001.geojson").unlink()
-        with pytest.raises(TrainingUIAPIError, match="Файл тестового тайла не найден"):
-            build_test_samples_download(
-                session,
-                [sample.id for sample in samples],
-                config,
-                include_previews=False,
-            )
-
-    download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
-    assert not list(download_root.glob("*.zip"))
-    assert not list(download_root.glob(".building-*"))
 
 
 def test_test_sample_download_removes_partial_archive_when_jpeg_cannot_fit(

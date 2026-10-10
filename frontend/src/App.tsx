@@ -73,9 +73,7 @@ import type {
   TrainingResultInfo,
   TrainingContinuationOptions,
   TrainingTemplate,
-  TestSampleCatalogResponse,
   TestSampleCard,
-  TestSampleBulkDownloadRequest,
   TestSampleDetail,
   TestSampleDownloadRequest,
   TestSampleDraftPreview,
@@ -106,13 +104,9 @@ import {
 } from "./utils/format";
 import {
   applyTestMarkupPreview,
-  changeTestMarkupDownloadSelection,
   containedImageOneToOneScale,
-  initialTestMarkupDownloadSelection,
-  testMarkupDownloadOptions,
   testMarkupDraft,
   testMarkupDraftChanged,
-  type TestMarkupDownloadOption,
   type TestMarkupDraft,
 } from "./utils/testMarkups";
 
@@ -157,6 +151,9 @@ export function App() {
   const [user, setUser] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
+  const bootstrapRequestRef = useRef<Promise<BootstrapInfo | undefined> | null>(null);
+  const sessionUserRef = useRef(user);
+  sessionUserRef.current = user;
   const [modal, setModal] = useState<ModalState | null>(null);
   const routeGuardRef = useRef<(() => boolean) | null>(null);
   const acceptedHashRef = useRef(window.location.hash);
@@ -184,13 +181,22 @@ export function App() {
     }
   }, []);
 
-  const loadBootstrap = useCallback(async () => {
-    const payload = await run(() => apiJson<BootstrapInfo>("/bootstrap"));
-    if (payload) {
-      setBootstrap(payload);
-    }
+  const fetchBootstrap = useCallback((): Promise<BootstrapInfo | undefined> => {
+    if (bootstrapRequestRef.current) return bootstrapRequestRef.current;
+    const requestUser = sessionUserRef.current;
+    const request = run(() => apiJson<BootstrapInfo>("/bootstrap")).then((payload) => {
+      if (requestUser !== sessionUserRef.current) return undefined;
+      if (payload) setBootstrap(payload);
+      return payload;
+    }).finally(() => {
+      if (bootstrapRequestRef.current === request) bootstrapRequestRef.current = null;
+    });
+    bootstrapRequestRef.current = request;
+    return request;
   }, [run]);
-  const independentTestMarkupPage = route[0] === "test-markups" && (!route[1] || route[1] === "create");
+  const loadBootstrap = useCallback(async () => { await fetchBootstrap(); }, [fetchBootstrap]);
+  const getBootstrap = useCallback(() => bootstrap ? Promise.resolve(bootstrap) : fetchBootstrap(), [bootstrap, fetchBootstrap]);
+  const independentCatalogPage = route[0] === "test-markups" || route[0] === "results";
 
   useEffect(() => {
     const onHashChange = () => {
@@ -225,15 +231,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (user && !bootstrap && !independentTestMarkupPage) {
+    if (user && !bootstrap && !independentCatalogPage) {
       void loadBootstrap();
     }
-  }, [bootstrap, loadBootstrap, user, independentTestMarkupPage]);
+  }, [bootstrap, loadBootstrap, user, independentCatalogPage]);
 
   const logout = async () => {
     if (routeGuardRef.current && !routeGuardRef.current()) return;
     await run(() => apiJson<{ status: string }>("/auth/logout", { method: "POST" }));
     setUser(null);
+    sessionUserRef.current = null;
+    bootstrapRequestRef.current = null;
     setBootstrap(null);
     void import("./utils/rasterCache").then(({ rasterCache }) => rasterCache.clear());
   };
@@ -275,6 +283,7 @@ export function App() {
       bootstrap={bootstrap}
       run={run}
       reloadBootstrap={loadBootstrap}
+      getBootstrap={getBootstrap}
       showModal={setModal}
       closeModal={closeModal}
       showJobLog={showJobLog}
@@ -296,6 +305,7 @@ function RoutedPage(context: {
   bootstrap: BootstrapInfo | null;
   run: Runner;
   reloadBootstrap: () => Promise<void>;
+  getBootstrap: () => Promise<BootstrapInfo | undefined>;
   showModal: (modal: ModalState) => void;
   closeModal: () => void;
   showJobLog: (jobId: string) => Promise<void>;
@@ -304,6 +314,9 @@ function RoutedPage(context: {
   const [head, second] = context.route;
   if (head === "test-markups" && second === "create") return <TestMarkupCreatePage run={context.run} />;
   if (head === "test-markups" && !second) return <TestMarkupCatalogPage {...context} />;
+  if (head === "test-markups" && second) return <TestSampleEditorPage {...context} sampleId={second} />;
+  if (head === "results" && second) return <DatasetResultsPage {...context} datasetKey={decodeURIComponent(second)} />;
+  if (head === "results") return <ResultsPage {...context} />;
   if (!context.bootstrap) return <LoadingPage text="Загрузка справочников" />;
   const props = { ...context, bootstrap: context.bootstrap };
   if (head === "news") return <NewsPage slug={second} />;
@@ -329,11 +342,6 @@ function RoutedPage(context: {
   }
   if (head === "model-export") return <ModelExportPage {...props} />;
   if (head === "scene-list-export") return <SceneListExportPage {...props} />;
-  if (head === "test-markups" && second) {
-    return <TestSampleEditorPage {...props} sampleId={second} />;
-  }
-  if (head === "results" && second) return <DatasetResultsPage {...props} datasetKey={decodeURIComponent(second)} />;
-  if (head === "results") return <ResultsPage {...props} />;
   if (head === "jobs" && second) return <JobPage {...props} jobId={second} />;
   return <HomePage {...props} />;
 }
@@ -1002,8 +1010,6 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
 function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPageProps, "run" | "showModal" | "closeModal">) {
   const { index, classKey, setClassKey, loadClasses } = useTestMarkupClasses(run);
   const [cards, setCards] = useState<Record<string, TestSampleCard[]>>({});
-  const [downloadingAll, setDownloadingAll] = useState(false);
-  const [loadingDownload, setLoadingDownload] = useState(false);
   const requests = useRef(new Map<string, number>());
 
   const loadCatalog = useCallback(async (key: string, signal?: AbortSignal) => {
@@ -1045,41 +1051,6 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
     return () => window.clearTimeout(timer);
   }, [evaluationActive, loadCatalog, samples, classKey]);
 
-  const downloadSelected = async (sampleIds: string[], includePreviews: boolean): Promise<boolean> => {
-    const request: TestSampleBulkDownloadRequest = {
-      sample_ids: sampleIds,
-      include_previews: includePreviews,
-    };
-    setDownloadingAll(true);
-    try {
-      const payload = await run(() => apiDownloadJson("/test-samples/download", request));
-      if (!payload) return false;
-      downloadBlob(payload.blob, payload.filename || "тестовые_разметки.zip");
-      return true;
-    } finally {
-      setDownloadingAll(false);
-    }
-  };
-
-  const openBulkDownload = async () => {
-    setLoadingDownload(true);
-    const catalog = await run(() => apiJson<TestSampleCard[]>("/test-samples/cards"));
-    setLoadingDownload(false);
-    if (!catalog) return;
-    showModal({
-      title: "Скачать тестовые разметки",
-      wide: true,
-      body: (
-        <BulkTestSampleDownloadForm
-          catalog={catalog}
-          onCancel={closeModal}
-          onSubmit={downloadSelected}
-        />
-      ),
-      footer: <></>,
-    });
-  };
-
   const removeSample = (sample: TestSampleCard) => {
     showModal({
       title: "Удалить тестовую разметку",
@@ -1117,16 +1088,6 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
         <div><h1>Тестовые разметки</h1><p>Каталог тестовых разметок по классам</p></div>
         <div className="button-row">
           <a className="primary compact-action" href="#/test-markups/create"><Plus size={15} />Создать</a>
-            <button
-              className="secondary compact-action"
-              type="button"
-              disabled={downloadingAll || loadingDownload || !index?.classes?.length}
-              title="Выбрать разметки всех классов для скачивания"
-              onClick={() => void openBulkDownload()}
-            >
-              <Download size={15} />
-              {downloadingAll ? "Скачивание…" : loadingDownload ? "Подготовка…" : "Скачать"}
-            </button>
         </div>
       </header>
       <div className="test-markup-browser-layout">
@@ -1181,105 +1142,6 @@ function TestSampleDownloadOptionsForm({
         <button className="primary" type="submit" disabled={submitting}>
           <Download size={16} />
           {submitting ? "Формирование..." : "Скачать ZIP"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function BulkTestSampleDownloadForm({
-  catalog,
-  onCancel,
-  onSubmit,
-}: {
-  catalog: TestSampleCatalogResponse | TestSampleCard[] | null;
-  onCancel: () => void;
-  onSubmit: (sampleIds: string[], includePreviews: boolean) => Promise<boolean>;
-}) {
-  const options = useMemo(() => testMarkupDownloadOptions(catalog), [catalog]);
-  const [selected, setSelected] = useState<Set<string>>(
-    () => initialTestMarkupDownloadSelection(options),
-  );
-  const [includePreviews, setIncludePreviews] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const selectedIds = options
-    .filter(({ sample }) => selected.has(sample.id))
-    .map(({ sample }) => sample.id);
-
-  const toggle = (sampleId: string, checked: boolean) => {
-    setSelected((current) => changeTestMarkupDownloadSelection(
-      options,
-      current,
-      { type: "toggle", sampleId, checked },
-    ));
-  };
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!selectedIds.length) return;
-    setSubmitting(true);
-    try {
-      if (await onSubmit(selectedIds, includePreviews)) onCancel();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <form className="form-stack bulk-test-sample-download-form" onSubmit={submit}>
-      <div className="download-selection-header">
-        <span className="field-label">Разметки</span>
-        <button
-          className="secondary compact-action"
-          type="button"
-          disabled={!selectedIds.length || submitting}
-          onClick={() => setSelected((current) => changeTestMarkupDownloadSelection(
-            options,
-            current,
-            { type: "clear" },
-          ))}
-        >
-          Снять все
-        </button>
-      </div>
-      <div className="test-sample-download-grid">
-        {options.map(({ datasetName, sample }: TestMarkupDownloadOption) => {
-          const available = sample.enabled_image_count > 0;
-          const displayName = `${sample.class_name}_${datasetName}`;
-          const createdAt = formatDateTime(sample.created_at);
-          return (
-            <label
-              className={`test-sample-download-choice ${available ? "" : "disabled-row"}`}
-              key={sample.id}
-              title={available ? sample.name : `${sample.name}: в разметке нет включённых тайлов`}
-            >
-              <input
-                type="checkbox"
-                checked={available && selected.has(sample.id)}
-                disabled={!available || submitting}
-                aria-label={`Выбрать разметку ${displayName}: ${sample.name}, создана ${createdAt}`}
-                onChange={(event) => toggle(sample.id, event.target.checked)}
-              />
-              <span className="source-lines">
-                <strong>
-                  {displayName}
-                  {sample.is_primary ? <Star className="primary-star" size={14} fill="currentColor" aria-label="Основная разметка" /> : null}
-                </strong>
-                <span className="test-sample-download-created-at">{createdAt}</span>
-              </span>
-            </label>
-          );
-        })}
-      </div>
-      <DownloadModeFields
-        includePreviews={includePreviews}
-        onChange={setIncludePreviews}
-      />
-      <div className="button-row download-dialog-actions">
-        <button className="secondary" type="button" disabled={submitting} onClick={onCancel}>Отмена</button>
-        <button className="primary" type="submit" disabled={submitting || !selectedIds.length}>
-          <Download size={16} />
-          {submitting ? "Формирование..." : `Скачать выбранные (${selectedIds.length})`}
         </button>
       </div>
     </form>
@@ -1379,7 +1241,7 @@ function TestSampleEditorPage({
   showModal,
   closeModal,
   registerRouteGuard,
-}: RoutedPageProps & { sampleId: string }) {
+}: Pick<RoutedPageProps, "run" | "showModal" | "closeModal" | "registerRouteGuard"> & { sampleId: string }) {
   const [sample, setSample] = useState<TestSampleDetail | null>(null);
   const [draft, setDraft] = useState<TestMarkupDraft | null>(null);
   const [draftEvaluation, setDraftEvaluation] = useState<TestSampleEvaluationInfo | null>(null);
@@ -1395,13 +1257,18 @@ function TestSampleEditorPage({
   const [maxTileCount, setMaxTileCount] = useState(1);
   const [minObjectCount, setMinObjectCount] = useState(1);
 
-  const loadSample = useCallback(async () => {
+  const sampleRequest = useRef(0);
+  const loadSample = useCallback(async (signal: AbortSignal) => {
+    const revision = ++sampleRequest.current;
     setLoaded(false);
-    await run(() => apiJson<TestSampleCatalogResponse>(
-      "/test-samples/reconcile",
-      { method: "POST" },
-    ));
-    const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
+    setSample(null);
+    setDraft(null);
+    const readSample = () => run(async () => {
+      try { return await apiJson<TestSampleDetail>(`/test-samples/${sampleId}`, { signal }); }
+      catch (error) { if (!signal.aborted) throw error; }
+    });
+    const payload = await readSample();
+    if (signal.aborted || revision !== sampleRequest.current) return;
     if (payload) {
       setSample(payload);
       setDraft(testMarkupDraft(payload));
@@ -1418,15 +1285,26 @@ function TestSampleEditorPage({
       }
     }
     setLoaded(true);
+    if (!payload) return;
+    await run(async () => {
+      try { await apiJson(`/test-samples/classes/${encodeURIComponent(payload.class_key)}/reconcile`, { method: "POST", signal }); }
+      catch (error) { if (!signal.aborted) throw error; }
+    });
+    if (signal.aborted || revision !== sampleRequest.current) return;
+    const refreshed = await readSample();
+    if (refreshed && !signal.aborted && revision === sampleRequest.current) setSample(refreshed);
   }, [run, sampleId]);
 
   useEffect(() => {
-    void loadSample();
+    const controller = new AbortController();
+    void loadSample(controller.signal);
+    return () => { controller.abort(); sampleRequest.current += 1; };
   }, [loadSample]);
 
   const refreshSample = useCallback(async () => {
+    const revision = sampleRequest.current;
     const payload = await run(() => apiJson<TestSampleDetail>(`/test-samples/${sampleId}`));
-    if (payload) setSample(payload);
+    if (payload && revision === sampleRequest.current) setSample(payload);
   }, [run, sampleId]);
 
   const evaluationActive = sample?.evaluation.status === "queued"
@@ -1958,6 +1836,17 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [viewportSize, setViewportSize] = useState<ViewerPoint>({ x: 0, y: 0 });
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const observer = new ResizeObserver(() => setViewportSize({ x: viewport.clientWidth, y: viewport.clientHeight }));
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+  const fittedPixelRatio = naturalSize && viewportSize.x && viewportSize.y
+    ? Math.min(1, viewportSize.x / naturalSize.x, viewportSize.y / naturalSize.y) : 1;
+  const maxScale = Math.max(TILE_VIEWER_MAX_SCALE, 1 / fittedPixelRatio);
 
   const resetView = useCallback(() => {
     setScale(TILE_VIEWER_MIN_SCALE);
@@ -1966,7 +1855,7 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
 
   const zoomTo = useCallback((requestedScale: number, clientPoint?: ViewerPoint) => {
     const nextScale = Math.min(
-      TILE_VIEWER_MAX_SCALE,
+      maxScale,
       Math.max(TILE_VIEWER_MIN_SCALE, requestedScale),
     );
     if (nextScale === scale) return;
@@ -1986,7 +1875,7 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
           y: anchor.y - (anchor.y - current.y) * ratio,
         });
     setScale(nextScale);
-  }, [scale]);
+  }, [scale, maxScale]);
 
   const oneToOneScale = useCallback(() => {
     const viewport = viewportRef.current;
@@ -1997,9 +1886,9 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
       viewport.clientHeight,
       image.naturalWidth,
       image.naturalHeight,
-      TILE_VIEWER_MAX_SCALE,
+      maxScale,
     );
-  }, []);
+  }, [maxScale]);
 
   return (
     <div className="test-sample-tile-viewer">
@@ -2013,11 +1902,11 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
             title="Уменьшить"
             onClick={() => zoomTo(scale / TILE_VIEWER_ZOOM_STEP)}
           ><ZoomOut size={17} /></button>
-          <span className="test-sample-tile-viewer-scale">{Math.round(scale * 100)}%</span>
+          <span className="test-sample-tile-viewer-scale" title="Масштаб относительно исходных пикселей">{Math.round(scale * fittedPixelRatio * 100)}%</span>
           <button
             className="secondary icon-button compact-action"
             type="button"
-            disabled={!loaded || scale >= TILE_VIEWER_MAX_SCALE}
+            disabled={!loaded || scale >= maxScale}
             aria-label="Увеличить"
             title="Увеличить"
             onClick={() => zoomTo(scale * TILE_VIEWER_ZOOM_STEP)}
@@ -2026,7 +1915,7 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
           <button className="secondary compact-action" type="button" disabled={!loaded} onClick={resetView}>Вписать</button>
         </div>
         <span className="muted">
-          {naturalSize ? `${naturalSize.x} × ${naturalSize.y} px · ` : ""}
+          {naturalSize ? `${naturalSize.x} × ${naturalSize.y} пикс. · ` : ""}
           колесо — масштаб, перетаскивание — перемещение, двойной клик — приблизить
         </span>
       </div>
@@ -2090,7 +1979,12 @@ function TestSampleTileViewer({ src, alt }: { src: string; alt: string }) {
           src={src}
           alt={alt}
           draggable={false}
-          style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }}
+          decoding="async"
+          style={{
+            width: naturalSize ? naturalSize.x * fittedPixelRatio * scale : undefined,
+            height: naturalSize ? naturalSize.y * fittedPixelRatio * scale : undefined,
+            transform: `translate3d(${offset.x}px, ${offset.y}px, 0) translate(-50%, -50%)`,
+          }}
           onLoad={(event) => {
             setNaturalSize({ x: event.currentTarget.naturalWidth, y: event.currentTarget.naturalHeight });
             setLoaded(true);
@@ -3228,7 +3122,7 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
   );
 }
 
-function ResultsPage({ run, showJobLog }: RoutedPageProps) {
+function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJobLog">) {
   const [classes, setClasses] = useState<ResultClassInfo[] | null>(null);
   const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
   useEffect(() => {
@@ -3260,11 +3154,16 @@ function ResultsPage({ run, showJobLog }: RoutedPageProps) {
 function DatasetResultsPage({
   datasetKey,
   bootstrap,
+  getBootstrap,
   run,
   showModal,
   closeModal,
   showJobLog,
-}: RoutedPageProps & { datasetKey: string }) {
+}: Pick<RoutedPageProps, "run" | "showModal" | "closeModal" | "showJobLog"> & {
+  datasetKey: string;
+  bootstrap: BootstrapInfo | null;
+  getBootstrap: () => Promise<BootstrapInfo | undefined>;
+}) {
   const [payload, setPayload] = useState<DatasetResultsResponse | null>(null);
   const [recalculatingTestF1, setRecalculatingTestF1] = useState(false);
   const load = useCallback(async () => {
@@ -3284,16 +3183,18 @@ function DatasetResultsPage({
 
   if (!payload) return <LoadingPage text="Загрузка результатов датасета" />;
 
-  const showPseudo = (result: TrainingResultInfo) => {
+  const showPseudo = async (result: TrainingResultInfo) => {
+    const catalog = await getBootstrap();
+    if (!catalog) return;
     showModal({
       title: "Создать псевдоразметку",
       body: (
         <PseudoMarkupForm
           datasetKey={datasetKey}
           result={result}
-          datasets={bootstrap.datasets}
-          imageFolders={bootstrap.image_folders}
-          inferenceAvailable={Boolean(inferenceTemplateForDataset(bootstrap.inference_templates, bootstrap.datasets, payload.class_key || datasetKey))}
+          datasets={catalog.datasets}
+          imageFolders={catalog.image_folders}
+          inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))}
           run={run}
           closeModal={closeModal}
           reload={load}
@@ -3302,15 +3203,19 @@ function DatasetResultsPage({
     });
   };
 
-  const showZip = (result: TrainingResultInfo) => {
-    showTrainingResultZipModal(result, bootstrap.datasets, run, showModal, closeModal);
+  const showZip = async (result: TrainingResultInfo) => {
+    const catalog = await getBootstrap();
+    if (catalog) showTrainingResultZipModal(result, catalog.datasets, run, showModal, closeModal);
   };
 
   const showContinuation = async (result: TrainingResultInfo) => {
-    const options = await run(() => apiJson<TrainingContinuationOptions>(`/results/training/${result.id}/continue`));
-    if (options) showModal({
+    const [options, catalog] = await Promise.all([
+      run(() => apiJson<TrainingContinuationOptions>(`/results/training/${result.id}/continue`)),
+      getBootstrap(),
+    ]);
+    if (options && catalog) showModal({
       title: "Продолжить обучение",
-      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(bootstrap.inference_templates, bootstrap.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
+      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
       footer: null,
     });
   };
@@ -3327,7 +3232,7 @@ function DatasetResultsPage({
   const deletePseudo = (item: PseudoMarkupResultInfo) => {
     showModal({
       title: "Удалить pseudo-markup",
-      body: <p>{imageSourceLabel(item, bootstrap.datasets, bootstrap.image_folders)}</p>,
+      body: <p>{imageSourceLabel(item, bootstrap?.datasets || [], bootstrap?.image_folders || [])}</p>,
       footer: (
         <>
           <button className="secondary" type="button" onClick={closeModal}>
@@ -3418,10 +3323,10 @@ function DatasetResultsPage({
       <section className="panel">
         <ResultsTable
           payload={payload}
-          datasets={bootstrap.datasets}
-          imageFolders={bootstrap.image_folders}
-          onPseudo={showPseudo}
-          onZip={showZip}
+          datasets={bootstrap?.datasets || []}
+          imageFolders={bootstrap?.image_folders || []}
+          onPseudo={(result) => void showPseudo(result)}
+          onZip={(result) => void showZip(result)}
           onContinue={(result) => void showContinuation(result)}
           onPrimary={(result) => void togglePrimaryResult(result)}
           onDeletePseudo={deletePseudo}

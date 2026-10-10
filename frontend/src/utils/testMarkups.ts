@@ -1,6 +1,5 @@
 import type {
   DatasetInfo,
-  TestSampleCard,
   TestSampleCatalogResponse,
   TestSampleDetail,
   TestSampleDraftPreview,
@@ -18,15 +17,6 @@ export type TestMarkupStats = {
   hasPrimary: boolean;
 };
 
-export type TestMarkupDownloadOption = {
-  datasetName: string;
-  sample: TestSampleCard;
-};
-
-export type TestMarkupDownloadSelectionChange =
-  | { type: "clear" }
-  | { type: "toggle"; sampleId: string; checked: boolean };
-
 export function isDatasetReadyForTestMarkup(dataset: DatasetInfo): boolean {
   if (dataset.is_custom || (dataset.diagnostics || []).length) return false;
   const legacyReady = Boolean(dataset.scenes_file && dataset.annotation_file);
@@ -43,68 +33,6 @@ export function flattenTestMarkups(catalog: TestSampleCatalogResponse | null): T
       ? classGroup.samples || []
       : (classGroup.datasets || []).flatMap((dataset) => dataset.samples || []),
   );
-}
-
-export function testMarkupDownloadOptions(
-  catalog: TestSampleCatalogResponse | TestSampleCard[] | null,
-): TestMarkupDownloadOption[] {
-  return (Array.isArray(catalog) ? catalog : flattenTestMarkups(catalog))
-    .map((sample) => ({
-      datasetName: sample.source_dataset_name || sample.dataset_name,
-      sample,
-    }))
-    .sort((left, right) => {
-      const classOrder = left.sample.class_name.localeCompare(right.sample.class_name, "ru");
-      if (classOrder) return classOrder;
-      const datasetOrder = left.datasetName.localeCompare(right.datasetName, "ru");
-      if (datasetOrder) return datasetOrder;
-      const primaryOrder = Number(right.sample.is_primary) - Number(left.sample.is_primary);
-      if (primaryOrder) return primaryOrder;
-      const createdOrder = right.sample.created_at.localeCompare(left.sample.created_at);
-      return createdOrder || left.sample.id.localeCompare(right.sample.id);
-    });
-}
-
-export function initialTestMarkupDownloadSelection(
-  options: TestMarkupDownloadOption[],
-): Set<string> {
-  const selected = new Set<string>();
-  const selectedClasses = new Set<string>();
-  for (const { sample } of options) {
-    if (
-      sample.is_primary
-      && sample.enabled_image_count > 0
-      && !selectedClasses.has(sample.class_key)
-    ) {
-      selected.add(sample.id);
-      selectedClasses.add(sample.class_key);
-    }
-  }
-  return selected;
-}
-
-export function changeTestMarkupDownloadSelection(
-  options: TestMarkupDownloadOption[],
-  current: ReadonlySet<string>,
-  change: TestMarkupDownloadSelectionChange,
-): Set<string> {
-  if (change.type === "clear") return new Set();
-
-  const option = options.find(({ sample }) => sample.id === change.sampleId);
-  const next = new Set(current);
-  if (!option || option.sample.enabled_image_count <= 0) return next;
-  if (!change.checked) {
-    next.delete(change.sampleId);
-    return next;
-  }
-
-  for (const candidate of options) {
-    if (candidate.sample.class_key === option.sample.class_key) {
-      next.delete(candidate.sample.id);
-    }
-  }
-  next.add(change.sampleId);
-  return next;
 }
 
 export function testMarkupStats(

@@ -122,6 +122,8 @@ from ._template_selection import (
     effective_training_template_row,
 )
 from ._test_samples import (
+    _TestF1ReadContext,
+    _test_f1_read_context,
     _class_scope_keys,
     TEST_SAMPLE_F1_OPERATION,
     dataset_test_sample_pseudo_markup,
@@ -313,13 +315,18 @@ def result_classes(
     config: TrainingUIAPIConfig,
 ) -> ResultClassListResponse:
     catalog = list_managed_classes(session, config)
+    selected_by_class = {
+        item.key: _result_card_training_results(session, item.key, [dataset.key for dataset in item.datasets])
+        for item in catalog
+    }
+    read_context = _test_f1_read_context(
+        session,
+        [row for selected, _ in selected_by_class.values() for row in selected.values()],
+        datasets=[dataset for item in catalog for dataset in item.datasets],
+    )
     output: list[ResultClassInfo] = []
     for class_info in catalog:
-        selected_results, last_training_time = _result_card_training_results(
-            session,
-            class_info.key,
-            [dataset.key for dataset in class_info.datasets],
-        )
+        selected_results, last_training_time = selected_by_class[class_info.key]
         result_datasets: list[ResultDatasetInfo] = []
         for dataset in class_info.datasets:
             test_f1 = None
@@ -328,7 +335,7 @@ def result_classes(
             test_f1_training_result_id = None
             selected_result = selected_results.get(dataset.key)
             if selected_result is not None:
-                info = training_result_test_f1_info(session, selected_result, config)
+                info = training_result_test_f1_info(session, selected_result, config, read_context=read_context)
                 if info is not None and info.f1 is not None:
                     test_f1 = info.f1
                     test_f1_metrics = dict(info.metrics or {})
@@ -1222,6 +1229,7 @@ def dataset_results(
         ],
     )
     primary = primary_test_sample(session, dataset_key)
+    read_context = _test_f1_read_context(session, list(rows), datasets=[dataset_info])
     result_infos = [
         _training_result_info(
             session,
@@ -1229,6 +1237,7 @@ def dataset_results(
             config=config,
             pseudo_rows=pseudo_by_training_id.get(row.id, []),
             jobs_by_id=job_rows,
+            test_f1_read_context=read_context,
         )
         for row in rows
     ]
@@ -2828,6 +2837,7 @@ def _training_result_info(
     config: TrainingUIAPIConfig,
     pseudo_rows: list[PseudoMarkupResultRow] | None = None,
     jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
+    test_f1_read_context: _TestF1ReadContext | None = None,
 ) -> TrainingResultInfo:
     if pseudo_rows is None:
         pseudo_rows = session.scalars(
@@ -2840,7 +2850,11 @@ def _training_result_info(
             .order_by(PseudoMarkupResultRow.created_at.desc())
         ).all()
     job = _job_from_map(session, row.job_id, jobs_by_id)
-    is_primary = _is_primary_training_result(session, row)
+    class_row = (
+        test_f1_read_context.classes.get(row.dataset_key or row.class_key)
+        if test_f1_read_context is not None else dataset_class_row(session, row.dataset_key or row.class_key)
+    )
+    is_primary = class_row is not None and class_row.primary_training_result_id == row.id
     continuation = (job.config or {}).get(CONTINUATION_KEY, {}) if job is not None else {}
     return TrainingResultInfo(
         id=row.id,
@@ -2872,7 +2886,7 @@ def _training_result_info(
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),
         error=job.error if job is not None else None,
         progress=_training_result_progress(session, row, jobs_by_id),
-        test_f1=training_result_test_f1_info(session, row, config),
+        test_f1=training_result_test_f1_info(session, row, config, read_context=test_f1_read_context),
         pseudo_markup_results=[
             _pseudo_markup_info(session, item, jobs_by_id) for item in pseudo_rows
         ],

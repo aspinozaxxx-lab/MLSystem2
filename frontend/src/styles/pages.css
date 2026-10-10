@@ -577,69 +577,6 @@
   gap: 12px;
 }
 
-.test-sample-download-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  max-height: min(50vh, 480px);
-  padding-right: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-.bulk-test-sample-download-form {
-  min-height: 0;
-}
-
-.test-sample-download-choice {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  min-height: 40px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--grovika-radius-control);
-  background: var(--surface-soft);
-  cursor: pointer;
-}
-
-.test-sample-download-choice.disabled-row {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.test-sample-download-choice input {
-  flex: 0 0 auto;
-  margin: 0;
-}
-
-.test-sample-download-choice .source-lines {
-  min-width: 0;
-}
-
-.test-sample-download-choice strong {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.test-sample-download-choice strong,
-.test-sample-download-choice span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.test-sample-download-created-at {
-  color: var(--muted);
-  font: 400 11px/16px var(--grovika-font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 .download-mode-fieldset {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1022,11 +959,11 @@
 
 .test-sample-tile-viewer-viewport img {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  max-width: none;
+  max-height: none;
   user-select: none;
   transform-origin: center;
   will-change: transform;
@@ -2016,10 +1953,6 @@
   }
 
   .test-markup-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .test-sample-download-grid {
     grid-template-columns: 1fr;
   }
 

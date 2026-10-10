@@ -79,7 +79,6 @@ export type TestSampleCreationSettings = components["schemas"]["TestSampleCreati
 export type TestSampleBatchDatasetOption = components["schemas"]["TestSampleBatchDatasetOption"];
 export type TestSampleBatchInfo = components["schemas"]["TestSampleBatchInfo"];
 export type TestSampleBatchOptionsResponse = components["schemas"]["TestSampleBatchOptionsResponse"];
-export type TestSampleBulkDownloadRequest = components["schemas"]["TestSampleBulkDownloadRequest"];
 export type TestSampleCreate = components["schemas"]["TestSampleCreate"];
 export type TestSampleDetail = components["schemas"]["TestSampleDetail"];
 export type TestSampleDownloadRequest = components["schemas"]["TestSampleDownloadRequest"];

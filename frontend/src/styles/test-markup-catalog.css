@@ -5,11 +5,11 @@
 .test-markup-browser-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .test-markup-browser-header .button-row { flex-shrink: 0; margin: 0; }
 .test-markup-browser-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: start; gap: 24px; }
-.test-markup-class-nav { position: sticky; top: 18px; display: grid; gap: 4px; min-width: 0; padding-right: 16px; border-right: 1px solid var(--border); }
-.test-markup-class-nav > .field-label { padding: 0 10px 8px; }
-.test-markup-class-nav button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 38px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; text-align: left; }
-.test-markup-class-nav button > span { min-width: 0; overflow-wrap: anywhere; line-height: 17px; }
-.test-markup-class-nav button > small { flex-shrink: 0; min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+.test-markup-class-nav { position: sticky; top: 12px; display: grid; gap: 2px; min-width: 0; padding-right: 14px; border-right: 1px solid var(--border); }
+.test-markup-class-nav > .field-label { padding: 0 8px 4px; font-size: 11px; }
+.test-markup-class-nav button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-height: 22px; padding: 2px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; line-height: 14px; text-align: left; }
+.test-markup-class-nav button > span { min-width: 0; overflow-wrap: anywhere; line-height: 14px; }
+.test-markup-class-nav button > small { flex-shrink: 0; min-width: 18px; font-size: 11px; line-height: 14px; text-align: right; font-variant-numeric: tabular-nums; }
 .test-markup-class-nav button:hover { background: var(--surface-strong); color: var(--text); }
 .test-markup-class-nav button.selected { background: var(--grovika-slate); color: var(--grovika-white); font-weight: 600; }
 .test-markup-class-content { min-width: 0; }
