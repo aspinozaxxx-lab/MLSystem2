@@ -3,6 +3,8 @@ from __future__ import annotations
 import builtins
 import inspect
 import random
+import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -56,6 +58,99 @@ def test_seed_training_without_torch_still_seeds_python_and_numpy(monkeypatch) -
     _runner._seed_training(42)
 
     assert (random.random(), float(np.random.random())) == first
+
+
+def test_training_device_cpu_does_not_import_torch(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def import_without_torch(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "torch":
+            pytest.fail("Проверка CPU не должна загружать Torch")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_torch)
+    _runner._validate_training_device("cpu")
+
+
+def test_training_device_checks_selected_cuda_device_and_waits_for_kernel(monkeypatch) -> None:
+    calls = []
+
+    class Tensor:
+        def __add__(self, value):
+            calls.append(("kernel", value))
+            return self
+
+        def item(self):
+            calls.append("synchronize")
+            return 1
+
+    def zeros(size, *, device):
+        calls.append(("allocate", size, device))
+        return Tensor()
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(zeros=zeros))
+    _runner._validate_training_device("cuda:1")
+
+    assert calls == [("allocate", 1, "cuda:1"), ("kernel", 1), "synchronize"]
+
+
+@pytest.mark.parametrize("failure_stage", ["allocate", "kernel", "synchronize"])
+def test_unavailable_cuda_fails_before_dataset_preparation_and_closes_mlflow(
+    monkeypatch, failure_stage,
+) -> None:
+    calls = []
+    reports = []
+    reason = "CUDA error: forward compatibility was attempted on non supported HW"
+
+    def operation(stage):
+        if stage == failure_stage:
+            raise RuntimeError(reason)
+
+    class Tensor:
+        def __add__(self, _value):
+            operation("kernel")
+            return self
+
+        def item(self):
+            operation("synchronize")
+            return 1
+
+    def zeros(_size, *, device):
+        assert device == "cuda"
+        operation("allocate")
+        return Tensor()
+
+    def prepare_dataset(_request):
+        pytest.fail("При сбое CUDA подготовка датасета не должна начинаться")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(zeros=zeros))
+    settings = _multiclass_settings()
+    settings.train.device = "cuda"
+    deps = replace(
+        _runner._default_dependencies(),
+        get_settings=lambda: settings,
+        get_settings_path=lambda: Path("config.yaml"),
+        start_run=lambda request: MLflowRunRef(
+            run_id="run",
+            experiment_name=request.experiment_name,
+            tracking_uri=request.tracking_uri,
+            active=True,
+        ),
+        log_run_config=lambda *_args: calls.append("config"),
+        prepare_dataset=prepare_dataset,
+        log_timing_report=lambda *_args: calls.append("timing"),
+        log_pipeline_report=lambda _run, report: reports.append(report),
+        end_run=lambda _run, status: calls.append(status.value),
+    )
+
+    with pytest.raises(TrainPipelineError) as error:
+        _runner.run_train_pipeline(TrainPipelineRequest(), dependencies=deps)
+
+    assert reason in str(error.value.__cause__)
+    assert calls == ["config", "timing", "FAILED"]
+    assert reports[0].status == PipelineStatus.FAILED
+    assert reason in reports[0].errors[0]
+    assert "Подготовка датасета не начата" in reports[0].errors[0]
 
 
 def test_code_revision_falls_back_to_valid_deployment_marker(

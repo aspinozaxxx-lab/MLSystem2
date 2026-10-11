@@ -140,6 +140,12 @@ def run_train_pipeline(
         run = deps.start_run(_mlflow_start_request(settings, request))
         measure_mlflow(lambda: deps.log_run_config(run, deps.get_settings_path()))
 
+        _, timing = timed_call(
+            "training_device",
+            lambda: _validate_training_device(settings.train.device),
+        )
+        timings.append(timing)
+
         dataset_result, timing = timed_call(
             "dataset_preparing",
             lambda: deps.prepare_dataset(_dataset_request(settings)),
@@ -361,6 +367,22 @@ def run_train_pipeline(
             except Exception:
                 pass
         raise TrainPipelineError("Конвейер обучения завершился ошибкой") from exc
+
+
+def _validate_training_device(device: str) -> None:
+    if device.split(":", 1)[0] != "cuda":
+        return
+    try:
+        import torch
+
+        # Проверяем создание контекста, запуск ядра и синхронизацию выбранной GPU.
+        (torch.zeros(1, device=device) + 1).item()
+    except (ImportError, RuntimeError, OSError, AssertionError) as exc:
+        raise TrainPipelineError(
+            f"CUDA недоступна на устройстве «{device}»: {exc}. "
+            "Подготовка датасета не начата. Проверьте доступность видеокарты "
+            "и согласованность драйвера NVIDIA с его библиотеками."
+        ) from exc
 
 
 def _mlflow_start_request(

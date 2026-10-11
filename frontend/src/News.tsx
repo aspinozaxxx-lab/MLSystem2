@@ -14,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "training-cuda-preflight",
+  date: "2026-10-11",
+  title: "Проверка видеокарты до подготовки обучения",
+  updates: [
+    "Обучение проверяет работу CUDA на выбранной видеокарте до подготовки датасета и тайлов. При недоступной GPU или несовпадении драйвера NVIDIA с его библиотеками задание сразу сообщает причину ошибки; ждать долгой подготовки данных больше не нужно.",
+  ],
+}, {
   slug: "next-gen2-multiclass",
   date: "2026-10-11",
   title: "Next-gen2: несколько классов в одной сети",
