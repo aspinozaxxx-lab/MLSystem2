@@ -128,13 +128,16 @@ def test_validation_uses_the_same_strict_threshold_as_window_inference():
     assert score["foreground_pixel_f1"] == 0
 
 
-def test_multiclass_sampler_weights_and_augmentation_share_geometry(tmp_path):
+@pytest.mark.parametrize("channels", [3, 4])
+def test_multiclass_sampler_weights_and_augmentation_share_geometry(tmp_path, channels):
     import albumentations as A
+    import cv2
 
     image, annotation = tmp_path / "scene.tif", tmp_path / "scene.geojson"
     transform = from_origin(0, 64, 1, 1)
-    with rasterio.open(image, "w", driver="GTiff", width=64, height=64, count=3, dtype="uint8", crs="EPSG:3857", transform=transform) as target:
-        target.write(np.ones((3, 64, 64), np.uint8))
+    with rasterio.open(image, "w", driver="GTiff", width=64, height=64, count=channels, dtype="uint8", crs="EPSG:3857", transform=transform) as target:
+        target.write(np.ones((channels, 64, 64), np.uint8))
+        target.colorinterp = (rasterio.enums.ColorInterp.undefined,) * channels
     annotation.write_text(json.dumps({"type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
         "features": [{"type": "Feature", "properties": {"_mlsystem2_class": "type_2"}, "geometry": mapping(box(0, 32, 16, 64))},
                      {"type": "Feature", "properties": {"_mlsystem2_class": "type_3"}, "geometry": mapping(box(16, 32, 32, 64))},
@@ -144,7 +147,7 @@ def test_multiclass_sampler_weights_and_augmentation_share_geometry(tmp_path):
     split = TileSplitRequest(val_fraction=0.2, test_fraction=0.2, strategy="window_random", seed=42)
     assert TileDataloaderRequest(scenes=[scene], classes=classes, batch_size=2, mode="train", pipeline_variant="next_gen2", tile_split=split)
     dataset = TileDataset(scenes=[scene], classes=classes, tile_size=32, stride=32, mode="train", seed=42,
-                          pipeline_variant="next_gen2", augmentation_level=0)
+                          pipeline_variant="next_gen2", augmentation_level=0, input_channels=channels)
     try:
         assert len(dataset.notebook_class_weights) == 4
         assert np.isfinite(dataset.notebook_class_weights).all()
@@ -155,6 +158,30 @@ def test_multiclass_sampler_weights_and_augmentation_share_geometry(tmp_path):
         assert after.shape == (32, 32)
         np.testing.assert_array_equal(after, before[:, ::-1])
         np.testing.assert_array_equal(moved["class_hard_negative_masks"], meta["class_hard_negative_masks"][:, :, ::-1])
+        # Проверяем реальную аффинную геометрию: простой flip не обнаруживает
+        # неподдерживаемые OpenCV boolean-маски отрицательных примеров.
+        for sample_index in (0, 1):
+            dataset._notebook_transform = None
+            _, before, meta = dataset[sample_index]
+            dataset._notebook_transform = A.Compose([
+                A.Affine(scale=1.08, rotate=17, translate_px={"x": 3, "y": -2},
+                         border_mode=cv2.BORDER_REFLECT_101, p=1),
+            ], strict=True, save_applied_params=True)
+            _, after, moved = dataset[sample_index]
+            matrix = dataset._notebook_transform.transforms[0].params["matrix"][:2]
+            expected = cv2.warpAffine(
+                before.astype(np.float32), matrix, (32, 32),
+                flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101,
+            ).astype(np.int64)
+            negatives = np.stack([
+                cv2.warpAffine(value.astype(np.uint8), matrix, (32, 32),
+                               flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101)
+                for value in meta["class_hard_negative_masks"]
+            ]).astype(bool)
+            assert after.dtype == np.int64
+            assert moved["class_hard_negative_masks"].dtype == np.bool_
+            np.testing.assert_array_equal(after, expected)
+            np.testing.assert_array_equal(moved["class_hard_negative_masks"], negatives)
     finally:
         dataset.close()
 

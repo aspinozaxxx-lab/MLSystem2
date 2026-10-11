@@ -351,11 +351,12 @@ class TileDataset:
                 extra.update(instances=object_instances.astype(np.float32), ambiguous=ambiguous.astype(np.uint8))
             transformed = notebook_transform(
                 image=np.moveaxis(image_raw, 0, -1), mask=mask if self.uses_multiclass_masks else mask[0],
-                **({"masks": list(class_hard_negative_masks)} if class_hard_negative_masks is not None else {}),
+                # OpenCV преобразует маски 0/1, но не массивы boolean.
+                **({"masks": list(class_hard_negative_masks.astype(np.uint8))} if class_hard_negative_masks is not None else {}),
                 **extra,
             )
             image = np.moveaxis(transformed["image"], -1, 0).astype(np.float32)
-            mask = transformed["mask"] if self.uses_multiclass_masks else transformed["mask"][None, :, :]
+            mask = transformed["mask"].astype(np.int64, copy=False) if self.uses_multiclass_masks else transformed["mask"][None, :, :]
             if class_hard_negative_masks is not None:
                 class_hard_negative_masks = np.asarray(transformed["masks"], dtype=bool)
             augmented = bool(transformed["applied_transforms"])

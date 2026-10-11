@@ -42,7 +42,9 @@ Manifest содержит все координаты и индексы train/va
 обратные частоты всех классов и фона и sampler 7/8/1 для любого positive/hard negative/фона; порог positive 0.001.
 Multiclass сохраняет ID 1..N, а class-specific отрицательные области исключены из частот; общий negative — фон.
 Albumentations синхронно переносит семантическую маску и все class-specific negative каналы.
-Hard negative перекрывает positive. Ко всем train-тайлам применяются геометрия и фотометрия
+Hard negative перекрывает positive. Для аффинных преобразований class-specific negative маски
+временно передаются как uint8 0/1, затем возвращаются в boolean; multiclass target сохраняет int64.
+Ко всем train-тайлам применяются геометрия и фотометрия
 Albumentations до нормализации в модели. Val/test не балансируются и не аугментируются.
 Workers берутся из серверных settings (8); prefetch_factor=2, persistent_workers=False, при CUDA — pinned memory.
 Во всех профилях дочерние загрузчики запускаются через `spawn`, чтобы не наследовать блокировки потоков MLflow, OpenSSL и GDAL. Ожидание batch ограничено 180 секундами; зависший загрузчик завершает задание с ошибкой и не удерживает очередь бессрочно. Однопроцессное чтение не имеет этого таймаута. Способ запуска и таймаут входят в диагностику next-gen2/object f1.
