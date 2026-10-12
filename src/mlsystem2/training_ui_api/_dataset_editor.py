@@ -38,6 +38,7 @@ from mlsystem2.dataset_preparing.api import (
 )
 
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_write_lock
 from ._combined_dataset import (
     build_combined_dataset,
     feature_hash,
@@ -1408,7 +1409,6 @@ def delete_editor_dataset(
 
     with _editor_lock(config, restore_ownership=True):
         _synchronize_editor_clone(config)
-        dataset = _managed_editor_dataset(session, config, dataset_key)
         row = session.scalar(
             select(DatasetRow).where(
                 DatasetRow.key == dataset_key,
@@ -1453,7 +1453,7 @@ def delete_editor_dataset(
                 "Нельзя удалить исходный датасет, пока он входит в управляемый: "
                 f"{dependent[1]} / {dependent[0]}."
             )
-        source_dir = _editor_source_dir(config, dataset)
+        source_dir = _editor_source_dir(config, row)
         source_relative = _repo_relative(config, source_dir)
         if len(source_relative.parts) < 2:
             raise TrainingUIAPIError(
@@ -1475,33 +1475,26 @@ def delete_editor_dataset(
                 + ", ".join(sorted(nested_sources, key=str.casefold))
             )
         tree_revision = _tree_object_revision(config, "HEAD", source_relative)
-        if tree_revision is None or not source_dir.is_dir():
-            raise TrainingUIAPIError(
-                "Папка датасета отсутствует или не зафиксирована в Git editor-клона."
-            )
-
-        _git(config, "rm", "-r", "--", source_relative.as_posix())
-        try:
-            commit = _commit(
-                config,
-                f"Удалить датасет {dataset.name}",
-                username,
-            )
-            commit = _push_with_retry(
-                config,
-                expected_revisions={},
-                expected_tree_revisions={source_relative: tree_revision},
-            )
-        except Exception:
-            _git_optional(
-                config,
-                "restore",
-                "--staged",
-                "--worktree",
-                "--",
-                source_relative.as_posix(),
-            )
-            raise
+        commit = _git(config, "rev-parse", "HEAD").stdout.strip()
+        if tree_revision is not None:
+            _git(config, "rm", "-r", "--", source_relative.as_posix())
+            try:
+                _commit(config, f"Удалить датасет {row.name}", username)
+                commit = _push_with_retry(
+                    config,
+                    expected_revisions={},
+                    expected_tree_revisions={source_relative: tree_revision},
+                )
+            except Exception:
+                _git_optional(
+                    config,
+                    "restore",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    source_relative.as_posix(),
+                )
+                raise
 
         class_row = session.get(DatasetClassRow, row.class_id)
         if class_row is not None and class_row.primary_dataset_id == row.id:
@@ -1646,7 +1639,8 @@ def editor_publication_info(
     if _SHA_PATTERN.fullmatch(commit) is None:
         raise TrainingUIAPIError("Некорректный SHA коммита")
     with _editor_lock(config, restore_ownership=True):
-        _fetch_editor_clone(config)
+        if config.mlmarkup_root.resolve() != config.mlmarkup_editor_root.resolve():
+            _fetch_editor_clone(config)
         live_commit = _live_commit(config)
         status = "publishing"
         if live_commit is not None:
@@ -2608,7 +2602,7 @@ def _positive_integer(value: object, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def _editor_source_dir(config: TrainingUIAPIConfig, dataset: DatasetInfo) -> Path:
+def _editor_source_dir(config: TrainingUIAPIConfig, dataset: DatasetInfo | DatasetRow) -> Path:
     if dataset.source_path is None:
         raise TrainingUIAPIError("У датасета отсутствует source_path")
     relative = PurePosixPath(dataset.source_path)
@@ -3909,39 +3903,12 @@ def _editor_lock(
     *,
     restore_ownership: bool = False,
 ) -> Iterator[None]:
-    lock_path = config.mlmarkup_editor_root.parent / ".mlmarkup-editor.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as stream:
-        if os.name == "nt":
-            import msvcrt
-
-            stream.seek(0, os.SEEK_END)
-            if stream.tell() == 0:
-                stream.write(b"\0")
-                stream.flush()
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                try:
-                    if restore_ownership:
-                        _restore_editor_clone_ownership(config)
-                finally:
-                    stream.seek(0)
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                try:
-                    if restore_ownership:
-                        _restore_editor_clone_ownership(config)
-                finally:
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    with markup_write_lock(config):
+        try:
+            yield
+        finally:
+            if restore_ownership:
+                _restore_editor_clone_ownership(config)
 
 
 def _restore_editor_clone_ownership(config: TrainingUIAPIConfig) -> None:
@@ -4000,6 +3967,8 @@ def _synchronize_editor_clone_if_stale(config: TrainingUIAPIConfig) -> None:
     """Обновить клон не чаще TTL; polling и чтение сцен Git не запускают."""
 
     _ensure_editor_clone(config)
+    if config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve():
+        return
     stamp_path = _editor_sync_stamp_path(config)
     try:
         age_seconds = time.time() - stamp_path.stat().st_mtime
@@ -4110,10 +4079,18 @@ def _push_with_retry(
     expected_tree_revisions: dict[PurePosixPath, str | None] | None = None,
 ) -> str:
     branch = config.mlmarkup_editor_branch
-    first = _git_optional(config, "push", "origin", f"HEAD:{branch}")
+    try:
+        first = _git_optional(config, "push", "origin", f"HEAD:{branch}")
+    except DatasetEditorGitError:
+        _discard_local_commit(config)
+        raise
     if first.returncode == 0:
         return _git(config, "rev-parse", "HEAD").stdout.strip()
-    _fetch_editor_clone(config)
+    try:
+        _fetch_editor_clone(config)
+    except DatasetEditorGitError:
+        _discard_local_commit(config)
+        raise
     remote_ref = f"origin/{branch}"
     changed = [
         path.as_posix()
@@ -4236,6 +4213,10 @@ def _publication_status(
 
 
 def _live_commit(config: TrainingUIAPIConfig) -> str | None:
+    if config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve():
+        result = _git_optional(config, "rev-parse", "HEAD")
+        value = result.stdout.strip()
+        return value if result.returncode == 0 and _SHA_PATTERN.fullmatch(value) else None
     try:
         value = config.mlmarkup_release_marker.read_text(encoding="utf-8").strip().splitlines()[0]
     except (OSError, IndexError):

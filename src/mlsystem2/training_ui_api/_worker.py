@@ -38,6 +38,7 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._training_continuation import CONTINUATION_KEY, build_continuation_config
 from ._dataset_catalog import (
     dataset_class_row,
@@ -834,150 +835,158 @@ def _build_pseudo_markup_config(
     config: TrainingUIAPIConfig,
     run_dir: Path,
 ) -> dict[str, Any]:
-    if _is_dataset_editor_pseudo_job(row):
-        state = (row.config or {}).get("editor_pseudo")
-        if not isinstance(state, dict):
-            raise RuntimeError("В задании редактора отсутствуют параметры псевдоразметки.")
-        try:
-            training_result_id = uuid.UUID(str(state.get("training_result_id")))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "В задании редактора повреждён идентификатор основной сети."
-            ) from exc
-        training_result = session.get(TrainingResultRow, training_result_id)
-        if training_result is None or training_result.status != ResultStatus.OK.value:
-            raise RuntimeError("Основная сеть для псевдоразметки снимка больше недоступна.")
-        scenes_path = run_dir / "editor_scene.txt"
-        scenes_path.write_text(f"{state.get('image_relative')}\n", encoding="utf-8")
-        snapshot = state
-        scenes_file = str(scenes_path)
-        images_root = str(state.get("images_root") or config.images_root)
-        annotation_files: list[str] = []
-        class_key = training_result.class_key
-        class_name = training_result.class_display_name
-        source_model = training_result.model_name
-    else:
-        result = _first_pseudo_markup_result(session, row)
-        if result is None or result.scenes_file is None:
-            raise RuntimeError("Для псевдоразметки не найден txt со снимками.")
-        training_result = (
-            session.get(TrainingResultRow, result.training_result_id)
-            if result.training_result_id is not None
-            else None
-        )
-        snapshot = dict(row.config or {})
-        scenes_file = result.scenes_file.path
-        images_root = str(snapshot.get("images_root") or config.images_root)
-        annotation_files = [
-            str(value) for value in (snapshot.get("annotation_files") or []) if value
-        ]
-        if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
-            dataset = find_managed_dataset(session, config, result.dataset_key)
-            if dataset is not None:
-                annotation_files = (
-                    per_image_annotation_files(Path(dataset.annotations_dir))
-                    if dataset.annotations_dir
-                    else [
-                        path
-                        for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
-                        if path
-                    ]
-                )
-        class_key = result.class_key
-        class_name = (
-            training_result.class_display_name if training_result is not None else result.class_key
-        )
-        source_model = training_result.model_name if training_result is not None else row.model_name
-
-    source_training_job = (
-        session.get(JobRow, training_result.job_id)
-        if training_result is not None and training_result.job_id is not None
-        else None
-    )
-    flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
-    try:
-        external_manifest = (
-            external_result_manifest(session, training_result)
-            if training_result is not None
-            else None
-        )
-    except ExternalModelError as exc:
-        raise RuntimeError(str(exc)) from exc
-    tile_size = (
-        external_manifest.tile_size
-        if external_manifest is not None
-        else _int_value(flat, "tile_preparation.tile_size", 768)
-    )
-    context = (
-        external_manifest.context
-        if external_manifest is not None
-        else _int_value(flat, "tile_preparation.context", 0)
-    )
-    core_size = tile_size - 2 * context
-    if context < 0 or core_size <= 0:
-        raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
-    threshold = _optional_float(snapshot, "checkpoint_threshold")
-    if threshold is None and training_result is not None and external_manifest is None:
-        raise RuntimeError(
-            "Для псевдоразметки по результату обучения не найден MLflow val/best_threshold "
-            "на эпохе best checkpoint."
-        )
-    if threshold is None:
-        threshold = _float_value(flat, "train.threshold", 0.5)
-    if flat.get("train.pipeline_variant") == "next_gen2":
-        threshold = NEXT_GEN2_INFERENCE_THRESHOLD
-    class_row = dataset_class_row(session, class_key)
-    imagery_type = str(
-        snapshot.get("imagery_type")
-        or (class_row.imagery_type if class_row is not None else "kanopus")
-    )
-    inference_backend = inference_backend_for_imagery(imagery_type)
-    return {
-        "run_root": str(run_dir / "scratch"),
-        "inference_backend": inference_backend,
-        "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
-        "report_path": str(run_dir / "scratch" / "report.json"),
-        "scenes_file": scenes_file,
-        "images_root": images_root,
-        "annotation_files": annotation_files,
-        "class_key": class_key,
-        "class_name": class_name,
-        "source_model": source_model,
-        "pipeline_variant": str(flat.get("train.pipeline_variant") or "legacy"),
-        "task": training_result.task if training_result is not None else "binary",
-        "object_types": (
-            list(training_result.class_schema or []) if training_result is not None else []
-        ),
-        "mlflow_tracking_uri": config.mlflow_tracking_uri,
-        "mlflow_run_id": snapshot.get("mlflow_run_id"),
-        "checkpoint_uri": snapshot.get("checkpoint_uri"),
-        "checkpoint_artifact_path": (
-            snapshot.get("checkpoint_artifact_path") or "checkpoints/best.pt"
-        ),
-        "checkpoint_f1_score": snapshot.get("checkpoint_f1_score"),
-        "checkpoint_epoch": snapshot.get("checkpoint_epoch"),
-        "external_model": external_model_payload(external_manifest),
-        "imagery_type": imagery_type,
-        "model_imagery_type": imagery_type,
-        "input_channels": _int_value(snapshot, "input_channels", 4),
-        "postprocess_config": snapshot.get("inference_template_config") or {},
-        "threshold": threshold,
-        "tile_size": tile_size,
-        "context": context,
-        "stride": (
-            external_manifest.stride
-            if external_manifest is not None
-            else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
-        ),
-        "batch_size": (
-            1 if external_manifest is not None else (
-                next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1"}
-                else _int_value(flat, "train.batch_size", 1)
+    with markup_read_lock(config):
+        if _is_dataset_editor_pseudo_job(row):
+            state = (row.config or {}).get("editor_pseudo")
+            if not isinstance(state, dict):
+                raise RuntimeError("В задании редактора отсутствуют параметры псевдоразметки.")
+            try:
+                training_result_id = uuid.UUID(str(state.get("training_result_id")))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "В задании редактора повреждён идентификатор основной сети."
+                ) from exc
+            training_result = session.get(TrainingResultRow, training_result_id)
+            if training_result is None or training_result.status != ResultStatus.OK.value:
+                raise RuntimeError("Основная сеть для псевдоразметки снимка больше недоступна.")
+            scenes_path = run_dir / "editor_scene.txt"
+            scenes_path.write_text(f"{state.get('image_relative')}\n", encoding="utf-8")
+            snapshot = state
+            scenes_file = str(scenes_path)
+            images_root = str(state.get("images_root") or config.images_root)
+            annotation_files: list[str] = []
+            class_key = training_result.class_key
+            class_name = training_result.class_display_name
+            source_model = training_result.model_name
+        else:
+            result = _first_pseudo_markup_result(session, row)
+            if result is None or result.scenes_file is None:
+                raise RuntimeError("Для псевдоразметки не найден txt со снимками.")
+            training_result = (
+                session.get(TrainingResultRow, result.training_result_id)
+                if result.training_result_id is not None
+                else None
             )
-        ),
-        "device": "cuda",
-        **_geoalert_runtime_config(config, inference_backend),
-    }
+            snapshot = dict(row.config or {})
+            scenes_file = result.scenes_file.path
+            images_root = str(snapshot.get("images_root") or config.images_root)
+            annotation_files = [
+                str(value) for value in (snapshot.get("annotation_files") or []) if value
+            ]
+            if not annotation_files and result.dataset_key and result.dataset_key != CUSTOM_KEY:
+                dataset = find_managed_dataset(session, config, result.dataset_key)
+                if dataset is not None:
+                    annotation_files = (
+                        per_image_annotation_files(Path(dataset.annotations_dir))
+                        if dataset.annotations_dir
+                        else [
+                            path
+                            for path in (dataset.annotation_file, dataset.hard_negative_annotation_file)
+                            if path
+                        ]
+                    )
+            class_key = result.class_key
+            class_name = (
+                training_result.class_display_name if training_result is not None else result.class_key
+            )
+            source_model = training_result.model_name if training_result is not None else row.model_name
+
+        source_training_job = (
+            session.get(JobRow, training_result.job_id)
+            if training_result is not None and training_result.job_id is not None
+            else None
+        )
+        flat = dict(source_training_job.config or {}) if source_training_job is not None else {}
+        try:
+            external_manifest = (
+                external_result_manifest(session, training_result)
+                if training_result is not None
+                else None
+            )
+        except ExternalModelError as exc:
+            raise RuntimeError(str(exc)) from exc
+        tile_size = (
+            external_manifest.tile_size
+            if external_manifest is not None
+            else _int_value(flat, "tile_preparation.tile_size", 768)
+        )
+        context = (
+            external_manifest.context
+            if external_manifest is not None
+            else _int_value(flat, "tile_preparation.context", 0)
+        )
+        core_size = tile_size - 2 * context
+        if context < 0 or core_size <= 0:
+            raise RuntimeError("Размер inference-тайла должен быть больше удвоенного context.")
+        threshold = _optional_float(snapshot, "checkpoint_threshold")
+        if threshold is None and training_result is not None and external_manifest is None:
+            raise RuntimeError(
+                "Для псевдоразметки по результату обучения не найден MLflow val/best_threshold "
+                "на эпохе best checkpoint."
+            )
+        if threshold is None:
+            threshold = _float_value(flat, "train.threshold", 0.5)
+        if flat.get("train.pipeline_variant") == "next_gen2":
+            threshold = NEXT_GEN2_INFERENCE_THRESHOLD
+        class_row = dataset_class_row(session, class_key)
+        imagery_type = str(
+            snapshot.get("imagery_type")
+            or (class_row.imagery_type if class_row is not None else "kanopus")
+        )
+        inference_backend = inference_backend_for_imagery(imagery_type)
+        if config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve():
+            frozen_files: list[str] = []
+            for index, filename in enumerate(annotation_files):
+                folder = run_dir / "dataset_snapshot" / str(index)
+                folder.mkdir(parents=True, exist_ok=True)
+                frozen_files.append(str(_snapshot_dataset_file(Path(filename), folder)))
+            annotation_files = frozen_files
+        return {
+            "run_root": str(run_dir / "scratch"),
+            "inference_backend": inference_backend,
+            "output_geojson": str(run_dir / "scratch" / "pseudo_markup.geojson"),
+            "report_path": str(run_dir / "scratch" / "report.json"),
+            "scenes_file": scenes_file,
+            "images_root": images_root,
+            "annotation_files": annotation_files,
+            "class_key": class_key,
+            "class_name": class_name,
+            "source_model": source_model,
+            "pipeline_variant": str(flat.get("train.pipeline_variant") or "legacy"),
+            "task": training_result.task if training_result is not None else "binary",
+            "object_types": (
+                list(training_result.class_schema or []) if training_result is not None else []
+            ),
+            "mlflow_tracking_uri": config.mlflow_tracking_uri,
+            "mlflow_run_id": snapshot.get("mlflow_run_id"),
+            "checkpoint_uri": snapshot.get("checkpoint_uri"),
+            "checkpoint_artifact_path": (
+                snapshot.get("checkpoint_artifact_path") or "checkpoints/best.pt"
+            ),
+            "checkpoint_f1_score": snapshot.get("checkpoint_f1_score"),
+            "checkpoint_epoch": snapshot.get("checkpoint_epoch"),
+            "external_model": external_model_payload(external_manifest),
+            "imagery_type": imagery_type,
+            "model_imagery_type": imagery_type,
+            "input_channels": _int_value(snapshot, "input_channels", 4),
+            "postprocess_config": snapshot.get("inference_template_config") or {},
+            "threshold": threshold,
+            "tile_size": tile_size,
+            "context": context,
+            "stride": (
+                external_manifest.stride
+                if external_manifest is not None
+                else (core_size if context else _int_value(flat, "tile_preparation.stride", tile_size))
+            ),
+            "batch_size": (
+                1 if external_manifest is not None else (
+                    next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1"}
+                    else _int_value(flat, "train.batch_size", 1)
+                )
+            ),
+            "device": "cuda",
+            **_geoalert_runtime_config(config, inference_backend),
+        }
 
 
 def _build_pseudolabel_aoi_config(
@@ -1340,84 +1349,90 @@ def _dataset_config(
     config: TrainingUIAPIConfig,
     run_dir: Path,
 ) -> dict[str, Any]:
-    result = _first_training_result(session, row)
-    dataset_key = result.class_key if result is not None else row.dataset_name
-    if row.custom_dataset_id is not None or dataset_key == CUSTOM_KEY:
-        custom = row.custom_dataset or session.get(CustomDatasetRow, row.custom_dataset_id)
-        if custom is None:
-            raise RuntimeError(f"Custom dataset не найден: {row.custom_dataset_id}")
-        return {
-            "images_dir": str(
-                row.config.get("dataset.images_dir")
-                or imagery_images_dir(config.images_root, "kanopus")
-            ),
-            "scenes_file": custom.scenes_file.path,
-            "annotation_file": custom.annotation_file.path,
-        }
+    with markup_read_lock(config):
+        result = _first_training_result(session, row)
+        dataset_key = result.class_key if result is not None else row.dataset_name
+        if row.custom_dataset_id is not None or dataset_key == CUSTOM_KEY:
+            custom = row.custom_dataset or session.get(CustomDatasetRow, row.custom_dataset_id)
+            if custom is None:
+                raise RuntimeError(f"Custom dataset не найден: {row.custom_dataset_id}")
+            return {
+                "images_dir": str(
+                    row.config.get("dataset.images_dir")
+                    or imagery_images_dir(config.images_root, "kanopus")
+                ),
+                "scenes_file": custom.scenes_file.path,
+                "annotation_file": custom.annotation_file.path,
+            }
 
-    dataset = find_managed_dataset(session, config, dataset_key)
-    if dataset is None:
-        dataset = next(
-            (
-                item
-                for item in list_managed_datasets(session, config, include_custom=False)
-                if item.name == row.dataset_name
-            ),
-            None,
+        dataset = find_managed_dataset(session, config, dataset_key)
+        if dataset is None:
+            dataset = next(
+                (
+                    item
+                    for item in list_managed_datasets(session, config, include_custom=False)
+                    if item.name == row.dataset_name
+                ),
+                None,
+            )
+        if dataset is None or not dataset.source_available or dataset.images_dir is None:
+            raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
+        if dataset.managed and dataset.annotations_dir is None:
+            raise _ManagedDatasetNotReady(f"Управляемый датасет подготавливается: {row.dataset_name}")
+        # Версия результата должна соответствовать именно скопированной разметке,
+        # даже если ручное задание ожидало в очереди с момента её изменения.
+        row.dataset_version = dataset.version
+        if result is not None:
+            result.dataset_version = dataset.version
+        images_dir = str(
+            row.config.get("dataset.images_dir") or dataset.images_dir or config.images_root
         )
-    if dataset is None or not dataset.source_available or dataset.images_dir is None:
-        raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
-    if dataset.managed and dataset.annotations_dir is None:
-        raise _ManagedDatasetNotReady(f"Управляемый датасет подготавливается: {row.dataset_name}")
-    images_dir = str(
-        row.config.get("dataset.images_dir") or dataset.images_dir or config.images_root
-    )
-    snapshot_dir = run_dir / "dataset_snapshot"
-    if dataset.annotations_dir:
-        source_dir = Path(dataset.annotations_dir).resolve()
-        geojson_files = sorted(
-            (
-                path
-                for path in source_dir.iterdir()
-                if path.is_file() and path.suffix.casefold() == ".geojson"
-            ),
-            key=lambda path: path.name.casefold(),
-        )
-        annotation_files = [
-            path for path in geojson_files if not is_per_image_footprint_name(path.name)
-        ]
-        if not annotation_files:
-            raise RuntimeError(f"Per-image датасет пуст: {row.dataset_name}")
+        snapshot_dir = run_dir / "dataset_snapshot"
+        if dataset.annotations_dir:
+            source_dir = Path(dataset.annotations_dir).resolve()
+            geojson_files = sorted(
+                (
+                    path
+                    for path in source_dir.iterdir()
+                    if path.is_file() and path.suffix.casefold() == ".geojson"
+                ),
+                key=lambda path: path.name.casefold(),
+            )
+            annotation_files = [
+                path for path in geojson_files if not is_per_image_footprint_name(path.name)
+            ]
+            if not annotation_files:
+                raise RuntimeError(f"Per-image датасет пуст: {row.dataset_name}")
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            for source_file in geojson_files:
+                shutil.copy2(source_file, snapshot_dir / source_file.name)
+            manifest_file = source_dir / ".mlsystem2-dataset.json"
+            if manifest_file.is_file():
+                shutil.copy2(manifest_file, snapshot_dir / manifest_file.name)
+            return {
+                "images_dir": images_dir,
+                "annotations_dir": str(snapshot_dir),
+            }
+        if not dataset.scenes_file or not dataset.annotation_file:
+            raise RuntimeError(f"Legacy-датасет не найден или неполный: {row.dataset_name}")
         snapshot_dir.mkdir(parents=True, exist_ok=True)
-        for source_file in geojson_files:
-            shutil.copy2(source_file, snapshot_dir / source_file.name)
-        manifest_file = source_dir / ".mlsystem2-dataset.json"
-        if manifest_file.is_file():
-            shutil.copy2(manifest_file, snapshot_dir / manifest_file.name)
+        scenes_file = _snapshot_dataset_file(Path(dataset.scenes_file), snapshot_dir)
+        annotation_file = _snapshot_dataset_file(Path(dataset.annotation_file), snapshot_dir)
+        hard_negative_file = (
+            _snapshot_dataset_file(Path(dataset.hard_negative_annotation_file), snapshot_dir)
+            if dataset.hard_negative_annotation_file
+            else None
+        )
         return {
             "images_dir": images_dir,
-            "annotations_dir": str(snapshot_dir),
+            "scenes_file": str(scenes_file),
+            "annotation_file": str(annotation_file),
+            **(
+                {"hard_negative_annotation_file": str(hard_negative_file)}
+                if hard_negative_file is not None
+                else {}
+            ),
         }
-    if not dataset.scenes_file or not dataset.annotation_file:
-        raise RuntimeError(f"Legacy-датасет не найден или неполный: {row.dataset_name}")
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    scenes_file = _snapshot_dataset_file(Path(dataset.scenes_file), snapshot_dir)
-    annotation_file = _snapshot_dataset_file(Path(dataset.annotation_file), snapshot_dir)
-    hard_negative_file = (
-        _snapshot_dataset_file(Path(dataset.hard_negative_annotation_file), snapshot_dir)
-        if dataset.hard_negative_annotation_file
-        else None
-    )
-    return {
-        "images_dir": images_dir,
-        "scenes_file": str(scenes_file),
-        "annotation_file": str(annotation_file),
-        **(
-            {"hard_negative_annotation_file": str(hard_negative_file)}
-            if hard_negative_file is not None
-            else {}
-        ),
-    }
 
 
 def _snapshot_dataset_file(source: Path, snapshot_dir: Path) -> Path:

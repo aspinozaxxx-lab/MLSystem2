@@ -192,10 +192,10 @@ def migrate_combined_datasets(*, apply: bool, username: str) -> list[MigrationSt
                         promote_pseudo=False,
                     )
             automation = ensure_automation_control(session)
-            # Git push запускает асинхронную публикацию MLMarkup. До появления
-            # нового release-marker live-каталог ещё имеет прежнюю версию, и
-            # раннее включение автоматизации создаёт ложные training jobs.
-            automation.enabled = False
+            # Рабочий клон уже содержит опубликованный коммит. Архивный режим
+            # по-прежнему ждёт доставку релиза перед включением автоматизации.
+            working_source = config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve()
+            automation.enabled = automation_was_enabled if working_source else False
             session.commit()
         except Exception:
             session.rollback()
@@ -204,7 +204,7 @@ def migrate_combined_datasets(*, apply: bool, username: str) -> list[MigrationSt
             session.commit()
             raise
         print(f"MLMarkup commit: {commit}")
-        if automation_was_enabled:
+        if automation_was_enabled and not working_source:
             print(
                 "Автоматизация оставлена выключенной до завершения деплоя MLMarkup; "
                 "после проверки release-marker её нужно включить вручную."

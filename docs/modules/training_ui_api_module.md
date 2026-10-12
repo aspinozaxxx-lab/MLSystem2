@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`training_ui_api` — FastAPI-сервис сайта MLSystem2. Он хранит UI-данные и управляемый каталог датасетов, синхронизирует опубликованный `/data/MLMarkup`, управляет очередями training/inference и предоставляет Git-backed редактор per-image разметки. Редактор пишет только в отдельный `mlmarkup-editor`, а обучение читает только атомарно опубликованный live-релиз.
+`training_ui_api` — FastAPI-сервис сайта MLSystem2. Он хранит UI-данные и управляемый каталог датасетов, управляет очередями training/inference и предоставляет Git-backed редактор per-image разметки. Опубликованные данные читаются из серверного `mlmarkup-editor` сразу после commit/push, без обратной доставки с GitHub. Публикация и чтение согласованы межпроцессным lock; задания получают отдельную копию файлов, личные черновики остаются в БД.
 
 Frontend — React + TypeScript + Vite SPA. TypeScript-типы генерируются из OpenAPI командой
 `npm run generate:api --prefix frontend`, production static собирается в `frontend/dist`, а сервер Node.js
@@ -178,7 +178,7 @@ Frontend показывает ошибку внутри окна импорта 
   снимок данных действует только в одном HTTP-чтении, актуальность следующего ответа проверяется заново.
 - `GET /api/v1/dataset-catalog` и `POST /api/v1/dataset-catalog/sync` - иерархия редактора и явная идемпотентная синхронизация с MLMarkup.
 - `POST|PATCH /api/v1/dataset-classes`, `PUT /api/v1/dataset-classes/{class_key}/primary-dataset`, `POST|PATCH /api/v1/managed-datasets` - создание и редактирование каталога. PATCH управляемого виртуального датасета меняет его имя и composition `sources/priority/color` с сохранением ключа; изменение composition при наличии пользовательских черновиков отклоняется. Назначение занятого обычного источника переносит существующий датасет с сохранением его ключа, а смена источника безопасно обменивает источники и увеличивает ревизии обеих сущностей.
-- `DELETE /api/v1/dataset-editor/datasets/{dataset_key}` - удалить папку датасета Git-коммитом, мягко архивировать его строку в Postgres и снять назначение основным; задания, результаты и MLflow не удаляются, при активном задании операция отклоняется.
+- `DELETE /api/v1/dataset-editor/datasets/{dataset_key}` - удалить папку датасета Git-коммитом, мягко архивировать его строку в Postgres и снять назначение основным; отсутствующая папка архивируется без нового коммита, повреждённая разметка не препятствует удалению. Задания, результаты и MLflow сохраняются; активные задания и зависимые управляемые датасеты защищены от удаления.
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/copy` - создать под новым именем копию опубликованного датасета с новым ключом. Обычный набор получает отдельную Git-папку; управляемый — отдельную конфигурацию с теми же источниками, приоритетами, цветами и явно добавленными снимками. Черновики, шаблоны, задания и результаты не копируются.
 - Названия заняты только активными датасетами своего класса, без учёта регистра. Архивные записи не мешают созданию и переименованию; новая сущность получает отдельный ключ, прежние записи и связи истории не меняются. Частичные уникальные индексы БД проверяют название и путь только при `deleted_at IS NULL`. При копировании на месте папки активного переименованного набора выбирается свободная соседняя папка с числовым суффиксом, но название в каталоге остаётся запрошенным. Чужая существующая папка без активного владельца не перезаписывается.
 - `GET /api/v1/dataset-editor/datasets` и `GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes[/{annotation_name}]` - список редактируемых датасетов, сцены и GeoJSON.
@@ -194,7 +194,7 @@ Frontend показывает ошибку внутри окна импорта 
 - Проверка попадания объекта в footprint учитывает машинную точность мировых координат и длину границы: численная погрешность после пересечения допускается, реальный выход за контур — нет.
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/drafts/publish` - атомарно опубликовать все сохранённые изменения и удаления пользователя одним Git-коммитом.
 - `POST|PUT /api/v1/dataset-editor/datasets/{dataset_key}/scenes`, `PUT|DELETE /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}` - добавить отсутствующие TIFF/папку, атомарно опубликовать несколько GeoJSON, совместимо сохранить один GeoJSON или создать отменяемую пометку удаления сцены.
-- `GET /api/v1/dataset-editor/publication/{commit}` - `publishing|published` по ancestry commit текущего live-релиза.
+- `GET /api/v1/dataset-editor/publication/{commit}` - `publishing|published` по ancestry commit HEAD рабочего клона; в явно выбранном архивном режиме — SHA атомарного релиза.
 - `POST /api/v1/dataset-editor/datasets/{dataset_key}/rebuild/preview` и `POST /api/v1/dataset-editor/datasets/{dataset_key}/rebuild` - preview и атомарная merge/replace-пересборка combined dataset; изменение source или target после preview возвращает `409`.
 - `GET /api/v1/files/{file_id}/download-by-type` - ZIP канонической multiclass-псевдоразметки с одним GeoJSON на object type.
 - `POST /api/v1/model-export/triton-zip` - multipart endpoint для сборки zip-архива модели под
@@ -351,7 +351,7 @@ Seed inference-шаблона рек идемпотентно добавляет
 
 Автоматизация хранится в таблицах `automation_controls` и `automation_rules`. Правило задается парой
 `dataset_key + architecture` и двумя флагами: `training_enabled` и `pseudo_markup_enabled`. `Custom` не участвует в
-автоматизации. Git checkout и атомарный runtime с `.mlsystem2-release-metadata.json` сохраняют формат
+автоматизации. Рабочий Git-клон и сохранённый архивный runtime с `.mlsystem2-release-metadata.json` сохраняют формат
 `git:{commit_sha}`; иначе используется `fs:{mtime_ns}`. После изменения источника, типа снимков или метрики версия содержит управляемую ревизию и
 файловую версию, поэтому активное правило видит значимое изменение.
 

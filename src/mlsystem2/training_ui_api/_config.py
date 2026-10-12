@@ -107,6 +107,9 @@ class TrainingUIAPIConfig:
 
 
 def get_config() -> TrainingUIAPIConfig:
+    editor_root = Path(
+        os.getenv("MLSYSTEM2_MLMARKUP_EDITOR_ROOT", "/data/mlsystem2/mlmarkup-editor")
+    )
     frontend_username = os.getenv(
         "MLSYSTEM2_TRAINING_UI_USER",
         os.getenv("MLSYSTEM_FRONTEND_USER", "mlsystem"),
@@ -134,7 +137,7 @@ def get_config() -> TrainingUIAPIConfig:
         mlmarkup_root=Path(
             os.getenv(
                 "MLSYSTEM2_MLMARKUP_ROOT",
-                os.getenv("MLSYSTEM_MLMARKUP_REPO_PATH", "/data/MLMarkup"),
+                os.getenv("MLSYSTEM_MLMARKUP_REPO_PATH", str(editor_root)),
             )
         ),
         images_root=Path(os.getenv("MLSYSTEM2_IMAGES_ROOT", "/data/mlsystem2/prepared_images")),
@@ -229,12 +232,7 @@ def get_config() -> TrainingUIAPIConfig:
             1,
             _int_env("MLSYSTEM2_PSEUDOLABEL_EXTERNAL_HTTP_WORKERS", 8),
         ),
-        mlmarkup_editor_root=Path(
-            os.getenv(
-                "MLSYSTEM2_MLMARKUP_EDITOR_ROOT",
-                "/data/mlsystem2/mlmarkup-editor",
-            )
-        ),
+        mlmarkup_editor_root=editor_root,
         mlmarkup_release_marker=Path(
             os.getenv(
                 "MLSYSTEM2_MLMARKUP_RELEASE_MARKER",

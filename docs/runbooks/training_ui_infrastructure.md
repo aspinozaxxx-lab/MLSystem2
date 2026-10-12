@@ -3,6 +3,32 @@
 Инфраструктура поднимается вручную на сервере. В CI/CD не добавляется создание контейнеров,
 Postgres, сетей или reverse proxy.
 
+## Источник опубликованных разметок
+
+Каталог, обучение и автоматизация используют `/data/mlsystem2/mlmarkup-editor`.
+`MLSYSTEM2_MLMARKUP_ROOT` и `MLSYSTEM2_MLMARKUP_EDITOR_ROOT` должны указывать на этот клон.
+Клон принадлежит `MLMarkup_deploy_user`; отдельный write deploy key и commit/push в GitHub сохраняются.
+Редактор и читатели используют один `.mlmarkup-editor.lock` рядом с клоном. Не изменяйте Git-дерево
+в обход этого lock во время работы сервиса. Серверные черновики остаются в Postgres.
+
+Перед переходом проверьте чистоту рабочего дерева, совпадение HEAD с удалённой веткой и версии датасетов
+в рабочем и архивном корнях. Незавершённые изменения не сбрасывайте. Измените только пути источника
+в серверном env-файле, затем перезапустите API и worker штатными сервисами; уже запущенные дочерние
+обучения используют свои снимки данных и должны сохраниться. Проверьте каталог, публикацию и очереди.
+Токены и пароли не выводите; env-файл загружайте только на сервере.
+
+Обратная доставка MLMarkup отключена в GitHub Actions, workflow остаётся в репозитории:
+
+```bash
+gh workflow disable deploy-markup-to-gpu.yml --repo aspinozaxxx-lab/MLMarkup
+gh workflow list --repo aspinozaxxx-lab/MLMarkup --all
+```
+
+Прежний `/data/MLMarkup` и каталоги `/data/mlmarkup-runtime/releases/` не удаляются.
+Для будущего восстановления доставки используйте `gh workflow enable deploy-markup-to-gpu.yml
+--repo aspinozaxxx-lab/MLMarkup` и отдельно согласуйте переключение `MLSYSTEM2_MLMARKUP_ROOT`
+на архивный корень. Само включение workflow не меняет рабочий источник Гровики.
+
 ## 1. Postgres
 
 На сервере создать env-файл вне git, например `/etc/mlsystem2/training-ui-postgres.env`:
@@ -39,7 +65,8 @@ psql "$MLSYSTEM2_TRAINING_UI_DATABASE_URL" -c 'CREATE SCHEMA IF NOT EXISTS train
 MLSYSTEM2_TRAINING_UI_DATABASE_URL=postgresql+psycopg://mlsystem2_training_ui:<пароль>@127.0.0.1:55432/mlsystem2_training_ui
 MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA=training_ui
 MLSYSTEM2_PROJECT_ROOT=/opt/mlsystem2/repo
-MLSYSTEM2_MLMARKUP_ROOT=/data/MLMarkup
+MLSYSTEM2_MLMARKUP_ROOT=/data/mlsystem2/mlmarkup-editor
+MLSYSTEM2_MLMARKUP_EDITOR_ROOT=/data/mlsystem2/mlmarkup-editor
 MLSYSTEM2_IMAGES_ROOT=/data/mlsystem2/prepared_images
 MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT=/data/mlsystem2/training-ui/files
 MLSYSTEM2_TRAINING_UI_SCRATCH_ROOT=/data/mlsystem2/training-ui/tmp

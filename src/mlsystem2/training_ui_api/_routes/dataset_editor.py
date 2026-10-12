@@ -61,6 +61,7 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from mlsystem2.training_ui_api._raster_http import raster_response
+from .._markup_lock import markup_write_lock
 from .common import RouteContext
 
 
@@ -144,6 +145,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             username=username,
+            publish=True,
         )
 
     @app.post(
@@ -163,6 +165,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             dataset_key,
             name=request.name,
             username=username,
+            publish=True,
         )
 
     @app.get(
@@ -280,6 +283,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             username=username,
+            publish=True,
         )
 
     @app.get(
@@ -372,6 +376,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             image_paths=request.image_paths,
             folder_path=request.folder_path,
             username=username,
+            publish=True,
         )
 
     @app.put(
@@ -393,6 +398,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
                 (scene.annotation_name, scene.revision, scene.geojson) for scene in request.scenes
             ],
             username=username,
+            publish=True,
         )
 
     @app.put(
@@ -415,6 +421,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             revision=request.revision,
             geojson=request.geojson,
             username=username,
+            publish=True,
         )
 
     @app.delete(
@@ -482,6 +489,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             preview_token=request.preview_token,
             mode=request.mode,
             username=username,
+            publish=True,
         )
 
     @app.get("/api/v1/dataset-editor/datasets/{dataset_key}/raster/{image_path:path}")
@@ -496,8 +504,14 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         return raster_response(path, range_header)
 
 
-def _git_call(function, *args, **kwargs):
+def _git_call(function, *args, publish=False, **kwargs):
     try:
+        if publish:
+            session, config = args[:2]
+            with markup_write_lock(config):
+                result = function(*args, **kwargs)
+                session.commit()
+                return result
         return function(*args, **kwargs)
     except DatasetEditorConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

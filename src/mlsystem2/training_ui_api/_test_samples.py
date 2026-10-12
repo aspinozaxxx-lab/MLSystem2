@@ -43,6 +43,7 @@ from sqlalchemy import Integer, func, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._dataset_catalog import (
     dataset_class_row,
     dataset_training_result,
@@ -2875,32 +2876,33 @@ def pseudo_markup_covers_dataset(
     *,
     dataset: DatasetInfo | None = None,
 ) -> bool:
-    scenes_file = pseudo_markup.scenes_file
-    if scenes_file is None or not Path(scenes_file.path).is_file():
-        return False
-    dataset = dataset if dataset is not None else find_managed_dataset(session, config, dataset_key)
-    if dataset is None or not dataset.images_dir:
-        return False
-    images_root = Path(dataset.images_dir).resolve()
-    try:
-        if dataset.annotations_dir:
-            resolution = resolve_scene_images(
-                SceneImageResolutionRequest(
-                    images_dir=str(images_root),
-                    annotations_dir=str(Path(dataset.annotations_dir).resolve()),
-                )
-            )
-            if resolution.missing_scenes or resolution.ambiguous_scenes:
-                return False
-            expected = {Path(item.image_path).resolve() for item in resolution.images}
-        elif dataset.scenes_file:
-            expected = set(resolve_scenes_file_images(Path(dataset.scenes_file), images_root))
-        else:
+    with markup_read_lock(config):
+        scenes_file = pseudo_markup.scenes_file
+        if scenes_file is None or not Path(scenes_file.path).is_file():
             return False
-        covered = set(resolve_scenes_file_images(Path(scenes_file.path), images_root))
-    except (OSError, ValueError):
-        return False
-    return bool(expected) and expected.issubset(covered)
+        dataset = dataset if dataset is not None else find_managed_dataset(session, config, dataset_key)
+        if dataset is None or not dataset.images_dir:
+            return False
+        images_root = Path(dataset.images_dir).resolve()
+        try:
+            if dataset.annotations_dir:
+                resolution = resolve_scene_images(
+                    SceneImageResolutionRequest(
+                        images_dir=str(images_root),
+                        annotations_dir=str(Path(dataset.annotations_dir).resolve()),
+                    )
+                )
+                if resolution.missing_scenes or resolution.ambiguous_scenes:
+                    return False
+                expected = {Path(item.image_path).resolve() for item in resolution.images}
+            elif dataset.scenes_file:
+                expected = set(resolve_scenes_file_images(Path(dataset.scenes_file), images_root))
+            else:
+                return False
+            covered = set(resolve_scenes_file_images(Path(scenes_file.path), images_root))
+        except (OSError, ValueError):
+            return False
+        return bool(expected) and expected.issubset(covered)
 
 
 def _sample_row(session: Session, sample_id: uuid.UUID) -> TestSampleRow:

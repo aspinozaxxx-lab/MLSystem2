@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title description">
+  <title id="title">Разметка сразу в работе</title>
+  <desc id="description">Схема публикации через рабочий клон на сервере с сохранением истории на GitHub, без обратной доставки.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1830"/><stop offset="1" stop-color="#122d3f"/></linearGradient>
+    <linearGradient id="clone" x2="1" y2="1"><stop stop-color="#164b54"/><stop offset="1" stop-color="#113b47"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#70e7c5"/></marker>
+  </defs>
+  <rect width="1200" height="640" rx="28" fill="url(#bg)"/>
+  <g font-family="Arial, sans-serif">
+    <text x="54" y="67" fill="#f2fbff" font-size="36" font-weight="700">Разметка сразу в работе</text>
+    <text x="54" y="101" fill="#afc5d6" font-size="20">Схема публикации: сервер — источник опубликованных датасетов</text>
+    <g fill="none" stroke="#70e7c5" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M350 250H429"/>
+      <path d="M735 250H819"/>
+      <path d="M584 359V420" marker-end="none"/>
+      <path d="M584 420H267V449"/>
+      <path d="M584 420H983V449"/>
+    </g>
+    <rect x="54" y="169" width="296" height="176" rx="20" fill="#1c304c" stroke="#355571"/>
+    <rect x="434" y="146" width="300" height="213" rx="20" fill="url(#clone)" stroke="#70e7c5" stroke-width="2"/>
+    <rect x="824" y="169" width="322" height="176" rx="20" fill="#1c304c" stroke="#355571"/>
+    <g fill="#f2fbff" font-size="25" font-weight="700">
+      <text x="79" y="212">Редактор Гровики</text>
+      <text x="459" y="191">Рабочий клон</text>
+      <text x="849" y="212">Обучение</text>
+    </g>
+    <g fill="#bdd4e0" font-size="20">
+      <text x="79" y="256">Личные черновики</text>
+      <text x="79" y="286">Кнопка «Опубликовать»</text>
+      <text x="459" y="233">Опубликованные файлы</text>
+      <text x="459" y="264">Согласованная версия</text>
+      <text x="849" y="256">Отдельная копия данных</text>
+      <text x="849" y="286">на момент запуска</text>
+    </g>
+    <rect x="459" y="292" width="251" height="39" rx="12" fill="#70e7c5"/>
+    <text x="477" y="317" fill="#103742" font-size="17" font-weight="700">Сразу доступно в работе</text>
+    <text x="54" y="383" fill="#afc5d6" font-size="18">Личные черновики видны</text>
+    <text x="54" y="408" fill="#afc5d6" font-size="18">только своему владельцу</text>
+    <rect x="106" y="451" width="322" height="112" rx="19" fill="#293351" stroke="#556588"/>
+    <rect x="821" y="451" width="325" height="112" rx="19" fill="#1c304c" stroke="#355571"/>
+    <text x="132" y="490" fill="#f2fbff" font-size="24" font-weight="700">История в GitHub</text>
+    <text x="132" y="527" fill="#c4caeb" font-size="19">Коммит и push сохраняются</text>
+    <text x="848" y="490" fill="#f2fbff" font-size="24" font-weight="700">Автоматизация</text>
+    <text x="848" y="527" fill="#bdd4e0" font-size="19">Читает версию из клона</text>
+    <rect x="457" y="455" width="334" height="104" rx="18" fill="#14243b" stroke="#627889" stroke-dasharray="5 5"/>
+    <text x="480" y="491" fill="#bdd4e0" font-size="20">Обратная доставка отключена</text>
+    <text x="480" y="525" fill="#93aaba" font-size="18">Workflow сохранён на будущее</text>
+    <text x="54" y="610" fill="#9db8c8" font-size="18">Начатое обучение сохраняет свою версию • Новая публикация не изменяет уже запущенное задание</text>
+  </g>
+</svg>

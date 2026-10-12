@@ -41,6 +41,7 @@ from mlsystem2.dataset_preparing.api import annotation_regions, resolve_scene_im
 from mlsystem2.dataset_preparing.contracts import SceneImageResolutionRequest
 
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._dataset_catalog import find_managed_dataset
 from ._datasets import find_dataset, imagery_images_dir, resolve_scenes_file_images
 from ._raster_index import load_raster_index
@@ -547,7 +548,7 @@ def generate_markup_files(
     if dataset.diagnostics:
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
     images_root = Path(dataset.images_dir or config.images_root)
-    sources = _dataset_markup_sources(dataset, images_root, min_object_area_m2)
+    sources = _dataset_markup_sources(dataset, images_root, min_object_area_m2, config=config)
     candidates = _build_candidates(
         sources=sources,
         images_root=images_root,
@@ -656,7 +657,7 @@ def generate_markup_pool_files(
         raise TrainingUIAPIError("; ".join(dataset.diagnostics))
     images_root = Path(dataset.images_dir or config.images_root)
     sources = _dataset_markup_sources(
-        dataset, images_root, min_object_area_m2, check_cancelled=check_cancelled
+        dataset, images_root, min_object_area_m2, config=config, check_cancelled=check_cancelled
     )
     if min_final_image_count > max_final_image_count:
         raise TrainingUIAPIError(
@@ -967,60 +968,62 @@ def _dataset_markup_sources(
     images_root: Path,
     min_object_area_m2: float = 0.0,
     *,
+    config: TrainingUIAPIConfig,
     check_cancelled: Callable[[], None] = lambda: None,
 ) -> list[tuple[Path, _AnnotationSet]]:
-    if dataset.annotations_dir:
-        try:
-            resolution = resolve_scene_images(
-                SceneImageResolutionRequest(
-                    images_dir=str(images_root),
-                    annotations_dir=dataset.annotations_dir,
+    with markup_read_lock(config):
+        if dataset.annotations_dir:
+            try:
+                resolution = resolve_scene_images(
+                    SceneImageResolutionRequest(
+                        images_dir=str(images_root),
+                        annotations_dir=dataset.annotations_dir,
+                    )
                 )
-            )
-        except (OSError, ValueError) as exc:
-            raise TrainingUIAPIError(f"Не удалось сопоставить per-image датасет: {exc}") from exc
-        if resolution.missing_scenes:
-            raise TrainingUIAPIError(
-                "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
-            )
-        if resolution.ambiguous_scenes:
-            raise TrainingUIAPIError(
-                "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
-                + ", ".join(sorted(resolution.ambiguous_scenes))
-            )
-        sources = [
-            (
-                Path(item.image_path),
-                _load_annotations(
-                    Path(item.annotation_file or ""),
-                    positive_only=True,
-                    allow_empty=True,
-                ),
-            )
-            for item in resolution.images
-        ]
-    else:
-        if not dataset.scenes_file or not dataset.annotation_file:
-            raise TrainingUIAPIError(
-                "У legacy-датасета должны быть TXT со сценами и один positive GeoJSON."
-            )
-        source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
-        annotations = _load_annotations(Path(dataset.annotation_file), positive_only=True)
-        sources = [(path, annotations) for path in source_paths]
-    if not sources:
-        raise TrainingUIAPIError(
-            "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
-        )
-    if min_object_area_m2 > 0:
-        # Общий GeoJSON legacy-набора фильтруем один раз для всех его снимков.
-        filtered: dict[int, _AnnotationSet] = {}
-        for path, annotations in sources:
-            if id(annotations) not in filtered:
-                filtered[id(annotations)] = _filter_annotation_objects_by_area(
-                    annotations, min_object_area_m2, check_cancelled=check_cancelled
+            except (OSError, ValueError) as exc:
+                raise TrainingUIAPIError(f"Не удалось сопоставить per-image датасет: {exc}") from exc
+            if resolution.missing_scenes:
+                raise TrainingUIAPIError(
+                    "Для GeoJSON не найдены TIFF: " + ", ".join(resolution.missing_scenes)
                 )
-        sources = [(path, filtered[id(annotations)]) for path, annotations in sources]
-    return sources
+            if resolution.ambiguous_scenes:
+                raise TrainingUIAPIError(
+                    "Имена GeoJSON неоднозначно сопоставлены с TIFF: "
+                    + ", ".join(sorted(resolution.ambiguous_scenes))
+                )
+            sources = [
+                (
+                    Path(item.image_path),
+                    _load_annotations(
+                        Path(item.annotation_file or ""),
+                        positive_only=True,
+                        allow_empty=True,
+                    ),
+                )
+                for item in resolution.images
+            ]
+        else:
+            if not dataset.scenes_file or not dataset.annotation_file:
+                raise TrainingUIAPIError(
+                    "У legacy-датасета должны быть TXT со сценами и один positive GeoJSON."
+                )
+            source_paths = resolve_scenes_file_images(Path(dataset.scenes_file), images_root)
+            annotations = _load_annotations(Path(dataset.annotation_file), positive_only=True)
+            sources = [(path, annotations) for path in source_paths]
+        if not sources:
+            raise TrainingUIAPIError(
+                "Для датасета не найдены снимки в MLSYSTEM2_IMAGES_ROOT."
+            )
+        if min_object_area_m2 > 0:
+            # Общий GeoJSON legacy-набора фильтруем один раз для всех его снимков.
+            filtered: dict[int, _AnnotationSet] = {}
+            for path, annotations in sources:
+                if id(annotations) not in filtered:
+                    filtered[id(annotations)] = _filter_annotation_objects_by_area(
+                        annotations, min_object_area_m2, check_cancelled=check_cancelled
+                    )
+            sources = [(path, filtered[id(annotations)]) for path, annotations in sources]
+        return sources
 
 
 def _filter_annotation_objects_by_area(

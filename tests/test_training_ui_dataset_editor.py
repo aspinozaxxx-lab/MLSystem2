@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 from mlsystem2.training_ui_api.api import create_app
 from mlsystem2.training_ui_api import _worker
+from mlsystem2.training_ui_api import _automation, _dataset_editor
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import create_session_factory
 from mlsystem2.training_ui_api._models import (
@@ -48,7 +49,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     _validate_preserved_properties,
 )
 from mlsystem2.training_ui_api.contracts import DatasetInfo, TrainingUIAPIError
-from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
+from mlsystem2.training_ui_api._dataset_catalog import find_managed_dataset, list_managed_datasets
 from mlsystem2.training_ui_api._managed_migration import (
     _git_geojson_payloads,
     _migration_features_equal,
@@ -1028,6 +1029,193 @@ def test_dataset_editor_deletes_dataset_folder_but_keeps_database_history(
             "/api/v1/dataset-editor/datasets/{dataset_key}"
         ]
     )
+
+
+@pytest.mark.parametrize("problem", ["missing", "invalid_manifest"])
+def test_dataset_editor_deletes_broken_dataset_without_loading_its_contents(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    env = editor_environment
+    if problem == "missing":
+        _git(env.editor_root, "rm", "-r", "--", "Реки/test")
+    else:
+        (env.editor_dataset / ".mlsystem2-dataset.json").write_text("{", encoding="utf-8")
+        _git(env.editor_root, "add", "--", "Реки/test")
+    _git(env.editor_root, "commit", "-m", "Повреждённый источник")
+    _git(env.editor_root, "push", "origin", "main")
+    previous_commit = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    with create_session_factory(get_config())() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        session.get(DatasetClassRow, dataset.class_id).primary_dataset_id = dataset.id
+        session.commit()
+
+    def refuse_loading(*args, **kwargs):
+        raise AssertionError("Удаление не должно читать разметку повреждённого источника")
+
+    monkeypatch.setattr(_dataset_editor, "_managed_editor_dataset", refuse_loading)
+    response = env.client.delete(f"/api/v1/dataset-editor/datasets/{env.dataset_key}")
+    assert response.status_code == 200
+    if problem == "missing":
+        assert response.json()["commit"] == previous_commit
+    assert not env.editor_dataset.exists()
+    with create_session_factory(get_config())() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == env.dataset_key))
+        assert dataset.deleted_at is not None
+        assert session.get(DatasetClassRow, dataset.class_id).primary_dataset_id is None
+
+
+def test_published_working_clone_is_immediately_available_to_catalog_training_and_automation(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env = editor_environment
+    monkeypatch.delenv("MLSYSTEM2_MLMARKUP_ROOT")
+    monkeypatch.delenv("MLSYSTEM_MLMARKUP_REPO_PATH", raising=False)
+    config = get_config()
+    assert config.mlmarkup_root == env.editor_root
+    assert not env.release_marker.exists()
+    live_before = env.live_annotation.read_bytes()
+    with TestClient(create_app()) as client:
+        assert client.post("/api/v1/auth/login", json={"username": "editor", "password": "secret"}).status_code == 200
+        copied = client.post(
+            f"/api/v1/dataset-editor/datasets/{env.dataset_key}/copy",
+            json={"name": "Сразу доступен"},
+        )
+        assert copied.status_code == 200
+        result = copied.json()
+        assert result["publication_status"] == "published"
+        assert _git(env.editor_root, "rev-parse", "origin/main").stdout.strip() == result["commit"]
+        publication = client.get(f"/api/v1/dataset-editor/publication/{result['commit']}")
+        assert publication.json()["status"] == "published"
+        assert publication.json()["live_commit"] == result["commit"]
+
+        catalog = client.get("/api/v1/dataset-catalog").json()
+        new_dataset = next(d for c in catalog["classes"] for d in c["datasets"] if d["key"] == result["dataset_key"])
+        assert new_dataset["source_available"] is True
+        assert new_dataset["diagnostics"] == []
+        assert new_dataset["image_count"] == 1
+        assert env.live_annotation.read_bytes() == live_before
+
+        with create_session_factory(config)() as session:
+            dataset = find_managed_dataset(session, config, result["dataset_key"])
+            rules = _automation.automation_snapshot(session, config).rules
+            assert any(rule.dataset_key == dataset.key and rule.dataset_version == dataset.version for rule in rules)
+            job = SimpleNamespace(custom_dataset_id=None, dataset_name=dataset.key, config={}, dataset_version="старая версия")
+            monkeypatch.setattr(_worker, "_first_training_result", lambda *args: None)
+            training = _worker._dataset_config(session, job, config, tmp_path / "training")
+            assert job.dataset_version == dataset.version
+            snapshot = Path(training["annotations_dir"]) / env.live_annotation.name
+            frozen = snapshot.read_bytes()
+
+        scenes_url = f"/api/v1/dataset-editor/datasets/{result['dataset_key']}/scenes"
+        scene = client.get(scenes_url).json()["scenes"][0]
+        detail_url = f"{scenes_url}/{scene['annotation_name']}"
+        geojson = client.get(detail_url).json()["geojson"]
+        geojson["features"][0]["geometry"]["coordinates"] = [[[1, 1], [3.5, 1], [3.5, 3.5], [1, 3.5], [1, 1]]]
+        saved = client.put(detail_url, json={"revision": scene["revision"], "geojson": geojson})
+        assert saved.status_code == 200
+        assert saved.json()["publication_status"] == "published"
+        assert snapshot.read_bytes() == frozen
+        assert (config.mlmarkup_root / result["source_path"] / env.live_annotation.name).read_bytes() != frozen
+        with create_session_factory(config)() as session:
+            updated = find_managed_dataset(session, config, result["dataset_key"])
+            assert updated.version != dataset.version
+            assert any(rule.dataset_key == updated.key and rule.dataset_version == updated.version for rule in _automation.automation_snapshot(session, config).rules)
+
+
+def test_working_clone_reads_and_publication_status_do_not_fetch(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = editor_environment
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(env.editor_root))
+
+    def refuse_network(*args, **kwargs):
+        raise AssertionError("Чтение рабочего клона не должно обращаться к GitHub")
+
+    monkeypatch.setattr(_dataset_editor, "_fetch_editor_clone", refuse_network)
+    with TestClient(create_app()) as client:
+        client.post("/api/v1/auth/login", json={"username": "editor", "password": "secret"})
+        assert client.get(f"/api/v1/dataset-editor/datasets/{env.dataset_key}/scenes").status_code == 200
+        commit = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+        assert client.get(f"/api/v1/dataset-editor/publication/{commit}").json()["status"] == "published"
+
+
+def test_inference_uses_frozen_annotations_from_working_clone(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env = editor_environment
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(env.editor_root))
+    config = get_config()
+    annotation = env.editor_dataset / env.live_annotation.name
+    original = annotation.read_bytes()
+    scenes = tmp_path / "scenes.txt"
+    scenes.write_text("SCN01.part\n", encoding="utf-8")
+    with create_session_factory(config)() as session:
+        dataset = find_managed_dataset(session, config, env.dataset_key)
+        result = SimpleNamespace(
+            training_result_id=None,
+            scenes_file=SimpleNamespace(path=str(scenes)),
+            dataset_key=env.dataset_key,
+            class_key=dataset.class_key,
+        )
+        monkeypatch.setattr(_worker, "_first_pseudo_markup_result", lambda *args: result)
+        job = SimpleNamespace(type="inference", config={"annotation_files": [str(annotation)]}, model_name="Тестовая сеть")
+        payload = _worker._build_pseudo_markup_config(session, job, config, tmp_path / "inference")
+    frozen = Path(payload["annotation_files"][0])
+    assert frozen != annotation
+    assert frozen.name == annotation.name
+    assert frozen.read_bytes() == original
+    annotation.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    assert frozen.read_bytes() == original
+
+
+def test_failed_push_and_fetch_restore_working_source_and_preserve_drafts(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = editor_environment
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(env.editor_root))
+    previous_commit = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+    previous_bytes = (env.editor_dataset / env.live_annotation.name).read_bytes()
+    original_git = _dataset_editor._git_optional
+    original_fetch = _dataset_editor._fetch_editor_clone
+    fetch_count = 0
+
+    def fail_push(config, *arguments):
+        if arguments[0] == "push":
+            return subprocess.CompletedProcess(arguments, 1, "", "Нет соединения")
+        return original_git(config, *arguments)
+
+    def fail_recovery_fetch(config):
+        nonlocal fetch_count
+        fetch_count += 1
+        if fetch_count > 1:
+            raise _dataset_editor.DatasetEditorGitError("GitHub временно недоступен")
+        return original_fetch(config)
+
+    with TestClient(create_app()) as client:
+        client.post("/api/v1/auth/login", json={"username": "editor", "password": "secret"})
+        scenes_url = f"/api/v1/dataset-editor/datasets/{env.dataset_key}/scenes"
+        scene = client.get(scenes_url).json()["scenes"][0]
+        geojson = client.get(f"{scenes_url}/{scene['annotation_name']}").json()["geojson"]
+        geojson["features"][0]["geometry"]["coordinates"] = [[[1, 1], [3.5, 1], [3.5, 3.5], [1, 3.5], [1, 1]]]
+        draft_url = f"/api/v1/dataset-editor/datasets/{env.dataset_key}/drafts/{scene['annotation_name']}"
+        draft = client.put(draft_url, json={"base_revision": scene["revision"], "geojson": geojson})
+        assert draft.status_code == 200
+        monkeypatch.setattr(_dataset_editor, "_git_optional", fail_push)
+        monkeypatch.setattr(_dataset_editor, "_fetch_editor_clone", fail_recovery_fetch)
+        published = client.post(f"/api/v1/dataset-editor/datasets/{env.dataset_key}/drafts/publish")
+        assert published.status_code == 503
+        assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == previous_commit
+        assert (env.editor_dataset / env.live_annotation.name).read_bytes() == previous_bytes
+        with create_session_factory(get_config())() as session:
+            assert session.scalar(select(DatasetEditorDraftRow.id).where(DatasetEditorDraftRow.dataset_key == env.dataset_key)) is not None
 
 
 def test_dataset_editor_copies_published_dataset_under_new_name(

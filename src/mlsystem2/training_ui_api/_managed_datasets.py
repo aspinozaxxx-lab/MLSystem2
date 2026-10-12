@@ -31,6 +31,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._datasets import _path_metadata, imagery_images_dir
 from ._models import (
     DatasetClassRow,
@@ -216,53 +217,54 @@ def managed_dataset_cache_state(
 ) -> ManagedDatasetCacheState:
     """Быстро проверить кэш, не выполняя материализацию в HTTP-процессе."""
 
-    version, updated_at = managed_dataset_version(session, dataset, source_root)
-    cache_parent, target, _digest = _managed_cache_paths(config, dataset.key, scope, version)
-    if (target / ".mlsystem2-dataset.json").is_file():
+    with markup_read_lock(config, source_root=source_root):
+        version, updated_at = managed_dataset_version(session, dataset, source_root)
+        cache_parent, target, _digest = _managed_cache_paths(config, dataset.key, scope, version)
+        if (target / ".mlsystem2-dataset.json").is_file():
+            return ManagedDatasetCacheState(
+                desired_version=version,
+                updated_at=updated_at,
+                status="current",
+                materialization=_materialization_from_cache(
+                    target,
+                    version,
+                    updated_at,
+                    scan_missing_summary=False,
+                ),
+            )
+
+        request_path = _materialization_request_path(config, dataset.key, scope)
+        request_payload = _read_json_object(request_path)
+        if request_if_missing:
+            request_payload = _write_materialization_request(
+                config,
+                dataset_key=dataset.key,
+                scope=scope,
+                version=version,
+                priority=priority,
+                previous=request_payload,
+            )
+        lock_path = cache_parent / f".{target.name}.lock"
+        if lock_path.is_file():
+            status: MaterializationStatus = "building"
+        elif request_payload is None:
+            status = "missing"
+        elif request_payload.get("last_error") and not _request_is_due(request_payload):
+            status = "failed"
+        else:
+            status = "queued"
         return ManagedDatasetCacheState(
             desired_version=version,
             updated_at=updated_at,
-            status="current",
-            materialization=_materialization_from_cache(
-                target,
-                version,
-                updated_at,
-                scan_missing_summary=False,
+            status=status,
+            materialization=None,
+            last_ready=_latest_ready_materialization(cache_parent, updated_at),
+            error=(
+                str(request_payload.get("last_error"))
+                if request_payload and request_payload.get("last_error")
+                else None
             ),
         )
-
-    request_path = _materialization_request_path(config, dataset.key, scope)
-    request_payload = _read_json_object(request_path)
-    if request_if_missing:
-        request_payload = _write_materialization_request(
-            config,
-            dataset_key=dataset.key,
-            scope=scope,
-            version=version,
-            priority=priority,
-            previous=request_payload,
-        )
-    lock_path = cache_parent / f".{target.name}.lock"
-    if lock_path.is_file():
-        status: MaterializationStatus = "building"
-    elif request_payload is None:
-        status = "missing"
-    elif request_payload.get("last_error") and not _request_is_due(request_payload):
-        status = "failed"
-    else:
-        status = "queued"
-    return ManagedDatasetCacheState(
-        desired_version=version,
-        updated_at=updated_at,
-        status=status,
-        materialization=None,
-        last_ready=_latest_ready_materialization(cache_parent, updated_at),
-        error=(
-            str(request_payload.get("last_error"))
-            if request_payload and request_payload.get("last_error")
-            else None
-        ),
-    )
 
 
 def has_pending_managed_materialization(config: TrainingUIAPIConfig) -> bool:
@@ -313,11 +315,12 @@ def process_next_managed_materialization(
         }
         _write_json_atomic(request_path, failed)
         raise
-    current_version, _current_updated_at = managed_dataset_version(
-        session,
-        dataset,
-        source_root,
-    )
+    with markup_read_lock(config, source_root=source_root):
+        current_version, _current_updated_at = managed_dataset_version(
+            session,
+            dataset,
+            source_root,
+        )
     if current_version != materialized.version:
         _write_materialization_request(
             config,
@@ -347,146 +350,147 @@ def materialize_managed_dataset(
     source_root: Path,
     scope: str,
 ) -> ManagedDatasetMaterialization:
-    if dataset.source_type != SOURCE_MANAGED:
-        raise TrainingUIAPIError(f"Датасет не является управляемым: {dataset.key}")
-    if scope not in {"live", "editor"}:
-        raise ValueError("scope должен быть live или editor")
-    class_row = session.get(DatasetClassRow, dataset.class_id)
-    if class_row is None:
-        raise TrainingUIAPIError(f"Класс управляемого датасета не найден: {dataset.key}")
-    version, updated_at = managed_dataset_version(session, dataset, source_root)
-    cache_parent, target, cache_digest = _managed_cache_paths(
-        config,
-        dataset.key,
-        scope,
-        version,
-    )
-    manifest_path = target / ".mlsystem2-dataset.json"
-    cache_parent.mkdir(parents=True, exist_ok=True)
-    lock_path = cache_parent / f".{cache_digest}.lock"
-    with _materialization_lock(lock_path, manifest_path):
-        if manifest_path.is_file():
+    with markup_read_lock(config, source_root=source_root):
+        if dataset.source_type != SOURCE_MANAGED:
+            raise TrainingUIAPIError(f"Датасет не является управляемым: {dataset.key}")
+        if scope not in {"live", "editor"}:
+            raise ValueError("scope должен быть live или editor")
+        class_row = session.get(DatasetClassRow, dataset.class_id)
+        if class_row is None:
+            raise TrainingUIAPIError(f"Класс управляемого датасета не найден: {dataset.key}")
+        version, updated_at = managed_dataset_version(session, dataset, source_root)
+        cache_parent, target, cache_digest = _managed_cache_paths(
+            config,
+            dataset.key,
+            scope,
+            version,
+        )
+        manifest_path = target / ".mlsystem2-dataset.json"
+        cache_parent.mkdir(parents=True, exist_ok=True)
+        lock_path = cache_parent / f".{cache_digest}.lock"
+        with _materialization_lock(lock_path, manifest_path):
+            if manifest_path.is_file():
+                return _materialization_from_cache(
+                    target,
+                    version,
+                    updated_at,
+                    scan_missing_summary=True,
+                )
+            started_at = time.perf_counter()
+            manifest = managed_manifest(session, dataset)
+            from ._combined_dataset import build_combined_dataset
+
+            build = build_combined_dataset(
+                manifest=manifest,
+                repo_root=Path(source_root),
+                images_root=imagery_images_dir(config.images_root, class_row.imagery_type),
+                code_revision=_project_revision(config.project_root),
+            )
+            files = dict(build.files)
+            image_paths = dict(build.image_paths)
+            baseline_hashes = dict(build.manifest.baseline_hashes)
+            images_root = imagery_images_dir(config.images_root, class_row.imagery_type).resolve()
+            classes_payload = [item.model_dump(mode="json") for item in manifest.classes]
+            for scene in managed_scenes(session, dataset.id):
+                relative = PurePosixPath(scene.image_relative_path)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise TrainingUIAPIError(
+                        f"Некорректный путь снимка управляемого датасета: {scene.image_relative_path}"
+                    )
+                image_path = images_root.joinpath(*relative.parts).resolve()
+                try:
+                    image_path.relative_to(images_root)
+                except ValueError as exc:
+                    raise TrainingUIAPIError(
+                        f"Снимок управляемого датасета выходит за разрешённый каталог: {scene.image_relative_path}"
+                    ) from exc
+                if not image_path.is_file():
+                    raise TrainingUIAPIError(
+                        f"Снимок управляемого датасета не найден: {scene.image_relative_path}"
+                    )
+                expected_name = per_image_annotation_name(image_path)
+                if expected_name.casefold() != scene.annotation_name.casefold():
+                    raise TrainingUIAPIError(
+                        "Имя разметки управляемого датасета не соответствует снимку: "
+                        f"{scene.annotation_name} != {expected_name}"
+                    )
+                existing_image = image_paths.get(scene.annotation_name)
+                if existing_image is not None and existing_image.resolve() != image_path:
+                    raise TrainingUIAPIError(
+                        f"Снимок {scene.annotation_name} неоднозначно задан в управляемом датасете."
+                    )
+                image_paths[scene.annotation_name] = image_path
+                if scene.annotation_name in files:
+                    continue
+                try:
+                    with rasterio.open(image_path) as raster:
+                        if raster.crs is None:
+                            raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path}")
+                        crs_name = raster.crs.to_string()
+                except rasterio.errors.RasterioError as exc:
+                    raise TrainingUIAPIError(
+                        f"Не удалось открыть TIFF {image_path.name}: {exc}"
+                    ) from exc
+                files[scene.annotation_name] = {
+                    "type": "FeatureCollection",
+                    "crs": {"type": "name", "properties": {"name": crs_name}},
+                    "_mlsystem2_schema_version": manifest.schema_version,
+                    "_mlsystem2_task": manifest.task,
+                    "_mlsystem2_classes": classes_payload,
+                    "features": [],
+                }
+                baseline_hashes[scene.annotation_name] = {}
+            resolved_manifest = build.manifest.model_copy(
+                update={
+                    "scene_ids": sorted(Path(name).stem for name in files),
+                    "baseline_hashes": baseline_hashes,
+                }
+            )
+            source_footprints = _source_footprint_index(session, dataset, Path(source_root))
+            reused_footprints = 0
+            computed_footprints = 0
+            temporary = cache_parent / f".{cache_digest}.{uuid.uuid4().hex}.tmp"
+            temporary.mkdir()
+            try:
+                for annotation_name, payload in files.items():
+                    _write_json(temporary / annotation_name, payload)
+                    footprint_name = footprint_name_for_annotation(annotation_name)
+                    source_footprint = source_footprints.get(footprint_name.casefold())
+                    if source_footprint is not None:
+                        shutil.copy2(source_footprint, temporary / footprint_name)
+                        reused_footprints += 1
+                    else:
+                        from ._dataset_editor import _footprint_geojson_payload
+
+                        _write_json(
+                            temporary / footprint_name,
+                            _footprint_geojson_payload(image_paths[annotation_name]),
+                        )
+                        computed_footprints += 1
+                _write_json(
+                    temporary / ".mlsystem2-dataset.json",
+                    resolved_manifest.model_dump(mode="json"),
+                )
+                _write_materialization_summary(
+                    temporary,
+                    version=version,
+                    class_counts=build.class_counts,
+                    hard_negative_count=build.hard_negative_count,
+                    image_count=len(files),
+                    duration_seconds=time.perf_counter() - started_at,
+                    reused_footprints=reused_footprints,
+                    computed_footprints=computed_footprints,
+                )
+                os.replace(temporary, target)
+            finally:
+                shutil.rmtree(temporary, ignore_errors=True)
+            _prune_managed_cache(cache_parent, keep=target)
             return _materialization_from_cache(
                 target,
                 version,
                 updated_at,
-                scan_missing_summary=True,
+                scan_missing_summary=False,
             )
-        started_at = time.perf_counter()
-        manifest = managed_manifest(session, dataset)
-        from ._combined_dataset import build_combined_dataset
-
-        build = build_combined_dataset(
-            manifest=manifest,
-            repo_root=Path(source_root),
-            images_root=imagery_images_dir(config.images_root, class_row.imagery_type),
-            code_revision=_project_revision(config.project_root),
-        )
-        files = dict(build.files)
-        image_paths = dict(build.image_paths)
-        baseline_hashes = dict(build.manifest.baseline_hashes)
-        images_root = imagery_images_dir(config.images_root, class_row.imagery_type).resolve()
-        classes_payload = [item.model_dump(mode="json") for item in manifest.classes]
-        for scene in managed_scenes(session, dataset.id):
-            relative = PurePosixPath(scene.image_relative_path)
-            if relative.is_absolute() or ".." in relative.parts:
-                raise TrainingUIAPIError(
-                    f"Некорректный путь снимка управляемого датасета: {scene.image_relative_path}"
-                )
-            image_path = images_root.joinpath(*relative.parts).resolve()
-            try:
-                image_path.relative_to(images_root)
-            except ValueError as exc:
-                raise TrainingUIAPIError(
-                    f"Снимок управляемого датасета выходит за разрешённый каталог: {scene.image_relative_path}"
-                ) from exc
-            if not image_path.is_file():
-                raise TrainingUIAPIError(
-                    f"Снимок управляемого датасета не найден: {scene.image_relative_path}"
-                )
-            expected_name = per_image_annotation_name(image_path)
-            if expected_name.casefold() != scene.annotation_name.casefold():
-                raise TrainingUIAPIError(
-                    "Имя разметки управляемого датасета не соответствует снимку: "
-                    f"{scene.annotation_name} != {expected_name}"
-                )
-            existing_image = image_paths.get(scene.annotation_name)
-            if existing_image is not None and existing_image.resolve() != image_path:
-                raise TrainingUIAPIError(
-                    f"Снимок {scene.annotation_name} неоднозначно задан в управляемом датасете."
-                )
-            image_paths[scene.annotation_name] = image_path
-            if scene.annotation_name in files:
-                continue
-            try:
-                with rasterio.open(image_path) as raster:
-                    if raster.crs is None:
-                        raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path}")
-                    crs_name = raster.crs.to_string()
-            except rasterio.errors.RasterioError as exc:
-                raise TrainingUIAPIError(
-                    f"Не удалось открыть TIFF {image_path.name}: {exc}"
-                ) from exc
-            files[scene.annotation_name] = {
-                "type": "FeatureCollection",
-                "crs": {"type": "name", "properties": {"name": crs_name}},
-                "_mlsystem2_schema_version": manifest.schema_version,
-                "_mlsystem2_task": manifest.task,
-                "_mlsystem2_classes": classes_payload,
-                "features": [],
-            }
-            baseline_hashes[scene.annotation_name] = {}
-        resolved_manifest = build.manifest.model_copy(
-            update={
-                "scene_ids": sorted(Path(name).stem for name in files),
-                "baseline_hashes": baseline_hashes,
-            }
-        )
-        source_footprints = _source_footprint_index(session, dataset, Path(source_root))
-        reused_footprints = 0
-        computed_footprints = 0
-        temporary = cache_parent / f".{cache_digest}.{uuid.uuid4().hex}.tmp"
-        temporary.mkdir()
-        try:
-            for annotation_name, payload in files.items():
-                _write_json(temporary / annotation_name, payload)
-                footprint_name = footprint_name_for_annotation(annotation_name)
-                source_footprint = source_footprints.get(footprint_name.casefold())
-                if source_footprint is not None:
-                    shutil.copy2(source_footprint, temporary / footprint_name)
-                    reused_footprints += 1
-                else:
-                    from ._dataset_editor import _footprint_geojson_payload
-
-                    _write_json(
-                        temporary / footprint_name,
-                        _footprint_geojson_payload(image_paths[annotation_name]),
-                    )
-                    computed_footprints += 1
-            _write_json(
-                temporary / ".mlsystem2-dataset.json",
-                resolved_manifest.model_dump(mode="json"),
-            )
-            _write_materialization_summary(
-                temporary,
-                version=version,
-                class_counts=build.class_counts,
-                hard_negative_count=build.hard_negative_count,
-                image_count=len(files),
-                duration_seconds=time.perf_counter() - started_at,
-                reused_footprints=reused_footprints,
-                computed_footprints=computed_footprints,
-            )
-            os.replace(temporary, target)
-        finally:
-            shutil.rmtree(temporary, ignore_errors=True)
-        _prune_managed_cache(cache_parent, keep=target)
-        return _materialization_from_cache(
-            target,
-            version,
-            updated_at,
-            scan_missing_summary=False,
-        )
 
 
 def invalidate_managed_cache(

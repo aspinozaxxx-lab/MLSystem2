@@ -25,6 +25,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._datasets import (
     CUSTOM_KEY,
     CUSTOM_NAME,
@@ -137,33 +138,35 @@ _TECHNICAL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$")
 def synchronize_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> None:
     """Идемпотентно импортирует историю и новые папки MLMarkup."""
 
-    with _SYNC_LOCK:
-        initial_import = session.scalar(select(DatasetRow.id).limit(1)) is None
-        reconcile_dataset_template_keys(session)
-        _import_historical_dataset_keys(session, config)
-        _import_mlmarkup_folders(session, config, preserve_legacy_keys=initial_import)
-        _ensure_model_name_stems(session, config)
-        reconcile_dataset_template_keys(session)
-        session.flush()
-        root = Path(config.mlmarkup_root).resolve()
-        _LAST_SYNC_BY_ROOT[root] = (time.monotonic(), _catalog_tree_stamp(root))
+    with markup_read_lock(config):
+        with _SYNC_LOCK:
+            initial_import = session.scalar(select(DatasetRow.id).limit(1)) is None
+            reconcile_dataset_template_keys(session)
+            _import_historical_dataset_keys(session, config)
+            _import_mlmarkup_folders(session, config, preserve_legacy_keys=initial_import)
+            _ensure_model_name_stems(session, config)
+            reconcile_dataset_template_keys(session)
+            session.flush()
+            root = Path(config.mlmarkup_root).resolve()
+            _LAST_SYNC_BY_ROOT[root] = (time.monotonic(), _catalog_tree_stamp(root))
 
 
 def _synchronize_dataset_catalog_if_stale(
     session: Session,
     config: TrainingUIAPIConfig,
 ) -> None:
-    root = Path(config.mlmarkup_root).resolve()
-    tree_stamp = _catalog_tree_stamp(root)
-    with _SYNC_LOCK:
-        last_sync = _LAST_SYNC_BY_ROOT.get(root)
-        if (
-            last_sync is not None
-            and time.monotonic() - last_sync[0] < _SYNC_TTL_SECONDS
-            and last_sync[1] == tree_stamp
-        ):
-            return
-        synchronize_dataset_catalog(session, config)
+    with markup_read_lock(config):
+        root = Path(config.mlmarkup_root).resolve()
+        tree_stamp = _catalog_tree_stamp(root)
+        with _SYNC_LOCK:
+            last_sync = _LAST_SYNC_BY_ROOT.get(root)
+            if (
+                last_sync is not None
+                and time.monotonic() - last_sync[0] < _SYNC_TTL_SECONDS
+                and last_sync[1] == tree_stamp
+            ):
+                return
+            synchronize_dataset_catalog(session, config)
 
 
 def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
@@ -349,42 +352,43 @@ def list_managed_datasets(
     materialize_managed: bool = True,
     class_key: str | None = None,
 ) -> list[DatasetInfo]:
-    _synchronize_dataset_catalog_if_stale(session, config)
-    statement = (
-        select(DatasetRow, DatasetClassRow)
-        .join(
-            DatasetClassRow,
-            DatasetClassRow.id == DatasetRow.class_id,
+    with markup_read_lock(config):
+        _synchronize_dataset_catalog_if_stale(session, config)
+        statement = (
+            select(DatasetRow, DatasetClassRow)
+            .join(
+                DatasetClassRow,
+                DatasetClassRow.id == DatasetRow.class_id,
+            )
+            .where(DatasetRow.deleted_at.is_(None))
         )
-        .where(DatasetRow.deleted_at.is_(None))
-    )
-    if class_key is not None:
-        statement = statement.where(DatasetClassRow.key == class_key)
-    rows = session.execute(statement).all()
-    image_indexes: dict[Path, dict[str, list[Path]]] = {}
-    per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
-    datasets = [
-        _dataset_info(
-            session,
-            dataset,
-            class_row,
-            config,
-            image_indexes=image_indexes,
-            per_image_indexes=per_image_indexes,
-            materialize_managed=materialize_managed,
+        if class_key is not None:
+            statement = statement.where(DatasetClassRow.key == class_key)
+        rows = session.execute(statement).all()
+        image_indexes: dict[Path, dict[str, list[Path]]] = {}
+        per_image_indexes: dict[Path, dict[str, list[Path]]] = {}
+        datasets = [
+            _dataset_info(
+                session,
+                dataset,
+                class_row,
+                config,
+                image_indexes=image_indexes,
+                per_image_indexes=per_image_indexes,
+                materialize_managed=materialize_managed,
+            )
+            for dataset, class_row in rows
+        ]
+        datasets.sort(
+            key=lambda item: (
+                (item.class_name or "").casefold(),
+                not item.is_primary,
+                (item.dataset_name or "").casefold(),
+            )
         )
-        for dataset, class_row in rows
-    ]
-    datasets.sort(
-        key=lambda item: (
-            (item.class_name or "").casefold(),
-            not item.is_primary,
-            (item.dataset_name or "").casefold(),
-        )
-    )
-    if include_custom:
-        datasets.append(_custom_dataset_info(config))
-    return datasets
+        if include_custom:
+            datasets.append(_custom_dataset_info(config))
+        return datasets
 
 
 def list_managed_classes(
@@ -441,25 +445,26 @@ def find_managed_dataset(
     *,
     materialize_managed: bool = True,
 ) -> DatasetInfo | None:
-    if dataset_key == CUSTOM_KEY:
-        return _custom_dataset_info(config)
-    _synchronize_dataset_catalog_if_stale(session, config)
-    row = session.execute(
-        select(DatasetRow, DatasetClassRow)
-        .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
-        .where(
-            DatasetRow.key == dataset_key,
-            DatasetRow.deleted_at.is_(None),
+    with markup_read_lock(config):
+        if dataset_key == CUSTOM_KEY:
+            return _custom_dataset_info(config)
+        _synchronize_dataset_catalog_if_stale(session, config)
+        row = session.execute(
+            select(DatasetRow, DatasetClassRow)
+            .join(DatasetClassRow, DatasetClassRow.id == DatasetRow.class_id)
+            .where(
+                DatasetRow.key == dataset_key,
+                DatasetRow.deleted_at.is_(None),
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return _dataset_info(
+            session,
+            *row,
+            config,
+            materialize_managed=materialize_managed,
         )
-    ).one_or_none()
-    if row is None:
-        return None
-    return _dataset_info(
-        session,
-        *row,
-        config,
-        materialize_managed=materialize_managed,
-    )
 
 
 def find_managed_class(
@@ -474,12 +479,13 @@ def find_managed_class(
 
 
 def managed_dataset_catalog(session: Session, config: TrainingUIAPIConfig) -> DatasetCatalogInfo:
-    _synchronize_dataset_catalog_if_stale(session, config)
-    return DatasetCatalogInfo(
-        classes=list_managed_classes(session, config, include_custom=False),
-        sources=_source_infos(session, config),
-        imagery_types=list_imagery_types(config.images_root),
-    )
+    with markup_read_lock(config):
+        _synchronize_dataset_catalog_if_stale(session, config)
+        return DatasetCatalogInfo(
+            classes=list_managed_classes(session, config, include_custom=False),
+            sources=_source_infos(session, config),
+            imagery_types=list_imagery_types(config.images_root),
+        )
 
 
 def create_dataset_class(
@@ -586,50 +592,51 @@ def create_managed_dataset(
     request: ManagedDatasetCreate,
     config: TrainingUIAPIConfig,
 ) -> DatasetCatalogInfo:
-    class_row = _class_row(session, request.class_key)
-    name = _clean_name(request.name, "Название датасета")
-    source_path = _validate_source_path(
-        config.mlmarkup_root,
-        request.source_path,
-        require_exists=True,
-    )
-    source_owner = session.scalar(
-        select(DatasetRow).where(
-            DatasetRow.source_type == SOURCE_MLMARKUP,
-            DatasetRow.source_path == source_path,
-            DatasetRow.deleted_at.is_(None),
+    with markup_read_lock(config):
+        class_row = _class_row(session, request.class_key)
+        name = _clean_name(request.name, "Название датасета")
+        source_path = _validate_source_path(
+            config.mlmarkup_root,
+            request.source_path,
+            require_exists=True,
         )
-    )
-    _ensure_dataset_name_available(
-        session,
-        class_row.id,
-        name,
-        exclude_id=source_owner.id if source_owner is not None else None,
-    )
-    if source_owner is None:
-        dataset = DatasetRow(
-            key=str(uuid.uuid4()),
-            class_id=class_row.id,
-            name=name,
-            source_type=SOURCE_MLMARKUP,
-            source_path=source_path,
-            config_revision=1,
-            legacy_version=False,
+        source_owner = session.scalar(
+            select(DatasetRow).where(
+                DatasetRow.source_type == SOURCE_MLMARKUP,
+                DatasetRow.source_path == source_path,
+                DatasetRow.deleted_at.is_(None),
+            )
         )
-        session.add(dataset)
-        session.flush()
-    else:
-        previous_class = session.get(DatasetClassRow, source_owner.class_id)
-        if previous_class is not None and previous_class.primary_dataset_id == source_owner.id:
-            previous_class.primary_dataset_id = None
-        source_owner.class_id = class_row.id
-        source_owner.name = name
-        source_owner.config_revision += 1
-        source_owner.legacy_version = False
-        dataset = source_owner
-        session.flush()
-    _assign_main_if_available(class_row, dataset)
-    return managed_dataset_catalog(session, config)
+        _ensure_dataset_name_available(
+            session,
+            class_row.id,
+            name,
+            exclude_id=source_owner.id if source_owner is not None else None,
+        )
+        if source_owner is None:
+            dataset = DatasetRow(
+                key=str(uuid.uuid4()),
+                class_id=class_row.id,
+                name=name,
+                source_type=SOURCE_MLMARKUP,
+                source_path=source_path,
+                config_revision=1,
+                legacy_version=False,
+            )
+            session.add(dataset)
+            session.flush()
+        else:
+            previous_class = session.get(DatasetClassRow, source_owner.class_id)
+            if previous_class is not None and previous_class.primary_dataset_id == source_owner.id:
+                previous_class.primary_dataset_id = None
+            source_owner.class_id = class_row.id
+            source_owner.name = name
+            source_owner.config_revision += 1
+            source_owner.legacy_version = False
+            dataset = source_owner
+            session.flush()
+        _assign_main_if_available(class_row, dataset)
+        return managed_dataset_catalog(session, config)
 
 
 def _managed_composition_source_specs(
@@ -760,26 +767,27 @@ def create_managed_dataset_composition(
 ) -> DatasetCatalogInfo:
     """Создать виртуальный multiclass-датасет из binary per-image источников."""
 
-    class_row = _class_row(session, request.class_key)
-    name = _clean_name(request.name, "Название датасета")
-    _ensure_dataset_name_available(session, class_row.id, name)
-    specs = _managed_composition_source_specs(session, config, class_row, request.sources)
+    with markup_read_lock(config):
+        class_row = _class_row(session, request.class_key)
+        name = _clean_name(request.name, "Название датасета")
+        _ensure_dataset_name_available(session, class_row.id, name)
+        specs = _managed_composition_source_specs(session, config, class_row, request.sources)
 
-    dataset = DatasetRow(
-        key=str(uuid.uuid4()),
-        class_id=class_row.id,
-        name=name,
-        source_type=SOURCE_MANAGED,
-        source_path=f"managed/{uuid.uuid4()}",
-        config_revision=1,
-        legacy_version=False,
-    )
-    session.add(dataset)
-    session.flush()
-    _replace_managed_composition_sources(session, dataset, specs)
-    _assign_main_if_available(class_row, dataset)
-    session.flush()
-    return managed_dataset_catalog(session, config)
+        dataset = DatasetRow(
+            key=str(uuid.uuid4()),
+            class_id=class_row.id,
+            name=name,
+            source_type=SOURCE_MANAGED,
+            source_path=f"managed/{uuid.uuid4()}",
+            config_revision=1,
+            legacy_version=False,
+        )
+        session.add(dataset)
+        session.flush()
+        _replace_managed_composition_sources(session, dataset, specs)
+        _assign_main_if_available(class_row, dataset)
+        session.flush()
+        return managed_dataset_catalog(session, config)
 
 
 def update_managed_dataset(
@@ -788,100 +796,101 @@ def update_managed_dataset(
     request: ManagedDatasetUpdate,
     config: TrainingUIAPIConfig,
 ) -> DatasetCatalogInfo:
-    row = _dataset_row(session, dataset_key)
-    if row.source_type == SOURCE_MANAGED and request.source_path is not None:
-        raise TrainingUIAPIError(
-            "Источник виртуального управляемого датасета меняется через его состав."
-        )
-    if row.source_type != SOURCE_MANAGED and request.sources is not None:
-        raise TrainingUIAPIError("Состав задаётся только для виртуального управляемого датасета.")
-    desired_name = (
-        _clean_name(request.name, "Название датасета") if request.name is not None else row.name
-    )
-    desired_source = (
-        _validate_source_path(config.mlmarkup_root, request.source_path, require_exists=True)
-        if request.source_path is not None
-        else row.source_path
-    )
-    _ensure_dataset_name_available(
-        session,
-        row.class_id,
-        desired_name,
-        exclude_id=row.id,
-    )
-
-    composition_specs = None
-    composition_changed = False
-    if request.sources is not None:
-        class_row = session.get(DatasetClassRow, row.class_id)
-        if class_row is None:
-            raise TrainingUIAPIError(f"Класс датасета не найден: {dataset_key}")
-        current_relations = session.scalars(
-            select(ManagedDatasetSourceRow)
-            .where(ManagedDatasetSourceRow.managed_dataset_id == row.id)
-            .order_by(ManagedDatasetSourceRow.object_type_id)
-        ).all()
-        composition_specs = _managed_composition_source_specs(
-            session,
-            config,
-            class_row,
-            request.sources,
-            current_relations,
-        )
-        current_signature = [
-            (
-                relation.source_dataset_id,
-                relation.priority,
-                relation.object_type_id,
-                relation.object_type_slug,
-                relation.object_type_name,
-                relation.color.upper(),
-            )
-            for relation in current_relations
-        ]
-        composition_changed = current_signature != _managed_composition_signature(composition_specs)
-        if (
-            composition_changed
-            and session.scalar(
-                select(DatasetEditorDraftRow.id)
-                .where(DatasetEditorDraftRow.dataset_key == row.key)
-                .limit(1)
-            )
-            is not None
-        ):
+    with markup_read_lock(config):
+        row = _dataset_row(session, dataset_key)
+        if row.source_type == SOURCE_MANAGED and request.source_path is not None:
             raise TrainingUIAPIError(
-                "Сначала опубликуйте или отмените все черновики управляемого датасета."
+                "Источник виртуального управляемого датасета меняется через его состав."
             )
-
-    changed = desired_name != row.name or desired_source != row.source_path or composition_changed
-    source_owner: DatasetRow | None = None
-    if desired_source != row.source_path:
-        source_owner = session.scalar(
-            select(DatasetRow).where(
-                DatasetRow.source_type == row.source_type,
-                DatasetRow.source_path == desired_source,
-                DatasetRow.id != row.id,
-                DatasetRow.deleted_at.is_(None),
-            )
+        if row.source_type != SOURCE_MANAGED and request.sources is not None:
+            raise TrainingUIAPIError("Состав задаётся только для виртуального управляемого датасета.")
+        desired_name = (
+            _clean_name(request.name, "Название датасета") if request.name is not None else row.name
         )
-        previous_source_path = row.source_path
-        if source_owner is not None:
-            source_owner.source_path = f".mlsystem2-source-swap/{uuid.uuid4()}"
+        desired_source = (
+            _validate_source_path(config.mlmarkup_root, request.source_path, require_exists=True)
+            if request.source_path is not None
+            else row.source_path
+        )
+        _ensure_dataset_name_available(
+            session,
+            row.class_id,
+            desired_name,
+            exclude_id=row.id,
+        )
+
+        composition_specs = None
+        composition_changed = False
+        if request.sources is not None:
+            class_row = session.get(DatasetClassRow, row.class_id)
+            if class_row is None:
+                raise TrainingUIAPIError(f"Класс датасета не найден: {dataset_key}")
+            current_relations = session.scalars(
+                select(ManagedDatasetSourceRow)
+                .where(ManagedDatasetSourceRow.managed_dataset_id == row.id)
+                .order_by(ManagedDatasetSourceRow.object_type_id)
+            ).all()
+            composition_specs = _managed_composition_source_specs(
+                session,
+                config,
+                class_row,
+                request.sources,
+                current_relations,
+            )
+            current_signature = [
+                (
+                    relation.source_dataset_id,
+                    relation.priority,
+                    relation.object_type_id,
+                    relation.object_type_slug,
+                    relation.object_type_name,
+                    relation.color.upper(),
+                )
+                for relation in current_relations
+            ]
+            composition_changed = current_signature != _managed_composition_signature(composition_specs)
+            if (
+                composition_changed
+                and session.scalar(
+                    select(DatasetEditorDraftRow.id)
+                    .where(DatasetEditorDraftRow.dataset_key == row.key)
+                    .limit(1)
+                )
+                is not None
+            ):
+                raise TrainingUIAPIError(
+                    "Сначала опубликуйте или отмените все черновики управляемого датасета."
+                )
+
+        changed = desired_name != row.name or desired_source != row.source_path or composition_changed
+        source_owner: DatasetRow | None = None
+        if desired_source != row.source_path:
+            source_owner = session.scalar(
+                select(DatasetRow).where(
+                    DatasetRow.source_type == row.source_type,
+                    DatasetRow.source_path == desired_source,
+                    DatasetRow.id != row.id,
+                    DatasetRow.deleted_at.is_(None),
+                )
+            )
+            previous_source_path = row.source_path
+            if source_owner is not None:
+                source_owner.source_path = f".mlsystem2-source-swap/{uuid.uuid4()}"
+                session.flush()
+            row.source_path = desired_source
             session.flush()
-        row.source_path = desired_source
+            if source_owner is not None:
+                source_owner.source_path = previous_source_path
+                source_owner.config_revision += 1
+                source_owner.legacy_version = False
+        if composition_changed and composition_specs is not None:
+            _replace_managed_composition_sources(session, row, composition_specs)
+        row.name = desired_name
+        if changed:
+            row.config_revision += 1
+            row.legacy_version = False
         session.flush()
-        if source_owner is not None:
-            source_owner.source_path = previous_source_path
-            source_owner.config_revision += 1
-            source_owner.legacy_version = False
-    if composition_changed and composition_specs is not None:
-        _replace_managed_composition_sources(session, row, composition_specs)
-    row.name = desired_name
-    if changed:
-        row.config_revision += 1
-        row.legacy_version = False
-    session.flush()
-    return managed_dataset_catalog(session, config)
+        return managed_dataset_catalog(session, config)
 
 
 def list_imagery_types(images_root: Path) -> list[ImageryTypeInfo]:
