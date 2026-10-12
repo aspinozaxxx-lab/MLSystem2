@@ -116,6 +116,7 @@ import { InferenceTemplates } from "./InferenceTemplates";
 import { inferenceTemplateForDataset } from "./utils/inferenceTemplates";
 import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { useTestMarkupClasses } from "./useTestMarkupClasses";
+import { ClassNavigation, useRememberedClass } from "./ClassNavigation";
 import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { useUsage } from "./useUsage";
@@ -474,7 +475,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1"].includes(route[0]) || (route[0] === "test-markups" && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1", "classes"].includes(route[0]) || (["test-markups", "results"].includes(route[0]) && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
     </div>
   );
 }
@@ -1091,18 +1092,9 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
         </div>
       </header>
       <div className="test-markup-browser-layout">
-        <nav className="test-markup-class-nav" aria-label="Классы тестовых разметок">
-          <span className="field-label">Классы</span>
-          {index?.classes?.map((item) => <button key={item.key} type="button" className={classKey === item.key ? "selected" : ""} aria-current={classKey === item.key ? "true" : undefined} onClick={() => setClassKey(item.key)} title={item.name}>
-            <span>{item.name}</span><small>{item.sample_count}</small>
-          </button>)}
-          {!index ? <span className="muted" role="status">Загрузка классов…</span> : null}
-        </nav>
+        <ClassNavigation classes={index ? (index.classes || []).map((item) => ({ ...item, count: item.sample_count })) : null}
+          classKey={classKey} onSelect={setClassKey} label="Классы тестовых разметок" />
         <section className="test-markup-class-content">
-          <label className="field test-markup-mobile-class"><span>Класс</span><select aria-label="Класс тестовых разметок" value={classKey} onChange={(event) => setClassKey(event.target.value)} disabled={!index?.classes?.length}>
-            {!index?.classes?.length ? <option>{index ? "Нет разметок" : "Загрузка…"}</option> : null}
-            {index?.classes?.map((item) => <option key={item.key} value={item.key}>{item.name} · {item.sample_count}</option>)}
-          </select></label>
           {classKey && index ? <div className="test-markup-class-header"><h2>{(index.classes || []).find((item) => item.key === classKey)?.name}</h2><span className="muted">Разметок: {samples?.length ?? "…"}</span></div> : null}
           {samples ? <TestSampleCatalog samples={samples} onDelete={removeSample} /> : <div className="empty-state" role="status">{index && !(index.classes || []).length ? "Тестовые разметки ещё не созданы." : "Загрузка разметок выбранного класса…"}</div>}
         </section>
@@ -2184,6 +2176,13 @@ function parseExportSampleSize(value: string): number | null | undefined {
 function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: RoutedPageProps) {
   const [catalog, setCatalog] = useState<DatasetCatalogInfo | null>(null);
   const [userDrafts, setUserDrafts] = useState<DatasetEditorUserDraftInfo[] | null>(null);
+  const classChoices = useMemo(() => catalog ? (catalog.classes || []).map((item) => ({
+    key: item.key, name: item.name, count: (item.datasets || []).length,
+    draftCount: (userDrafts || []).filter((draft) => draft.class_key === item.key).length,
+  })) : null, [catalog, userDrafts]);
+  const { classKey, setClassKey } = useRememberedClass(classChoices, "grovika:class-editor:class");
+  const visibleDrafts = (userDrafts || []).filter((draft) => draft.class_key === classKey);
+  const [renameDrafts, setRenameDrafts] = useState<Record<string, { name?: string; technical_name?: string }>>({});
 
   const loadCatalog = useCallback(async () => {
     const payload = await run(() => apiJson<DatasetCatalogInfo>("/dataset-catalog"));
@@ -2222,7 +2221,11 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
         body: { name, technical_name: technicalName, imagery_type: imageryType },
       }),
     );
-    if (payload) form.reset();
+    if (payload) {
+      const created = (payload.classes || []).find((item) => !(catalog?.classes || []).some((old) => old.key === item.key));
+      if (created) setClassKey(created.key);
+      closeModal();
+    }
     await applyCatalog(payload);
   };
 
@@ -2231,12 +2234,18 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     const data = new FormData(event.currentTarget);
     const name = String(data.get("name") || "").trim();
     const technicalName = String(data.get("technical_name") || "").trim().toLowerCase();
-    await applyCatalog(await run(() =>
+    const payload = await run(() =>
       apiJson<DatasetCatalogInfo>(`/dataset-classes/${encodeURIComponent(classKey)}`, {
         method: "PATCH",
         body: { name, technical_name: technicalName },
       }),
-    ));
+    );
+    if (payload) setRenameDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[classKey];
+      return next;
+    });
+    await applyCatalog(payload);
   };
 
   const updateClass = async (
@@ -2505,25 +2514,41 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     ));
   };
 
+  const openCreateClass = () => showModal({
+    title: "Новый класс",
+    body: <form id="create-class" className="form-stack" onSubmit={createClass}>
+      <label className="field">Название класса<input name="name" maxLength={240} autoFocus required /></label>
+      <label className="field">Техническое имя<input name="technical_name" maxLength={160}
+        pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
+        title="Латинские строчные буквы, цифры, дефис и подчёркивание" required /></label>
+      <label className="field">Тип снимков<select name="imagery_type" defaultValue="kanopus">
+        <option value="kanopus">Канопус</option><option value="ortho">Ортофото</option>
+      </select></label>
+    </form>,
+    footer: <><button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+      <button className="primary" type="submit" form="create-class"><Plus size={15} />Добавить класс</button></>,
+  });
+
   return (
-    <>
+    <div className="class-editor-page">
       <PageHeader
         title="Редактор классов"
-        subtitle="Классы, датасеты и источники снимков"
         actions={(
-          <button className="secondary" type="button" onClick={synchronize}>
-            <RefreshCw size={15} /> Синхронизировать MLMarkup
-          </button>
+          <><button className="primary compact-action" type="button" onClick={openCreateClass}><Plus size={15} />Класс</button>
+          <button className="secondary icon-button" type="button" onClick={synchronize}
+            title="Синхронизировать MLMarkup" aria-label="Синхронизировать MLMarkup"><RefreshCw size={15} /></button></>
         )}
       />
-      {userDrafts?.length ? (
+      <div className="class-browser-layout">
+        <ClassNavigation classes={classChoices} classKey={classKey} onSelect={setClassKey} label="Классы редактора" />
+        <div className="class-browser-content">
+      {visibleDrafts.length ? (
         <section className="panel class-editor-user-drafts">
           <PanelHeader
             title="Мои черновики"
-            subtitle="Сохранённые, но ещё не опубликованные изменения"
           />
           <div className="class-editor-user-draft-list">
-            {userDrafts.map((draft) => (
+            {visibleDrafts.map((draft) => (
               <a
                 className="class-editor-user-draft"
                 href={`#/dataset-editor/${encodeURIComponent(draft.dataset_key)}`}
@@ -2531,7 +2556,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
               >
                 <FileText size={18} />
                 <span className="source-lines">
-                  <strong>{draft.class_name} · {draft.dataset_name}</strong>
+                  <strong>{draft.dataset_name}</strong>
                   <span className="muted">
                     Снимков с изменениями: {draft.scene_count}
                     {draft.deleted_scene_count
@@ -2548,44 +2573,33 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           </div>
         </section>
       ) : null}
-      <section className="panel">
-        <PanelHeader title="Новый класс" subtitle="Выберите тип снимков, затем добавьте датасеты" />
-        <form className="inline-form" onSubmit={createClass}>
-          <input name="name" placeholder="Название класса" maxLength={240} required />
-          <input
-            name="technical_name"
-            placeholder="Техническое имя, например abrasion"
-            maxLength={160}
-            pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
-            title="Латинские строчные буквы, цифры, дефис и подчёркивание"
-            required
-          />
-          <select name="imagery_type" defaultValue="kanopus" aria-label="Тип снимков">
-            <option value="kanopus">Канопус</option>
-            <option value="ortho">Ортофото</option>
-          </select>
-          <button className="primary" type="submit"><Plus size={15} /> Добавить класс</button>
-        </form>
-      </section>
       {!catalog ? <div className="empty-state">Загрузка каталога...</div> : null}
-      {(catalog?.classes || []).map((classInfo) => {
+      {catalog && !classChoices?.length ? <div className="empty-state">Классы пока не созданы.</div> : null}
+      {(catalog?.classes || []).filter((item) => item.key === classKey).map((classInfo) => {
         const datasets = classInfo.datasets || [];
         const hasFreeSource = (catalog?.sources || []).some((source) => !source.assigned_dataset_key);
         return (
           <section className="panel class-editor-card" key={classInfo.key}>
+            <div className="class-editor-class-heading"><h2>{classInfo.name}</h2><span className="muted">Датасетов: {datasets.length}</span></div>
             <div className="class-editor-header">
-              <form className="inline-form" onSubmit={(event) => renameClass(event, classInfo.key)}>
-                <input name="name" defaultValue={classInfo.name} maxLength={240} required />
+              <form className="class-editor-name-form" onSubmit={(event) => renameClass(event, classInfo.key)}>
+                <label className="field">Название<input name="name" value={renameDrafts[classInfo.key]?.name ?? classInfo.name}
+                  onChange={(event) => setRenameDrafts((drafts) => ({ ...drafts, [classInfo.key]: { ...drafts[classInfo.key], name: event.target.value } }))}
+                  maxLength={240} required /></label>
+                <label className="field">Имя модели
                 <input
                   name="technical_name"
-                  defaultValue={classInfo.technical_name}
+                  value={renameDrafts[classInfo.key]?.technical_name ?? classInfo.technical_name ?? ""}
+                  onChange={(event) => setRenameDrafts((drafts) => ({ ...drafts, [classInfo.key]: { ...drafts[classInfo.key], technical_name: event.target.value } }))}
                   maxLength={160}
                   pattern="[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?"
                   title="Техническое имя модели: латинские строчные буквы, цифры, дефис и подчёркивание"
                   aria-label="Техническое имя класса"
                   required
                 />
-                <button className="secondary" type="submit">Сохранить</button>
+                </label>
+                <button className="secondary icon-button" type="submit" title="Сохранить название и имя модели"
+                  aria-label="Сохранить название и имя модели"><Save size={15} /></button>
               </form>
               <label>
                 Тип снимков
@@ -2634,7 +2648,9 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                 <article className="dataset-card" key={dataset.key}>
                   <div className="dataset-card-header">
                     <div className="source-lines">
-                      <strong>{dataset.dataset_name || dataset.name}</strong>
+                      <a className="dataset-card-name" href={`#/dataset-editor/${encodeURIComponent(dataset.key)}`} title="Открыть разметку датасета">
+                        <strong>{dataset.dataset_name || dataset.name}</strong>
+                      </a>
                       {dataset.managed ? (
                         <>
                           <span className="badge neutral">управляемый</span>
@@ -2645,7 +2661,6 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                           </span>
                         </>
                       ) : <span className="muted">MLMarkup: {dataset.source_path}</span>}
-                      <span className="muted">Снимки: {imageryTypeLabel(classInfo.imagery_type)}</span>
                     </div>
                     <div className="inline-row">
                       {dataset.is_primary ? <span className="badge ok">основной</span> : null}
@@ -2712,7 +2727,9 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           </section>
         );
       })}
-    </>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3125,6 +3142,8 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
 function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJobLog">) {
   const [classes, setClasses] = useState<ResultClassInfo[] | null>(null);
   const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
+  const { classKey, setClassKey } = useRememberedClass(classes, "grovika:results:class");
+  const selectedClass = classes?.find((item) => item.key === classKey);
   useEffect(() => {
     void run(() => apiJson<ResultClassListResponse>("/results/classes")).then((payload) => {
       if (payload) setClasses(payload.classes || []);
@@ -3136,17 +3155,22 @@ function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJob
 
   return (
     <div className="results-page results-classes-page">
-      <PageHeader title="Результаты" subtitle="Классы, датасеты и последние изменения" />
-      <section className="content-grid results-class-grid">
-        {(classes || []).map((item) => (
-          <ResultClassCard item={item} key={item.key} />
-        ))}
-        {classes === null ? <div className="empty-state">Загрузка классов...</div> : null}
-      </section>
-      <section className="panel results-changes">
-        <PanelHeader title="Последние изменения" />
-        <ResultChangesTable changes={changes} showJobLog={showJobLog} />
-      </section>
+      <PageHeader title="Результаты" />
+      <div className="class-browser-layout">
+        <ClassNavigation classes={classes?.map((item) => ({ ...item, count: (item.datasets || []).length })) ?? null}
+          classKey={classKey} onSelect={setClassKey} label="Классы результатов" />
+        <section className="class-browser-content">
+          <div className="results-class-grid">
+            {selectedClass ? <ResultClassCard item={selectedClass} /> : (
+              <div className="empty-state" role="status">{classes === null ? "Загрузка классов…" : "Результатов пока нет."}</div>
+            )}
+          </div>
+          {selectedClass ? <section className="panel results-changes">
+            <PanelHeader title="Последние изменения класса" />
+            <ResultChangesTable changes={changes.filter((item) => item.class_key === classKey)} showJobLog={showJobLog} />
+          </section> : null}
+        </section>
+      </div>
     </div>
   );
 }
@@ -3644,8 +3668,7 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
   return (
     <div className="class-card">
       <div className="card-title">
-        <Layers3 size={20} />
-        {item.name}
+        <h2>{item.name}</h2><span className="muted">Датасетов: {datasets.length}</span>
       </div>
       <div className="dataset-list">
         {datasets.length ? (

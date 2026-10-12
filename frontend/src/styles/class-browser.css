@@ -1,0 +1,108 @@
+.class-browser-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: start; gap: 18px; }
+.class-browser-content { min-width: 0; }
+.class-browser-nav { position: sticky; top: 84px; display: grid; gap: 2px; min-width: 0; padding-right: 14px; border-right: 1px solid var(--border); }
+.class-browser-nav > .field-label { padding: 0 8px 4px; font-size: 11px; }
+.class-browser-nav button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-height: 22px; padding: 2px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; line-height: 14px; text-align: left; }
+.class-browser-nav button > span { min-width: 0; overflow-wrap: anywhere; }
+.class-browser-nav button > small { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+.class-browser-nav button:hover { background: var(--surface-strong); color: var(--text); }
+.class-browser-nav button.selected { background: var(--grovika-slate); color: var(--grovika-white); font-weight: 600; }
+.class-browser-draft-count { display: inline-flex; align-items: center; gap: 2px; }
+.class-browser-mobile { display: none; }
+
+.results-classes-page .results-class-grid > .class-card { padding: 0; border: 0; background: transparent; box-shadow: none; transform: none; }
+.results-classes-page .results-class-grid .card-title { justify-content: space-between; margin-bottom: 10px; }
+.results-classes-page .results-class-grid .card-title h2 { margin: 0; font-size: 19px; line-height: 24px; }
+.results-classes-page .results-class-grid .card-title > span { flex-shrink: 0; font-size: 11px; font-weight: 400; }
+.results-classes-page .results-class-grid .dataset-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(270px, 100%), 1fr)); align-items: start; gap: 8px; }
+.results-classes-page .results-class-grid .dataset-link { padding: 8px; min-height: 54px; border-radius: 7px; }
+.results-classes-page .results-class-grid .dataset-result-link { grid-template-columns: minmax(0, 1fr) auto; }
+
+.class-editor-page { min-width: 0; }
+.class-editor-page .page-header { flex-direction: row; align-items: center; margin-bottom: 12px; gap: 10px; }
+.class-editor-page .page-title h1 { margin: 0; font-size: 25px; line-height: 30px; }
+.class-editor-page .page-header .button-row { width: auto; flex-shrink: 0; gap: 6px; }
+.class-editor-page .primary, .class-editor-page .secondary, .class-editor-page .danger { min-height: 30px; padding: 4px 8px; font-size: 11px; gap: 4px; }
+.class-editor-page .icon-button { width: 30px; min-width: 30px; padding: 0; }
+.class-editor-page .panel { padding: 10px; margin-bottom: 10px; box-shadow: none; }
+.class-editor-page .panel-header { margin-bottom: 6px; }
+.class-editor-page .panel-header h2 { font-size: 14px; line-height: 19px; margin: 0; }
+.class-editor-page .class-editor-card { gap: 10px; }
+.class-editor-class-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.class-editor-class-heading h2 { font-size: 18px; line-height: 23px; margin: 0; overflow-wrap: anywhere; }
+.class-editor-class-heading > span { flex-shrink: 0; font-size: 11px; }
+.class-editor-page .class-editor-header { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.class-editor-name-form { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 30px; align-items: end; gap: 6px; grid-column: span 2; min-width: 0; }
+.class-editor-page .class-editor-header label { min-width: 0; gap: 3px; font-size: 11px; font-weight: 600; line-height: 15px; }
+.class-editor-page .class-editor-header input, .class-editor-page .class-editor-header select { min-width: 0; min-height: 32px; padding: 5px 7px; font-size: 12px; }
+.class-editor-page .class-editor-name-form .icon-button { min-height: 32px; }
+.class-editor-page .class-editor-datasets { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); align-items: start; gap: 8px; }
+.class-editor-page .dataset-card { min-width: 0; padding: 8px; gap: 6px; border-radius: 8px; }
+.class-editor-page .dataset-card-header { display: grid; min-width: 0; gap: 6px; }
+.class-editor-page .dataset-card-header .source-lines { min-width: 0; gap: 3px; font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+.dataset-card-name { color: var(--text); font-size: 13px; line-height: 18px; text-decoration: none; overflow-wrap: anywhere; }
+.dataset-card-name:hover { color: var(--accent-strong); }
+.class-editor-page .dataset-card .inline-row { flex-wrap: wrap; gap: 4px; }
+.class-editor-page .badge { min-height: 18px; padding: 1px 5px; font-size: 10px; line-height: 14px; }
+.class-editor-page .dataset-card .notice { padding: 6px 8px; font-size: 11px; overflow-wrap: anywhere; }
+.class-editor-page .add-dataset-actions { padding: 0; gap: 6px; }
+.class-editor-page .class-editor-user-drafts { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
+.class-editor-page .class-editor-user-drafts .panel-header { margin: 0; }
+.class-editor-page .class-editor-user-draft-list { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 6px; }
+.class-editor-page .class-editor-user-draft { grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; padding: 7px 8px; border-radius: 7px; }
+.class-editor-page .class-editor-user-draft .source-lines { gap: 2px; font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+.class-editor-page .class-editor-user-draft-action { grid-column: auto; font-size: 11px; }
+.class-editor-page .empty-state { padding: 12px 8px; font-size: 12px; }
+
+@media (min-width: 701px) and (max-width: 1199px) {
+  .class-editor-page .class-editor-header { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .class-editor-page .class-editor-header > label:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 700px), (max-width: 1000px) and (max-height: 500px) {
+  .class-browser-layout, .test-markup-browser-layout { display: block; }
+  .class-browser-nav { display: none; }
+  .class-browser-mobile { display: grid; margin-bottom: 8px; }
+  .class-browser-mobile > span { display: none; }
+  .class-browser-mobile select { min-width: 0; min-height: 34px; height: 34px; padding: 5px 28px 5px 8px; font-size: 16px; line-height: 20px; }
+  .class-browser-mobile select, .class-editor-page .class-editor-header select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; }
+  .results-classes-page .page-title h1 { font-size: 18px; line-height: 24px; }
+  .results-classes-page .page-header { margin-bottom: 8px; }
+  .results-classes-page .results-class-grid .card-title { display: none; }
+  .results-classes-page .results-class-grid .dataset-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .results-classes-page .results-class-grid .dataset-link { padding: 7px; }
+  .results-classes-page .results-class-grid .dataset-result-link { grid-template-columns: minmax(0, 1fr); }
+  .results-classes-page .badge { min-height: 16px; padding: 0 4px; font-size: 10px; line-height: 14px; }
+  .results-classes-page .results-changes { padding: 8px; margin-top: 8px; }
+  .results-classes-page .results-changes .panel-header h2 { font-size: 13px; line-height: 18px; }
+  .results-classes-page .results-changes th, .results-classes-page .results-changes td { padding: 5px; font-size: 10px; line-height: 14px; }
+  .results-classes-page .results-changes th:nth-child(2), .results-classes-page .results-changes td:nth-child(2) { display: none; }
+  .class-editor-page .page-title h1 { font-size: 18px; line-height: 24px; }
+  .class-editor-page .page-header { margin-bottom: 8px; }
+  .class-editor-page .page-header > .button-row { width: auto; }
+  .class-editor-page .primary, .class-editor-page .secondary, .class-editor-page .danger { min-height: 32px; padding: 4px 7px; font-size: 10px; }
+  .class-editor-page .icon-button { width: 32px; min-width: 32px; padding: 0; }
+  .class-editor-page .panel { padding: 8px; }
+  .class-editor-page .class-editor-card { gap: 6px; }
+  .class-editor-page .class-editor-class-heading { display: none; }
+  .class-editor-page .class-editor-header { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .class-editor-name-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
+  .class-editor-page .class-editor-header label { gap: 2px; font-size: 10px; line-height: 14px; }
+  .class-editor-page .class-editor-header > label:last-child { grid-column: 1 / -1; }
+  .class-editor-page .class-editor-header input, .class-editor-page .class-editor-header select { min-height: 34px; height: 34px; padding: 5px 6px; font-size: 16px; line-height: 20px; }
+  .class-editor-page .class-editor-header select { padding-right: 26px; }
+  .class-editor-page .class-editor-name-form .icon-button { min-height: 34px; }
+  .class-editor-page .class-editor-datasets { gap: 6px; }
+  .class-editor-page .dataset-card { padding: 6px 7px; gap: 5px; }
+  .class-editor-page .dataset-card-header { gap: 4px; }
+  .class-editor-page .dataset-card-name { font-size: 12px; line-height: 16px; }
+  .class-editor-page .dataset-card-header .source-lines { font-size: 10px; line-height: 14px; }
+  .class-editor-page .badge { min-height: 16px; padding: 0 4px; line-height: 14px; }
+  .class-editor-page .dataset-card button > svg { width: 14px; height: 14px; }
+  .class-editor-page .dataset-card .notice { padding: 5px 6px; font-size: 10px; line-height: 14px; }
+  .class-editor-page .class-editor-user-draft-action { font-size: 0; gap: 0; }
+  .class-editor-page .class-editor-user-draft-action svg { width: 15px; height: 15px; }
+  .class-editor-page .class-editor-user-drafts { gap: 6px; }
+  .class-editor-page .class-editor-user-draft { padding: 5px 6px; }
+  .class-editor-page .class-editor-user-draft .source-lines { font-size: 10px; line-height: 14px; }
+  .class-editor-page .class-editor-user-drafts .panel-header h2 { font-size: 11px; line-height: 15px; }
+}
