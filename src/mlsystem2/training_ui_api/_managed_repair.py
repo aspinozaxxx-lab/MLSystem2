@@ -207,10 +207,10 @@ def repair_historical_managed_datasets(
                         _ordinary_editor_dataset_version(config, source.dataset),
                         promote_pseudo=False,
                     )
-            # Live-каталог обновляется асинхронно. До проверки release-marker автоматизация
-            # должна оставаться выключенной, иначе она увидит переходную версию датасета.
+            # Рабочий источник уже опубликован; архивный режим ещё ждёт доставку.
             automation = ensure_automation_control(session)
-            automation.enabled = False
+            working_source = config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve()
+            automation.enabled = automation_was_enabled if working_source else False
             session.commit()
         except Exception:
             session.rollback()
@@ -220,7 +220,7 @@ def repair_historical_managed_datasets(
             raise
 
         print(f"MLMarkup commit: {commit}")
-        if automation_was_enabled:
+        if automation_was_enabled and not working_source:
             print(
                 "Автоматизация оставлена выключенной до завершения деплоя MLMarkup и "
                 "проверки release-marker."

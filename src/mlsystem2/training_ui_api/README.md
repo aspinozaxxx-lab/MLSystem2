@@ -9,9 +9,9 @@
 - `MLSYSTEM2_PROJECT_ROOT` — корень установленного репозитория MLSystem2 для запуска CLI, default равен `cwd` сервиса.
 - `MLSYSTEM2_TRAINING_UI_DATABASE_URL` — Postgres URL, секреты задаются только через env.
 - `MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA` — отдельная схема Postgres, default `training_ui`.
-- `MLSYSTEM2_MLMARKUP_ROOT` — путь к MLMarkup, default `/data/MLMarkup`.
-- `MLSYSTEM2_MLMARKUP_EDITOR_ROOT` — отдельный Git-клон редактора, default `/data/mlsystem2/mlmarkup-editor`.
-- `MLSYSTEM2_MLMARKUP_RELEASE_MARKER` — marker SHA опубликованного релиза, default `/data/MLMarkup/.mlsystem2-release`.
+- `MLSYSTEM2_MLMARKUP_ROOT` — рабочий источник опубликованных датасетов; по умолчанию совпадает с `MLSYSTEM2_MLMARKUP_EDITOR_ROOT`.
+- `MLSYSTEM2_MLMARKUP_EDITOR_ROOT` — серверный Git-клон редактора и рабочих данных, default `/data/mlsystem2/mlmarkup-editor`.
+- `MLSYSTEM2_MLMARKUP_RELEASE_MARKER` — marker SHA архивного релиза при явном выборе архивного источника, default `/data/MLMarkup/.mlsystem2-release`.
 - `MLSYSTEM2_MLMARKUP_EDITOR_BRANCH` — ветка editor clone, default `main`.
 - `MLSYSTEM2_IMAGES_ROOT` — путь к подготовленным снимкам, default `/data/mlsystem2/prepared_images`.
 - `MLSYSTEM2_TRAINING_UI_STORED_FILES_ROOT` — корень загруженных txt/geojson и постоянных тестовых разметок.
@@ -167,7 +167,10 @@ hard negative — во все источники одним Git-коммитом
 снимки с черновой пометкой удаления в сумму не входят. Параметры виртуального управляемого датасета редактируются
 той же формой состава: PATCH сохраняет ключ датасета, меняя название, источники, приоритеты и цвета, и отклоняет
 изменение схемы при наличии неопубликованных черновиков любого пользователя.
-Редактор читает и коммитит отдельный SSH-клон, никогда не пишет в live-каталог. Frontend автоматически сохраняет
+Редактор, каталог и автоматизация используют серверный SSH-клон; обратная доставка MLMarkup с GitHub отключена,
+workflow сохранён. Чтение не выполняет fetch, публикация защищена exclusive lock до commit/push и транзакции БД,
+читатели используют shared lock. Обучение и инференс копируют разметку для отдельного запуска.
+Frontend автоматически сохраняет
 изменения каждого снимка в пользовательский серверный черновик; публикация проверяет их все и создаёт один атомарный commit.
 Совместимый одиночный save меняет один GeoJSON; добавление прямых TIFF папки обычного датасета создаёт один commit,
 а пустые сцены управляемого — только строки состава в БД; delete остаётся отменяемым черновиком. Все Git-операции сериализованы,
@@ -195,7 +198,8 @@ Polygon/MultiPolygon и валидность. Проверка сохранно�
 проверяется целиком и сохраняется только в черновики.
 OpenLayers отключает интерполяцию и переходное размытие raster tiles, даёт nearest-neighbor масштаб до 1000%, немного повышает контраст и позволяет
 полностью скрыть разметку отдельной кнопкой. Raster endpoint авторизован и поддерживает HTTP Range. Возвращённый commit имеет
-статус `publishing`; он становится `published`, когда является предком SHA в live release marker. Если API
+статус `published` сразу после успешной отправки: проверяется ancestry относительно HEAD рабочего клона.
+Только явно выбранный архивный источник ожидает live release marker со статусом `publishing`. Если API
 работает от другого системного пользователя, после каждой заблокированной операции UID/GID содержимого клона
 восстанавливаются по владельцу его корневого каталога.
 
