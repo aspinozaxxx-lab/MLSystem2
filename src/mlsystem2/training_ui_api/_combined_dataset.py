@@ -852,7 +852,7 @@ def _tree_revision(values: dict[str, str]) -> str:
 
 def _git_head(root: Path) -> str:
     result = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        ["git", "-c", f"safe.directory={root.resolve()}", "-C", str(root), "rev-parse", "HEAD"],
         check=False,
         capture_output=True,
         text=True,

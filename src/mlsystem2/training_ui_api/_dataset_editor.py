@@ -38,7 +38,7 @@ from mlsystem2.dataset_preparing.api import (
 )
 
 from ._config import TrainingUIAPIConfig
-from ._markup_lock import markup_write_lock
+from ._markup_lock import markup_read_lock, markup_write_lock
 from ._combined_dataset import (
     build_combined_dataset,
     feature_hash,
@@ -137,7 +137,7 @@ def download_editor_dataset(
 
     stream = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
     try:
-        with _editor_lock(config):
+        with _editor_read_lock(config):
             dataset, source_dir = _editor_dataset_context(
                 session, config, dataset_key, allow_missing=True,
             )
@@ -168,7 +168,7 @@ def list_editor_datasets(
     session: Session,
     config: TrainingUIAPIConfig,
 ) -> DatasetEditorDatasetListResponse:
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         _synchronize_editor_clone_if_stale(config)
         result: list[DatasetEditorDatasetInfo] = []
         for dataset in list_managed_datasets(
@@ -322,7 +322,7 @@ def list_editor_scenes(
     *,
     username: str,
 ) -> DatasetEditorSceneListResponse:
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(
             session,
             config,
@@ -357,7 +357,7 @@ def editor_scene_detail(
     *,
     username: str,
 ) -> DatasetEditorSceneDetail:
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
         draft_row = _editor_draft_row(
             session, dataset.key, _safe_annotation_name(annotation_name), username,
@@ -405,7 +405,7 @@ def import_editor_drafts(
     """Проверить весь пакет, затем сохранить новые сцены только в личных черновиках."""
     if len(json.dumps(scenes, ensure_ascii=False).encode("utf-8")) > 50 * 1024 * 1024:
         raise TrainingUIAPIError("Общий размер GeoJSON не должен превышать 50 МиБ")
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
         existing = {path.name.casefold() for path in _direct_annotation_files(source_dir)}
         own_drafts = {name.casefold() for name in session.scalars(select(DatasetEditorDraftRow.annotation_name).where(
@@ -505,7 +505,7 @@ def save_editor_draft(
 ) -> DatasetEditorDraftInfo:
     """Сохранить проверенный черновик в БД без Git-коммита и инференса."""
 
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key, allow_missing=True)
         annotation_name = _safe_annotation_name(annotation_name)
         row = _editor_draft_row(session, dataset.key, annotation_name, username)
@@ -596,7 +596,7 @@ def publish_editor_drafts(
     discarded = [row for row in rows if row.deleted and row.base_revision == _NEW_SCENE_REVISION]
     active = [row for row in rows if row not in discarded]
     if not active:
-        with _editor_lock(config):
+        with _editor_read_lock(config):
             _editor_dataset_context(session, config, dataset_key, allow_missing=True)
             commit = _git(config, "rev-parse", "HEAD").stdout.strip()
             result = DatasetEditorMutationResult(commit=commit, publication_status=_publication_status(config, commit))
@@ -630,7 +630,7 @@ def editor_scene_pseudo_markup(
 ) -> DatasetEditorPseudoMarkupInfo:
     """Вернуть готовый фрагмент или идемпотентно поставить срочный инференс TIFF."""
 
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         image_path = _matched_image_path(dataset, source_dir, annotation_name).resolve()
@@ -1261,7 +1261,7 @@ def delete_editor_scene(
             raise TrainingUIAPIError("Черновик нового снимка не найден")
         return save_editor_draft(session, config, dataset_key, annotation_name,
                                  base_revision=revision, geojson=dict(row.geojson), deleted=True, username=username)
-    with _editor_lock(config):
+    with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
         if scene.revision != revision:
@@ -1638,7 +1638,7 @@ def editor_publication_info(
 ) -> DatasetEditorPublicationInfo:
     if _SHA_PATTERN.fullmatch(commit) is None:
         raise TrainingUIAPIError("Некорректный SHA коммита")
-    with _editor_lock(config, restore_ownership=True):
+    with _editor_read_lock(config):
         if config.mlmarkup_root.resolve() != config.mlmarkup_editor_root.resolve():
             _fetch_editor_clone(config)
         live_commit = _live_commit(config)
@@ -3895,6 +3895,16 @@ def _ensure_within(path: Path, root: Path, message: str) -> None:
         path.relative_to(root)
     except ValueError as exc:
         raise TrainingUIAPIError(message) from exc
+
+
+@contextmanager
+def _editor_read_lock(config: TrainingUIAPIConfig) -> Iterator[None]:
+    if config.mlmarkup_root.resolve() == config.mlmarkup_editor_root.resolve():
+        with markup_read_lock(config):
+            yield
+    else:
+        with _editor_lock(config, restore_ownership=True):
+            yield
 
 
 @contextmanager

@@ -55,8 +55,10 @@ from mlsystem2.training_ui_api._managed_migration import (
     _migration_features_equal,
 )
 from mlsystem2.training_ui_api._managed_datasets import (
+    _source_snapshot,
     process_next_managed_materialization,
 )
+from mlsystem2.training_ui_api._markup_lock import markup_read_lock
 
 
 @dataclass(frozen=True)
@@ -1142,6 +1144,53 @@ def test_working_clone_reads_and_publication_status_do_not_fetch(
         assert client.get(f"/api/v1/dataset-editor/datasets/{env.dataset_key}/scenes").status_code == 200
         commit = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
         assert client.get(f"/api/v1/dataset-editor/publication/{commit}").json()["status"] == "published"
+    with markup_read_lock(get_config()), create_session_factory(get_config())() as session:
+        assert _dataset_editor.editor_publication_info(get_config(), commit).status == "published"
+        assert _dataset_editor.list_editor_scenes(session, get_config(), env.dataset_key, username="editor").scenes
+
+
+def test_managed_build_uses_snapshot_without_blocking_new_publications(
+    editor_environment: _EditorEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = editor_environment
+    monkeypatch.setenv("MLSYSTEM2_MLMARKUP_ROOT", str(env.editor_root))
+    config = get_config()
+    second_source = env.editor_root / "Озера/main"
+    second_source.mkdir(parents=True)
+    (second_source / env.live_annotation.name).write_bytes(env.live_annotation.read_bytes())
+    _git(env.editor_root, "add", ".")
+    _git(env.editor_root, "commit", "-m", "Добавить источник для снимка")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    with TestClient(create_app()) as client:
+        client.post("/api/v1/auth/login", json={"username": "editor", "password": "secret"})
+        catalog = client.post("/api/v1/dataset-catalog/sync").json()
+        second_class = next(c for c in catalog["classes"] if c["name"] == "Озера")
+        catalog = client.post("/api/v1/dataset-classes", json={"name": "Снимок источника", "imagery_type": "kanopus"}).json()
+        target_class = next(c for c in catalog["classes"] if c["name"] == "Снимок источника")
+        composed = client.post("/api/v1/managed-datasets/compose", json={
+            "class_key": target_class["key"], "name": "main", "sources": [
+                {"dataset_key": env.dataset_key, "priority": 100},
+                {"dataset_key": second_class["datasets"][0]["key"], "priority": 0},
+            ],
+        })
+        assert composed.status_code == 200, composed.text
+        target_key = next(c for c in composed.json()["classes"] if c["key"] == target_class["key"])["datasets"][0]["key"]
+    with create_session_factory(config)() as session:
+        dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == target_key))
+        assert dataset is not None
+        annotation = env.editor_dataset / env.live_annotation.name
+        original = annotation.read_bytes()
+        commit = _git(env.editor_root, "rev-parse", "HEAD").stdout.strip()
+        with _source_snapshot(session, config, dataset, config.mlmarkup_root) as (root, version, _updated):
+            frozen = root / "Реки" / "test" / env.live_annotation.name
+            assert frozen.read_bytes() == original
+            assert (root / ".mlsystem2-release").read_text() == commit
+            assert version.startswith("managed:")
+            with _dataset_editor._editor_lock(config, restore_ownership=True):
+                annotation.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+            assert frozen.read_bytes() == original
+        assert not root.exists()
 
 
 def test_inference_uses_frozen_annotations_from_working_clone(

@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Literal
 
 import rasterio
@@ -342,6 +343,43 @@ def process_next_managed_materialization(
     return True
 
 
+@contextmanager
+def _source_snapshot(
+    session: Session,
+    config: TrainingUIAPIConfig,
+    dataset: DatasetRow,
+    source_root: Path,
+) -> Iterator[tuple[Path, str, datetime | None]]:
+    root = source_root.resolve()
+    if root != config.mlmarkup_editor_root.resolve():
+        version, updated_at = managed_dataset_version(session, dataset, root)
+        yield root, version, updated_at
+        return
+
+    config.scratch_root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="managed-sources-", dir=config.scratch_root) as temporary:
+        frozen_root = Path(temporary)
+        with markup_read_lock(config, source_root=root):
+            from ._combined_dataset import _git_head
+
+            version, updated_at = managed_dataset_version(session, dataset, root)
+            for item in managed_sources(session, dataset.id):
+                source = _safe_source_path(root, item.dataset.source_path)
+                target = frozen_root / source.relative_to(root)
+                target.mkdir(parents=True, exist_ok=True)
+                for path in source.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    if not path.resolve().is_relative_to(root):
+                        raise TrainingUIAPIError("Файл источника выходит за пределы MLMarkup")
+                    destination = target / path.relative_to(source)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, destination)
+            (frozen_root / ".mlsystem2-release").write_text(_git_head(root), encoding="utf-8")
+        # Геометрия и footprint строятся по копии без блокировки рабочего клона.
+        yield frozen_root, version, updated_at
+
+
 def materialize_managed_dataset(
     session: Session,
     config: TrainingUIAPIConfig,
@@ -350,15 +388,14 @@ def materialize_managed_dataset(
     source_root: Path,
     scope: str,
 ) -> ManagedDatasetMaterialization:
-    with markup_read_lock(config, source_root=source_root):
-        if dataset.source_type != SOURCE_MANAGED:
-            raise TrainingUIAPIError(f"Датасет не является управляемым: {dataset.key}")
-        if scope not in {"live", "editor"}:
-            raise ValueError("scope должен быть live или editor")
-        class_row = session.get(DatasetClassRow, dataset.class_id)
-        if class_row is None:
-            raise TrainingUIAPIError(f"Класс управляемого датасета не найден: {dataset.key}")
-        version, updated_at = managed_dataset_version(session, dataset, source_root)
+    if dataset.source_type != SOURCE_MANAGED:
+        raise TrainingUIAPIError(f"Датасет не является управляемым: {dataset.key}")
+    if scope not in {"live", "editor"}:
+        raise ValueError("scope должен быть live или editor")
+    class_row = session.get(DatasetClassRow, dataset.class_id)
+    if class_row is None:
+        raise TrainingUIAPIError(f"Класс управляемого датасета не найден: {dataset.key}")
+    with _source_snapshot(session, config, dataset, source_root) as (frozen_root, version, updated_at):
         cache_parent, target, cache_digest = _managed_cache_paths(
             config,
             dataset.key,
@@ -382,7 +419,7 @@ def materialize_managed_dataset(
 
             build = build_combined_dataset(
                 manifest=manifest,
-                repo_root=Path(source_root),
+                repo_root=frozen_root,
                 images_root=imagery_images_dir(config.images_root, class_row.imagery_type),
                 code_revision=_project_revision(config.project_root),
             )
@@ -446,7 +483,7 @@ def materialize_managed_dataset(
                     "baseline_hashes": baseline_hashes,
                 }
             )
-            source_footprints = _source_footprint_index(session, dataset, Path(source_root))
+            source_footprints = _source_footprint_index(session, dataset, frozen_root)
             reused_footprints = 0
             computed_footprints = 0
             temporary = cache_parent / f".{cache_digest}.{uuid.uuid4().hex}.tmp"
