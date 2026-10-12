@@ -106,8 +106,14 @@ class DatasetClassRow(Base):
 class DatasetRow(Base):
     __tablename__ = "datasets"
     __table_args__ = (
-        UniqueConstraint("source_type", "source_path", name="uq_datasets_source"),
-        UniqueConstraint("class_id", "name", name="uq_datasets_class_name"),
+        Index(
+            "uq_datasets_active_source", "source_type", "source_path", unique=True,
+            postgresql_where=text("deleted_at IS NULL"), sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_datasets_active_class_name", "class_id", "name", unique=True,
+            postgresql_where=text("deleted_at IS NULL"), sqlite_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_datasets_class_id", "class_id"),
         Index("ix_datasets_deleted_at", "deleted_at"),
     )

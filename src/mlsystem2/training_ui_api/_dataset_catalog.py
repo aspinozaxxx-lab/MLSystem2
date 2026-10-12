@@ -597,6 +597,7 @@ def create_managed_dataset(
         select(DatasetRow).where(
             DatasetRow.source_type == SOURCE_MLMARKUP,
             DatasetRow.source_path == source_path,
+            DatasetRow.deleted_at.is_(None),
         )
     )
     _ensure_dataset_name_available(
@@ -623,7 +624,6 @@ def create_managed_dataset(
             previous_class.primary_dataset_id = None
         source_owner.class_id = class_row.id
         source_owner.name = name
-        source_owner.deleted_at = None
         source_owner.config_revision += 1
         source_owner.legacy_version = False
         dataset = source_owner
@@ -861,6 +861,7 @@ def update_managed_dataset(
                 DatasetRow.source_type == row.source_type,
                 DatasetRow.source_path == desired_source,
                 DatasetRow.id != row.id,
+                DatasetRow.deleted_at.is_(None),
             )
         )
         previous_source_path = row.source_path
@@ -1475,7 +1476,10 @@ def _source_infos(session: Session, config: TrainingUIAPIConfig) -> list[Dataset
     assigned = {
         row.source_path: row.key
         for row in session.scalars(
-            select(DatasetRow).where(DatasetRow.source_type == SOURCE_MLMARKUP)
+            select(DatasetRow).where(
+                DatasetRow.source_type == SOURCE_MLMARKUP,
+                DatasetRow.deleted_at.is_(None),
+            )
         ).all()
     }
     result: list[DatasetSourceInfo] = []
@@ -1928,13 +1932,13 @@ def _ensure_dataset_name_available(
     *,
     exclude_id: uuid.UUID | None = None,
 ) -> None:
-    statement = select(DatasetRow).where(
+    statement = select(DatasetRow.name).where(
         DatasetRow.class_id == class_id,
-        DatasetRow.name == name,
+        DatasetRow.deleted_at.is_(None),
     )
     if exclude_id is not None:
         statement = statement.where(DatasetRow.id != exclude_id)
-    if session.scalar(statement) is not None:
+    if any(existing.casefold() == name.casefold() for existing in session.scalars(statement)):
         raise TrainingUIAPIError(f"Датасет с названием «{name}» уже существует в классе")
 
 
@@ -1980,15 +1984,15 @@ def _unique_dataset_name(session: Session, class_id: uuid.UUID, preferred: str) 
     base = preferred or DEFAULT_DATASET_NAME
     name = base
     suffix = 2
-    while (
-        session.scalar(
-            select(DatasetRow).where(
-                DatasetRow.class_id == class_id,
-                DatasetRow.name == name,
+    active_names = {
+        value.casefold()
+        for value in session.scalars(
+            select(DatasetRow.name).where(
+                DatasetRow.class_id == class_id, DatasetRow.deleted_at.is_(None),
             )
         )
-        is not None
-    ):
+    }
+    while name.casefold() in active_names:
         name = f"{base} (MLMarkup)" if suffix == 2 else f"{base} (MLMarkup) {suffix}"
         suffix += 1
     return name

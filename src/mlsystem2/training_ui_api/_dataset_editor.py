@@ -45,6 +45,7 @@ from ._combined_dataset import (
     tree_revision,
 )
 from ._dataset_catalog import (
+    _ensure_dataset_name_available,
     dataset_training_result,
     find_managed_dataset,
     list_managed_datasets,
@@ -1299,7 +1300,7 @@ def copy_editor_dataset(
         )
         if row is None:
             raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
-        _ensure_dataset_copy_name_available(session, row.class_id, copy_name)
+        _ensure_dataset_name_available(session, row.class_id, copy_name)
 
         if row.source_type == SOURCE_MANAGED:
             copied = _copy_managed_dataset_row(session, row, copy_name)
@@ -1319,7 +1320,7 @@ def copy_editor_dataset(
             raise TrainingUIAPIError(
                 "Копировать можно только отдельную папку датасета внутри папки класса."
             )
-        target_relative = source_relative.parent / copy_name
+        target_relative = _dataset_copy_target(session, config, source_relative.parent, copy_name)
         target_dir = config.mlmarkup_editor_root.joinpath(*target_relative.parts)
         _ensure_within(
             target_dir.resolve(),
@@ -1540,16 +1541,29 @@ def _dataset_copy_name(value: str) -> str:
     return normalized
 
 
-def _ensure_dataset_copy_name_available(
+def _dataset_copy_target(
     session: Session,
-    class_id: uuid.UUID,
+    config: TrainingUIAPIConfig,
+    parent: PurePosixPath,
     name: str,
-) -> None:
-    names = session.scalars(select(DatasetRow.name).where(DatasetRow.class_id == class_id)).all()
-    if any(existing.casefold() == name.casefold() for existing in names):
-        raise TrainingUIAPIError(
-            f"Датасет с названием «{name}» уже существует в классе или сохранён в истории."
+) -> PurePosixPath:
+    """Не перезаписывать папку активного датасета с уже изменённым названием."""
+    source_paths = {
+        value.casefold()
+        for value in session.scalars(
+            select(DatasetRow.source_path).where(DatasetRow.deleted_at.is_(None))
         )
+    }
+    target = parent / name
+    if target.as_posix().casefold() not in source_paths:
+        return target
+    suffix = 2
+    while True:
+        candidate = parent / f"{name} ({suffix})"
+        candidate_dir = config.mlmarkup_editor_root.joinpath(*candidate.parts)
+        if candidate.as_posix().casefold() not in source_paths and not candidate_dir.exists():
+            return candidate
+        suffix += 1
 
 
 def _ensure_dataset_copy_source_available(
@@ -1558,10 +1572,12 @@ def _ensure_dataset_copy_source_available(
     target_dir: Path,
 ) -> None:
     target_key = target_relative.as_posix().casefold()
-    source_paths = session.scalars(select(DatasetRow.source_path)).all()
+    source_paths = session.scalars(
+        select(DatasetRow.source_path).where(DatasetRow.deleted_at.is_(None))
+    ).all()
     if any(value.casefold() == target_key for value in source_paths):
         raise TrainingUIAPIError(
-            f"Путь копии уже использовался другим датасетом: {target_relative.as_posix()}"
+            f"Путь копии используется активным датасетом: {target_relative.as_posix()}"
         )
     if target_dir.exists():
         raise TrainingUIAPIError(

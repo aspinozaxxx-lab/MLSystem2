@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -286,6 +287,83 @@ def test_primary_dataset_must_belong_to_class(
                 DatasetPrimaryDatasetUpdate(dataset_key=second.datasets[0].key),
                 config,
             )
+
+
+def test_create_dataset_reuses_archived_name_and_source_with_new_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / "Реки" / "main", "scene-a")
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        old = session.scalar(select(DatasetRow))
+        klass = session.scalar(select(DatasetClassRow))
+        assert old is not None and klass is not None
+        old_key = old.key
+        old.deleted_at = datetime.now(timezone.utc)
+        klass.primary_dataset_id = None
+        klass.primary_dataset_locked = True
+        session.flush()
+        catalog = create_managed_dataset(
+            session, ManagedDatasetCreate(class_key=klass.key, name="main", source_path="Реки/main"), config,
+        )
+        active = next(dataset for row in catalog.classes for dataset in row.datasets)
+        assert active.key != old_key
+        assert old.deleted_at is not None and old.key == old_key
+        synchronize_dataset_catalog(session, config)
+        assert [row.key for row in list_managed_datasets(session, config, include_custom=False)] == [active.key]
+        assert session.scalar(select(func.count()).select_from(DatasetRow)) == 2
+        reassigned = create_managed_dataset(
+            session, ManagedDatasetCreate(class_key=klass.key, name="Новое имя", source_path="Реки/main"), config,
+        )
+        current = next(dataset for row in reassigned.classes for dataset in row.datasets)
+        assert current.key == active.key and current.dataset_name == "Новое имя"
+        assert old.deleted_at is not None and old.name == "main" and old.source_path == "Реки/main"
+
+
+def test_rename_dataset_reuses_archived_name_but_blocks_active_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / "Реки" / "main", "scene-a")
+    _write_source(config.mlmarkup_root / "Реки" / "test", "scene-b")
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        rows = {row.name: row for row in session.scalars(select(DatasetRow)).all()}
+        rows["test"].deleted_at = datetime.now(timezone.utc)
+        session.flush()
+        catalog = update_managed_dataset(session, rows["main"].key, ManagedDatasetUpdate(name="test"), config)
+        active = next(dataset for row in catalog.classes for dataset in row.datasets)
+        assert active.dataset_name == "test" and active.key == rows["main"].key
+        assert rows["test"].name == "test" and rows["test"].deleted_at is not None
+        with pytest.raises(TrainingUIAPIError, match="уже существует"):
+            create_managed_dataset(
+                session, ManagedDatasetCreate(class_key=active.class_key, name="TEST", source_path="Реки/test"), config,
+            )
+
+
+def test_update_dataset_ignores_archived_source_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / "Реки" / "main", "scene-a")
+    _write_source(config.mlmarkup_root / "Реки" / "test", "scene-b")
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        rows = {row.name: row for row in session.scalars(select(DatasetRow)).all()}
+        rows["test"].deleted_at = datetime.now(timezone.utc)
+        revision = rows["test"].config_revision
+        session.flush()
+        catalog = update_managed_dataset(
+            session, rows["main"].key, ManagedDatasetUpdate(source_path="Реки/test"), config,
+        )
+        active = next(dataset for row in catalog.classes for dataset in row.datasets)
+        assert active.source_path == "Реки/test" and active.key == rows["main"].key
+        assert rows["test"].source_path == "Реки/test" and rows["test"].deleted_at is not None
+        assert rows["test"].config_revision == revision
 
 
 def test_managed_composition_is_virtual_and_follows_source_versions(

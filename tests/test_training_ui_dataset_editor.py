@@ -1221,6 +1221,147 @@ def test_dataset_editor_copies_managed_dataset_parameters_and_explicit_scenes(
         ]
 
 
+def test_dataset_editor_reuses_deleted_copy_name_without_reusing_history(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    copy_url = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy"
+    first = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert first.status_code == 200, first.text
+    old_key = first.json()["dataset_key"]
+    with create_session_factory(get_config())() as session:
+        history = TrainingResultRow(
+            source="manual", dataset_key=old_key, class_key=old_key,
+            class_display_name="Реки\\main_i_testovyj", architecture="smp_segformer_b0",
+            model_name="Старая сеть", status="ok",
+        )
+        session.add(history)
+        session.commit()
+        history_id = history.id
+    removed = env.client.delete(f"/api/v1/dataset-editor/datasets/{quote(old_key, safe='')}")
+    assert removed.status_code == 200, removed.text
+
+    second = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert second.status_code == 200, second.text
+    assert second.json()["dataset_key"] != old_key
+    assert second.json()["source_path"] == first.json()["source_path"]
+    with create_session_factory(get_config())() as session:
+        old = session.scalar(select(DatasetRow).where(DatasetRow.key == old_key))
+        new = session.scalar(select(DatasetRow).where(DatasetRow.key == second.json()["dataset_key"]))
+        assert old is not None and old.deleted_at is not None
+        assert new is not None and new.deleted_at is None and new.id != old.id
+        assert old.name == new.name == "main_i_testovyj"
+        assert old.source_path == new.source_path
+        assert session.get(TrainingResultRow, history_id).dataset_key == old_key
+    duplicate = env.client.post(copy_url, json={"name": "MAIN_I_TESTOVYJ"})
+    assert duplicate.status_code == 400
+    assert "уже существует" in duplicate.json()["detail"]
+
+
+def test_dataset_editor_reuses_renamed_copy_name_without_overwriting_source(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    copy_url = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy"
+    first = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert first.status_code == 200, first.text
+    old_key = first.json()["dataset_key"]
+    original_dir = env.editor_root / first.json()["source_path"]
+    original_files = {path.name: path.read_bytes() for path in original_dir.iterdir() if path.is_file()}
+    renamed = env.client.patch(
+        f"/api/v1/managed-datasets/{quote(old_key, safe='')}", json={"name": "Другая копия"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    second = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert second.status_code == 200, second.text
+    assert second.json()["dataset_key"] != old_key
+    assert second.json()["dataset_name"] == "main_i_testovyj"
+    assert second.json()["source_path"] != first.json()["source_path"]
+    assert {path.name: path.read_bytes() for path in original_dir.iterdir() if path.is_file()} == original_files
+    with create_session_factory(get_config())() as session:
+        old = session.scalar(select(DatasetRow).where(DatasetRow.key == old_key))
+        assert old is not None and old.name == "Другая копия" and old.deleted_at is None
+        assert old.source_path == first.json()["source_path"]
+
+
+def test_dataset_editor_reuses_name_after_rename_round_trip(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    url = f"/api/v1/managed-datasets/{quote(env.dataset_key, safe='')}"
+    for name in ["main_i_testovyj", "test"]:
+        response = env.client.patch(url, json={"name": name})
+        assert response.status_code == 200, response.text
+    copied = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy",
+        json={"name": "main_i_testovyj"},
+    )
+    assert copied.status_code == 200, copied.text
+    assert copied.json()["dataset_key"] != env.dataset_key
+    assert copied.json()["source_path"] == "Реки/main_i_testovyj"
+
+
+def test_dataset_editor_reuses_deleted_managed_copy_name(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    created = env.client.post("/api/v1/dataset-classes", json={"name": "Составной", "imagery_type": "kanopus"})
+    assert created.status_code == 200, created.text
+    klass = next(row for row in created.json()["classes"] if row["name"] == "Составной")
+    extra_class = env.client.post("/api/v1/dataset-classes", json={"name": "Второй источник", "imagery_type": "kanopus"})
+    assert extra_class.status_code == 200, extra_class.text
+    extra_key = next(row["key"] for row in extra_class.json()["classes"] if row["name"] == "Второй источник")
+    moved = env.client.post("/api/v1/managed-datasets", json={"class_key": extra_key, "name": "main", "source_path": "Реки/empty"})
+    assert moved.status_code == 200, moved.text
+    composed = env.client.post("/api/v1/managed-datasets/compose", json={
+        "class_key": klass["key"], "name": "main",
+        "sources": [
+            {"dataset_key": env.dataset_key, "priority": 10, "color": "#123456"},
+            {"dataset_key": env.empty_dataset_key, "priority": 0, "color": "#654321"},
+        ],
+    })
+    assert composed.status_code == 200, composed.text
+    source = next(row for item in composed.json()["classes"] if item["key"] == klass["key"] for row in item["datasets"])
+    copy_url = f"/api/v1/dataset-editor/datasets/{source['key']}/copy"
+    first = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert first.status_code == 200, first.text
+    removed = env.client.delete(f"/api/v1/dataset-editor/datasets/{first.json()['dataset_key']}")
+    assert removed.status_code == 200, removed.text
+    second = env.client.post(copy_url, json={"name": "main_i_testovyj"})
+    assert second.status_code == 200, second.text
+    assert second.json()["managed"] is True
+    assert second.json()["dataset_key"] != first.json()["dataset_key"]
+    with create_session_factory(get_config())() as session:
+        old = session.scalar(select(DatasetRow).where(DatasetRow.key == first.json()["dataset_key"]))
+        new = session.scalar(select(DatasetRow).where(DatasetRow.key == second.json()["dataset_key"]))
+        assert old is not None and old.deleted_at is not None
+        assert new is not None and new.deleted_at is None
+        relations = session.scalars(select(ManagedDatasetSourceRow).where(ManagedDatasetSourceRow.managed_dataset_id == new.id)).all()
+        assert {(row.priority, row.color) for row in relations} == {(10, "#123456"), (0, "#654321")}
+
+
+def test_dataset_editor_does_not_overwrite_unowned_existing_copy_folder(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    target = env.editor_dataset.parent / "main_i_testovyj"
+    target.mkdir()
+    sentinel = target / env.live_annotation.name
+    sentinel.write_bytes(env.live_annotation.read_bytes())
+    before = sentinel.read_bytes()
+    _git(env.editor_root, "add", "--", "Реки/main_i_testovyj")
+    _git(env.editor_root, "commit", "-m", "Добавить несвязанный источник")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    copied = env.client.post(
+        f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}/copy",
+        json={"name": "main_i_testovyj"},
+    )
+    assert copied.status_code == 400
+    assert "Папка копии уже существует" in copied.json()["detail"]
+    assert sentinel.read_bytes() == before
+
+
 def test_dataset_editor_returns_service_unavailable_for_missing_clone(
     editor_environment: _EditorEnvironment,
 ) -> None:
