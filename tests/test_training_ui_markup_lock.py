@@ -63,3 +63,11 @@ def test_nested_catalog_reads_inside_publication_do_not_deadlock(tmp_path: Path)
         with pytest.raises(RuntimeError, match="публикацию"):
             with markup_write_lock(config):
                 pass
+
+
+def test_missing_working_source_does_not_create_directories_for_reading(tmp_path: Path) -> None:
+    root = tmp_path / "missing-parent" / "clone"
+    config = SimpleNamespace(mlmarkup_root=root, mlmarkup_editor_root=root)
+    with markup_read_lock(config):
+        assert not root.is_dir()
+    assert not root.parent.exists()

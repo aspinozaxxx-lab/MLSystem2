@@ -61,7 +61,7 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from mlsystem2.training_ui_api._raster_http import raster_response
-from .._markup_lock import markup_write_lock
+from mlsystem2.training_ui_api._markup_lock import markup_write_lock
 from .common import RouteContext
 
 

@@ -67,7 +67,7 @@ def markup_read_lock(
     source_root: Path | None = None,
 ) -> Iterator[None]:
     root = source_root if source_root is not None else config.mlmarkup_root
-    if root.resolve() != config.mlmarkup_editor_root.resolve():
+    if not root.is_dir() or root.resolve() != config.mlmarkup_editor_root.resolve():
         # Архивный атомарный релиз остаётся пригодным для ручного восстановления.
         yield
         return
