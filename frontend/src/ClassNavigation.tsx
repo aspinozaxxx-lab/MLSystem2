@@ -1,25 +1,46 @@
 import { FileText } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 type ClassChoice = { key: string; name: string; count?: number; draftCount?: number };
 
-export function useRememberedClass(classes: readonly { key: string }[] | null, storageKey: string) {
-  const [savedKey, setSavedKey] = useState(() => {
-    try { return localStorage.getItem(storageKey) || ""; } catch { return ""; }
-  });
-  const latestKey = useRef(savedKey);
+const storageKey = "grovika:selected-class";
+let rememberedClassKey: string | undefined;
+const listeners = new Set<() => void>();
+
+function readRememberedClass(): string {
+  if (rememberedClassKey === undefined) {
+    try {
+      rememberedClassKey = localStorage.getItem(storageKey)
+        // Однократно подхватываем прежний выбор при обновлении приложения.
+        || localStorage.getItem("grovika:results:class")
+        || localStorage.getItem("grovika:test-markups:class")
+        || localStorage.getItem("grovika:class-editor:class") || "";
+    } catch { rememberedClassKey = ""; }
+  }
+  return rememberedClassKey;
+}
+
+function rememberClass(key: string) {
+  rememberedClassKey = key;
+  try { localStorage.setItem(storageKey, key); } catch { /* Выбор сохраняется в текущей вкладке. */ }
+  listeners.forEach((notify) => notify());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function useRememberedClass(classes: readonly { key: string }[] | null) {
+  const savedKey = useSyncExternalStore(subscribe, readRememberedClass, readRememberedClass);
   const classKey = classes === null ? savedKey
     : classes.some((item) => item.key === savedKey) ? savedKey : classes[0]?.key || "";
-  const setClassKey = useCallback((key: string) => {
-    latestKey.current = key;
-    setSavedKey(key);
-    try { localStorage.setItem(storageKey, key); } catch { /* Выбор доступен без хранилища браузера. */ }
-  }, [storageKey]);
   useEffect(() => {
-    // Поздний ответ каталога не отменяет уже сделанный пользователем выбор.
-    if (classes !== null && classKey !== savedKey && latestKey.current === savedKey) setClassKey(classKey);
-  }, [classes, classKey, savedKey, setClassKey]);
-  return { classKey, setClassKey };
+    // Локальный запасной класс не отменяет общий выбор в ограниченном каталоге.
+    // Поздний ответ каталога также не отменяет уже сделанный выбор.
+    if (!savedKey && classKey && !readRememberedClass()) rememberClass(classKey);
+  }, [classKey, savedKey]);
+  return { classKey, setClassKey: rememberClass };
 }
 
 export function ClassNavigation({ classes, classKey, onSelect, label }: {

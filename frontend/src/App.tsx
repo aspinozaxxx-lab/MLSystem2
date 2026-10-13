@@ -2180,7 +2180,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     key: item.key, name: item.name, count: (item.datasets || []).length,
     draftCount: (userDrafts || []).filter((draft) => draft.class_key === item.key).length,
   })) : null, [catalog, userDrafts]);
-  const { classKey, setClassKey } = useRememberedClass(classChoices, "grovika:class-editor:class");
+  const { classKey, setClassKey } = useRememberedClass(classChoices);
   const visibleDrafts = (userDrafts || []).filter((draft) => draft.class_key === classKey);
   const [renameDrafts, setRenameDrafts] = useState<Record<string, { name?: string; technical_name?: string }>>({});
 
@@ -3142,7 +3142,7 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
 function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJobLog">) {
   const [classes, setClasses] = useState<ResultClassInfo[] | null>(null);
   const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
-  const { classKey, setClassKey } = useRememberedClass(classes, "grovika:results:class");
+  const { classKey, setClassKey } = useRememberedClass(classes);
   const selectedClass = classes?.find((item) => item.key === classKey);
   useEffect(() => {
     void run(() => apiJson<ResultClassListResponse>("/results/classes")).then((payload) => {

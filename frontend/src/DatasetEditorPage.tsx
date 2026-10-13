@@ -47,6 +47,7 @@ import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, 
 import "ol/ol.css";
 
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
+import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
 import { NEW_SCENE_REVISION, readAnnotationFiles } from "./utils/datasetEditorImport";
@@ -280,7 +281,12 @@ export function DatasetEditorPage({
 }) {
   const [datasets, setDatasets] = useState<EditorDataset[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(true);
-  const [classKey, setClassKey] = useState("");
+  const classes = useMemo(
+    () => Array.from(new Map(datasets.map((item) => [item.class_key, item.class_name])).entries())
+      .map(([key, name]) => ({ key, name })),
+    [datasets],
+  );
+  const { classKey, setClassKey } = useRememberedClass(datasetsLoading ? null : classes);
   const [datasetKey, setDatasetKey] = useState("");
   const [scenes, setScenes] = useState<EditorScene[]>([]);
   const [annotationName, setAnnotationName] = useState("");
@@ -508,10 +514,6 @@ export function DatasetEditorPage({
       );
       if (!payload) return;
       setDatasets(payload.datasets);
-      const firstClass = payload.datasets[0]?.class_key || "";
-      setClassKey((current) =>
-        payload.datasets.some((item) => item.class_key === current) ? current : firstClass,
-      );
     } finally {
       if (showLoading) setDatasetsLoading(false);
     }
@@ -525,14 +527,6 @@ export function DatasetEditorPage({
     () => datasets.filter((item) => item.class_key === classKey),
     [classKey, datasets],
   );
-  const classes = useMemo(
-    () =>
-      Array.from(new Map(datasets.map((item) => [item.class_key, item.class_name])).entries()).map(
-        ([key, name]) => ({ key, name }),
-      ),
-    [datasets],
-  );
-
   useEffect(() => {
     if (!classDatasets.some((item) => item.key === datasetKey)) {
       setDatasetKey(classDatasets[0]?.key || "");
@@ -549,7 +543,7 @@ export function DatasetEditorPage({
     appliedInitialDatasetKeyRef.current = initialDatasetKey;
     setClassKey(initialDataset.class_key);
     setDatasetKey(initialDataset.key);
-  }, [datasets, initialDatasetKey]);
+  }, [datasets, initialDatasetKey, setClassKey]);
 
   const loadScenes = useCallback(
     async (key: string, preferredAnnotation = "") => {
