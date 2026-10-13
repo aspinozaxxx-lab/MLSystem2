@@ -39,7 +39,7 @@ def compute_object_f1(request: ObjectF1Request) -> ObjectF1Result:
             destination.update({int(key): int(count) for key, count in zip(ids, counts, strict=True) if key > 0})
         common = (truth > 0) & (predicted > 0)
         if np.any(common):
-            pairs, counts = np.unique(np.column_stack((truth[common], predicted[common])), axis=0, return_counts=True)
+            pairs, counts = _unique_instance_pairs(truth[common], predicted[common])
             intersections.update({(int(pair[0]), int(pair[1])): int(count) for pair, count in zip(pairs, counts, strict=True)})
     true_ids = sorted(true_areas)
     predicted_ids = sorted(predicted_areas)
@@ -64,6 +64,24 @@ def compute_object_f1(request: ObjectF1Request) -> ObjectF1Result:
         false_negative=len(true_ids) - true_positive,
         matched_pairs=[(true_ids[i], predicted_ids[j]) for i, j in enumerate(matching) if j >= 0],
     )
+
+
+def _unique_instance_pairs(truth, predicted):
+    """Сортировать целочисленные пары одним uint64 без структурного сравнения строк."""
+    if (truth.dtype.kind in "biu" and predicted.dtype.kind in "biu"
+            and truth.max(initial=0) <= 0xFFFFFFFF and predicted.max(initial=0) <= 0xFFFFFFFF):
+        # Вызывается только для положительных ID. Упаковка сохраняет прежний
+        # лексикографический порядок, в том числе исходные разреженные номера.
+        encoded = truth.astype(np.uint64)
+        encoded <<= np.uint64(32)
+        np.bitwise_or(encoded, predicted, out=encoded, dtype=np.uint64, casting="unsafe")
+        keys, counts = np.unique(encoded, return_counts=True)
+        pairs = np.empty((keys.size, 2), dtype=np.uint32)
+        pairs[:, 0] = keys >> np.uint64(32)
+        pairs[:, 1] = keys  # Приведение оставляет младшие 32 бита.
+        return pairs, counts
+    # Произвольные исторические типы и ID шире 32 бит сохраняют прежнюю семантику.
+    return np.unique(np.column_stack((truth, predicted)), axis=0, return_counts=True)
 
 
 def _result(

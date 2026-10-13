@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import math
 import time
 import warnings
@@ -193,6 +194,10 @@ def train_model(
                 epoch_started = perf_counter()
                 epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
 
+                if config.pipeline_variant == "object_f1_v2":
+                    logging.getLogger(__name__).info("Эпоха %s/%s: обучение object_f1_v2 на %s",
+                                                     epoch, config.epochs, device)
+
                 train_epoch = _train_epoch(
                     torch,
                     model,
@@ -204,6 +209,9 @@ def train_model(
                     pause_controller=pause_controller,
                 )
                 _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
+                if config.pipeline_variant == "object_f1_v2":
+                    logging.getLogger(__name__).info("Эпоха %s: обучение завершено за %.1f с, loss=%.6f; начинается проверка",
+                                                     epoch, perf_counter() - epoch_started, train_epoch["loss"])
                 validate_now = (
                     config.pipeline_variant == "legacy"
                     or epoch == 1
@@ -697,6 +705,7 @@ def _train_epoch(
     batches = 0
     has_optimizer_step = False
     nonfinite_gradient_skips = 0
+    epoch_started = last_report = perf_counter()
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(
@@ -790,6 +799,10 @@ def _train_epoch(
         optimizer.step()
         has_optimizer_step = True
         total_loss += float(loss.detach().item()) * loss_weight
+        if config.pipeline_variant == "object_f1_v2" and perf_counter() - last_report >= 30:
+            logging.getLogger(__name__).info("Эпоха %s: обучение на %s, пакетов=%s, %.1f с",
+                                             epoch, device, batch_index, perf_counter() - epoch_started)
+            last_report = perf_counter()
         loss_denominator += loss_weight
         batches += 1
         reached_limit = (

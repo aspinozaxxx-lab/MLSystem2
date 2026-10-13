@@ -16,16 +16,18 @@ from shapely.ops import transform, unary_union
 from .contracts import TilePreparationError
 
 
-def rasterize_objects(index, dataset, window, size, invalid):
+def rasterize_objects(index, dataset, window, size, invalid, *, collect_overlaps=True):
     parts = index.query_instances(dataset.window_bounds(window))
     if not parts:
-        return np.zeros((size, size), dtype=np.int32), np.zeros((size, size), dtype=bool)
+        return np.zeros((size, size), dtype=np.int32), np.zeros((size, size), dtype=bool) if collect_overlaps else None
     transform = dataset.window_transform(window)
     instances = rasterize([(geometry, key) for key, geometry in parts],
                           out_shape=(size, size), transform=transform, dtype="int32")
+    instances[invalid] = 0
+    if not collect_overlaps:
+        return instances, None
     counts = rasterize([(geometry, 1) for _, geometry in parts],
                        out_shape=(size, size), transform=transform, dtype="int32", merge_alg=MergeAlg.add)
-    instances[invalid] = 0
     return instances, counts > 1
 
 

@@ -64,6 +64,7 @@ def create_tile_dataloader(
             pipeline_variant=request.pipeline_variant,
             collect_band_histogram=request.collect_band_histogram,
             input_channels=getattr(request, "input_channels", None),
+            statistics_workers=tile_settings.num_workers,
         )
     except TilePreparationError:
         raise

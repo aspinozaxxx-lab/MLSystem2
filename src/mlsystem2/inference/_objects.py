@@ -69,18 +69,27 @@ def _separate_objects_v2(foreground, boundary, valid, config):
         marker_sizes = np.bincount(markers.ravel())
         marker_sizes[0] = 0
         markers[marker_sizes[markers] < config.min_marker_pixels] = 0
-        if not np.any(markers):
+        marker_count = int((marker_sizes >= config.min_marker_pixels).sum())
+        if not marker_count:
             distance = ndimage.distance_transform_edt(np.pad(component, 1))[1:-1, 1:-1]
             # Значимые максимумы разделяют доли сложной формы, плато — один маркер.
             # Малые/тонкие компоненты без значимых максимумов получают один центр.
             peaks = h_maxima(distance, config.fallback_peak_prominence) & component
-            markers, _ = ndimage.label(peaks)
+            markers, marker_count = ndimage.label(peaks)
             if not np.any(markers):
                 markers[np.unravel_index(np.argmax(distance), distance.shape)] = 1
+                marker_count = 1
+        if marker_count == 1:
+            # Единственный маркер заполняет всю связную область при любом рельефе.
+            instances[slices][component] = offset + 1
+            offset += 1
+            continue
         elevation = np.where(barriers, np.maximum(values, config.boundary_threshold), values)
         labels = watershed(elevation, markers, mask=component, connectivity=1, watershed_line=False)
         label_sizes = np.bincount(labels.ravel())
-        too_small = (label_sizes < config.min_object_pixels)
+        # Пропуски ID после фильтра маркеров не являются маленькими объектами:
+        # раньше они запускали повторный watershed, хотя ни один маркер не менялся.
+        too_small = (label_sizes > 0) & (label_sizes < config.min_object_pixels)
         too_small[0] = False
         if np.all(too_small[np.unique(labels[component])]):
             too_small[1 + np.argmax(label_sizes[1:])] = False
@@ -90,9 +99,11 @@ def _separate_objects_v2(foreground, boundary, valid, config):
             labels = watershed(elevation, markers, mask=component, connectivity=1, watershed_line=False)
         positive = labels > 0
         if positive.any():
-            _, compact = np.unique(labels[positive], return_inverse=True)
-            instances[slices][positive] = compact + offset + 1
-            offset += int(compact.max()) + 1
+            present = np.flatnonzero(np.bincount(labels.ravel())[1:]) + 1
+            compact = np.zeros(int(present[-1]) + 1, dtype=np.int32)
+            compact[present] = np.arange(1, len(present) + 1, dtype=np.int32)
+            instances[slices][positive] = compact[labels[positive]] + offset
+            offset += len(present)
     return instances
 
 
@@ -103,6 +114,8 @@ class SceneAccumulator:
         self._arrays = []
         self._finished = False
         self._closed = False
+        self._component_threshold = None
+        self._component_slices = None
         self.shape = (request.height, request.width)
         self.probabilities = self._array("probabilities", np.float32, (2, *self.shape))
         self.weights = self._array("weights", np.float32, self.shape)
@@ -158,13 +171,19 @@ class SceneAccumulator:
         return self._segment(ObjectSeparationConfig.model_validate(config))
 
     def _segment(self, config):
+        reuse_components = (config.profile == "object_f1_v2"
+                            and self._component_threshold == config.foreground_threshold)
         for y in range(0, self.request.height, 256):
             strip = np.s_[y:y+256, :]
-            self._foreground[strip] = (self.probabilities[0][strip] >= config.foreground_threshold) & self.valid[strip]
+            if not reuse_components:
+                self._foreground[strip] = (self.probabilities[0][strip] >= config.foreground_threshold) & self.valid[strip]
             self._instances[strip] = 0
-        count = ndimage.label(self._foreground, output=self._components)
+        if not reuse_components:
+            count = ndimage.label(self._foreground, output=self._components)
+            self._component_slices = ndimage.find_objects(self._components, count)
+            self._component_threshold = config.foreground_threshold if config.profile == "object_f1_v2" else None
         offset = 0
-        for component_id, slices in enumerate(ndimage.find_objects(self._components, count), start=1):
+        for component_id, slices in enumerate(self._component_slices, start=1):
             if slices is None:
                 continue
             mask = self._components[slices] == component_id

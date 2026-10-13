@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import time
@@ -45,6 +46,7 @@ _MAX_OPEN_RASTERS = 8
 _TRAINING_CONTROL_DIR_ENV = "MLSYSTEM2_TRAINING_CONTROL_DIR"
 _PAUSE_REQUEST_FILE = "pause.request"
 _PAUSED_MARKER_FILE = "paused"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,7 @@ class TileDataset:
         pipeline_variant: str = "legacy",
         collect_band_histogram: bool = False,
         input_channels: int | None = None,
+        statistics_workers: int = 0,
     ) -> None:
         if not scenes:
             raise TilePreparationError("Не задано ни одного TIFF для нарезки тайлов.")
@@ -114,6 +117,10 @@ class TileDataset:
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
         self._pipeline_variant = pipeline_variant
+        self._statistics_workers = statistics_workers
+        preparation_started = time.monotonic()
+        if pipeline_variant == "object_f1_v2":
+            LOGGER.info("object f1 v2: подготовка %s, снимков=%s, размер окна=%s", mode, len(scenes), tile_size)
         self._input_channels = input_channels
         self._has_regions = any(scene.region_geometry is not None for scene in scenes)
         self._has_rgb_alpha = False
@@ -262,14 +269,23 @@ class TileDataset:
             raise TilePreparationError("Размеченные зоны не содержат допустимых пикселей для обучения")
         self._candidate_window_count = len(self._windows)
         should_build_hints = self._mode in {"train", "val"} or self._tile_split is not None
+        if pipeline_variant == "object_f1_v2":
+            LOGGER.info("object f1 v2: сетка %s готова, окон=%s, %.1f с; определение категорий",
+                        mode, len(self._windows), time.monotonic() - preparation_started)
         if should_build_hints:
             self._build_hints()
             self._record_scene_category_counts()
+        if pipeline_variant == "object_f1_v2":
+            LOGGER.info("object f1 v2: категории %s готовы, %.1f с; разбиение по группам снимков",
+                        mode, time.monotonic() - preparation_started)
         self._pool_window_count = len(self._windows)
         if self._tile_split is not None:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
         self._record_scene_selected_counts()
+        if pipeline_variant == "object_f1_v2":
+            LOGGER.info("object f1 v2: разбиение %s готово, выбрано окон=%s, %.1f с",
+                        mode, len(self._windows), time.monotonic() - preparation_started)
         if self._has_regions:
             self._tile_split_manifest["annotation_regions"] = [
                 {"scene_id": scene.scene_id, "parent_scene_id": scene.parent_scene_id,
@@ -281,6 +297,8 @@ class TileDataset:
         if self._collect_band_histogram_enabled:
             self._band_histogram = self._collect_band_histogram()
         self._close_datasets()
+        if pipeline_variant == "object_f1_v2":
+            LOGGER.info("object f1 v2: подготовка %s завершена за %.1f с", mode, time.monotonic() - preparation_started)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -563,10 +581,27 @@ class TileDataset:
         return list(self._object_target_counts)
 
     def _compute_notebook_statistics(self) -> None:
+        if self._pipeline_variant == "object_f1_v2":
+            from ._statistics import object_statistics
+
+            ratios, negatives, counts = object_statistics(self, self._statistics_workers)
+            self._notebook_positive_ratios = ratios
+            self._notebook_hard_negatives = negatives
+            self._object_target_counts = counts.tolist()
+            present = counts > 0
+            weights = np.ones(3, dtype=np.float64)
+            if present.any():
+                inverse = 1.0 / counts[present]
+                weights[present] = inverse / inverse.mean()
+            weights[2] *= 3.0
+            self._notebook_class_weights = weights.astype(np.float32).tolist()
+            self._tile_split_manifest["object_target_counts"] = self.object_target_counts
+            self._tile_split_manifest["object_class_weights"] = self.notebook_class_weights
+            self._tile_split_manifest["boundary_width_pixels"] = 8
+            return
         ratios = []
         hard_negatives = []
-        object_v2 = self._pipeline_variant == "object_f1_v2"
-        class_count = 3 if object_v2 else 1 + len(self._classes or self._class_annotations) if self.uses_multiclass_masks else 2
+        class_count = 1 + len(self._classes or self._class_annotations) if self.uses_multiclass_masks else 2
         valid_counts = np.zeros(class_count, dtype=np.float64)
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
@@ -574,7 +609,7 @@ class TileDataset:
             zoned = self._scenes[item.scene_index].region_geometry is not None
             invalid = (
                 self._region_invalid(item.scene_index, dataset, window) if zoned
-                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha or object_v2
+                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha
                 else np.zeros((self._tile_size, self._tile_size), dtype=bool)
             )
             mask = self._read_supervision_mask(
@@ -592,37 +627,17 @@ class TileDataset:
                     valid &= ~class_negatives.any(axis=0)
                 labels = np.maximum(semantic[valid], 0)
                 valid_counts += np.bincount(labels, minlength=class_count)
-            if object_v2:
-                instances, _ = rasterize_objects(self._positive_index(item.scene_index), dataset, window,
-                                                self._tile_size, invalid | (mask[0] < 0))
-                boundary, usable = boundary_targets_v2(instances, ~invalid)
-                labels = (instances > 0).astype(np.int32)
-                labels[boundary > 0] = 2
-                valid_counts += np.bincount(labels[usable], minlength=3)
-            elif self._pipeline_variant == "object_f1":
+            if self._pipeline_variant == "object_f1":
                 valid = ~invalid if zoned else ~self._read_invalid_data_pixels(dataset, window)
                 positive_count = int(((mask[0] == 1) & valid).sum())
                 valid_counts += [int(valid.sum()) - positive_count, positive_count]
-            ratios.append(float(np.count_nonzero((semantic > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha or object_v2 else float(np.mean(semantic > 0, dtype=np.float32)))
+            ratios.append(float(np.count_nonzero((semantic > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha else float(np.mean(semantic > 0, dtype=np.float32)))
             hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL) or (class_negatives is not None and class_negatives.any())))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
         self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
         positive = self._notebook_positive_ratios.sum()
         negative = (1 - self._notebook_positive_ratios).sum()
-        counts = valid_counts if self._pipeline_variant in {"object_f1", "object_f1_v2"} or self.uses_multiclass_masks else np.asarray([negative, positive])
-        if object_v2:
-            self._object_target_counts = counts.astype(np.int64).tolist()
-            present = counts > 0
-            weights = np.ones(3, dtype=np.float64)
-            if present.any():
-                inverse = 1.0 / counts[present]
-                weights[present] = inverse / inverse.mean()
-            weights[2] *= 3.0
-            self._notebook_class_weights = weights.astype(np.float32).tolist()
-            self._tile_split_manifest["object_target_counts"] = self.object_target_counts
-            self._tile_split_manifest["object_class_weights"] = self.notebook_class_weights
-            self._tile_split_manifest["boundary_width_pixels"] = 8
-            return
+        counts = valid_counts if self._pipeline_variant == "object_f1" or self.uses_multiclass_masks else np.asarray([negative, positive])
         weights = 1.0 / (counts + 1e-6)
         self._notebook_class_weights = (weights / weights.mean()).astype(np.float32).tolist()
 

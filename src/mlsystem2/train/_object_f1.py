@@ -1,7 +1,9 @@
 """Обучение границ и оценка объектов после сборки полных снимков."""
 
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 
 import numpy as np
 
@@ -74,6 +76,10 @@ def validate_objects(torch, model, loader, device, config, epoch, pause_controll
     pixel_counts = {"tp": 0, "fp": 0, "fn": 0}
     object_counts = {"tp": 0, "fp": 0, "fn": 0}
     per_scene = []
+    logger = logging.getLogger(__name__)
+    started = last_log = perf_counter()
+    if v2:
+        logger.info("Эпоха %s: начало полной проверки object_f1_v2, инференс окон на %s", epoch, device)
     with TemporaryDirectory(prefix="object-f1-validation-") as temporary:
         try:
             with torch.no_grad():
@@ -120,16 +126,22 @@ def validate_objects(torch, model, loader, device, config, epoch, pause_controll
                             current_edges = meta["boundary_target"][i, :h, :w].cpu().numpy() > 0
                             _merge_boundary_target(edges, usable, priority, x, y, size, current_edges, current_valid)
                     del images, masks, valid, logits, loss, region, boundary
+                    if v2 and perf_counter() - last_log >= 30:
+                        logger.info("Эпоха %s: проверка на %s, пакетов=%s, окон=%s, %.1f с",
+                                    epoch, device, batch_index, examples, perf_counter() - started)
+                        last_log = perf_counter()
             if not examples:
                 raise TrainError("object f1: validation не содержит окон")
-            for scene_id, (accumulator, truth) in scenes.items():
+            if v2:
+                from ._object_parallel import evaluate_scenes
+                logger.info("Эпоха %s: инференс проверки завершён за %.1f с, окон=%s; расчёт объектов на CPU",
+                            epoch, perf_counter() - started, examples)
+                evaluate_scenes(scenes, boundary_truths, separation, candidates,
+                                getattr(loader, "num_workers", 0), pause_controller)
+            for scene_id, (accumulator, truth) in (() if v2 else scenes.items()):
                 if pause_controller is not None:
                     pause_controller.pause_if_requested()
                 result = accumulator.finish()
-                if v2:
-                    from ._object_v2 import evaluate_candidates
-                    evaluate_candidates(scene_id, accumulator, truth, *boundary_truths[scene_id][:2], separation, candidates, pause_controller, initial_result=result)
-                    continue
                 metrics = compute_object_f1(ObjectF1Request(y_true_instances=truth, y_pred_instances=result.instances))
                 counts = {"tp": metrics.true_positive, "fp": metrics.false_positive, "fn": metrics.false_negative}
                 for key in counts:

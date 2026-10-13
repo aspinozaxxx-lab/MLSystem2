@@ -1,6 +1,8 @@
 """Три обучаемых класса и диагностика разделения полных объектов."""
 
 from collections import Counter
+import logging
+from time import perf_counter
 
 import numpy as np
 
@@ -60,7 +62,7 @@ def _scene_metrics(truth, predicted, probabilities, valid, boundary_truth, bound
             counts.update({int(i): int(n) for i, n in zip(ids, amounts) if i > 0})
         common = (gt > 0) & (pred > 0) & use
         if common.any():
-            pairs, amounts = np.unique(np.column_stack((gt[common], pred[common])), axis=0, return_counts=True)
+            pairs, amounts = _unique_instance_pairs(gt[common], pred[common])
             intersections.update({(int(pair[0]), int(pair[1])): int(n) for pair, n in zip(pairs, amounts)})
     true_neighbors, pred_neighbors = Counter(), Counter()
     for (gt, pred), amount in intersections.items():
@@ -82,6 +84,21 @@ def _scene_metrics(truth, predicted, probabilities, valid, boundary_truth, bound
     }
 
 
+def _unique_instance_pairs(truth, predicted):
+    """Подсчитать пары положительных ID без структурной сортировки двух столбцов."""
+    if (truth.dtype.kind in "biu" and predicted.dtype.kind in "biu"
+            and truth.max(initial=0) <= 0xFFFFFFFF and predicted.max(initial=0) <= 0xFFFFFFFF):
+        encoded = truth.astype(np.uint64)
+        encoded <<= np.uint64(32)
+        np.bitwise_or(encoded, predicted, out=encoded, dtype=np.uint64, casting="unsafe")
+        keys, counts = np.unique(encoded, return_counts=True)
+        pairs = np.empty((keys.size, 2), dtype=np.uint32)
+        pairs[:, 0] = keys >> np.uint64(32)
+        pairs[:, 1] = keys  # Приведение оставляет младшие 32 бита.
+        return pairs, counts
+    return np.unique(np.column_stack((truth, predicted)), axis=0, return_counts=True)
+
+
 def evaluate_candidates(scene_id, accumulator, truth, boundary_truth, boundary_valid, separation, candidates, pause_controller, *, initial_result):
     # resegment меняет тот же дисковый массив instances. Сначала учитываем готовый
     # результат finish, иначе очередной порог затрёт его до расчёта метрик.
@@ -92,11 +109,16 @@ def evaluate_candidates(scene_id, accumulator, truth, boundary_truth, boundary_v
     for threshold in thresholds:
         if pause_controller is not None:
             pause_controller.pause_if_requested()
+        started = perf_counter()
+        logging.getLogger(__name__).info("Снимок %s: порог границы %.3f, разделение и точные метрики", scene_id, threshold)
         result = initial_result if threshold == initial_threshold else accumulator.resegment(
             separation.model_copy(update={"boundary_threshold": threshold}))
         predicted = result.instances
         candidates[threshold].append({"scene_id": scene_id, **_scene_metrics(
             truth, predicted, result.probabilities, result.valid_pixels, boundary_truth, boundary_valid, threshold)})
+        logging.getLogger(__name__).info("Снимок %s: порог %.3f проверен за %.1f с, объектов=%s",
+                                        scene_id, threshold, perf_counter() - started,
+                                        candidates[threshold][-1]["predicted_objects"])
         del predicted
 
 

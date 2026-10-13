@@ -185,3 +185,124 @@ def test_v2_class_weights_ignore_heldout_annotations_and_missing_classes(tmp_pat
         assert background_only.notebook_class_weights == [1.0, 1.0, 3.0]
     finally:
         background_only.close()
+
+
+@pytest.mark.parametrize("zoned", [False, True])
+def test_parallel_statistics_match_previous_full_rasterization(tmp_path, zoned, caplog):
+    from rasterio.windows import Window
+    from mlsystem2.tile_preparation._object_targets import rasterize_objects
+
+    caplog.set_level("INFO", logger="mlsystem2.tile_preparation")
+    scenes = _scenes(tmp_path)
+    for index, scene in enumerate(scenes):
+        payload = json.loads(scene.annotation_file.read_text(encoding="utf-8"))
+        payload["features"].append({"type": "Feature", "properties": {"_mlsystem2_role": "hard_negative"},
+                                    "geometry": mapping(box(index * 200 + 20, 8, index * 200 + 35, 24))})
+        scene.annotation_file.write_text(json.dumps(payload), encoding="utf-8")
+        if zoned:
+            scenes[index] = scene.model_copy(update={"region_geometry": mapping(box(index * 200 + 3, 3, index * 200 + 61, 61)),
+                "region_window": (0, 0, 64, 64), "parent_scene_id": scene.scene_id, "zone_id": "зона"})
+    options = dict(scenes=scenes, tile_size=32, stride=16, mode="train", seed=42,
+        augmentation_level=3, include_object_instances=True, pipeline_variant="object_f1_v2",
+        input_channels=3, tile_split=TileSplitRequest(strategy="scene_groups", val_fraction=.2, test_fraction=.2))
+    serial, parallel = TileDataset(**options), TileDataset(**options, statistics_workers=2)
+    try:
+        counts = np.zeros(3, dtype=np.float64)
+        ratios, negatives = [], []
+        for item in serial._windows:
+            source = serial._open_dataset(item.scene_index)
+            window = Window(item.window.x, item.window.y, 32, 32)
+            invalid = serial._region_invalid(item.scene_index, source, window) if zoned else serial._read_invalid_data_pixels(source, window)
+            mask = serial._read_supervision_mask(item.scene_index, source, window, invalid)[0]
+            instances, _ = rasterize_objects(serial._positive_index(item.scene_index), source, window, 32, invalid | (mask < 0))
+            boundary, usable = boundary_targets_v2(instances, ~invalid)
+            target = (instances > 0).astype(np.int32)
+            target[boundary > 0] = 2
+            counts += np.bincount(target[usable], minlength=3)
+            ratios.append(float(np.count_nonzero((mask > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))))
+            negatives.append(bool(np.any(mask == -1)))
+        for dataset in (serial, parallel):
+            np.testing.assert_array_equal(dataset.object_target_counts, counts)
+            np.testing.assert_array_equal(dataset._notebook_positive_ratios, ratios)
+            np.testing.assert_array_equal(dataset._notebook_hard_negatives, negatives)
+        assert serial.notebook_class_weights == parallel.notebook_class_weights
+        assert serial.tile_split_manifest == parallel.tile_split_manifest
+        assert serial.sampling_weights() == parallel.sampling_weights()
+        left, right = serial[0], parallel[0]
+        for a, b in ((left[0], right[0]), (left[1], right[1]), (left[2]["boundary_target"], right[2]["boundary_target"])):
+            np.testing.assert_array_equal(a, b)
+        assert "процессов=2" in caplog.text
+        assert "статистика train готова" in caplog.text
+    finally:
+        serial.close()
+        parallel.close()
+
+
+def test_statistics_skip_unused_overlap_raster_without_changing_ids(tmp_path, monkeypatch):
+    from rasterio.windows import Window
+    from mlsystem2.tile_preparation import _object_targets
+
+    dataset = _dataset(_scenes(tmp_path))
+    try:
+        item = dataset._windows[0]
+        source = dataset._open_dataset(item.scene_index)
+        window = Window(item.window.x, item.window.y, 64, 64)
+        index = dataset._positive_index(item.scene_index)
+        invalid = dataset._read_invalid_data_pixels(source, window)
+        reference, overlaps = _object_targets.rasterize_objects(index, source, window, 64, invalid)
+        calls = []
+        original = _object_targets.rasterize
+
+        def tracked_rasterize(*args, **kwargs):
+            calls.append(kwargs.get("merge_alg"))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(_object_targets, "rasterize", tracked_rasterize)
+        actual, unused = _object_targets.rasterize_objects(index, source, window, 64, invalid, collect_overlaps=False)
+        np.testing.assert_array_equal(actual, reference)
+        assert overlaps.any()
+        assert unused is None and len(calls) == 1
+    finally:
+        dataset.close()
+
+
+def _record_statistics_shutdown(dataset, marker):
+    marker.write_text("закрыт" if not dataset._datasets else "открыт", encoding="utf-8")
+
+
+def _statistics_shutdown_probe(paths, marker):
+    from collections import OrderedDict
+    from multiprocessing.util import Finalize
+    from types import SimpleNamespace
+    from mlsystem2.tile_preparation._statistics import _initialize_worker
+
+    dataset = TileDataset.__new__(TileDataset)
+    dataset._datasets = OrderedDict()
+    dataset._annotation_indexes = {}
+    dataset._scenes = [SimpleNamespace(image_path=path) for path in paths]
+    _initialize_worker(dataset)
+    for index in range(len(paths)):
+        dataset._open_dataset(index).read(1)
+    # Проверка завершается после рабочего finalizer, но до разрушения интерпретатора.
+    # Без явного закрытия глобального датасета все TIFF в этот момент ещё открыты.
+    Finalize(None, _record_statistics_shutdown, args=(dataset, marker), exitpriority=0)
+
+
+def test_statistics_worker_closes_gdal_before_python_teardown(tmp_path):
+    import multiprocessing
+
+    marker = tmp_path / "закрытие.txt"
+    paths = [scene.image_path for scene in _scenes(tmp_path)]
+    process = multiprocessing.get_context("spawn").Process(
+        target=_statistics_shutdown_probe, args=(paths, marker))
+    process.start()
+    try:
+        process.join(timeout=30)
+        assert not process.is_alive(), "Процесс статистики не завершился"
+        assert process.exitcode == 0
+        assert marker.read_text(encoding="utf-8") == "закрыт"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=10)
+        process.close()
