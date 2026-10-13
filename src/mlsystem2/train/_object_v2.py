@@ -82,14 +82,20 @@ def _scene_metrics(truth, predicted, probabilities, valid, boundary_truth, bound
     }
 
 
-def evaluate_candidates(scene_id, accumulator, truth, boundary_truth, boundary_valid, separation, candidates, pause_controller):
-    for threshold, rows in candidates.items():
+def evaluate_candidates(scene_id, accumulator, truth, boundary_truth, boundary_valid, separation, candidates, pause_controller, *, initial_result):
+    # resegment меняет тот же дисковый массив instances. Сначала учитываем готовый
+    # результат finish, иначе очередной порог затрёт его до расчёта метрик.
+    initial_threshold = separation.boundary_threshold
+    thresholds = ([initial_threshold] if initial_threshold in candidates else []) + [
+        value for value in candidates if value != initial_threshold
+    ]
+    for threshold in thresholds:
         if pause_controller is not None:
             pause_controller.pause_if_requested()
-        selected = separation.model_copy(update={"boundary_threshold": threshold})
-        result = accumulator.resegment(selected)
+        result = initial_result if threshold == initial_threshold else accumulator.resegment(
+            separation.model_copy(update={"boundary_threshold": threshold}))
         predicted = result.instances
-        rows.append({"scene_id": scene_id, **_scene_metrics(
+        candidates[threshold].append({"scene_id": scene_id, **_scene_metrics(
             truth, predicted, result.probabilities, result.valid_pixels, boundary_truth, boundary_valid, threshold)})
         del predicted
 

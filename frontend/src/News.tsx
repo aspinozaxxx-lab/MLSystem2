@@ -14,6 +14,11 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "object-f1-v2-validation-reuse",
+  date: "2026-10-13",
+  title: "Быстрее проверка больших снимков в object f1 v2",
+  updates: ["Убрано повторное выделение объектов на исходном пороге при валидации и тестировании: готовая карта используется повторно, результаты метрик не меняются."],
+}, {
   slug: "object-f1-v2-boundaries",
   date: "2026-10-13",
   title: "Object f1 v2: учим границы соприкасающихся объектов",

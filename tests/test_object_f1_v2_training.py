@@ -1,6 +1,7 @@
 """Обучение трёх классов, независимая калибровка и переносимость checkpoint."""
 
 import json
+from itertools import permutations
 from types import SimpleNamespace
 
 import numpy as np
@@ -61,7 +62,23 @@ def test_v2_loss_ignores_invalid_and_empty_supervision():
     assert loss.item() == 0 and not empty.grad.any()
 
 
-def test_validation_calibrates_boundary_but_test_keeps_saved_threshold():
+def test_validation_calibrates_boundary_but_test_keeps_saved_threshold(monkeypatch):
+    from mlsystem2.inference import _objects
+
+    calls = {"finish": 0, "resegment": []}
+    original_finish = _objects.SceneAccumulator.finish
+    original_resegment = _objects.SceneAccumulator.resegment
+
+    def counted_finish(accumulator):
+        calls["finish"] += 1
+        return original_finish(accumulator)
+
+    def counted_resegment(accumulator, separation):
+        calls["resegment"].append(separation.boundary_threshold)
+        return original_resegment(accumulator, separation)
+
+    monkeypatch.setattr(_objects.SceneAccumulator, "finish", counted_finish)
+    monkeypatch.setattr(_objects.SceneAccumulator, "resegment", counted_resegment)
     torch = pytest.importorskip("torch")
     image, masks, meta = _batch(torch)
     probabilities = np.full((1, 3, 64, 64), .05, np.float32)
@@ -81,12 +98,52 @@ def test_validation_calibrates_boundary_but_test_keeps_saved_threshold():
     assert result["object_separation"]["boundary_threshold"] == .35
     assert len(result["object_threshold_sweep"]) == 3
     assert result["per_scene_metrics"][0]["merged_predictions"] == 0
+    assert calls == {"finish": 1, "resegment": [.35, .65]}
     fixed = config.model_copy(update={"calibrate_object_threshold": False})
     test = validate_objects(torch, Model(), [(image, masks, meta)], "cpu", fixed, 1, None)
     assert len(test["object_threshold_sweep"]) == 1
     assert test["object_separation"]["boundary_threshold"] == .5
     assert test["quality_f1"] == pytest.approx(2 / 3)
     assert test["per_scene_metrics"][0]["merged_predictions"] == 1
+    assert calls == {"finish": 2, "resegment": [.35, .65]}
+    calibrated_test = fixed.model_copy(update={"object_separation": ObjectSeparationConfig.model_validate(result["object_separation"])})
+    calibrated = validate_objects(torch, Model(), [(image, masks, meta)], "cpu", calibrated_test, 1, None)
+    assert calibrated["quality_f1"] == 1
+    assert calls == {"finish": 3, "resegment": [.35, .65]}
+
+
+@pytest.mark.parametrize("order", list(permutations((.35, .5, .65))))
+def test_candidates_reuse_finish_before_mutable_instances_are_overwritten(order):
+    from mlsystem2.train._object_v2 import evaluate_candidates, summarize_candidates
+
+    truth = np.zeros((24, 24), np.int32)
+    truth[4:20, 4:12] = 1
+    truth[4:20, 12:20] = 2
+    shared_instances = truth.copy()
+    result = SimpleNamespace(instances=shared_instances,
+        probabilities=np.stack([(truth > 0).astype(np.float32), np.zeros_like(truth, np.float32)]),
+        valid_pixels=np.ones_like(truth, bool))
+    called = []
+
+    def resegment(config):
+        called.append(config.boundary_threshold)
+        # Как настоящий накопитель, перезаписываем исходный массив, не заменяем его.
+        shared_instances[:] = (truth > 0) if config.boundary_threshold == .35 else 0
+        return result
+
+    separation = ObjectSeparationConfig(profile="object_f1_v2")
+    candidates = {value: [] for value in order}
+    evaluate_candidates("участки", SimpleNamespace(resegment=resegment), truth,
+        np.zeros_like(truth, bool), np.ones_like(truth, bool), separation, candidates, None,
+        initial_result=result)
+    assert called == [value for value in order if value != .5]
+    assert candidates[.5][0]["object_f1"] == 1
+    assert candidates[.5][0]["tp"] == 2
+    assert candidates[.35][0]["object_f1"] == pytest.approx(2 / 3)
+    assert candidates[.65][0]["object_f1"] == 0
+    summary = summarize_candidates(candidates, separation)
+    assert summary["quality_f1"] == 1
+    assert summary["object_separation"]["boundary_threshold"] == .5
 
 
 def test_real_b0_training_checkpoint_and_onnx_roundtrip(tmp_path, monkeypatch):

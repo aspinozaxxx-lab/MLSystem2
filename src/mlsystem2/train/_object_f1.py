@@ -128,7 +128,7 @@ def validate_objects(torch, model, loader, device, config, epoch, pause_controll
                 result = accumulator.finish()
                 if v2:
                     from ._object_v2 import evaluate_candidates
-                    evaluate_candidates(scene_id, accumulator, truth, *boundary_truths[scene_id][:2], separation, candidates, pause_controller)
+                    evaluate_candidates(scene_id, accumulator, truth, *boundary_truths[scene_id][:2], separation, candidates, pause_controller, initial_result=result)
                     continue
                 metrics = compute_object_f1(ObjectF1Request(y_true_instances=truth, y_pred_instances=result.instances))
                 counts = {"tp": metrics.true_positive, "fp": metrics.false_positive, "fn": metrics.false_negative}
