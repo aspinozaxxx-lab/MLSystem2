@@ -137,8 +137,19 @@ class SceneAccumulator:
         valid = np.asarray(window.valid_pixels, dtype=bool)
         if probabilities.shape != (2, size, size) or valid.shape != (size, size):
             raise InferenceError("Окно object f1 должно содержать два канала и valid mask полного размера")
-        if not np.isfinite(probabilities).all() or np.any((probabilities < 0) | (probabilities > 1)):
+        if not np.isfinite(probabilities).all():
             raise InferenceError("Вероятности object f1 должны быть конечными числами от 0 до 1")
+        # Сумма двух softmax-классов float32 может дать 1 + epsilon.
+        # Допуск только для v2; реальные ошибки входа нельзя скрывать обрезкой.
+        tolerance = 1e-6 if self.request.separation.profile == "object_f1_v2" else 0.0
+        minimum, maximum = float(probabilities.min()), float(probabilities.max())
+        if minimum < -tolerance or maximum > 1 + tolerance:
+            raise InferenceError(
+                "Вероятности object f1 должны быть конечными числами от 0 до 1: "
+                f"минимум={minimum:.9g}, максимум={maximum:.9g}"
+            )
+        if tolerance and (minimum < 0 or maximum > 1):
+            probabilities = np.clip(probabilities, 0, 1)
         x0, y0 = max(0, window.x), max(0, window.y)
         x1, y1 = min(self.request.width, window.x + size), min(self.request.height, window.y + size)
         if x1 <= x0 or y1 <= y0:
@@ -162,6 +173,10 @@ class SceneAccumulator:
             weights = self.weights[strip]
             np.divide(self.probabilities[:, y:y+256], np.maximum(weights, 1e-12),
                       out=self.probabilities[:, y:y+256])
+            if self.request.separation.profile == "object_f1_v2":
+                # Взвешенное среднее также накапливает погрешность float32.
+                np.clip(self.probabilities[:, y:y+256], 0, 1,
+                        out=self.probabilities[:, y:y+256])
         return self._segment(self.request.separation)
 
     def resegment(self, config: ObjectSeparationConfig):

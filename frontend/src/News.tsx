@@ -95,6 +95,13 @@ export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
     ],
   }],
 }, {
+  slug: "object-f1-v2-probability-rounding",
+  date: "2026-10-13",
+  title: "Исправлена остановка проверки object f1 v2",
+  updates: [
+    "Незначительное округление суммы вероятностей больше не прерывает validation и распознавание. Проверка по-прежнему отклоняет некорректные значения; формулы обучения, пороги и состав выборок не изменены.",
+  ],
+}, {
   slug: "object-f1-v2-parallel-preparation",
   date: "2026-10-13",
   title: "Ускорены подготовка и проверка object f1 v2",
