@@ -169,6 +169,12 @@ def _synchronize_dataset_catalog_if_stale(
             synchronize_dataset_catalog(session, config)
 
 
+def _is_catalog_directory(path: Path) -> bool:
+    """Служебные папки не являются классами или датасетами MLMarkup."""
+
+    return path.is_dir() and not path.name.startswith(".") and path.name != "__pycache__"
+
+
 def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
     """Дешёвая ревизия папок class/dataset для мгновенного сброса TTL."""
 
@@ -176,10 +182,10 @@ def _catalog_tree_stamp(root: Path) -> tuple[tuple[str, int], ...]:
         return ()
     result: list[tuple[str, int]] = []
     try:
-        class_dirs = [path for path in root.iterdir() if path.is_dir()]
+        class_dirs = [path for path in root.iterdir() if _is_catalog_directory(path)]
         for class_dir in sorted(class_dirs, key=lambda item: item.name.casefold()):
             result.append((class_dir.name, class_dir.stat().st_mtime_ns))
-            dataset_dirs = [path for path in class_dir.iterdir() if path.is_dir()]
+            dataset_dirs = [path for path in class_dir.iterdir() if _is_catalog_directory(path)]
             for dataset_dir in sorted(
                 dataset_dirs,
                 key=lambda item: item.name.casefold(),
@@ -1012,7 +1018,7 @@ def _discover_mlmarkup_sources(root: Path) -> list[tuple[str, str, str | None]]:
     resolved_root = root.resolve()
     discovered: list[tuple[str, str, str | None]] = []
     for class_dir in sorted(
-        (item for item in root.iterdir() if item.is_dir() and not item.name.startswith(".")),
+        (item for item in root.iterdir() if _is_catalog_directory(item)),
         key=lambda item: item.name.casefold(),
     ):
         if not _is_within_root(class_dir.resolve(), resolved_root):
@@ -1024,7 +1030,7 @@ def _discover_mlmarkup_sources(root: Path) -> list[tuple[str, str, str | None]]:
             (
                 item
                 for item in class_dir.iterdir()
-                if item.is_dir() and not item.name.startswith(".")
+                if _is_catalog_directory(item)
             ),
             key=lambda item: (item.name != DEFAULT_DATASET_NAME, item.name.casefold()),
         )

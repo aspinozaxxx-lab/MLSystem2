@@ -75,7 +75,6 @@
   .results-classes-page .results-changes { padding: 8px; margin-top: 8px; }
   .results-classes-page .results-changes .panel-header h2 { font-size: 13px; line-height: 18px; }
   .results-classes-page .results-changes th, .results-classes-page .results-changes td { padding: 5px; font-size: 10px; line-height: 14px; }
-  .results-classes-page .results-changes th:nth-child(2), .results-classes-page .results-changes td:nth-child(2) { display: none; }
   .class-editor-page .page-title h1 { font-size: 18px; line-height: 24px; }
   .class-editor-page .page-header { margin-bottom: 8px; }
   .class-editor-page .page-header > .button-row { width: auto; }

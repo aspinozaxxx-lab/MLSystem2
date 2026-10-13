@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -86,6 +88,19 @@ jobs:
           OLD_FRONTEND_SERVICE: ${{ vars.MLSYSTEM_OLD_FRONTEND_SERVICE || '' }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/mlsystem2_key -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new"
+          worker_restart_required() {
+            local previous_commit="${1:-}"
+            local current_commit="${2:-}"
+            if [[ ! "${previous_commit}" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "${previous_commit}^{commit}" 2>/dev/null; then
+              return 0
+            fi
+            ! git diff --quiet "${previous_commit}" "${current_commit}" -- src configs migrations pyproject.toml alembic.ini 'requirements*.txt'
+          }
+          PREVIOUS_COMMIT=$(${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "if [ -f '${TARGET_PATH}/DEPLOYED_COMMIT' ]; then cat '${TARGET_PATH}/DEPLOYED_COMMIT'; fi")
+          WORKER_RESTART_REQUIRED=false
+          if worker_restart_required "${PREVIOUS_COMMIT}" "${GITHUB_SHA}"; then
+            WORKER_RESTART_REQUIRED=true
+          fi
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "mkdir -p '${TARGET_PATH}'"
           rsync -az --delete \
             -e "${SSH_CMD}" \
@@ -107,6 +122,10 @@ jobs:
             ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl disable --now '${OLD_FRONTEND_SERVICE}' || true"
           fi
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "systemctl restart '${TRAINING_UI_API_SERVICE}'"
-          ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "if systemctl cat '${TRAINING_UI_WORKER_SERVICE}' >/dev/null 2>&1; then systemctl restart '${TRAINING_UI_WORKER_SERVICE}'; fi"
+          if [ "${WORKER_RESTART_REQUIRED}" = true ]; then
+            ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "if systemctl cat '${TRAINING_UI_WORKER_SERVICE}' >/dev/null 2>&1; then systemctl restart '${TRAINING_UI_WORKER_SERVICE}'; fi"
+          else
+            printf '%s\n' 'Код исполнителя не изменился: worker продолжает работу без перезапуска.'
+          fi
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "for attempt in \$(seq 1 30); do curl --fail --silent --show-error '${TRAINING_UI_HEALTH_URL}' && exit 0; sleep 2; done; exit 1"
           ${SSH_CMD} "${SERVER_USER}@${SERVER_HOST}" "python3 '${TARGET_PATH}/frontend/deploy.py' --source '${TARGET_PATH}/frontend/dist' --target '${FRONTEND_DIST_PATH}'"

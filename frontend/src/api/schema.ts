@@ -9562,7 +9562,9 @@ export interface operations {
     };
     get_result_changes_api_v1_results_changes_get: {
         parameters: {
-            query?: never;
+            query?: {
+                class_key?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9576,6 +9578,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResultChangesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

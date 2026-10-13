@@ -5354,6 +5354,24 @@
       "get": {
         "summary": "Get Result Changes",
         "operationId": "get_result_changes_api_v1_results_changes_get",
+        "parameters": [
+          {
+            "name": "class_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Class Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5361,6 +5379,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResultChangesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }

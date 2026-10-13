@@ -316,8 +316,7 @@ function RoutedPage(context: {
   if (head === "test-markups" && second === "create") return <TestMarkupCreatePage run={context.run} />;
   if (head === "test-markups" && !second) return <TestMarkupCatalogPage {...context} />;
   if (head === "test-markups" && second) return <TestSampleEditorPage {...context} sampleId={second} />;
-  if (head === "results" && second) return <DatasetResultsPage {...context} datasetKey={decodeURIComponent(second)} />;
-  if (head === "results") return <ResultsPage {...context} />;
+  if (head === "results") return <ResultsPage {...context} datasetKey={second ? decodeURIComponent(second) : undefined} />;
   if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={context.username} /></Suspense>;
   if (!context.bootstrap) return <LoadingPage text="Загрузка справочников" />;
   const props = { ...context, bootstrap: context.bootstrap };
@@ -475,7 +474,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1", "classes"].includes(route[0]) || (["test-markups", "results"].includes(route[0]) && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1", "classes", "results"].includes(route[0]) || (route[0] === "test-markups" && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
     </div>
   );
 }
@@ -3139,35 +3138,71 @@ function JobPage({ bootstrap, run, showModal, closeModal, jobId }: RoutedPagePro
   );
 }
 
-function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJobLog">) {
+function ResultsPage({ datasetKey, ...context }: Pick<RoutedPageProps, "run" | "showJobLog" | "showModal" | "closeModal"> & {
+  datasetKey?: string;
+  bootstrap: BootstrapInfo | null;
+  getBootstrap: () => Promise<BootstrapInfo | undefined>;
+}) {
+  const { run, showJobLog } = context;
   const [classes, setClasses] = useState<ResultClassInfo[] | null>(null);
-  const [changes, setChanges] = useState<ResultChangeInfo[]>([]);
+  const [changes, setChanges] = useState<{ classKey: string; items: ResultChangeInfo[] } | null>(null);
   const { classKey, setClassKey } = useRememberedClass(classes);
-  const selectedClass = classes?.find((item) => item.key === classKey);
-  useEffect(() => {
-    void run(() => apiJson<ResultClassListResponse>("/results/classes")).then((payload) => {
-      if (payload) setClasses(payload.classes || []);
-    });
-    void run(() => apiJson<ResultChangesResponse>("/results/changes")).then((payload) => {
-      if (payload) setChanges(payload.changes || []);
-    });
+  const linkedClass = classes?.find((item) => (item.datasets || []).some((dataset) => dataset.key === datasetKey));
+  const selectedClass = linkedClass || classes?.find((item) => item.key === classKey);
+  const classDatasets = selectedClass?.datasets || [];
+  const selectedDataset = classDatasets.find((item) => item.key === datasetKey)
+    || classDatasets.find((item) => item.is_primary) || classDatasets[0];
+  const selectedClassKey = selectedClass?.key;
+  const classChanges = changes && changes.classKey === selectedClassKey ? changes.items : null;
+  const loadClasses = useCallback(async () => {
+    const payload = await run(() => apiJson<ResultClassListResponse>("/results/classes"));
+    if (payload) setClasses(payload.classes || []);
   }, [run]);
+
+  useEffect(() => { void loadClasses(); }, [loadClasses]);
+  useEffect(() => {
+    if (linkedClass) setClassKey(linkedClass.key);
+  }, [linkedClass?.key, setClassKey]);
+  useEffect(() => {
+    setChanges(null);
+    if (!selectedClassKey) return;
+    let current = true;
+    let fetching = false;
+    const refresh = async () => {
+      if (fetching) return;
+      fetching = true;
+      try {
+        const payload = await run(() => apiJson<ResultChangesResponse>(`/results/changes?class_key=${encodeURIComponent(selectedClassKey)}`));
+        if (current && payload) setChanges({ classKey: selectedClassKey, items: payload.changes || [] });
+      } finally { fetching = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), PROGRESS_REFRESH_MS);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [run, selectedClassKey]);
+
+  // Исторические ссылки на архивные датасеты остаются доступными.
+  if (datasetKey && classes !== null && !linkedClass) return <div className="results-page results-dataset-page">
+    <PageHeader title="Результаты" actions={<a className="secondary" href="#/results">Все классы</a>} />
+    <DatasetResultsPanel {...context} datasetKey={datasetKey} key={datasetKey} onChanged={loadClasses} />
+  </div>;
 
   return (
     <div className="results-page results-classes-page">
       <PageHeader title="Результаты" />
       <div className="class-browser-layout">
         <ClassNavigation classes={classes?.map((item) => ({ ...item, count: (item.datasets || []).length })) ?? null}
-          classKey={classKey} onSelect={setClassKey} label="Классы результатов" />
+          classKey={selectedClassKey || classKey} onSelect={(key) => { setClassKey(key); navigate("results"); }} label="Классы результатов" />
         <section className="class-browser-content">
           <div className="results-class-grid">
-            {selectedClass ? <ResultClassCard item={selectedClass} /> : (
+            {selectedClass ? <ResultClassCard item={selectedClass} selectedDatasetKey={selectedDataset?.key} /> : (
               <div className="empty-state" role="status">{classes === null ? "Загрузка классов…" : "Результатов пока нет."}</div>
             )}
           </div>
-          {selectedClass ? <section className="panel results-changes">
-            <PanelHeader title="Последние изменения класса" />
-            <ResultChangesTable changes={changes.filter((item) => item.class_key === classKey)} showJobLog={showJobLog} />
+          {selectedDataset ? <DatasetResultsPanel {...context} datasetKey={selectedDataset.key} key={selectedDataset.key} onChanged={loadClasses} /> : null}
+          {selectedClass ? <section className="panel results-changes" aria-label="Все обучения класса">
+            <PanelHeader title="Все обучения класса" subtitle={`По всем датасетам · ${selectedClass.name}`} />
+            {classChanges === null ? <div className="empty-state" role="status">Загрузка обучений класса…</div> : <ResultChangesTable changes={classChanges.filter((item) => item.type === "training")} showJobLog={showJobLog} />}
           </section> : null}
         </section>
       </div>
@@ -3175,7 +3210,7 @@ function ResultsPage({ run, showJobLog }: Pick<RoutedPageProps, "run" | "showJob
   );
 }
 
-function DatasetResultsPage({
+function DatasetResultsPanel({
   datasetKey,
   bootstrap,
   getBootstrap,
@@ -3183,10 +3218,12 @@ function DatasetResultsPage({
   showModal,
   closeModal,
   showJobLog,
+  onChanged,
 }: Pick<RoutedPageProps, "run" | "showModal" | "closeModal" | "showJobLog"> & {
   datasetKey: string;
   bootstrap: BootstrapInfo | null;
   getBootstrap: () => Promise<BootstrapInfo | undefined>;
+  onChanged: () => Promise<void>;
 }) {
   const [payload, setPayload] = useState<DatasetResultsResponse | null>(null);
   const [recalculatingTestF1, setRecalculatingTestF1] = useState(false);
@@ -3194,6 +3231,7 @@ function DatasetResultsPage({
     const data = await run(() => apiJson<DatasetResultsResponse>(`/results/datasets/${encodeURIComponent(datasetKey)}`));
     if (data) setPayload(data);
   }, [datasetKey, run]);
+  const reloadAfterChange = async () => { await load(); await onChanged(); };
 
   useEffect(() => {
     void load();
@@ -3221,7 +3259,7 @@ function DatasetResultsPage({
           inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))}
           run={run}
           closeModal={closeModal}
-          reload={load}
+          reload={reloadAfterChange}
         />
       ),
     });
@@ -3239,7 +3277,7 @@ function DatasetResultsPage({
     ]);
     if (options && catalog) showModal({
       title: "Продолжить обучение",
-      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={load} />,
+      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={reloadAfterChange} />,
       footer: null,
     });
   };
@@ -3250,7 +3288,7 @@ function DatasetResultsPage({
         method: result.is_primary ? "DELETE" : "POST",
       }),
     );
-    if (updated) await load();
+    if (updated) await reloadAfterChange();
   };
 
   const deletePseudo = (item: PseudoMarkupResultInfo) => {
@@ -3269,7 +3307,7 @@ function DatasetResultsPage({
               const deleted = await run(() => apiJson<PseudoMarkupResultInfo>(`/results/pseudo-markup/${item.id}`, { method: "DELETE" }));
               if (deleted) {
                 closeModal();
-                await load();
+                await reloadAfterChange();
               }
             }}
           >
@@ -3304,12 +3342,12 @@ function DatasetResultsPage({
   const resultMetricLabel = managedTestEvaluation ? "F1 сред." : qualityMetricShort(payload.quality_metric);
 
   return (
-    <div className="results-page results-dataset-page">
-      <PageHeader
-        title={payload.dataset_name}
+    <section className="results-dataset-page results-dataset-panel" aria-label="Сети выбранного датасета">
+      <PanelHeader
+        title={`Сети датасета: ${payload.dataset_name}`}
         subtitle={`Обновление датасета: ${formatDate(payload.dataset_updated_at)}`}
-        actions={
-          <>
+        aside={
+          <div className="button-row">
             <a
               className="secondary"
               href={`#/dataset-editor/${encodeURIComponent(datasetKey)}`}
@@ -3317,8 +3355,7 @@ function DatasetResultsPage({
               <PencilLine size={16} />
               Редактор датасета
             </a>
-            <a className="secondary" href="#/results">Все классы</a>
-          </>
+          </div>
         }
       />
       {primaryTestSamples.length ? (
@@ -3357,7 +3394,7 @@ function DatasetResultsPage({
           showJobLog={showJobLog}
         />
       </section>
-    </div>
+    </section>
   );
 }
 
@@ -3663,7 +3700,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
   );
 }
 
-function ResultClassCard({ item }: { item: ResultClassInfo }) {
+export function ResultClassCard({ item, selectedDatasetKey }: { item: ResultClassInfo; selectedDatasetKey?: string }) {
   const datasets = item.datasets || [];
   return (
     <div className="class-card">
@@ -3674,12 +3711,12 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
         {datasets.length ? (
           datasets.map((dataset) => (
             <div
-              className={`dataset-link${dataset.is_primary ? " primary-dataset" : ""}`}
+              className={`dataset-link${dataset.is_primary ? " primary-dataset" : ""}${dataset.key === selectedDatasetKey ? " selected-dataset" : ""}`}
               key={dataset.key}
               title={dataset.is_primary ? "Основной датасет класса" : undefined}
             >
               <div className="dataset-result-link">
-                <a className="dataset-result-identity" href={`#/results/${encodeURIComponent(dataset.key)}`}>
+                <a className="dataset-result-identity" href={`#/results/${encodeURIComponent(dataset.key)}`} aria-current={dataset.key === selectedDatasetKey ? "true" : undefined}>
                   <span className="dataset-result-name">{dataset.dataset_name || dataset.name}</span>
                   <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
                 </a>
@@ -3720,15 +3757,14 @@ function ResultClassCard({ item }: { item: ResultClassInfo }) {
   );
 }
 
-function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo[]; showJobLog: (jobId: string) => Promise<void> }) {
-  if (!changes.length) return <div className="empty-state">Изменений пока нет</div>;
+export function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo[]; showJobLog: (jobId: string) => Promise<void> }) {
+  if (!changes.length) return <div className="empty-state">Обучений пока нет</div>;
   return (
     <div className="table-wrap">
-      <table>
+      <table className="class-training-table">
         <thead>
           <tr>
             <th>Статус</th>
-            <th>Класс</th>
             <th>Датасет</th>
             <th>Модель</th>
             <th>Действие</th>
@@ -3748,11 +3784,10 @@ function ResultChangesTable({ changes, showJobLog }: { changes: ResultChangeInfo
                   {sourceBadge(item.source)}
                 </span>
               </td>
-              <td>{item.class_name || item.class_key}</td>
-              <td>{item.dataset_name}</td>
-              <td>{item.model_name}</td>
-              <td>{actionBadge(item.action, changeResultKind(item))}</td>
-              <td className="technical-value">{formatDateTime(item.changed_at)}</td>
+              <td data-label="Датасет"><a href={`#/results/${encodeURIComponent(item.dataset_key)}`}>{item.dataset_name}</a></td>
+              <td data-label="Модель">{item.model_name}</td>
+              <td data-label="Действие">{actionBadge(item.action, changeResultKind(item))}</td>
+              <td className="technical-value" data-label="Время">{formatDateTime(item.changed_at)}</td>
             </tr>
           ))}
         </tbody>
@@ -3836,7 +3871,7 @@ function ResultsTable({
                             <Star className={result.is_primary ? "primary-star" : undefined} size={17} fill={result.is_primary ? "currentColor" : "none"} />
                           </button>
                         ) : null}
-                        {trainingModelLabel(result.model_name, result.pipeline_variant)}
+                        <span className="training-model-name">{trainingModelLabel(result.model_name, result.pipeline_variant)}</span>
                       </strong>
                       <small className="muted">{result.architecture}</small>
                       {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}

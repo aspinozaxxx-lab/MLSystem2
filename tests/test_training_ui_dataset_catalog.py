@@ -17,6 +17,7 @@ from mlsystem2.training_ui_api import _dataset_editor
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import (
+    _catalog_tree_stamp,
     create_dataset_class,
     create_managed_dataset,
     create_managed_dataset_composition,
@@ -130,6 +131,47 @@ def test_sync_adds_sources_idempotently_and_keeps_missing_source(
         shutil.rmtree(config.mlmarkup_root / "Пожары")
         synchronize_dataset_catalog(session, config)
         assert session.scalar(select(func.count()).select_from(DatasetRow)) == 3
+
+
+@pytest.mark.parametrize("service_directory", ["__pycache__", ".git", ".pytest_cache"])
+def test_sync_ignores_service_directories_at_class_and_dataset_levels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    service_directory: str,
+) -> None:
+    config, session_factory = _catalog_environment(tmp_path, monkeypatch)
+    _write_source(config.mlmarkup_root / service_directory / "main", "служебный")
+    _write_source(config.mlmarkup_root / "Лес" / "main", "лес")
+    _write_source(config.mlmarkup_root / "Лес" / service_directory, "служебный")
+    _write_source(config.mlmarkup_root / "Реки", "река")
+    (config.mlmarkup_root / "Реки" / service_directory).mkdir()
+    (config.mlmarkup_root / "Пустой" / service_directory).mkdir(parents=True)
+
+    with session_factory() as session:
+        synchronize_dataset_catalog(session, config)
+        synchronize_dataset_catalog(session, config)
+        classes = list_managed_classes(session, config, include_custom=False)
+        assert {item.name for item in classes} == {"Лес", "Реки", "Пустой"}
+        datasets = list_managed_datasets(session, config, include_custom=False)
+        assert {item.source_path for item in datasets} == {"Лес/main", "Реки"}
+        assert next(item for item in classes if item.name == "Пустой").datasets == []
+
+
+@pytest.mark.parametrize("service_directory", ["__pycache__", ".git", ".pytest_cache"])
+def test_catalog_tree_stamp_ignores_service_directory_changes(
+    tmp_path: Path,
+    service_directory: str,
+) -> None:
+    root = tmp_path / "MLMarkup"
+    (root / "Лес" / "main").mkdir(parents=True)
+    service_paths = [root / service_directory, root / "Лес" / service_directory]
+    for path in service_paths:
+        path.mkdir()
+    before = _catalog_tree_stamp(root)
+    assert {name for name, _ in before} == {"Лес", "Лес/main"}
+    for path in service_paths:
+        (path / "служебная-папка").mkdir()
+    assert _catalog_tree_stamp(root) == before
 
 
 def test_manual_settings_and_ortho_type_survive_sync(

@@ -178,10 +178,11 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
 
     @app.get("/api/v1/results/changes", response_model=ResultChangesResponse)
     def get_result_changes(
+        class_key: str | None = None,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> ResultChangesResponse:
-        return result_changes(db, ctx.config)
+        return result_changes(db, ctx.config, class_key=class_key)
 
     @app.get("/api/v1/results/datasets/{dataset_key}", response_model=DatasetResultsResponse)
     def get_dataset_results(

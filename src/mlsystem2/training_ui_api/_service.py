@@ -81,6 +81,7 @@ from ._model_export import (
 from ._models import (
     CustomDatasetRow,
     DatasetClassRow,
+    DatasetRow,
     InferenceTemplateRow,
     JobRow,
     PseudoMarkupResultRow,
@@ -1395,30 +1396,58 @@ def result_changes(
     session: Session,
     config: TrainingUIAPIConfig,
     limit: int = 20,
+    *,
+    class_key: str | None = None,
 ) -> ResultChangesResponse:
     ensure_queue_positions(session)
     datasets_by_key = {item.key: item for item in list_managed_datasets(session, config)}
+    class_row = (
+        session.scalar(select(DatasetClassRow).where(DatasetClassRow.key == class_key))
+        if class_key is not None and class_key != CUSTOM_KEY
+        else None
+    )
+    if class_key is not None and class_key != CUSTOM_KEY and class_row is None:
+        raise TrainingUIAPIError("Класс результатов не найден")
+    dataset_keys = {
+        item.key for item in datasets_by_key.values() if item.class_key == class_key
+    }
+    if class_row is not None:
+        # История архивных датасетов также принадлежит выбранному классу.
+        dataset_keys.update(session.scalars(
+            select(DatasetRow.key).where(DatasetRow.class_id == class_row.id)
+        ).all())
+    if class_key is not None:
+        dataset_keys.add(class_key)
     active_changes = [
         _job_change_info(session, row, datasets_by_key) for row in _queue_rows(session)
+        if class_key is None or _job_dataset_key(row) in dataset_keys
     ]
-    training_rows = session.scalars(
-        select(TrainingResultRow)
-        .where(
-            TrainingResultRow.status == ResultStatus.OK.value,
-        )
-        .order_by(TrainingResultRow.updated_at.desc())
-        .limit(limit)
-    ).all()
-    pseudo_rows = session.scalars(
+    training_query = select(TrainingResultRow).order_by(TrainingResultRow.updated_at.desc())
+    pseudo_query = (
         select(PseudoMarkupResultRow)
-        .where(
-            PseudoMarkupResultRow.status == ResultStatus.OK.value,
-        )
+        .where(PseudoMarkupResultRow.status == ResultStatus.OK.value)
         .order_by(PseudoMarkupResultRow.updated_at.desc())
-        .limit(limit)
-    ).all()
+    )
+    if class_key is None:
+        training_query = training_query.where(
+            TrainingResultRow.status == ResultStatus.OK.value
+        ).limit(limit)
+        pseudo_query = pseudo_query.limit(limit)
+    else:
+        training_query = training_query.where(
+            TrainingResultRow.class_key.in_(dataset_keys),
+            TrainingResultRow.status != ResultStatus.CANCELLED.value,
+        )
+        pseudo_query = pseudo_query.where(
+            PseudoMarkupResultRow.class_key.in_(dataset_keys)
+        )
+    training_rows = session.scalars(training_query).all()
+    pseudo_rows = session.scalars(pseudo_query).all()
+    active_job_ids = {item.job_id for item in active_changes}
     changes: list[ResultChangeInfo] = []
     for row in training_rows:
+        if class_key is not None and row.job_id in active_job_ids:
+            continue
         dataset = datasets_by_key.get(row.class_key)
         changes.append(
             ResultChangeInfo(
@@ -1427,17 +1456,19 @@ def result_changes(
                 job_id=row.job_id,
                 type=JobType.TRAINING,
                 dataset_key=row.class_key,
-                class_key=(dataset.class_key or row.class_key)
-                if dataset is not None
-                else row.class_key,
+                class_key=class_key or (dataset.class_key if dataset is not None else None)
+                or row.class_key,
                 class_name=(
-                    dataset.class_name
-                    if dataset is not None
-                    else row.class_display_name.split("\\", maxsplit=1)[0]
+                    class_row.name if class_row is not None else (
+                        dataset.class_name if dataset is not None
+                        else row.class_display_name.split("\\", maxsplit=1)[0]
+                    )
                 ),
-                dataset_name=row.class_display_name,
+                dataset_name=(dataset.dataset_name or dataset.name)
+                if class_key is not None and dataset is not None
+                else row.class_display_name,
                 model_name=row.model_name,
-                action="обучена сеть",
+                action={"ok": "обучена сеть", "error": "ошибка обучения"}.get(row.status, "обучение"),
                 source=JobSource(row.source),
                 status=ResultStatus(row.status),
                 changed_at=row.updated_at or row.trained_at or row.created_at or _now(),
@@ -1456,13 +1487,13 @@ def result_changes(
                 job_id=row.job_id,
                 type=JobType.INFERENCE,
                 dataset_key=row.class_key,
-                class_key=(dataset.class_key or row.class_key)
-                if dataset is not None
-                else row.class_key,
+                class_key=class_key or (dataset.class_key if dataset is not None else None)
+                or row.class_key,
                 class_name=(
-                    dataset.class_name
-                    if dataset is not None
-                    else row.source_dataset_name.split("\\", maxsplit=1)[0]
+                    class_row.name if class_row is not None else (
+                        dataset.class_name if dataset is not None
+                        else row.source_dataset_name.split("\\", maxsplit=1)[0]
+                    )
                 ),
                 dataset_name=row.source_dataset_name,
                 model_name=model_name,
@@ -1473,7 +1504,9 @@ def result_changes(
             )
         )
     changes.sort(key=lambda item: item.changed_at, reverse=True)
-    return ResultChangesResponse(changes=[*active_changes, *changes[:limit]])
+    return ResultChangesResponse(changes=[
+        *active_changes, *(changes if class_key is not None else changes[:limit])
+    ])
 
 
 def _job_change_info(
