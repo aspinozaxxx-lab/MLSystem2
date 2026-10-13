@@ -10,7 +10,7 @@ import tempfile
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy import func, select
@@ -1954,7 +1954,7 @@ def export_training_results_triton_zip(
                 config=config,
             )
             try:
-                _copy_model_export_files(
+                extra_files = _copy_model_export_files(
                     archive,
                     model_name=model_name,
                     service_zip_dir=service_zip_dir,
@@ -1977,10 +1977,25 @@ def export_training_results_triton_zip(
                     else None,
                     "model_archive": f"models-serving-service/{model_name}.zip",
                     "pipeline": f"pipelines/{model_name}_triton.yaml",
+                    **extra_files,
                     "metadata": f"metadata/{model_name}_export_metadata.json",
                 }
             )
 
+        instructions = "\n".join(
+            f"- `{item['model_name']}`: [{item['model_name']}]({item['instructions']})"
+            for item in exported_models
+            if "instructions" in item
+        )
+        (export_root / "README.md").write_text(
+            "# Модели и пайплайны для ПМО\n\n"
+            "Пакеты сетей находятся в `models-serving-service/`, готовые YAML и Base64 "
+            "для сценариев ПМО — в `pipelines/`. Локальные `_triton.yaml` сохранены. "
+            "Инструкции каждой модели перечислены ниже. Требуемые расширения инференса, "
+            "если они есть, находятся в общем каталоге `runtime/`.\n\n"
+            + instructions + "\n",
+            encoding="utf-8",
+        )
         _write_export_json(
             export_root / "export_metadata.json",
             {
@@ -2090,19 +2105,60 @@ def _copy_model_export_files(
     service_zip_dir: Path,
     pipeline_dir: Path,
     metadata_dir: Path,
-) -> None:
+) -> dict[str, str]:
     expected_files = {
         f"models-serving-service/{model_name}.zip": service_zip_dir / f"{model_name}.zip",
         f"pipelines/{model_name}_triton.yaml": pipeline_dir / f"{model_name}_triton.yaml",
         "export_metadata.json": metadata_dir / f"{model_name}_export_metadata.json",
     }
     with zipfile.ZipFile(archive.zip_path) as zip_file:
+        if any(
+            member.orig_filename.startswith("runtime/") and "\\" in member.orig_filename
+            for member in zip_file.infolist()
+        ):
+            raise TrainingUIAPIError("Архив содержит недопустимый путь расширения инференса.")
         names = set(zip_file.namelist())
         missing = [name for name in expected_files if name not in names]
         if missing:
             raise TrainingUIAPIError("Собранный архив модели не содержит ожидаемые файлы экспорта.")
         for source_name, target_path in expected_files.items():
             target_path.write_bytes(zip_file.read(source_name))
+        extra_files: dict[str, str] = {}
+        pmo_files = {
+            "pipeline_pmo": f"pipelines/{model_name}_pmo.yaml",
+            "pipeline_pmo_base64": f"pipelines/{model_name}_pmo.base64.txt",
+        }
+        present = [name in names for name in pmo_files.values()]
+        if any(present) and not all(present):
+            raise TrainingUIAPIError("В архиве модели отсутствует один из файлов пайплайна ПМО.")
+        export_root = service_zip_dir.parent
+        for key, source_name in pmo_files.items():
+            if source_name in names:
+                (export_root / source_name).write_bytes(zip_file.read(source_name))
+                extra_files[key] = source_name
+        if "README.md" in names:
+            readme_path = f"instructions/{model_name}.md"
+            target_path = export_root / readme_path
+            target_path.parent.mkdir(exist_ok=True)
+            target_path.write_bytes(zip_file.read("README.md"))
+            extra_files["instructions"] = readme_path
+            metadata_path = metadata_dir / f"{model_name}_export_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["instructions"] = readme_path
+            _write_export_json(metadata_path, metadata)
+        for source_name in sorted(names):
+            if not source_name.startswith("runtime/") or source_name.endswith("/"):
+                continue
+            relative = PurePosixPath(source_name)
+            if ".." in relative.parts or "\\" in source_name or ":" in source_name:
+                raise TrainingUIAPIError("Архив содержит недопустимый путь расширения инференса.")
+            target_path = export_root.joinpath(*relative.parts)
+            content = zip_file.read(source_name)
+            if target_path.exists() and target_path.read_bytes() != content:
+                raise TrainingUIAPIError("Модели содержат несовместимые версии расширений инференса.")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(content)
+        return extra_files
 
 
 def _write_export_json(path: Path, content: dict[str, object]) -> None:

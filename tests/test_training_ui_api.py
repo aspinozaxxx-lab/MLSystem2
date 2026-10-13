@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -2022,6 +2023,9 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
             zip_file.extractall(extract_dir)
         assert "export_metadata.json" in names
         assert "pipelines/deforestation-b2_triton.yaml" in names
+        assert "pipelines/deforestation-b2_pmo.yaml" in names
+        assert "pipelines/deforestation-b2_pmo.base64.txt" in names
+        assert "README.md" in names
         assert "models-serving-service/deforestation-b2.zip" in names
         assert "deforestation-b2/config.pbtxt" not in names
         assert "deforestation-b2/export_metadata.json" not in names
@@ -2064,6 +2068,13 @@ def test_model_export_zip_layout_config_and_pipeline(tmp_path: Path, monkeypatch
         assert metadata["inference_core_size"] == 512
         assert metadata["model_archive"] == "models-serving-service/deforestation-b2.zip"
         assert metadata["pipeline"] == "pipelines/deforestation-b2_triton.yaml"
+        assert metadata["pipeline_pmo"] == "pipelines/deforestation-b2_pmo.yaml"
+        pmo_text = (extract_dir / metadata["pipeline_pmo"]).read_text(encoding="utf-8")
+        assert base64.b64decode((extract_dir / metadata["pipeline_pmo_base64"]).read_bytes()).decode("utf-8") == pmo_text
+        pmo_block, = yaml.safe_load(pmo_text)["config"]["blocks"]
+        assert pmo_block["name"] == "Recognition" and pmo_block["optional"] is False
+        assert pmo_block["bricks"][1]["adapter"]["host"] == "models-serving.service.consul"
+        assert pmo_block["bricks"][1]["bounds"] == 128
         assert metadata["onnx_opset"] == 17
         assert metadata["onnx_ir_version"] == 8
         assert metadata["postprocess_config"] == {}
@@ -2688,11 +2699,19 @@ def test_training_results_batch_model_export_api_returns_flat_zip(
     def fake_build_zip(**kwargs: object) -> SimpleNamespace:
         build_calls.append(dict(kwargs))
         model_name = str(kwargs["model_name"])
+        export_root = tmp_path / model_name
+        pipeline = _model_export.build_geoalert_pipeline_yaml(
+            model_name=model_name, sample_size=512, input_channels=4, probability_output=True,
+        )
+        pipeline_files = _model_export._write_export_pipelines(export_root, model_name, pipeline)
+        _model_export._write_probability_runtime(export_root)
         zip_path = tmp_path / f"{model_name}_export.zip"
         with zipfile.ZipFile(zip_path, "w") as zip_file:
             zip_file.writestr(f"models-serving-service/{model_name}.zip", b"service-zip")
-            zip_file.writestr(f"pipelines/{model_name}_triton.yaml", "pipeline")
-            zip_file.writestr("export_metadata.json", json.dumps({"model_name": model_name}))
+            for path in sorted(export_root.rglob("*")):
+                if path.is_file():
+                    zip_file.write(path, path.relative_to(export_root).as_posix())
+            zip_file.writestr("export_metadata.json", json.dumps({"model_name": model_name, **pipeline_files}))
         return SimpleNamespace(
             zip_path=zip_path,
             filename=f"{model_name}_export.zip",
@@ -2751,7 +2770,21 @@ def test_training_results_batch_model_export_api_returns_flat_zip(
         assert "models-serving-service/deforest_kanopus.zip" in names
         assert "pipelines/rivers_kanopus_triton.yaml" in names
         assert "metadata/rivers_kanopus_export_metadata.json" in names
+        for model_name in ("rivers_kanopus", "deforest_kanopus"):
+            assert f"pipelines/{model_name}_pmo.yaml" in names
+            encoded = zip_file.read(f"pipelines/{model_name}_pmo.base64.txt")
+            assert base64.b64decode(encoded) == zip_file.read(f"pipelines/{model_name}_pmo.yaml")
+            readme = zip_file.read(f"instructions/{model_name}.md").decode("utf-8")
+            assert "Модель и пайплайн для ПМО" in readme and "Экспорт оконного инференса" in readme
+        assert "runtime/mlsystem2/inference/_objects.py" in names
+        assert zip_file.read("runtime/mlsystem2/inference/_objects.py") == (
+            Path(__file__).resolve().parents[1] / "src/mlsystem2/inference/_objects.py"
+        ).read_bytes()
         metadata = json.loads(zip_file.read("export_metadata.json").decode("utf-8"))
+        assert metadata["models"][0]["pipeline_pmo"] == "pipelines/rivers_kanopus_pmo.yaml"
+        assert metadata["models"][0]["instructions"] == "instructions/rivers_kanopus.md"
+        model_metadata = json.loads(zip_file.read("metadata/rivers_kanopus_export_metadata.json"))
+        assert model_metadata["instructions"] == "instructions/rivers_kanopus.md"
     assert [item["model_name"] for item in metadata["models"]] == [
         "rivers_kanopus",
         "deforest_kanopus",

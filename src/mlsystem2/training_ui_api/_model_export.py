@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -167,8 +168,9 @@ def build_triton_model_export_zip(
                 probability_output=next_gen2 or object_f1,
             ),
         )
-        _write_text(
-            pipeline_dir / f"{parsed_model_name}_triton.yaml",
+        pipeline_files = _write_export_pipelines(
+            export_root,
+            parsed_model_name,
             _pipeline_yaml(
                 parsed_model_name,
                 parsed_sample_size,
@@ -192,6 +194,7 @@ def build_triton_model_export_zip(
                 "model_name": parsed_model_name,
                 "model_archive": f"models-serving-service/{parsed_model_name}.zip",
                 "pipeline": f"pipelines/{parsed_model_name}_triton.yaml",
+                **pipeline_files,
                 "format": "onnx",
                 "triton_platform": "onnxruntime_onnx",
                 "triton_instance_kind": parsed_instance_kind,
@@ -272,9 +275,8 @@ def build_external_triton_model_export_zip(
                 manifest.model_member if manifest.adapter == "oks_multiclass_footprints" else None
             ),
         )
-        _write_text(
-            pipeline_dir / f"{parsed_model_name}_triton.yaml",
-            _external_pipeline_yaml(parsed_model_name, manifest),
+        pipeline_files = _write_export_pipelines(
+            export_root, parsed_model_name, _external_pipeline_yaml(parsed_model_name, manifest),
         )
         _write_json(
             export_root / "export_metadata.json",
@@ -282,6 +284,7 @@ def build_external_triton_model_export_zip(
                 "model_name": parsed_model_name,
                 "model_archive": f"models-serving-service/{parsed_model_name}.zip",
                 "pipeline": f"pipelines/{parsed_model_name}_triton.yaml",
+                **pipeline_files,
                 "format": "torchscript",
                 "triton_platform": (
                     "python" if manifest.adapter == "detectron2_instances" else "pytorch_libtorch"
@@ -1331,6 +1334,69 @@ def _vector_postprocess_yaml(
     )
 
 
+def _write_export_pipelines(export_root: Path, model_name: str, pipeline_yaml: str) -> dict[str, str]:
+    """Сохранить локальный YAML и готовый вариант для редактора/API сценариев ПМО."""
+    import yaml
+
+    pipeline_dir = export_root / "pipelines"
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    _write_text(pipeline_dir / f"{model_name}_triton.yaml", pipeline_yaml)
+    document = yaml.safe_load(pipeline_yaml)
+
+    def update_adapters(value):
+        if isinstance(value, dict):
+            if value.get("_class") == "TritonAdapter":
+                value.update(host="models-serving.service.consul", port=18070, protocol="http")
+            for item in value.values():
+                update_adapters(item)
+        elif isinstance(value, list):
+            for item in value:
+                update_adapters(item)
+
+    update_adapters(document)
+    config = document["config"]
+    if "bricks" in config:
+        config["blocks"] = [{
+            "name": "Recognition",
+            "optional": False,
+            "inputs": list(config["inputs"]),
+            "outputs": list(config["outputs"]),
+            "bricks": config.pop("bricks"),
+        }]
+    pmo_yaml = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    pmo_path = f"pipelines/{model_name}_pmo.yaml"
+    base64_path = f"pipelines/{model_name}_pmo.base64.txt"
+    _write_text(export_root / pmo_path, pmo_yaml)
+    encoded = base64.b64encode(pmo_yaml.encode("utf-8")).decode("ascii")
+    _write_text(export_root / base64_path, encoded + "\n")
+    _write_text(export_root / "README.md", f"""# Модель и пайплайн для ПМО
+
+Архив `models-serving-service/{model_name}.zip` содержит сеть Triton. Разместите его в MinIO
+под постоянным именем модели и замените сеть через штатное управление ПМО.
+
+В редакторе существующего сценария откройте вкладку `pipeline` (или `Alt` + нажатие на
+`$FILE_pipeline`) и вставьте целиком содержимое `{pmo_path}`. Сохраните сценарий.
+Не вставляйте YAML пайплайна вместо всего сценария: этапы загрузки и сохранения остаются прежними.
+Для прямого API содержимое `{base64_path}` — готовое значение
+`stages.inference.config.params.pipeline`, без дополнительного кодирования.
+
+Этот вариант использует штатный адрес Triton ПМО `models-serving.service.consul:18070`.
+В другом контуре замените только адрес/порт адаптера. Обязательный блок `Recognition` работает
+без дополнительных переключателей; старые пользовательские опции сценария он не реализует.
+Состав опций согласуйте с новым пайплайном. Размер окна, число каналов, порог и постобработка
+сохранены из экспорта. `{model_name}_triton.yaml` оставлен для локального Triton `127.0.0.1:8000`.
+
+Для вероятностного и объектового инференса потребитель должен поддерживать брики из
+`export_metadata.json.requires_inference_brick`; при необходимости используйте поставляемый runtime.
+Файлы пайплайна не устанавливают расширения на сервер автоматически и не меняют другие этапы сценария.
+""")
+    return {
+        "pipeline_pmo": pmo_path,
+        "pipeline_pmo_base64": base64_path,
+        "instructions": "README.md",
+    }
+
+
 def _write_probability_runtime(export_root: Path) -> None:
     """Включить тот же CPU-код в переносимый экспорт, без копии алгоритма."""
     package_root = Path(__file__).resolve().parent.parent
@@ -1345,7 +1411,9 @@ def _write_probability_runtime(export_root: Path) -> None:
         shutil.copyfile(package_root / relative, target)
     _write_text(export_root / "runtime" / "requirements.txt",
                 "numpy\nscipy\nscikit-image>=0.24,<0.27\npydantic>=2\nrasterio\n")
-    _write_text(export_root / "README.md", """# Экспорт оконного инференса
+    readme = export_root / "README.md"
+    prefix = readme.read_text(encoding="utf-8") + "\n" if readme.exists() else ""
+    _write_text(readme, prefix + """# Экспорт оконного инференса
 
 ONNX возвращает вероятности; порог применяется после Gaussian-объединения окон.
 Мультиклассовая сеть возвращает фон и типы в порядке схемы. Блок MulticlassProbabilityMasks
