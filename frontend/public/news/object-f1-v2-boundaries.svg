@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="650" viewBox="0 0 1280 650" role="img" aria-labelledby="title desc">
+  <title id="title">Схема обучения и разделения соседних полигонов в object f1 v2</title>
+  <desc id="desc">Слева два исходных участка с общим стыком. В центре три обучающих класса: фон, внутренность, широкая граница. Справа восстановленная полная площадь двух объектов с отдельными идентификаторами. Это условная схема, не пример результата сети.</desc>
+  <rect width="1280" height="650" rx="24" fill="#0d1729"/>
+  <g font-family="Arial, sans-serif">
+    <text x="48" y="61" fill="#91a9c8" font-size="17" letter-spacing="2">СХЕМА МЕХАНИЗМА · OBJECT F1 V2</text>
+    <text x="48" y="113" fill="#f2f6fc" font-size="34" font-weight="700">Соседние участки — отдельные полигоны</text>
+    <g fill="#17263e" stroke="#31445f" stroke-width="1">
+      <rect x="48" y="155" width="360" height="360" rx="16"/>
+      <rect x="460" y="155" width="360" height="360" rx="16"/>
+      <rect x="872" y="155" width="360" height="360" rx="16"/>
+    </g>
+    <g fill="#f2f6fc" font-size="23" font-weight="700">
+      <text x="72" y="197">1. Исходная разметка</text>
+      <text x="484" y="197">2. Обучающие классы</text>
+      <text x="896" y="197">3. Полные объекты</text>
+    </g>
+    <g stroke-width="3" stroke-linejoin="round">
+      <path d="M93 239H238L221 318L246 400H93Z" fill="#315c50" stroke="#80d8ab"/>
+      <path d="M238 239H362V400H246L221 318Z" fill="#315c50" stroke="#80d8ab"/>
+      <path d="M505 239H650L633 318L658 400H505Z" fill="#e9b251" stroke="#f3cc83"/>
+      <path d="M650 239H774V400H658L633 318Z" fill="#e9b251" stroke="#f3cc83"/>
+      <path d="M524 258H625L613 318L632 381H524Z" fill="#69b58d" stroke="#69b58d"/>
+      <path d="M667 258H755V381H674L654 318Z" fill="#69b58d" stroke="#69b58d"/>
+      <path d="M917 239H1062L1045 318L1070 400H917Z" fill="#386f94" stroke="#85c7f4"/>
+      <path d="M1062 239H1186V400H1070L1045 318Z" fill="#416b57" stroke="#98deb5"/>
+    </g>
+    <g fill="#f2f6fc" font-size="22" font-weight="700" text-anchor="middle">
+      <text x="158" y="333">Участок 1</text><text x="301" y="333">Участок 2</text>
+      <text x="982" y="333">ИД 1</text><text x="1125" y="333">ИД 2</text>
+    </g>
+    <g fill="#bdcbdf" font-size="18">
+      <text x="72" y="447">Полная площадь сохраняется.</text>
+      <text x="72" y="478">Общий стык задан разметкой.</text>
+      <text x="484" y="447">Полоса границы расширена.</text>
+      <text x="484" y="478">Узкие объекты учитываются.</text>
+      <text x="896" y="447">Маркеры и карта границ.</text>
+      <text x="896" y="478">Отдельные ИД до GeoJSON.</text>
+    </g>
+    <g fill="none" stroke="#91a9c8" stroke-width="3"><path d="M417 324H451M442 316L451 324L442 332"/><path d="M829 324H863M854 316L863 324L854 332"/></g>
+    <rect x="48" y="548" width="18" height="18" rx="3" fill="#17263e" stroke="#657e9e"/>
+    <rect x="166" y="548" width="18" height="18" rx="3" fill="#69b58d"/>
+    <rect x="398" y="548" width="18" height="18" rx="3" fill="#e9b251"/>
+    <g fill="#dce6f4" font-size="19"><text x="77" y="563">Фон</text><text x="195" y="563">Внутренность</text><text x="427" y="563">Граница</text></g>
+    <text x="48" y="609" fill="#91a9c8" font-size="18">Условная схема. Реальное качество разделения проверяется после обучения на независимых снимках.</text>
+  </g>
+</svg>

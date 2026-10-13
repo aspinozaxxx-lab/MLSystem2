@@ -85,6 +85,8 @@
 
 ## Алгоритм работы и его особенности
 
+Для object_f1_v2 история и validation_by_scene содержат выбранные параметры разделения, поиск порога и диагностику границ/склеек/дроблений. Вложенные object_separation и per_scene_metrics сохраняются в test_metrics.json; log_training_metrics отправляет только числовые значения, без преобразования словарей/списков в float.
+
 Для object_f1 журнал эпох дополнен train/region_loss, train/boundary_loss, val/region_loss, val/boundary_loss. Объектовые результаты используют существующие val/object_f1, precision/recall; train/learning_rate сохраняется. Дубли quality_* не добавляются.
 
 Новые next-gen2 runs получают checkpoint_selection_metric=val_loss и читаются по минимуму val/loss.

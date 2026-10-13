@@ -9157,7 +9157,8 @@
               "legacy",
               "next_gen",
               "next_gen2",
-              "object_f1"
+              "object_f1",
+              "object_f1_v2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"
@@ -9445,7 +9446,8 @@
               "legacy",
               "next_gen",
               "next_gen2",
-              "object_f1"
+              "object_f1",
+              "object_f1_v2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"
@@ -14505,7 +14507,8 @@
               "legacy",
               "next_gen",
               "next_gen2",
-              "object_f1"
+              "object_f1",
+              "object_f1_v2"
             ],
             "title": "Pipeline Variant",
             "default": "legacy"

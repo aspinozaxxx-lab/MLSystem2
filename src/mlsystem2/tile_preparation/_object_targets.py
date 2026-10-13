@@ -38,6 +38,46 @@ def boundary_targets(instances, valid, ambiguous):
     return boundary.astype(np.float32), usable
 
 
+def boundary_targets_v2(instances, valid, width=8):
+    """Широкая внутренняя полоса с сохранением сердцевины узких объектов.
+
+    Переходы через nodata и край окна не создают границы. Полные ID остаются
+    неизменными; ширина ограничена половиной доступной глубины компонента.
+    """
+    instances = np.asarray(instances)
+    valid = np.asarray(valid, dtype=bool)
+    if instances.ndim != 2 or valid.shape != instances.shape or width < 1:
+        raise TilePreparationError("Некорректные маски или ширина границы object f1 v2")
+    foreground = (instances > 0) & valid
+    edges = np.zeros_like(valid)
+    vertical = valid[1:] & valid[:-1] & (instances[1:] != instances[:-1])
+    horizontal = valid[:, 1:] & valid[:, :-1] & (instances[:, 1:] != instances[:, :-1])
+    edges[1:] |= vertical & foreground[1:]
+    edges[:-1] |= vertical & foreground[:-1]
+    edges[:, 1:] |= horizontal & foreground[:, 1:]
+    edges[:, :-1] |= horizontal & foreground[:, :-1]
+    usable = ndimage.binary_erosion(valid, structure=np.ones((3, 3)), border_value=0)
+    boundary = np.zeros_like(valid)
+    if not edges.any():
+        return boundary.astype(np.float32), usable
+    # Плотные номера нужны только для обхода bbox: исходные ID могут быть большими.
+    from skimage.measure import label
+
+    components = label(np.where(foreground, instances, 0), connectivity=1, background=0)
+    for key, bounds in enumerate(ndimage.find_objects(components), start=1):
+        if bounds is None:
+            continue
+        component = components[bounds] == key
+        local_edges = edges[bounds] & component
+        if not local_edges.any():
+            continue
+        local_distance = ndimage.distance_transform_edt(~local_edges)
+        maximum = float(local_distance[component].max())
+        effective_width = min(float(width), maximum / 2.0)
+        boundary[bounds] |= component & (local_distance < effective_width)
+    return boundary.astype(np.float32), usable
+
+
 def scene_group_split(scenes, request):
     footprints = []
     cached = {}

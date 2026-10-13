@@ -31,8 +31,32 @@ class AnnotationIndex:
         return [(int(index) + 1, self._instance_parts[int(index)])
                 for index in sorted(self._instance_tree.query(box(*bounds), predicate="intersects"))]
 
-    def instance_diagnostics(self, bounds):
+    def instance_diagnostics(self, bounds, *, detailed=False):
         parts = self.query_instances(bounds)
+        if detailed:
+            overlaps = duplicates = substantial = 0
+            maximum = 0.0
+            for key, geometry in parts:
+                for other, candidate in self.query_instances(geometry.bounds):
+                    if other <= key:
+                        continue
+                    intersection = geometry.intersection(candidate).area
+                    if intersection <= 0:
+                        continue
+                    overlaps += 1
+                    ratio = intersection / max(min(geometry.area, candidate.area), 1e-12)
+                    maximum = max(maximum, ratio)
+                    duplicates += int(geometry.equals(candidate))
+                    substantial += int(ratio >= 0.1)
+            warnings = []
+            if overlaps:
+                warnings.append("Пересечения разметки разрешены порядком исходных объектов; общие границы участвуют в обучении.")
+            if substantial:
+                warnings.append(f"Требуют проверки {substantial} пар: перекрыто не менее 10% меньшего объекта, включая {duplicates} точных дублей.")
+            return {"polygon_parts": len(parts), "overlapping_polygon_pairs": overlaps,
+                    "duplicate_polygon_pairs": duplicates, "substantial_overlap_pairs": substantial,
+                    "maximum_overlap_fraction": maximum, "annotation_warnings": warnings,
+                    "overlap_policy": "stable_raster_overwrite"}
         overlaps = sum(1 for key, geometry in parts
                        for other, candidate in self.query_instances(geometry.bounds)
                        if other > key and geometry.intersection(candidate).area > 0)

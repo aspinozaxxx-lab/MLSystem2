@@ -109,7 +109,7 @@ def test_segformer_templates_offer_supported_pipelines() -> None:
         schema = template["config_schema"]
         expected = ["legacy", "next_gen2"] if "segformer" in name else ["legacy"]
         if "segformer" in name:
-            expected.append("object_f1")
+            expected.extend(["object_f1", "object_f1_v2"])
             assert schema["pipeline_defaults"]["object_f1"]["train.batch_size"] == next_gen2_train_batch_size(512, name)
         assert schema["fields"][0]["options"] == expected
         assert not any(field["key"].startswith("next_gen.") for field in schema["fields"])

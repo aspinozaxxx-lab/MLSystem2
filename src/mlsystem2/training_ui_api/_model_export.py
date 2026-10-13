@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelsError
+from mlsystem2.inference.api import object_separation_config
+from mlsystem2.inference.contracts import ObjectSeparationConfig
 
 from ._external_models import (
     ExternalModelError,
@@ -86,7 +88,9 @@ def build_triton_model_export_zip(
         metadata = loaded.artifact.metadata
         parameters = getattr(loaded.model.spec, "parameters", None) or {}
         next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "next_gen2"
-        object_f1 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) == "object_f1"
+        variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
+        object_f1 = variant in {"object_f1", "object_f1_v2"}
+        separation = object_separation_config(loaded.model.spec) if variant == "object_f1_v2" else None
         if object_f1 and task != "binary":
             raise TrainingUIAPIError("Экспорт object f1 поддерживает только бинарную модель.")
         class_schema = _export_class_schema_override(
@@ -100,6 +104,8 @@ def build_triton_model_export_zip(
         )
         if next_gen2 and threshold is None:
             effective_threshold = NEXT_GEN2_INFERENCE_THRESHOLD
+        if separation is not None:
+            effective_threshold = separation.foreground_threshold
         parsed_instance_kind = _validate_instance_kind(instance_kind)
         parsed_sample_size, sample_size_source = _sample_size_from_metadata_or_request(
             loaded.artifact.metadata,
@@ -140,6 +146,7 @@ def build_triton_model_export_zip(
                 onnx_path=onnx_path,
                 probability_output=True,
                 object_output=object_f1,
+                object_profile=variant if object_f1 else "object_f1",
             )
         elif task == "binary":
             _export_binary_mask_onnx(
@@ -182,6 +189,7 @@ def build_triton_model_export_zip(
                 probability_output=next_gen2 or object_f1,
                 threshold=effective_threshold,
                 object_output=object_f1,
+                object_separation=separation.model_dump() if separation is not None else None,
             ),
         )
         if object_f1 or next_gen2:
@@ -206,13 +214,14 @@ def build_triton_model_export_zip(
                 "inference_core_size": inference_core_size,
                 "threshold": effective_threshold,
                 "threshold_source": (
+                    "checkpoint_object_separation" if separation is not None else
                     "request" if threshold is not None else
                     "next_gen2_eval_notebook" if next_gen2 else "checkpoint_metadata"
                 ),
                 "output_kind": "object_probabilities" if object_f1 else "probabilities" if next_gen2 else "binary_masks",
-                "pipeline_variant": "object_f1" if object_f1 else "next_gen2" if next_gen2 else "legacy",
+                "pipeline_variant": variant if object_f1 else "next_gen2" if next_gen2 else "legacy",
                 "output_channels": ["foreground", "boundary"] if object_f1 else ["background", *[str(item["slug"]) for item in class_schema]] if next_gen2 and task == "multiclass" else None,
-                "object_separation": parameters.get("object_separation") if object_f1 else None,
+                "object_separation": separation.model_dump() if separation is not None else parameters.get("object_separation") if object_f1 else None,
                 "inference_merge": "gaussian_probabilities" if next_gen2 or object_f1 else "drop",
                 "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 or object_f1 else inference_core_size,
                 "requires_inference_brick": "ObjectF1Segmentation" if object_f1 else "SlidingWindowSegmentation" if next_gen2 else "Segmentation",
@@ -332,6 +341,7 @@ def build_geoalert_pipeline_yaml(
     external_manifest: ExternalModelManifest | None = None,
     probability_output: bool = False,
     object_output: bool = False,
+    object_separation: dict[str, object] | None = None,
     threshold: float = 0.9,
 ) -> str:
     """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
@@ -349,6 +359,7 @@ def build_geoalert_pipeline_yaml(
         resolution_m=resolution_m,
         probability_output=probability_output,
         object_output=object_output,
+        object_separation=object_separation,
         threshold=threshold,
     )
 
@@ -827,6 +838,7 @@ def _export_segmentation_mask_onnx(
     onnx_path: Path,
     probability_output: bool = False,
     object_output: bool = False,
+    object_profile: str = "object_f1",
 ) -> None:
     try:
         import torch
@@ -855,6 +867,9 @@ def _export_segmentation_mask_onnx(
                     align_corners=False,
                 )
             if object_output:
+                if object_profile == "object_f1_v2":
+                    probabilities = torch.softmax(logits, dim=1)
+                    return torch.cat((probabilities[:, 1:].sum(1, keepdim=True), probabilities[:, 2:3]), dim=1)
                 return torch.cat((torch.softmax(logits[:, :2], dim=1)[:, 1:2], torch.sigmoid(logits[:, 2:3])), dim=1)
             if output_channels == 1:
                 probability = torch.sigmoid(logits)
@@ -1022,6 +1037,7 @@ def _pipeline_yaml(
     resolution_m: float | None = None,
     probability_output: bool = False,
     object_output: bool = False,
+    object_separation: dict[str, object] | None = None,
     threshold: float = 0.5,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
@@ -1108,6 +1124,10 @@ config:
             {"_class": "VectorizeMasks", "input_rasters": ["object_instances"], "output_fcs": ["output"],
              "value_property_name": "instance_id"},
         ]
+        if object_separation is not None:
+            separation = ObjectSeparationConfig.model_validate(object_separation)
+            document["config"]["bricks"][0]["separation"] = separation.model_dump()
+            document["config"]["bricks"][0]["threshold"] = separation.foreground_threshold
         # Геометрические фильтры применяются отдельно к каждому instance.
         extra = yaml.safe_load("bricks:\n" + vector_postprocess_yaml) if vector_postprocess_yaml.strip() else {}
         document["config"]["bricks"].extend(extra.get("bricks", []))
@@ -1419,6 +1439,8 @@ ONNX возвращает вероятности; порог применяет�
 Мультиклассовая сеть возвращает фон и типы в порядке схемы. Блок MulticlassProbabilityMasks
 выбирает наиболее вероятный класс и применяет строгий порог только к объектам.
 У object f1 два канала: область и граница; ObjectF1Segmentation выделяет экземпляры через watershed.
+У object f1 v2 область равна сумме вероятностей внутренности и границы трёхклассовой сети.
+Параметры разделения из checkpoint включены в YAML; их нельзя заменять профилем первой версии.
 
 Модель размещается в штатном репозитории Triton. Для Geoalert добавьте каталог `runtime` этого архива
 в `PYTHONPATH`, установите `runtime/requirements.txt` в его окружение и перед `Compose.load` вызовите:

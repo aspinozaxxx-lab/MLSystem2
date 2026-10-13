@@ -106,6 +106,7 @@ NEXT_GEN2_DESCRIPTION = (
 
 
 OBJECT_F1_DEFAULT_CONFIG = {**NEXT_GEN2_DEFAULT_CONFIG, "train.pipeline_variant": "object_f1"}
+OBJECT_F1_V2_DEFAULT_CONFIG = {**NEXT_GEN2_DEFAULT_CONFIG, "train.pipeline_variant": "object_f1_v2"}
 OBJECT_F1_DESCRIPTION = (
     "Конвейер для SegFormer B0/B1/B2/B3 на основе next-gen2 с соответствующим encoder MiT. "
     "Сеть предсказывает область и отдельную карту границ; "
@@ -128,20 +129,47 @@ OBJECT_F1_DESCRIPTION = (
 )
 
 
+OBJECT_F1_V2_DESCRIPTION = (
+    "Конвейер object f1 v2 для бинарных датасетов и SegFormer B0/B1/B2/B3. "
+    "Сеть различает три взаимоисключающих класса: фон, внутренность объекта и широкую разделительную полосу. "
+    "Полные исходные полигоны и их идентификаторы сохраняются; обучающие маски строятся автоматически. "
+    "Граница шириной до 8 px адаптируется к размеру объекта, чтобы у небольших участков оставалась внутренность. "
+    "Небольшие нахлёсты разметки разрешаются при подготовке целей с сохранением общего стыка.\n\n"
+    "RGB для ортофотопланов, RGB+NIR для Канопуса; alpha используется только как маска валидности. "
+    "Предобученные веса ImageNet можно включить независимо. Нормализация min-max по каналам окна. "
+    "Тайлы 512/768/1024/1536 px, шаг — половина тайла, полное покрытие краёв. "
+    "Batch size: B0 — 16/8/4/2, B1 — 8/4/2/1, B2 и B3 — 4/2/1/1.\n\n"
+    "Разбиение примерно 60/20/20 по независимым группам снимков, seed 42; необходимо минимум три группы. "
+    "Пересекающиеся территории остаются в одной части. Nodata, alpha и заполнение после аугментаций "
+    "исключены из обучения и метрик. Веса классов рассчитываются только по обучающей части.\n\n"
+    "FP32, AdamW, learning rate 0,0001, weight decay 0,01. "
+    "Взвешенная CrossEntropy и Tversky обучают три класса с усилением разделительных полос. "
+    "При распознавании вероятности окон объединяются, внутренние маркеры очищаются от мелкого шума, "
+    "короткие разрывы границ обрабатываются, затем watershed восстанавливает полную площадь объектов "
+    "и сохраняет отдельные идентификаторы до GeoJSON.\n\n"
+    "Полная validation каждую эпоху на собранных снимках; лучшие веса и ранняя остановка — по object F1 "
+    "при IoU ≥ 0,5. Scheduler следит за validation loss. Test оценивается один раз на лучших весах. "
+    "Доступны предобучение, размер тайла и условия остановки: по умолчанию 20 эпох, patience 10, без лимита времени. "
+    "Профиль улучшает механизм обучения границ, но качество разделения необходимо проверить на независимых снимках."
+)
+
+
 def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
+    if variant == "object_f1_v2":
+        return OBJECT_F1_V2_DEFAULT_CONFIG
     return OBJECT_F1_DEFAULT_CONFIG if variant == "object_f1" else NEXT_GEN2_DEFAULT_CONFIG
 
 
 CONFIG_SCHEMA: dict[str, Any] = {
-    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG},
-    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION},
+    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
+    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
-            "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука для SegFormer B0/B1/B2/B3: Канопус или RGB-ортофотопланы, тайлы 512/768/1024/1536, CrossEntropy + Tversky, выбор весов по validation loss. object f1 для SegFormer B0/B1/B2/B3 обучает области и границы, разделяет соприкасающиеся объекты и выбирает checkpoint по object F1 полных validation-снимков. Batch size учитывает архитектуру и размер тайла; подробности внизу формы.",
-            "options": ["legacy", "next_gen2", "object_f1"],
+            "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука с выбором весов по validation loss. object f1 обучает области и границы, выбирая лучшие веса по объектной F1 полных проверочных снимков. object f1 v2 различает фон, внутренность и широкую границу, восстанавливает полные отдельные полигоны и фильтрует мелкий шум. Оба объектных профиля предназначены для бинарных датасетов и SegFormer B0/B1/B2/B3. Подробности внизу формы.",
+            "options": ["legacy", "next_gen2", "object_f1", "object_f1_v2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -222,7 +250,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "key": "train.pretrained",
             "label": "Предобученные веса",
             "value_type": "boolean",
-            "tooltip": "Загрузить веса ImageNet для encoder выбранной SegFormer. Без галочки сеть обучается со случайной инициализацией. Доступно в legacy, next-gen2 и object f1.",
+            "tooltip": "Загрузить веса ImageNet для encoder выбранной SegFormer. Без галочки сеть обучается со случайной инициализацией. Доступно в legacy, next-gen2, object f1 и object f1 v2.",
         },
         {
             "key": "train.learning_rate",
@@ -669,10 +697,10 @@ def sanitize_template_config(
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
-    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "object_f1"}:
+    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
         result.update(BASE_DEFAULT_CONFIG)
     if (
-        (config or {}).get("train.pipeline_variant") in {"next_gen2", "object_f1"}
+        (config or {}).get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}
         and result.get("train.pipeline_variant") != (config or {}).get("train.pipeline_variant")
     ):
         result.update(fixed_pipeline_defaults(str((config or {}).get("train.pipeline_variant"))))
@@ -682,9 +710,10 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
-    if result.get("train.pipeline_variant") == "object_f1" and architecture not in OBJECT_F1_MODEL_NAMES:
-        raise TrainingUIAPIError("object f1 доступен для SegFormer B0/B1/B2/B3")
-    if result.get("train.pipeline_variant") in {"next_gen2", "object_f1"}:
+    if result.get("train.pipeline_variant") in {"object_f1", "object_f1_v2"} and architecture not in OBJECT_F1_MODEL_NAMES:
+        label = "object f1 v2" if result.get("train.pipeline_variant") == "object_f1_v2" else "object f1"
+        raise TrainingUIAPIError(f"{label} доступен для SegFormer B0/B1/B2/B3")
+    if result.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
         result.update({key: value for key, value in fixed_pipeline_defaults(str(result["train.pipeline_variant"])).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = result.get("tile_preparation.tile_size")
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
@@ -842,11 +871,14 @@ def _template(
         legacy_defaults.update(default_config)
     schema["fields"][0]["options"] = ["legacy", "next_gen2"]
     if architecture in OBJECT_F1_MODEL_NAMES:
-        schema["fields"][0]["options"].append("object_f1")
+        schema["fields"][0]["options"].extend(["object_f1", "object_f1_v2"])
     schema["pipeline_defaults"] = {"legacy": legacy_defaults}
     if architecture in OBJECT_F1_MODEL_NAMES:
         schema["pipeline_defaults"]["object_f1"] = {
             **OBJECT_F1_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
+        schema["pipeline_defaults"]["object_f1_v2"] = {
+            **OBJECT_F1_V2_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
         }
     if architecture in NEXT_GEN2_MODEL_BATCH_SIZES:
         schema["pipeline_defaults"]["next_gen2"] = {

@@ -12,8 +12,8 @@
 
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
-- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (два веса для binary next-gen2/object_f1, N+1 для multiclass next-gen2, иначе пустой список), validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema.
-- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
+- `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (три веса для object_f1_v2, два для binary next-gen2/object_f1, N+1 для multiclass next-gen2, иначе пустой список), optional `object_separation` и `calibrate_object_threshold` для v2, validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema. Профиль разделения должен совпадать с вариантом; исторический object_f1 не допускает его переопределения.
+- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, `val_object_separation`, `val_object_threshold_sweep`, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
@@ -25,10 +25,12 @@
 - `models.contracts` - публичный контракт модели, которую нужно обучить.
 - `models.api` - сохранить best/final checkpoint через публичный API.
 - `metrics.api` - сопоставить объекты один к одному и рассчитать объектовую F1.
-- `inference.api/contracts` — общая сборка вероятностей и выделение ID для object_f1.
+- `inference.api/contracts` — общая сборка вероятностей, выделение ID и сохранённые параметры разделения для object_f1 и object_f1_v2.
 - `torch` - выполнить обучение, optimizer, scheduler, losses и tensor operations; импортируется лениво.
 
 ## Алгоритм работы и его особенности
+
+`object_f1_v2` обучает три softmax-класса weighted CE/Tversky; region/boundary loss — диагностические Dice полной площади и границы. Полная validation калибрует boundary threshold 0.35/0.5/0.65 по object F1, precision и близости к 0.5. Настройки конкретного checkpoint входят в ModelSpec/metadata; test использует best без калибровки. Поснимочно сохраняются полнота границ, склейки/дробления (взаимное перекрытие≥10%) и числа объектов. Старые loss и метаданные legacy не меняются.
 
 Все профили принимают optional `batch_meta.valid_pixels` для размеченных зон. Маска исключает пиксели из каждого компонента loss и метрик, включая multiclass и class-specific hard negative; нормализация loss использует допустимые пиксели. Полностью пустая маска даёт конечный нулевой loss и нулевые градиенты. При отсутствии зон сохраняются прежние правила профиля. Object f1 собирает виртуальные сцены и игнорирует искусственную границу зоны.
 

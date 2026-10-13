@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mlsystem2.models.contracts import ModelSpec
 
@@ -51,9 +51,21 @@ class ObjectSeparationConfig(BaseModel):
     """Общие параметры выделения объектов из области и границ."""
 
     model_config = ConfigDict(extra="forbid")
+    profile: Literal["object_f1", "object_f1_v2"] = "object_f1"
     foreground_threshold: float = Field(default=0.5, gt=0, lt=1)
     boundary_threshold: float = Field(default=0.5, gt=0, lt=1)
     min_marker_pixels: int = Field(default=4, ge=1)
+    min_object_pixels: int = Field(default=1, ge=1)
+    boundary_closing_radius: int = Field(default=0, ge=0, le=8)
+    fallback_peak_prominence: float = Field(default=2.0, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def profile_defaults(cls, value):
+        if isinstance(value, dict) and value.get("profile") == "object_f1_v2":
+            return {"min_marker_pixels": 16, "min_object_pixels": 16,
+                    "boundary_closing_radius": 1, **value}
+        return value
 
 
 class ObjectSceneRequest(BaseModel):
@@ -78,7 +90,7 @@ class ObjectWindowPrediction(BaseModel):
 
 
 class ObjectSceneResult(BaseModel):
-    """Дисковые массивы действительны до закрытия накопителя."""
+    """Карты действуют до close; resegment перезаписывает прежнюю карту instances."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     probabilities: Any
@@ -93,6 +105,7 @@ class ObjectSceneAccumulator(Protocol):
 
     def add_window(self, window: ObjectWindowPrediction) -> None: ...
     def finish(self) -> ObjectSceneResult: ...
+    def resegment(self, config: ObjectSeparationConfig) -> ObjectSceneResult: ...
     def close(self) -> None: ...
 
 

@@ -19,6 +19,8 @@ def separate_objects(foreground, boundary, valid_pixels, config: ObjectSeparatio
         raise InferenceError("Карты области, границ и валидности должны иметь одинаковый размер")
     if not np.isfinite(foreground).all() or not np.isfinite(boundary).all():
         raise InferenceError("Карты вероятностей содержат нечисловые значения")
+    if config.profile == "object_f1_v2":
+        return _separate_objects_v2(foreground, boundary, valid, config)
     mask = (foreground >= config.foreground_threshold) & valid
     components, count = ndimage.label(mask)
     markers, _ = ndimage.label(mask & (boundary < config.boundary_threshold))
@@ -41,12 +43,66 @@ def separate_objects(foreground, boundary, valid_pixels, config: ObjectSeparatio
     return inverse[1:].reshape(labels.shape).astype(np.int32)
 
 
+def _separate_objects_v2(foreground, boundary, valid, config):
+    """Восстановить полные объекты из устойчивых маркеров без возврата мелкого шума."""
+    from skimage.morphology import h_maxima
+    from skimage.segmentation import watershed
+
+    mask = (foreground >= config.foreground_threshold) & valid
+    components, count = ndimage.label(mask)
+    sizes = np.bincount(components.ravel())
+    instances = np.zeros(mask.shape, dtype=np.int32)
+    offset = 0
+    for component_id, slices in enumerate(ndimage.find_objects(components, count), start=1):
+        if slices is None or sizes[component_id] < config.min_object_pixels:
+            continue
+        component = components[slices] == component_id
+        values = boundary[slices]
+        barriers = (values >= config.boundary_threshold) & component
+        radius = config.boundary_closing_radius
+        if radius:
+            # Продление ободка не даёт замыканию стереть шов у края bbox/снимка.
+            padded = np.pad(barriers, radius, mode="edge")
+            closed = ndimage.binary_closing(padded, structure=np.ones((2 * radius + 1,) * 2, bool))
+            barriers |= closed[radius:-radius, radius:-radius] & component
+        markers, _ = ndimage.label(component & ~barriers)
+        marker_sizes = np.bincount(markers.ravel())
+        marker_sizes[0] = 0
+        markers[marker_sizes[markers] < config.min_marker_pixels] = 0
+        if not np.any(markers):
+            distance = ndimage.distance_transform_edt(np.pad(component, 1))[1:-1, 1:-1]
+            # Значимые максимумы разделяют доли сложной формы, плато — один маркер.
+            # Малые/тонкие компоненты без значимых максимумов получают один центр.
+            peaks = h_maxima(distance, config.fallback_peak_prominence) & component
+            markers, _ = ndimage.label(peaks)
+            if not np.any(markers):
+                markers[np.unravel_index(np.argmax(distance), distance.shape)] = 1
+        elevation = np.where(barriers, np.maximum(values, config.boundary_threshold), values)
+        labels = watershed(elevation, markers, mask=component, connectivity=1, watershed_line=False)
+        label_sizes = np.bincount(labels.ravel())
+        too_small = (label_sizes < config.min_object_pixels)
+        too_small[0] = False
+        if np.all(too_small[np.unique(labels[component])]):
+            too_small[1 + np.argmax(label_sizes[1:])] = False
+        if too_small.any():
+            # Удалённые маленькие центры не оставляют искусственных дыр в участке.
+            markers[too_small[labels]] = 0
+            labels = watershed(elevation, markers, mask=component, connectivity=1, watershed_line=False)
+        positive = labels > 0
+        if positive.any():
+            _, compact = np.unique(labels[positive], return_inverse=True)
+            instances[slices][positive] = compact + offset + 1
+            offset += int(compact.max()) + 1
+    return instances
+
+
 class SceneAccumulator:
     def __init__(self, request):
         self.request = request
         self._temporary = TemporaryDirectory(prefix="object-f1-", dir=request.work_dir)
         self._arrays = []
         self._finished = False
+        self._closed = False
         self.shape = (request.height, request.width)
         self.probabilities = self._array("probabilities", np.float32, (2, *self.shape))
         self.weights = self._array("weights", np.float32, self.shape)
@@ -61,7 +117,7 @@ class SceneAccumulator:
         return result
 
     def add_window(self, window):
-        if self._finished:
+        if self._finished or self._closed:
             raise InferenceError("Накопитель уже завершён")
         size = self.request.tile_size
         probabilities = np.asarray(window.probabilities, dtype=np.float32)
@@ -82,32 +138,45 @@ class SceneAccumulator:
         self.valid[target] |= valid[source]
 
     def finish(self):
-        if self._finished:
+        if self._finished or self._closed:
             raise InferenceError("Накопитель уже завершён")
         self._finished = True
-        foreground = self._array("foreground", np.bool_, self.shape)
-        components = self._array("components", np.int32, self.shape)
-        instances = self._array("instances", np.int32, self.shape)
+        self._foreground = self._array("foreground", np.bool_, self.shape)
+        self._components = self._array("components", np.int32, self.shape)
+        self._instances = self._array("instances", np.int32, self.shape)
         for y in range(0, self.request.height, 256):
             strip = np.s_[y:y+256, :]
             weights = self.weights[strip]
             np.divide(self.probabilities[:, y:y+256], np.maximum(weights, 1e-12),
                       out=self.probabilities[:, y:y+256])
-            foreground[strip] = (self.probabilities[0][strip] >= self.request.separation.foreground_threshold) & self.valid[strip]
-        count = ndimage.label(foreground, output=components)
+        return self._segment(self.request.separation)
+
+    def resegment(self, config: ObjectSeparationConfig):
+        """Повторить разделение по готовым вероятностям, переиспользуя дисковые карты."""
+        if not self._finished or self._closed:
+            raise InferenceError("Повторное разделение доступно после finish и до close")
+        return self._segment(ObjectSeparationConfig.model_validate(config))
+
+    def _segment(self, config):
+        for y in range(0, self.request.height, 256):
+            strip = np.s_[y:y+256, :]
+            self._foreground[strip] = (self.probabilities[0][strip] >= config.foreground_threshold) & self.valid[strip]
+            self._instances[strip] = 0
+        count = ndimage.label(self._foreground, output=self._components)
         offset = 0
-        for component_id, slices in enumerate(ndimage.find_objects(components, count), start=1):
+        for component_id, slices in enumerate(ndimage.find_objects(self._components, count), start=1):
             if slices is None:
                 continue
-            mask = components[slices] == component_id
-            labels = separate_objects(self.probabilities[0][slices], self.probabilities[1][slices], mask, self.request.separation)
+            mask = self._components[slices] == component_id
+            labels = separate_objects(self.probabilities[0][slices], self.probabilities[1][slices], mask, config)
             positive = labels > 0
-            instances[slices][positive] = labels[positive] + offset
+            self._instances[slices][positive] = labels[positive] + offset
             offset += int(labels.max())
         return ObjectSceneResult(probabilities=self.probabilities, valid_pixels=self.valid,
-                                 instances=instances, object_count=offset)
+                                 instances=self._instances, object_count=offset)
 
     def close(self):
+        self._closed = True
         for array in self._arrays:
             array.flush()
             array._mmap.close()

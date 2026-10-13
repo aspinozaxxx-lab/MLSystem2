@@ -14,6 +14,7 @@ def register_notebook_bricks() -> None:
     from urban import SplitRaster as OriginalSplitRaster
     from urban.bricks.model_bricks.modelbrick import ModelBrick
     from urban.base.brick import Brick
+    from mlsystem2.inference.contracts import ObjectSeparationConfig
 
     class SplitRaster(OriginalSplitRaster):
         apply_mask: bool = True
@@ -42,6 +43,7 @@ def register_notebook_bricks() -> None:
         output_raster: str = "object_instances"
         window_size: int = Field(gt=0)
         threshold: float = Field(default=0.5, gt=0, lt=1)
+        separation: ObjectSeparationConfig | None = None
 
         def __call__(self, path):
             from mlsystem2.training_ui_api._object_inference import predict_instances
@@ -49,7 +51,8 @@ def register_notebook_bricks() -> None:
             with rasterio.open(Path(path) / f"{self.input_raster}.tif") as source:
                 accumulator, result = predict_instances(source,
                     lambda images: np.stack([self.adapter(image) for image in images]),
-                    input_indexes=tuple(range(1, self.input_channels + 1)), tile_size=self.window_size, threshold=self.threshold)
+                    input_indexes=tuple(range(1, self.input_channels + 1)), tile_size=self.window_size,
+                    threshold=self.threshold, separation=self.separation)
                 try:
                     profile = {**_raster_profile(source, "int32"), "nodata": 0}
                     with rasterio.open(Path(path) / f"{self.output_raster}.tif", "w", **profile) as target:

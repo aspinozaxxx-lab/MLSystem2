@@ -79,7 +79,7 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1", "object_f1_v2"] = "legacy"
     collect_band_histogram: bool = False
     input_channels: int | None = Field(default=None, gt=0)
 
@@ -112,7 +112,7 @@ class TileDataloaderRequest(BaseModel):
                 "hard_negative_annotation_file задается в TileDataloaderRequest только для binary режима"
             )
         if self.include_object_instances and (
-            (self.mode != "val" and self.pipeline_variant != "object_f1") or has_legacy_multiclass or has_per_image_multiclass
+            (self.mode != "val" and self.pipeline_variant not in {"object_f1", "object_f1_v2"}) or has_legacy_multiclass or has_per_image_multiclass
         ):
             raise ValueError(
                 "include_object_instances поддерживается только для binary val loader"
@@ -122,7 +122,7 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("next_gen loader требует tile_split strategy=scene_fold")
             if self.mode == "val" and self.max_batches_per_epoch is not None:
                 raise ValueError("next_gen val loader не допускает ограничение числа batch")
-        if self.pipeline_variant == "object_f1":
+        if self.pipeline_variant in {"object_f1", "object_f1_v2"}:
             if self.tile_split is None or self.tile_split.strategy != "scene_groups" or self.tile_split.val_fraction != 0.2 or self.tile_split.test_fraction != 0.2:
                 raise ValueError("object f1 требует разбиение групп снимков 60/20/20")
             if has_legacy_multiclass or has_per_image_multiclass or self.input_channels not in (3, 4):

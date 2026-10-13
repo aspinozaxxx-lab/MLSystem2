@@ -548,7 +548,8 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
         if result.best_threshold is not None:
             mlflow.log_metric("train/best_confidence_threshold", result.best_threshold)
         for name, value in result.diagnostics.get("test_metrics", {}).items():
-            mlflow.log_metric(f"test/{name}", float(value))
+            if isinstance(value, (int, float)):
+                mlflow.log_metric(f"test/{name}", float(value))
         peak_vram_bytes = result.diagnostics.get("peak_vram_bytes")
         if peak_vram_bytes is not None:
             mlflow.log_metric("train/peak_vram_bytes", float(peak_vram_bytes))

@@ -1,4 +1,5 @@
 import type { JsonRecord } from "../api/types";
+import { trainingPipelineLabel } from "./trainingConfig";
 
 export const SAMPLE_FACTOR_KEYS = [
   "tile_preparation.positive_factor",
@@ -76,20 +77,21 @@ export function trainingSummary({
   runInferenceAfterTraining: boolean;
 }): string {
   const tile = trainingTile(value);
-  const variant = String(value["train.pipeline_variant"] || "legacy").replace("_", "-");
+  const variant = String(value["train.pipeline_variant"] || "legacy");
+  const objectF1 = ["object_f1", "object_f1_v2"].includes(variant);
   const time = value["train.max_training_time_sec"];
   const patience = Number(value["train.early_stopping_patience"]);
-  const checks = variant === "next-gen";
+  const checks = variant === "next_gen";
   const ending = (one: string, few: string, many: string) =>
     patience % 100 >= 11 && patience % 100 <= 14 ? many : patience % 10 === 1 ? one : patience % 10 >= 2 && patience % 10 <= 4 ? few : many;
   const patienceUnit = checks ? ending("проверки", "проверок", "проверок") : ending("эпохи", "эпох", "эпох");
-  return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${variant === "object-f1" ? "object f1" : variant}. `
+  return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${trainingPipelineLabel(variant)}. `
     + (modelName.toLowerCase().includes("segformer") ? `${value["train.pretrained"] ? "Предобученные веса ImageNet" : "Случайная инициализация весов"}. ` : "")
     + `Тайлы ${trainingNumber(tile.size)} × ${trainingNumber(tile.size)} px, центр ${trainingNumber(tile.core)} × ${trainingNumber(tile.core)} px; `
-    + (["next-gen2", "object-f1"].includes(variant) ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20${variant === "object-f1" ? " по независимым снимкам; область и границы" : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
+    + (["next_gen2", "object_f1", "object_f1_v2"].includes(variant) ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20${objectF1 ? " по независимым снимкам; " + (variant === "object_f1_v2" ? "фон, внутренность и широкая граница" : "область и границы") : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
     + `Batch size ${trainingNumber(value["train.batch_size"])}, LR ${value["train.learning_rate"] ?? "—"}. `
     + `Максимум ${trainingNumber(value["train.epochs"])} эпох${time == null || time === "" ? "" : `, лимит ${trainingNumber(Number(time) / 60)} мин`}; `
-    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${variant === "next-gen2" ? " validation loss" : variant === "object-f1" ? " object F1 после выделения объектов" : ""}. `
+    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${variant === "next_gen2" ? " validation loss" : objectF1 ? " object F1 после выделения объектов" : ""}. `
     + `${secondaryPriority ? "Второстепенный" : "Обычный"} приоритет.`
     + (runInferenceAfterTraining ? " После успешного обучения — псевдоразметка всех снимков датасета." : "");
 }

@@ -216,7 +216,7 @@ def _run_pseudo_markup(config: dict[str, Any], run_root: Path) -> dict[str, Any]
     failures = list(child_result.get("failures") or [])
     features = _collect_features(config, child_result.get("reports") or [])
     feature_count_before_merge = len(features)
-    if config.get("pipeline_variant") == "object_f1":
+    if config.get("pipeline_variant") in {"object_f1", "object_f1_v2"}:
         features = merge_external_instance_features(features, cross_scene_only=True)
     if prepared.is_aoi:
         features = _finalize_aoi_features(
@@ -491,7 +491,7 @@ def _ensure_runtime_export(
     )
     model_identity = json.dumps(
         {
-            "runtime_contract": 5 if external_oks else 4,
+            "runtime_contract": 6 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -505,7 +505,7 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 5 if external_oks else 4,
+            "pipeline_contract": 6 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
@@ -555,6 +555,7 @@ def _ensure_runtime_export(
                 external_manifest=external_manifest,
                 probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
                 object_output=model_marker.get("output_kind") == "object_probabilities",
+                object_separation=model_marker.get("object_separation"),
                 threshold=(
                     float(model_marker["threshold"])
                     if model_marker.get("threshold") is not None
@@ -640,6 +641,8 @@ def _ensure_runtime_export(
                 "class_schema": list(metadata.get("class_schema") or []),
                 "task": str(metadata.get("task") or "binary"),
                 "output_kind": str(metadata.get("output_kind") or "binary_masks"),
+                "object_separation": metadata.get("object_separation")
+                    if metadata.get("pipeline_variant") == "object_f1_v2" else None,
                 "threshold": (
                     float(metadata["threshold"])
                     if metadata.get("threshold") is not None

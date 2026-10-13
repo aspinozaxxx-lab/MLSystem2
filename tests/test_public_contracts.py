@@ -43,7 +43,7 @@ EXPECTED_API = {
         "mark_run_killed",
     ],
     "train_pipeline.api": ["run_train_pipeline"],
-    "inference.api": ["run_inference", "create_object_scene", "separate_objects", "object_window_origins"],
+    "inference.api": ["run_inference", "create_object_scene", "separate_objects", "object_window_origins", "object_separation_config"],
     "inference_pipeline.api": ["run_inference_pipeline"],
     "training_ui_api.api": ["create_app", "get_openapi_schema", "main", "worker_main", "feedback_main"],
 }
@@ -187,7 +187,7 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
 
     for dto in (TrainSettings, TrainConfig, TileDataloaderRequest, JobDetail, JobSummary, TrainingResultInfo):
         assert dto.model_json_schema()["properties"]["pipeline_variant"]["enum"] == [
-            "legacy", "next_gen", "next_gen2", "object_f1",
+            "legacy", "next_gen", "next_gen2", "object_f1", "object_f1_v2",
         ]
     assert TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"] == [
         "window_random", "scene_fold", "scene_groups",

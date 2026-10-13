@@ -1,5 +1,9 @@
 import type { ConfigField, ConfigSchema, DatasetInfo, JsonRecord, TrainingTemplate } from "../api/types";
 
+export function trainingPipelineLabel(variant: string): string {
+  return variant === "object_f1_v2" ? "object f1 v2" : variant === "object_f1" ? "object f1" : variant.replace("_", "-");
+}
+
 export function trainingConfigForTemplate(
   template: Pick<TrainingTemplate, "architecture" | "default_config" | "config_schema"> | undefined,
   task: DatasetInfo["task"],
@@ -9,7 +13,7 @@ export function trainingConfigForTemplate(
   const next = { ...(template?.default_config || {}) };
   const available = template?.config_schema.fields.find((field) => field.key === "train.pipeline_variant")?.options ?? ["legacy"];
   const choice = pipelineChoice ?? String(next["train.pipeline_variant"] ?? "legacy");
-  const variant = available.includes(choice) && !(task === "multiclass" && choice === "object_f1") ? choice : "legacy";
+  const variant = available.includes(choice) && !(task === "multiclass" && ["object_f1", "object_f1_v2"].includes(choice)) ? choice : "legacy";
   const preset = variant ? template?.config_schema.pipeline_defaults?.[variant] : undefined;
   if (preset && next["train.pipeline_variant"] !== variant) Object.assign(next, preset);
   if (task === "multiclass") {
@@ -29,7 +33,7 @@ export function trainingConfigSchema(
 ): ConfigSchema | undefined {
   if (!schema) return undefined;
   const allowedLosses =
-    ["next_gen2", "object_f1"].includes(pipelineVariant)
+    ["next_gen2", "object_f1", "object_f1_v2"].includes(pipelineVariant)
       ? ["cross_entropy_tversky"]
       : task === "multiclass"
       ? ["cross_entropy", "cross_entropy_dice"]
@@ -41,7 +45,7 @@ export function trainingConfigSchema(
     } : schema.pipeline_defaults,
     fields: schema.fields.map((field) =>
       field.key === "train.pipeline_variant" && task === "multiclass"
-        ? { ...field, options: field.options?.filter((variant) => variant !== "object_f1") }
+        ? { ...field, options: field.options?.filter((variant) => !["object_f1", "object_f1_v2"].includes(variant)) }
         : field.key === "train.loss"
         ? {
             ...field,
@@ -92,7 +96,7 @@ export function configWithField(
   nextValue: unknown,
   pipelineDefaults?: Record<string, JsonRecord>,
 ): JsonRecord {
-  if (["next_gen2", "object_f1"].includes(String(value["train.pipeline_variant"])) && ![
+  if (["next_gen2", "object_f1", "object_f1_v2"].includes(String(value["train.pipeline_variant"])) && ![
     "train.pipeline_variant", "train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key)) return value;
   const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
@@ -100,7 +104,7 @@ export function configWithField(
   if (key === "train.pipeline_variant" && typeof value["train.pretrained"] === "boolean") {
     next["train.pretrained"] = value["train.pretrained"];
   }
-  if (["next_gen2", "object_f1"].includes(String(next["train.pipeline_variant"]))) {
+  if (["next_gen2", "object_f1", "object_f1_v2"].includes(String(next["train.pipeline_variant"]))) {
     const tileSize = Number(next["tile_preparation.tile_size"]);
     next["tile_preparation.stride"] = tileSize / 2;
     next["tile_preparation.context"] = 0;
@@ -121,7 +125,7 @@ export function trainingConfigFieldVisible(
 ): boolean {
   if (key.startsWith("next_gen.")) return false;
   if (key === "train.pretrained") return Boolean(architecture?.startsWith("smp_segformer_"));
-  if (["next_gen2", "object_f1"].includes(pipelineVariant)) return [
+  if (["next_gen2", "object_f1", "object_f1_v2"].includes(pipelineVariant)) return [
     "train.pipeline_variant", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key);
   return true;

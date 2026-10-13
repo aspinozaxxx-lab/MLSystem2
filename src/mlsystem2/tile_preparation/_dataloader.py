@@ -70,7 +70,7 @@ def create_tile_dataloader(
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
-    if request.pipeline_variant in {"next_gen2", "object_f1"}:
+    if request.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
         # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
         sampler = (
             WeightedRandomSampler(dataset.sampling_weights(), num_samples=len(dataset), replacement=True)
@@ -659,7 +659,7 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):
         worker_info.dataset.close()
-    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "object_f1"}:
+    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "object_f1", "object_f1_v2"}:
         import cv2
 
         cv2.setNumThreads(1)

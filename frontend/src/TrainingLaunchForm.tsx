@@ -3,7 +3,7 @@ import { type CSSProperties, type FormEvent, type ReactNode, useState } from "re
 import type { ConfigSchema, DatasetInfo, JsonRecord, ModelInfo, TrainingTemplate } from "./api/types";
 import { ConfigEditor, type FieldPresentation } from "./ConfigEditor";
 import { SampleBalance } from "./SampleBalance";
-import { trainingConfigFieldVisible } from "./utils/trainingConfig";
+import { trainingConfigFieldVisible, trainingPipelineLabel } from "./utils/trainingConfig";
 import {
   configWithSamplePercentages, SAMPLE_FACTOR_KEYS, samplePercentages,
   trainingNumber, trainingSectionForField, trainingSummary, trainingTile, type TrainingSection,
@@ -56,9 +56,9 @@ export function TrainingLaunchForm({
 }: TrainingLaunchFormProps) {
   const [openSection, setOpenSection] = useState<TrainingSection | null>("model");
   const variant = String(value["train.pipeline_variant"] || "legacy");
-  const variantLabel = variant === "object_f1" ? "object f1" : variant.replace("_", "-");
-  const nextGen2 = ["next_gen2", "object_f1"].includes(variant);
-  const objectF1 = variant === "object_f1";
+  const variantLabel = trainingPipelineLabel(variant);
+  const nextGen2 = ["next_gen2", "object_f1", "object_f1_v2"].includes(variant);
+  const objectF1 = ["object_f1", "object_f1_v2"].includes(variant);
   const modelName = models.find((model) => model.architecture === architecture)?.display_name.replace(" (next-gen)", "") || "Модель не выбрана";
   const dataset = datasets.find((item) => item.key === datasetKey);
   const datasetName = dataset?.name || "Датасет не выбран";

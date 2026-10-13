@@ -158,14 +158,17 @@ def create_model_for_checkpoint(spec: ModelSpec) -> ModelHandle:
 
 
 def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") == "object_f1" and spec.name not in _SMP_ENCODERS:
+    if spec.parameters.get("pipeline_variant") == "object_f1_v2":
+        if spec.parameters.get("output_layout") != "background_interior_boundary":
+            raise ModelsError("object f1 v2 требует сохранённую схему фон/внутренность/граница")
+    if spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"} and spec.name not in _SMP_ENCODERS:
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
-    if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1"} and (
+    if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"} and (
         spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
         or spec.input_channels not in (3, 4)
-        or (spec.parameters.get("pipeline_variant") == "object_f1" and spec.output_channels != 1)
+        or (spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"} and spec.output_channels != 1)
         or spec.parameters.get("preprocessing") != {"mode": "window_minmax", "epsilon": 1e-6}
     ):
         raise ModelsError("next-gen2 требует SegFormer с входом RGB или RGB+NIR и оконной min-max нормализацией")
@@ -225,7 +228,7 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
         encoder_name=_SMP_ENCODERS[spec.name],
         encoder_weights="imagenet" if pretrained else None,
         in_channels=3 if pretrained else spec.input_channels,
-        classes=3 if spec.parameters.get("pipeline_variant") == "object_f1" else 2 if notebook and spec.output_channels == 1 else spec.output_channels,
+        classes=3 if spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"} else 2 if notebook and spec.output_channels == 1 else spec.output_channels,
         activation=None,
     )
     if pretrained and spec.input_channels == 4:
@@ -431,14 +434,14 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "object_f1"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
         raise ModelsError("next_gen ModelSpec не содержит preprocessing")
     return ModelHandle(
         spec=spec,
-        model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") == "object_f1", multiclass_output=spec.output_channels > 1),
+        model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"}, multiclass_output=spec.output_channels > 1),
     )
 
 

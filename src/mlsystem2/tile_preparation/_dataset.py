@@ -18,7 +18,7 @@ from rasterio.windows import Window
 from rasterio.features import geometry_mask
 
 from mlsystem2.inference.api import object_window_origins
-from ._object_targets import boundary_targets, rasterize_objects, scene_group_split
+from ._object_targets import boundary_targets, boundary_targets_v2, rasterize_objects, scene_group_split
 from ._annotations import AnnotationIndex, load_annotation_index
 from ._augmentations import apply_augmentations, apply_next_gen_augmentations, build_notebook_augmentations
 from ._mask import (
@@ -117,15 +117,16 @@ class TileDataset:
         self._input_channels = input_channels
         self._has_regions = any(scene.region_geometry is not None for scene in scenes)
         self._has_rgb_alpha = False
-        if pipeline_variant in {"next_gen2", "object_f1"} and context:
+        if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} and context:
             raise TilePreparationError("next-gen2 использует полные окна без контекста")
         self._notebook_transform = (
-            build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1")
-            if pipeline_variant in {"next_gen2", "object_f1"} and mode == "train" and augmentation_level else None
+            build_notebook_augmentations(seed, object_instances=pipeline_variant in {"object_f1", "object_f1_v2"})
+            if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} and mode == "train" and augmentation_level else None
         )
         self._notebook_positive_ratios: np.ndarray | None = None
         self._notebook_hard_negatives: np.ndarray | None = None
         self._notebook_class_weights: list[float] = []
+        self._object_target_counts: list[int] = []
         self._collect_band_histogram_enabled = collect_band_histogram
         self._band_histogram: dict[str, object] | None = None
         self._tile_split_manifest: dict[str, object] = {"strategy": "none"}
@@ -192,13 +193,13 @@ class TileDataset:
                         context,
                         full_windows_only=pipeline_variant == "next_gen2" and scene.region_geometry is None,
                     )
-                    if pipeline_variant == "object_f1":
+                    if pipeline_variant in {"object_f1", "object_f1_v2"}:
                         candidate_windows = [TileWindow(x, y, tile_size, tile_size) for y in object_window_origins(height, tile_size) for x in object_window_origins(width, tile_size)]
                     candidate_windows = [TileWindow(item.x + offset_x, item.y + offset_y, item.width, item.height) for item in candidate_windows]
                     if scene.region_geometry is not None:
                         valid_windows = [item for item in candidate_windows if np.any(self._core_array(~self._region_invalid(scene_index, dataset, Window(item.x, item.y, item.width, item.height))))]
                         diagnostics = ValidFootprintDiagnostics(len(candidate_windows), len(valid_windows), len(candidate_windows) - len(valid_windows), 0, 0, 0)
-                    elif pipeline_variant in {"next_gen2", "object_f1"} and not rgb_alpha:
+                    elif pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} and not rgb_alpha:
                         valid_windows = candidate_windows
                         diagnostics = ValidFootprintDiagnostics(
                             len(candidate_windows), len(candidate_windows), 0, 0, 0, 0
@@ -254,7 +255,7 @@ class TileDataset:
         if self._count is None:
             raise TilePreparationError("Не удалось определить число каналов TIFF.")
         self._zone_transform = (
-            build_notebook_augmentations(seed, object_instances=pipeline_variant == "object_f1", masked=True)
+            build_notebook_augmentations(seed, object_instances=pipeline_variant in {"object_f1", "object_f1_v2"}, masked=True)
             if (self._has_regions or self._has_rgb_alpha) and self._notebook_transform is not None else None
         )
         if self._has_regions and not self._windows:
@@ -275,7 +276,7 @@ class TileDataset:
                  "zone_id": scene.zone_id, "window": scene.region_window,
                  "geometry": scene.region_geometry} for scene in self._scenes
             ]
-        if self._pipeline_variant in {"next_gen2", "object_f1"} and self._mode == "train":
+        if self._pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} and self._mode == "train":
             self._compute_notebook_statistics()
         if self._collect_band_histogram_enabled:
             self._band_histogram = self._collect_band_histogram()
@@ -303,7 +304,7 @@ class TileDataset:
         elif self._pipeline_variant == "next_gen2" and not masked:
             # Ноутбук обучается на всех пикселях окна, включая nodata и raster mask.
             nodata_pixels = np.zeros(image_raw.shape[-2:], dtype=bool)
-        elif self._pipeline_variant == "object_f1" or masked:
+        elif self._pipeline_variant in {"object_f1", "object_f1_v2"} or masked:
             nodata_pixels = self._read_invalid_data_pixels(dataset, window)
         else:
             nodata_pixels = np.logical_or(
@@ -314,7 +315,7 @@ class TileDataset:
         image = image_raw if self._notebook_transform is not None else image_raw.astype(np.float32, copy=False)
         if masked:
             image[:, nodata_pixels] = nodata
-        if self._pipeline_variant not in {"next_gen2", "object_f1"}:
+        if self._pipeline_variant not in {"next_gen2", "object_f1", "object_f1_v2"}:
             image[:, nodata_pixels] = 0.0 if self._pipeline_variant == "next_gen" else nodata
         mask = self._read_supervision_mask(
             scene_window.scene_index,
@@ -342,7 +343,7 @@ class TileDataset:
         )
         object_instances = None
         ambiguous = None
-        if self._pipeline_variant == "object_f1":
+        if self._pipeline_variant in {"object_f1", "object_f1_v2"}:
             object_instances, ambiguous = rasterize_objects(self._positive_index(scene_window.scene_index), dataset, window, self._tile_size, nodata_pixels | (mask[0] < 0))
         augmented = False
         if notebook_transform is not None:
@@ -366,7 +367,7 @@ class TileDataset:
                 object_instances = transformed["instances"].astype(np.int32)
                 nodata_pixels = ~transformed["valid"].astype(bool)
                 ambiguous = transformed["ambiguous"].astype(bool)
-        should_augment = self._mode == "train" and self._augmentation_level > 0 and self._pipeline_variant not in {"next_gen2", "object_f1"}
+        should_augment = self._mode == "train" and self._augmentation_level > 0 and self._pipeline_variant not in {"next_gen2", "object_f1", "object_f1_v2"}
         if should_augment and (
             self._pipeline_variant == "next_gen"
             or category in {TILE_CATEGORY_POSITIVE, TILE_CATEGORY_HARD_NEGATIVE}
@@ -420,7 +421,7 @@ class TileDataset:
                 class_hard_negative_masks[:, nodata_pixels] = False
             if object_instances is not None:
                 object_instances[nodata_pixels] = 0
-        object_instances = object_instances if self._pipeline_variant == "object_f1" else (
+        object_instances = object_instances if self._pipeline_variant in {"object_f1", "object_f1_v2"} else (
             self._read_object_instances(
                 scene_window.scene_index,
                 dataset,
@@ -435,11 +436,14 @@ class TileDataset:
             augmented,
             object_instances,
             class_hard_negative_masks,
-            valid_pixels=(~nodata_pixels if masked or self._pipeline_variant in {"next_gen", "object_f1"} else np.ones_like(nodata_pixels) if self._has_regions else None),
-            scene_window=(scene_window if self._pipeline_variant in {"next_gen", "object_f1"} else None),
+            valid_pixels=(~nodata_pixels if masked or self._pipeline_variant in {"next_gen", "object_f1", "object_f1_v2"} else np.ones_like(nodata_pixels) if self._has_regions else None),
+            scene_window=(scene_window if self._pipeline_variant in {"next_gen", "object_f1", "object_f1_v2"} else None),
         )
-        if self._pipeline_variant == "object_f1":
-            boundary, usable = boundary_targets(object_instances, ~nodata_pixels & (mask[0] >= 0), ambiguous)
+        if self._pipeline_variant in {"object_f1", "object_f1_v2"}:
+            if self._pipeline_variant == "object_f1_v2":
+                boundary, usable = boundary_targets_v2(object_instances, ~nodata_pixels)
+            else:
+                boundary, usable = boundary_targets(object_instances, ~nodata_pixels & (mask[0] >= 0), ambiguous)
             meta.update(boundary_target=boundary, boundary_valid=usable, overlap_pixels=int(ambiguous.sum()))
         return np.ascontiguousarray(image), np.ascontiguousarray(mask), meta
 
@@ -465,11 +469,12 @@ class TileDataset:
 
     @property
     def scene_tile_diagnostics(self) -> list[dict[str, object]]:
-        if self._pipeline_variant == "object_f1":
+        if self._pipeline_variant in {"object_f1", "object_f1_v2"}:
             for i, item in enumerate(self._scene_tile_diagnostics):
                 if "overlapping_polygon_pairs" not in item:
                     with rasterio.open(self._scenes[i].image_path) as source:
-                        item.update(self._positive_index(i).instance_diagnostics(source.bounds))
+                        item.update(self._positive_index(i).instance_diagnostics(
+                            source.bounds, detailed=self._pipeline_variant == "object_f1_v2"))
         return [dict(item) for item in self._scene_tile_diagnostics]
 
     @property
@@ -553,10 +558,15 @@ class TileDataset:
     def notebook_class_weights(self) -> list[float]:
         return list(self._notebook_class_weights)
 
+    @property
+    def object_target_counts(self) -> list[int]:
+        return list(self._object_target_counts)
+
     def _compute_notebook_statistics(self) -> None:
         ratios = []
         hard_negatives = []
-        class_count = 1 + len(self._classes or self._class_annotations) if self.uses_multiclass_masks else 2
+        object_v2 = self._pipeline_variant == "object_f1_v2"
+        class_count = 3 if object_v2 else 1 + len(self._classes or self._class_annotations) if self.uses_multiclass_masks else 2
         valid_counts = np.zeros(class_count, dtype=np.float64)
         for item in self._windows:
             dataset = self._open_dataset(item.scene_index)
@@ -564,7 +574,7 @@ class TileDataset:
             zoned = self._scenes[item.scene_index].region_geometry is not None
             invalid = (
                 self._region_invalid(item.scene_index, dataset, window) if zoned
-                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha
+                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha or object_v2
                 else np.zeros((self._tile_size, self._tile_size), dtype=bool)
             )
             mask = self._read_supervision_mask(
@@ -582,17 +592,37 @@ class TileDataset:
                     valid &= ~class_negatives.any(axis=0)
                 labels = np.maximum(semantic[valid], 0)
                 valid_counts += np.bincount(labels, minlength=class_count)
-            if self._pipeline_variant == "object_f1":
+            if object_v2:
+                instances, _ = rasterize_objects(self._positive_index(item.scene_index), dataset, window,
+                                                self._tile_size, invalid | (mask[0] < 0))
+                boundary, usable = boundary_targets_v2(instances, ~invalid)
+                labels = (instances > 0).astype(np.int32)
+                labels[boundary > 0] = 2
+                valid_counts += np.bincount(labels[usable], minlength=3)
+            elif self._pipeline_variant == "object_f1":
                 valid = ~invalid if zoned else ~self._read_invalid_data_pixels(dataset, window)
                 positive_count = int(((mask[0] == 1) & valid).sum())
                 valid_counts += [int(valid.sum()) - positive_count, positive_count]
-            ratios.append(float(np.count_nonzero((semantic > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha else float(np.mean(semantic > 0, dtype=np.float32)))
+            ratios.append(float(np.count_nonzero((semantic > 0) & ~invalid) / max(1, np.count_nonzero(~invalid))) if zoned or self._has_rgb_alpha or object_v2 else float(np.mean(semantic > 0, dtype=np.float32)))
             hard_negatives.append(bool(np.any(mask == HARD_NEGATIVE_LABEL) or (class_negatives is not None and class_negatives.any())))
         self._notebook_positive_ratios = np.asarray(ratios, dtype=np.float64)
         self._notebook_hard_negatives = np.asarray(hard_negatives, dtype=bool)
         positive = self._notebook_positive_ratios.sum()
         negative = (1 - self._notebook_positive_ratios).sum()
-        counts = valid_counts if self._pipeline_variant == "object_f1" or self.uses_multiclass_masks else np.asarray([negative, positive])
+        counts = valid_counts if self._pipeline_variant in {"object_f1", "object_f1_v2"} or self.uses_multiclass_masks else np.asarray([negative, positive])
+        if object_v2:
+            self._object_target_counts = counts.astype(np.int64).tolist()
+            present = counts > 0
+            weights = np.ones(3, dtype=np.float64)
+            if present.any():
+                inverse = 1.0 / counts[present]
+                weights[present] = inverse / inverse.mean()
+            weights[2] *= 3.0
+            self._notebook_class_weights = weights.astype(np.float32).tolist()
+            self._tile_split_manifest["object_target_counts"] = self.object_target_counts
+            self._tile_split_manifest["object_class_weights"] = self.notebook_class_weights
+            self._tile_split_manifest["boundary_width_pixels"] = 8
+            return
         weights = 1.0 / (counts + 1e-6)
         self._notebook_class_weights = (weights / weights.mean()).astype(np.float32).tolist()
 
@@ -659,7 +689,7 @@ class TileDataset:
         hard_negative_factor: float | None = None,
         background_factor: float | None = None,
     ) -> list[float] | None:
-        if getattr(self, "_pipeline_variant", "legacy") in {"next_gen2", "object_f1"}:
+        if getattr(self, "_pipeline_variant", "legacy") in {"next_gen2", "object_f1", "object_f1_v2"}:
             if self._notebook_positive_ratios is None:
                 return None
             weights = np.where(self._notebook_positive_ratios > 0.001, 7.0, 1.0)
@@ -782,7 +812,7 @@ class TileDataset:
         return index
 
     def _needs_boundless_read(self, dataset, window) -> bool:
-        return self._pipeline_variant != "object_f1" or (
+        return self._pipeline_variant not in {"object_f1", "object_f1_v2"} or (
             window.col_off < 0 or window.row_off < 0
             or window.col_off + window.width > dataset.width
             or window.row_off + window.height > dataset.height
@@ -811,7 +841,7 @@ class TileDataset:
         if self._pipeline_variant == "next_gen2" and window.col_off >= 0 and window.row_off >= 0 and window.col_off + window.width <= dataset.width and window.row_off + window.height <= dataset.height:
             # Все окна целиком внутри TIFF: виртуальная подложка boundless не нужна.
             return dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
-        if self._pipeline_variant == "object_f1" and not self._needs_boundless_read(dataset, window):
+        if self._pipeline_variant in {"object_f1", "object_f1_v2"} and not self._needs_boundless_read(dataset, window):
             return dataset.read(indexes=list(range(1, self.channel_count + 1)), window=window, masked=False)
         return dataset.read(
             indexes=list(range(1, self.channel_count + 1)),
@@ -859,7 +889,7 @@ class TileDataset:
             transform=dataset.window_transform(window),
             nodata_pixels=nodata_pixels,
         )
-        if self._pipeline_variant in {"next_gen2", "object_f1"}:
+        if self._pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
             # В ноутбуке hard negative перекрывает positive и остаётся фоном в loss.
             hard_negative = rasterize_window_mask(
                 self._hard_negative_geometries(scene_index, bounds),
@@ -1113,7 +1143,7 @@ class TileDataset:
     def _apply_tile_split(self, tile_split: TileSplitRequest) -> None:
         if self._positive_hint_by_index is None:
             return
-        if self._pipeline_variant == "object_f1":
+        if self._pipeline_variant in {"object_f1", "object_f1_v2"}:
             parts, manifest = scene_group_split(self._scenes, tile_split)
             selected_indices = [i for i, item in enumerate(self._windows) if item.scene_id in parts[self._mode]]
             if not selected_indices:

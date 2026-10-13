@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from .contracts import (
-    InferenceRequest, InferenceResult, ObjectSceneAccumulator, ObjectSceneRequest,
+    InferenceError, InferenceRequest, InferenceResult, ObjectSceneAccumulator, ObjectSceneRequest,
     ObjectSeparationConfig,
 )
+from mlsystem2.models.contracts import ModelSpec
 
 
 def run_inference(request: InferenceRequest) -> InferenceResult:
@@ -28,6 +29,24 @@ def separate_objects(foreground, boundary, valid_pixels, config: ObjectSeparatio
     return separate(foreground, boundary, valid_pixels, config or ObjectSeparationConfig())
 
 
+def object_separation_config(model_spec: ModelSpec) -> ObjectSeparationConfig:
+    """Прочитать зафиксированный в checkpoint профиль разделения экземпляров."""
+    parameters = model_spec.parameters
+    variant = parameters.get("pipeline_variant", "legacy")
+    if variant not in {"object_f1", "object_f1_v2"}:
+        raise InferenceError("Модель не относится к объектному конвейеру")
+    raw = parameters.get("object_separation")
+    if variant == "object_f1_v2" and not isinstance(raw, dict):
+        raise InferenceError("Checkpoint object f1 v2 не содержит параметров разделения")
+    try:
+        result = ObjectSeparationConfig.model_validate(raw or {})
+    except ValueError as exc:
+        raise InferenceError("Checkpoint содержит некорректные параметры разделения") from exc
+    if result.profile != variant:
+        raise InferenceError("Профиль разделения не соответствует конвейеру checkpoint")
+    return result
+
+
 def object_window_origins(length: int, tile_size: int) -> list[int]:
     """Покрыть ось окнами с половинным шагом, включая последний пиксель."""
     if length <= 0 or tile_size < 2:
@@ -36,4 +55,4 @@ def object_window_origins(length: int, tile_size: int) -> list[int]:
     return sorted({*range(0, last + 1, tile_size // 2), last})
 
 
-__all__ = ["run_inference", "create_object_scene", "separate_objects", "object_window_origins"]
+__all__ = ["run_inference", "create_object_scene", "separate_objects", "object_window_origins", "object_separation_config"]

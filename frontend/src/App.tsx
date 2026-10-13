@@ -121,7 +121,7 @@ import { NewsPage, NewsSection } from "./News";
 import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { useUsage } from "./useUsage";
 import { usagePageViewed } from "./utils/usage";
-import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema } from "./utils/trainingConfig";
+import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema, trainingPipelineLabel } from "./utils/trainingConfig";
 
 const PROGRESS_REFRESH_MS = 10_000;
 const GROVIKA_LOGO_PATH = "/grovika/brand/grovika-lockup-horizontal-color.svg";
@@ -4316,7 +4316,7 @@ function queueModelCell(job: JobSummary): ReactNode {
 }
 
 function trainingModelLabel(name: string, variant: string): string {
-  return ["next_gen2", "object_f1"].includes(variant) ? `${name.replace(" (next-gen)", "")} (${variant === "object_f1" ? "object f1" : "next-gen2"})` : name;
+  return ["next_gen2", "object_f1", "object_f1_v2"].includes(variant) ? `${name.replace(" (next-gen)", "")} (${trainingPipelineLabel(variant)})` : name;
 }
 
 function mergedQueueJobs(snapshot: QueueSnapshot): JobSummary[] {

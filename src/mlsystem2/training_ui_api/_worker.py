@@ -713,7 +713,7 @@ def _build_training_config(
         return build_continuation_config(session, row, config, run_dir)
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
-    if pipeline_variant in {"next_gen2", "object_f1"}:
+    if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
         flat.setdefault("train.pretrained", True)
         flat.update({key: value for key, value in fixed_pipeline_defaults(pipeline_variant).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512)
@@ -740,7 +740,7 @@ def _build_training_config(
     )
     task = "multiclass" if manifest is not None else "binary"
     raw_loss = str(_flat_value(flat, "train.loss", "bce_dice"))
-    if pipeline_variant in {"next_gen2", "object_f1"}:
+    if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
         loss = raw_loss
     elif task == "multiclass":
         loss = (
@@ -762,7 +762,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
-            **({"seed": 42} if pipeline_variant in {"next_gen2", "object_f1"} else {}),
+            **({"seed": 42} if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),
@@ -792,7 +792,7 @@ def _build_training_config(
             "quality_metric": (
                 "pixel"
                 if task == "multiclass"
-                else "objects" if pipeline_variant == "object_f1" else str(_flat_value(flat, "train.quality_metric", "pixel"))
+                else "objects" if pipeline_variant in {"object_f1", "object_f1_v2"} else str(_flat_value(flat, "train.quality_metric", "pixel"))
             ),
             "model_name": row.architecture,
             "pipeline_variant": pipeline_variant,
@@ -818,7 +818,7 @@ def _build_training_config(
             "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
             "max_val_batches_per_epoch": (
                 None
-                if pipeline_variant in {"next_gen", "next_gen2", "object_f1"}
+                if pipeline_variant in {"next_gen", "next_gen2", "object_f1", "object_f1_v2"}
                 else _optional_int(flat, "train.max_val_batches_per_epoch")
             ),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
@@ -980,7 +980,7 @@ def _build_pseudo_markup_config(
             ),
             "batch_size": (
                 1 if external_manifest is not None else (
-                    next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1"}
+                    next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}
                     else _int_value(flat, "train.batch_size", 1)
                 )
             ),
@@ -1206,7 +1206,7 @@ def _build_test_sample_f1_config(
         )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
-        if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1"}:
+        if flat.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
             batch_size = next_gen2_inference_batch_size(inference_tile_size, training_result.architecture)
     row.tile_size = inference_tile_size
     row.config = {
