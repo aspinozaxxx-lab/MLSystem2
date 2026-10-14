@@ -49,6 +49,10 @@ from mlsystem2.training_ui_api._raster_http import raster_response, raster_revis
 from mlsystem2.training_ui_api._test_f1_viewer import (
     prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
 )
+from mlsystem2.training_ui_api._models import TrainingResultRow
+from mlsystem2.training_ui_api._test_samples import queue_training_result_test_f1, training_result_test_f1_info
+from mlsystem2.training_ui_api.contracts import TrainingResultTestF1Info, JobSource
+from sqlalchemy import select
 
 
 async def _comparison_read(http_request, operation):
@@ -75,6 +79,16 @@ async def _comparison_read(http_request, operation):
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.post("/api/v1/results/training/{result_id}/test-f1", response_model=TrainingResultTestF1Info | None)
+    def post_training_test_f1(result_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
+        row = db.scalar(select(TrainingResultRow).where(TrainingResultRow.id == result_id).with_for_update())
+        if row is None:
+            raise HTTPException(404, "Результат обучения не найден.")
+        if row.status != "ok":
+            raise HTTPException(400, "F1 доступен только для успешно обученной сети.")
+        queue_training_result_test_f1(db, row, ctx.config, source=JobSource.MANUAL, manual=True, force=True)
+        db.commit()
+        return training_result_test_f1_info(db, row, ctx.config)
     @app.post("/api/v1/results/pseudo-markup/compare/counts", response_model=PseudoMarkupComparisonCounts)
     async def post_pseudo_comparison_counts(request: PseudoMarkupComparisonRequest, http_request: Request,
                                      db: Session = Depends(ctx.get_db),

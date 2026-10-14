@@ -39,7 +39,7 @@ from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
-from sqlalchemy import Integer, func, select, text
+from sqlalchemy import Integer, delete, func, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
@@ -69,6 +69,7 @@ from ._markup_export import (
 from ._managed_datasets import SOURCE_MANAGED, managed_sources
 from ._models import (
     DatasetClassRow,
+    DatasetEditorDraftRow,
     DatasetRow,
     InferenceTemplateRow,
     JobRow,
@@ -136,7 +137,6 @@ TEST_SAMPLE_DOWNLOAD_ROOT_NAME = "test-sample-downloads"
 TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 TEST_SAMPLE_EVALUATION_TARGET = "test_sample"
 TRAINING_RESULT_TEST_METRIC_TARGET = "training_result"
-AUTOMATIC_TEST_F1_RESULTS_PER_DATASET = 3
 OBJECT_IOU_THRESHOLD = 0.5
 _DOWNLOAD_BASE_TILE_SUFFIXES = (".tif", ".geojson")
 _DOWNLOAD_PREVIEW_SOURCE_SUFFIXES = ("_mask.png",)
@@ -229,6 +229,25 @@ def create_test_sample(
         dataset = find_managed_dataset(session, config, request.dataset_key)
         if dataset is None or dataset.is_custom:
             raise TrainingUIAPIError(f"Датасет не найден: {request.dataset_key}")
+        if request.creation_mode == "manual":
+            row = TestSampleRow(
+                id=sample_id, name=_sample_name(request.name, dataset.name),
+                dataset_key=dataset.key, dataset_name=dataset.name, dataset_version=dataset.version,
+                dataset_short_name=dataset.dataset_name or dataset.name,
+                class_key=dataset.class_key or dataset.key, class_name=dataset.class_name or dataset.name,
+                quality_metric=dataset.quality_metric, task=dataset.task,
+                class_schema=[item.model_dump(mode="json") for item in dataset.object_types],
+                tile_width=request.tile_width, tile_height=request.tile_height,
+                image_count=0, requested_object_count=request.object_count,
+                actual_object_count=0, territory_count=0, content_revision=1,
+                metric_status="unavailable", is_primary=False, tiles=[], warnings=[],
+                exclude_boundary_objects=False,
+            )
+            building_root.replace(final_root)
+            _normalize_test_sample_class(session, row)
+            session.add(row)
+            session.flush()
+            return _detail(session, row, config)
         if request.exclude_boundary_objects and dataset.quality_metric != "objects":
             raise TrainingUIAPIError(
                 "Исключать объекты на границе тайла можно только для объектовой метрики F1."
@@ -257,14 +276,6 @@ def create_test_sample(
         )
         _normalize_test_sample_class(session, row)
         session.add(row)
-        session.flush()
-        evaluate_test_sample(session, row, config)
-        queue_test_sample_evaluation(
-            session,
-            row,
-            config,
-            source=JobSource.AUTOMATION,
-        )
         session.flush()
         return _detail(session, row, config)
     except Exception:
@@ -332,12 +343,15 @@ def test_sample_batch_options(
     config: TrainingUIAPIConfig,
     *,
     class_key: str | None = None,
+    include_empty: bool = False,
 ) -> TestSampleBatchOptionsResponse:
     """Описать явные пары датасет-сеть-псевдоразметка для создания набора."""
 
     grouped: dict[tuple[str, str], list[TestSampleBatchDatasetOption]] = defaultdict(list)
     for dataset in list_managed_datasets(session, config, include_custom=False, class_key=class_key):
-        if not _dataset_ready_for_test_sample_batch(dataset):
+        if not _dataset_ready_for_test_sample_batch(dataset) and not (
+            include_empty and not dataset.is_custom and dataset.imagery_type is not None
+        ):
             continue
         class_key = dataset.class_key or dataset.key
         class_name = dataset.class_name or dataset.name.split("\\", maxsplit=1)[0]
@@ -466,7 +480,7 @@ def _test_sample_batch_dataset_option(
         "dataset_version": dataset.version,
         "class_key": class_key,
         "class_name": class_name,
-        "image_count": int(dataset.image_count),
+        "image_count": int(dataset.image_count or 0),
         "imagery_type": dataset.imagery_type,
         "quality_metric": dataset.quality_metric,
         "task": dataset.task,
@@ -904,8 +918,6 @@ def _create_grouped_test_sample(
         # Отмена и завершение имеют один порядок относительно HTTP-запросов.
         _lock_test_sample_queue(session)
         check_cancelled()
-        if item.use_optimization:
-            queue_test_sample_evaluation(session, row, config, source=JobSource.AUTOMATION)
         session.flush()
         return _detail(session, row, config)
     except Exception:
@@ -1132,19 +1144,6 @@ def update_test_sample(
                 else "Состав основной тестовой разметки изменён; требуется пересчёт."
             ),
         )
-    elif request.enabled_tile_indices is not None and row.is_primary:
-        reconcile_training_result_test_f1(
-            session,
-            config,
-            dataset_keys=_class_scope_keys(session, row.class_key),
-        )
-    if content_changed:
-        queue_test_sample_evaluation(
-            session,
-            row,
-            config,
-            source=JobSource.AUTOMATION,
-        )
     session.flush()
     return _detail(session, row, config)
 
@@ -1235,13 +1234,6 @@ def update_test_sample_tile(
                 config,
                 reason="Состав основной тестовой разметки изменён; требуется пересчёт.",
             )
-        if config is not None:
-            queue_test_sample_evaluation(
-                session,
-                row,
-                config,
-                source=JobSource.AUTOMATION,
-            )
         session.flush()
     return _detail(session, row, config)
 
@@ -1274,6 +1266,7 @@ def delete_test_sample(
                     "Основная тестовая разметка исходного класса удалена.",
                     unavailable=True,
                 )
+        session.execute(delete(DatasetEditorDraftRow).where(DatasetEditorDraftRow.dataset_key == f"test-sample:{row.id}"))
         session.delete(row)
         session.flush()
     except Exception:
@@ -1456,12 +1449,6 @@ def optimize_test_sample(
                 config,
                 reason="Состав основной тестовой разметки оптимизирован; требуется пересчёт.",
             )
-        queue_test_sample_evaluation(
-            session,
-            row,
-            config,
-            source=JobSource.AUTOMATION,
-        )
     session.flush()
     return _detail(session, row, config)
 
@@ -1847,37 +1834,6 @@ def _sum_tile_metrics(
     return total
 
 
-def evaluate_test_samples_for_pseudo_markup(
-    session: Session,
-    pseudo_result: PseudoMarkupResultRow,
-    config: TrainingUIAPIConfig,
-) -> None:
-    if (
-        pseudo_result.status != "ok"
-        or pseudo_result.geojson_file is None
-        or not pseudo_result.dataset_key
-    ):
-        return
-    class_keys = _class_scope_keys(
-        session,
-        pseudo_result.class_key or pseudo_result.dataset_key,
-    )
-    rows = session.scalars(
-        select(TestSampleRow)
-        .where(TestSampleRow.class_key.in_(class_keys))
-        .options(selectinload(TestSampleRow.tiles))
-        .order_by(TestSampleRow.created_at)
-    ).all()
-    for row in rows:
-        latest = test_sample_source_pseudo_markup(session, row, config)
-        if latest is None or latest.id != pseudo_result.id:
-            continue
-        if row.source_training_result_id is None:
-            row.source_training_result_id = pseudo_result.training_result_id
-        if row.source_pseudo_result_id is None:
-            row.source_pseudo_result_id = pseudo_result.id
-        evaluate_test_sample(session, row, config, pseudo_result=pseudo_result)
-    session.flush()
 
 
 def mark_test_samples_stale_for_pseudo_markup(
@@ -2943,14 +2899,6 @@ def _refresh_training_metrics_after_primary_change(
     primary = _primary_sample(session, dataset_key)
     usable = primary is not None and any(tile.enabled for tile in primary.tiles)
     dependent_managed_keys = _dependent_managed_dataset_keys(session, dataset_key)
-    changed_class = dataset_class_row(session, dataset_key)
-    managed_class_keys = (
-        _pending_managed_metric_class_keys(session, dependent_managed_keys)
-        if dependent_managed_keys
-        else set()
-    )
-    if changed_class is not None:
-        managed_class_keys.add(changed_class.key)
     _mark_training_test_metrics_stale(
         session,
         dataset_key,
@@ -2964,15 +2912,6 @@ def _refresh_training_metrics_after_primary_change(
             reason,
             unavailable=not usable,
         )
-    if config is not None and usable:
-        queue_class_test_f1(session, dataset_key, config)
-        if dependent_managed_keys:
-            reconcile_training_result_test_f1(
-                session,
-                config,
-                dataset_keys=dependent_managed_keys,
-                managed_class_keys=managed_class_keys,
-            )
 
 
 def _dependent_managed_dataset_keys(
@@ -2996,38 +2935,6 @@ def _dependent_managed_dataset_keys(
     )
 
 
-def _pending_managed_metric_class_keys(
-    session: Session,
-    managed_dataset_keys: set[str],
-) -> set[str]:
-    """Не потерять класс уже поставленного частичного пересчёта при новой правке."""
-
-    if not managed_dataset_keys:
-        return set()
-    jobs = session.scalars(
-        select(JobRow)
-        .join(
-            TrainingResultTestMetricRow,
-            TrainingResultTestMetricRow.job_id == JobRow.id,
-        )
-        .join(
-            TrainingResultRow,
-            TrainingResultRow.id == TrainingResultTestMetricRow.training_result_id,
-        )
-        .where(
-            (
-                TrainingResultRow.dataset_key.in_(managed_dataset_keys)
-                | TrainingResultRow.class_key.in_(managed_dataset_keys)
-            ),
-            JobRow.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-        )
-    ).all()
-    return {
-        str(class_key)
-        for job in jobs
-        for class_key in (job.config or {}).get("managed_partial_class_keys") or []
-        if class_key
-    }
 
 
 def _mark_training_test_metrics_stale(
@@ -3067,7 +2974,7 @@ def reconcile_test_sample_evaluations(
     class_keys: set[str] | None = None,
     sample_ids: set[uuid.UUID] | None = None,
 ) -> int:
-    """Поставить отсутствующие и устаревшие прямые оценки в общую очередь."""
+    """Отметить устаревшие оценки без запуска инференса."""
 
     conditions = []
     if class_keys is not None:
@@ -3098,17 +3005,31 @@ def reconcile_test_sample_evaluations(
         .options(selectinload(TestSampleRow.tiles))
         .order_by(TestSampleRow.created_at, TestSampleRow.id)
     ).all()
-    created = 0
     for row in rows:
-        if queue_test_sample_evaluation(
-            session,
-            row,
-            config,
-            source=JobSource.AUTOMATION,
+        result = current_primary_training_result(session, row.class_key)
+        if result is None or not any(tile.enabled for tile in row.tiles):
+            _mark_test_sample_evaluation_stale(session, row, "Нет сети или включённых снимков для расчёта F1.")
+            continue
+        compatibility_error = test_sample_model_compatibility_error(session, row, result)
+        if compatibility_error:
+            _cancel_test_sample_evaluation_job(session, row)
+            row.metric_status = "error"
+            row.evaluation_error = compatibility_error
+            continue
+        profile = _test_f1_postprocess_profile_name(session, row, config)
+        template, _, config_hash = _effective_inference_template(
+            session, result.dataset_key or result.class_key, profile, training_result=result,
+        )
+        active = row.evaluation_job
+        if active is not None and active.status in {"queued", "running"} and _test_sample_evaluation_job_matches(
+            active, row, result, template, config_hash,
+            sorted(tile.tile_index for tile in row.tiles if tile.enabled),
         ):
-            created += 1
+            continue
+        if not _saved_test_sample_evaluation_matches(row, result, template, config_hash):
+            _mark_test_sample_evaluation_stale(session, row, "Сеть, разметка или настройки изменились. Пересчитайте F1 вручную.")
     session.flush()
-    return created
+    return 0
 
 
 def queue_test_sample_evaluation(
@@ -3175,8 +3096,7 @@ def queue_test_sample_evaluation(
     ):
         return False
     if (
-        not force
-        and active_job is not None
+        active_job is not None
         and _test_sample_evaluation_job_matches(
             active_job,
             sample,
@@ -3657,35 +3577,6 @@ def _set_test_sample_evaluation_unavailable(
     sample.updated_at = _utc_now()
 
 
-def queue_class_test_f1(
-    session: Session,
-    dataset_key: str,
-    config: TrainingUIAPIConfig,
-) -> int:
-    """Поставить основную оценку и две фоновые для каждого датасета класса."""
-
-    class_keys = _class_scope_keys(session, dataset_key)
-    results = session.scalars(
-        select(TrainingResultRow)
-        .where(
-            (
-                TrainingResultRow.class_key.in_(class_keys)
-                | TrainingResultRow.dataset_key.in_(class_keys)
-            ),
-            TrainingResultRow.status == "ok",
-        )
-        .order_by(
-            TrainingResultRow.trained_at.desc().nullslast(),
-            TrainingResultRow.created_at.desc(),
-            TrainingResultRow.id.desc(),
-        )
-    ).all()
-    return _queue_training_results_test_f1(
-        session,
-        _automatic_training_results_per_dataset(session, results),
-        config,
-        dataset_key=dataset_key,
-    )
 
 
 def queue_dataset_test_f1_all(
@@ -3758,29 +3649,6 @@ def _queue_training_results_test_f1(
     return created
 
 
-def _automatic_training_results_per_dataset(
-    session: Session,
-    results: list[TrainingResultRow],
-) -> list[TrainingResultRow]:
-    selected: list[TrainingResultRow] = []
-    grouped: dict[str, list[TrainingResultRow]] = defaultdict(list)
-    for result in results:
-        dataset = _training_result_dataset_row(session, result)
-        group_key = dataset.key if dataset is not None else result.dataset_key or result.class_key
-        grouped[group_key].append(result)
-    for dataset_key, candidates in grouped.items():
-        preferred = dataset_training_result(session, dataset_key)
-        preferred = next(
-            (row for row in candidates if preferred is not None and row.id == preferred.id),
-            candidates[0],
-        )
-        selected.append(preferred)
-        selected.extend(
-            [row for row in candidates if row.id != preferred.id][
-                : AUTOMATIC_TEST_F1_RESULTS_PER_DATASET - 1
-            ]
-        )
-    return selected
 
 
 def _set_test_f1_job_priority(
@@ -3821,26 +3689,6 @@ def _set_test_f1_job_priority(
         job.config = state
 
 
-def _reconcile_queued_test_f1_priorities(
-    session: Session,
-    dataset_keys: set[str] | None,
-) -> None:
-    statement = (
-        select(JobRow, TrainingResultRow)
-        .join(TrainingResultTestMetricRow, TrainingResultTestMetricRow.job_id == JobRow.id)
-        .join(
-            TrainingResultRow,
-            TrainingResultRow.id == TrainingResultTestMetricRow.training_result_id,
-        )
-        .where(JobRow.status == JobStatus.QUEUED.value)
-    )
-    if dataset_keys is not None:
-        statement = statement.where(
-            TrainingResultRow.class_key.in_(dataset_keys)
-            | TrainingResultRow.dataset_key.in_(dataset_keys)
-        )
-    for job, result in session.execute(statement):
-        _set_test_f1_job_priority(session, job, result)
 
 
 def reconcile_training_result_test_f1(
@@ -3850,7 +3698,7 @@ def reconcile_training_result_test_f1(
     dataset_keys: set[str] | None = None,
     managed_class_keys: set[str] | None = None,
 ) -> int:
-    """Восстанавливает отсутствующие и устаревшие оценки без повтора текущих ошибок."""
+    """Сверяет актуальность сохранённых оценок, не создавая заданий."""
 
     conditions = [TrainingResultRow.status == "ok"]
     if dataset_keys is not None:
@@ -3869,9 +3717,6 @@ def reconcile_training_result_test_f1(
             TrainingResultRow.id.desc(),
         )
     ).all()
-    _reconcile_queued_test_f1_priorities(session, dataset_keys)
-    results = _automatic_training_results_per_dataset(session, results)
-    created = 0
     for result in results:
         plan = _training_result_test_plan(session, result)
         metric = session.get(TrainingResultTestMetricRow, result.id)
@@ -3890,16 +3735,13 @@ def reconcile_training_result_test_f1(
             config,
         ):
             continue
-        if queue_training_result_test_f1(
-            session,
-            result,
-            config,
-            source=JobSource(result.source),
-            managed_class_keys=managed_class_keys,
-        ):
-            created += 1
+        if metric is not None:
+            _cancel_test_metric_job(session, metric)
+            metric.status = "stale" if metric.f1 is not None else "unavailable"
+            metric.error = "Разметка или настройки изменились. Пересчитайте F1 вручную."
+            metric.updated_at = _utc_now()
     session.flush()
-    return created
+    return 0
 
 
 def _test_metric_needs_reconciliation(
@@ -4699,11 +4541,11 @@ def _detail(
                 thumbnail_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/"
                     f"{tile.tile_index}/thumbnail?renderer="
-                    f"{_THUMBNAIL_RENDERER_VERSION}"
+                    f"{_THUMBNAIL_RENDERER_VERSION}&revision={row.content_revision}"
                 ),
                 preview_url=(
                     f"/api/v1/test-samples/{row.id}/tiles/{tile.tile_index}/preview"
-                    f"?renderer={_INSTANCE_BOUNDARY_PREVIEW_VERSION}-native-v1"
+                    f"?renderer={_INSTANCE_BOUNDARY_PREVIEW_VERSION}-native-v1&revision={row.content_revision}"
                 ),
             )
             for tile in row.tiles
@@ -4885,14 +4727,12 @@ __all__ = [
     "delete_test_sample",
     "evaluate_test_sample_by_id",
     "evaluate_test_sample_preview",
-    "evaluate_test_samples_for_pseudo_markup",
     "latest_test_sample_batch",
     "mark_test_samples_stale_for_pseudo_markup",
     "optimize_test_sample",
     "optimize_test_sample_preview",
     "primary_test_sample",
     "process_test_sample_batch_once",
-    "queue_class_test_f1",
     "queue_dataset_test_f1_all",
     "queue_test_sample_evaluation",
     "queue_training_result_test_f1",

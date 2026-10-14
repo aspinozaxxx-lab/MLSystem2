@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   index: 0,
   options: null as TestSampleBatchOptionsResponse | null,
   drafts: {} as Record<string, TestSampleCreationSettings>,
+  manual: false,
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -15,7 +16,7 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useState(initialValue: unknown) {
       const index = state.index++;
-      return actual.useState(index === 0 ? state.options : index === 1 ? "класс\\main" : index === 2 ? state.drafts : initialValue);
+      return actual.useState(index === 0 ? state.manual ? "manual" : "automatic" : index === 2 ? state.options : index === 3 ? "класс\\main" : index === 4 ? state.drafts : initialValue);
     },
   };
 });
@@ -44,6 +45,17 @@ function render(imageryType: ImageryType | null = "kanopus", changes: Partial<Te
 }
 
 describe("размеры и объём в мастере тестовых разметок", () => {
+  it("позволяет создать пустую разметку без сети и открыть общий редактор", () => {
+    state.manual = true;
+    const { html, requests } = render();
+    state.manual = false;
+    expect(html).toContain("Название тестовой разметки");
+    expect(html).toContain("Создать и открыть редактор");
+    expect(html).toContain("Обучающий датасет не изменится");
+    expect(html).not.toContain("Примерный объём снимков");
+    expect(html).not.toContain('aria-label="Минимум тайлов"');
+    expect(requests).not.toHaveBeenCalled();
+  });
   it("сохраняет прежние размеры и добавляет все размеры до 8192 с шагом 512", () => {
     expect(TEST_SAMPLE_TILE_SIZES).toEqual([512, 768, 1024, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192]);
     const { html } = render();

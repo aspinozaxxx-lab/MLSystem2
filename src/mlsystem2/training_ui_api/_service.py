@@ -341,7 +341,7 @@ def result_classes(
                 if info is not None and info.f1 is not None:
                     test_f1 = info.f1
                     test_f1_metrics = dict(info.metrics or {})
-                    test_f1_status = "current" if info.status == "current" else "stale"
+                    test_f1_status = info.status
                     test_f1_training_result_id = selected_result.id
             result_datasets.append(
                 ResultDatasetInfo(

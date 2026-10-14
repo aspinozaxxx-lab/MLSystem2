@@ -41,7 +41,7 @@ from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
 from ._config import TrainingUIAPIConfig
-from ._markup_lock import markup_read_lock
+from ._markup_lock import TestSampleStorageBusy, markup_read_lock, test_sample_storage_lock
 from ._training_continuation import CONTINUATION_KEY, build_continuation_config
 from ._dataset_catalog import (
     dataset_class_row,
@@ -105,10 +105,10 @@ from ._test_samples import (
     _training_result_test_plan,
     _training_result_test_scope,
     current_primary_training_result,
-    evaluate_test_samples_for_pseudo_markup,
     primary_test_sample,
     reconcile_test_sample_evaluations,
-    reconcile_training_result_test_f1,
+    queue_training_result_test_f1,
+    queue_test_sample_evaluation,
     test_sample_model_compatibility_error,
 )
 from .contracts import JobSource, JobStatus, JobType, ResultStatus, StoredFileKind
@@ -661,6 +661,13 @@ def _start_inference_job(
             cwd=str(config.project_root),
             start_new_session=True,
         )
+    except TestSampleStorageBusy:
+        # Освободить строки задания до того, как публикация отменит его старую ревизию.
+        # Нового задания и нового расчёта здесь нет: обычный диспетчер перечитает очередь.
+        session.rollback()
+        shutil.rmtree(run_dir, ignore_errors=True)
+        LOGGER.info("Подготовка тестового F1 отложена до завершения публикации разметки")
+        return
     except Exception:
         LOGGER.exception("Failed to start inference job %s", row.id)
         _write_worker_error(
@@ -1276,6 +1283,25 @@ def _build_test_sample_f1_config(
     for target in targets:
         target_sample = target.sample if target is not None else sample
         sample_root = Path(config.stored_files_root) / "test-samples" / str(target_sample.id)
+        # Worker уже меняет строки задания: не ждать публикацию, которая отменяет ту же оценку.
+        with test_sample_storage_lock(config, target_sample.id, wait=False):
+            session.refresh(target_sample)
+            expected_revision = (target_sample.content_revision if target is not None else int(row.config.get("test_sample_revision") or 0))
+            if target is not None:
+                expected_revision = next(int(item["sample_revision"]) for item in managed_scope if item["sample_id"] == str(target_sample.id))
+            if target_sample.content_revision != expected_revision:
+                raise RuntimeError("Тестовая разметка изменилась перед подготовкой F1.")
+            snapshot_root = run_dir / "test-samples" / str(target_sample.id)
+            snapshot_root.mkdir(parents=True, exist_ok=True)
+            for source_path in sample_root.iterdir():
+                if source_path.is_file() and source_path.suffix.lower() in {".tif", ".geojson", ".png"}:
+                    destination = snapshot_root / source_path.name
+                    if not destination.exists():
+                        try:
+                            os.link(source_path, destination)
+                        except OSError:
+                            shutil.copy2(source_path, destination)
+            sample_root = snapshot_root
         target_tiles = sorted(
             (tile for tile in target_sample.tiles if tile.enabled),
             key=lambda item: item.tile_index,
@@ -1298,6 +1324,7 @@ def _build_test_sample_f1_config(
                     "test_sample_name": target_sample.name,
                     "test_sample_revision": target_sample.content_revision,
                     "image_path": str(tif_path),
+                    "viewer_image_path": str(Path(config.stored_files_root) / "test-samples" / str(target_sample.id) / tif_path.name),
                     "mask_path": str(mask_path),
                     "geojson_path": str(geojson_path),
                     **(
@@ -1663,10 +1690,8 @@ def _finish_training_job(
             if class_row is not None:
                 affected_class_keys.add(class_row.key)
             try:
-                reconcile_training_result_test_f1(
-                    session,
-                    config,
-                    dataset_keys={result.dataset_key or result.class_key},
+                queue_training_result_test_f1(
+                    session, result, config, source=JobSource.AUTOMATION,
                 )
             except Exception:  # noqa: BLE001
                 LOGGER.exception(
@@ -1680,6 +1705,13 @@ def _finish_training_job(
                     config,
                     class_keys=affected_class_keys,
                 )
+                completed_ids = {result.id for result in training_results if result.status == "ok"}
+                for sample in session.scalars(select(TestSampleRow).where(
+                    TestSampleRow.class_key.in_(affected_class_keys),
+                )).all():
+                    primary = current_primary_training_result(session, sample.class_key)
+                    if primary is not None and primary.id in completed_ids:
+                        queue_test_sample_evaluation(session, sample, config, source=JobSource.AUTOMATION)
             except Exception:  # noqa: BLE001
                 LOGGER.exception(
                     "Не удалось сверить прямые оценки тестовых разметок после обучения сети"
@@ -1840,28 +1872,6 @@ def _finish_inference_job(
         row.status = JobStatus.FAILED.value
         row.error = _pseudo_markup_error(report, row)
     session.flush()
-    evaluated_dataset_keys: set[str] = set()
-    for result in pseudo_results:
-        if result.status != ResultStatus.OK.value:
-            continue
-        try:
-            evaluate_test_samples_for_pseudo_markup(session, result, config)
-            if result.class_key:
-                evaluated_dataset_keys.add(result.class_key)
-        except Exception:  # noqa: BLE001
-            LOGGER.exception(
-                "Не удалось автоматически пересчитать тестовые разметки для результата %s",
-                result.id,
-            )
-    if evaluated_dataset_keys:
-        try:
-            reconcile_training_result_test_f1(
-                session,
-                config,
-                dataset_keys=evaluated_dataset_keys,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.exception("Не удалось восстановить тестовый F1 после новой псевдоразметки")
     _cleanup_inference_scratch(row)
     LOGGER.info(
         "Finished pseudo-markup job %s with status %s report=%s",

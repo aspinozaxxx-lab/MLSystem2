@@ -17,6 +17,7 @@ class TestSampleCreate(BaseModel):
 
     name: str = Field(default="", max_length=180)
     dataset_key: str = Field(min_length=1)
+    creation_mode: Literal["automatic", "manual"] = "automatic"
     tile_width: int = Field(default=1536, gt=0)
     tile_height: int = Field(default=1536, gt=0)
     image_count: int = Field(default=10, gt=0)
@@ -185,9 +186,9 @@ class TestSampleCard(BaseModel):
     class_schema: list[dict[str, Any]] = Field(default_factory=list)
     class_object_counts: dict[str, int] = Field(default_factory=dict)
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    image_count: int = Field(gt=0)
+    image_count: int = Field(ge=0)
     enabled_image_count: int = Field(ge=0)
-    actual_object_count: int = Field(gt=0)
+    actual_object_count: int = Field(ge=0)
     enabled_object_count: int = Field(ge=0)
     exclude_boundary_objects: bool = False
     is_primary: bool = False
@@ -244,7 +245,7 @@ class TestSampleTileInfo(BaseModel):
     index: int = Field(gt=0)
     source_name: str
     territory: str
-    object_count: int = Field(gt=0)
+    object_count: int = Field(ge=0)
     class_object_counts: dict[str, int] = Field(default_factory=dict)
     evaluation_metrics: dict[str, Any] = Field(default_factory=dict)
     f1_score: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -259,7 +260,7 @@ class TestSampleDetail(TestSampleSummary):
     tile_width: int = Field(gt=0)
     tile_height: int = Field(gt=0)
     requested_object_count: int = Field(gt=0)
-    territory_count: int = Field(gt=0)
+    territory_count: int = Field(ge=0)
     warnings: list[str] = Field(default_factory=list)
     download_url: str
     tiles: list[TestSampleTileInfo] = Field(default_factory=list)
@@ -395,7 +396,7 @@ class TestSampleBatchDatasetOption(BaseModel):
     dataset_version: str | None = None
     class_key: str
     class_name: str
-    image_count: int = Field(gt=0)
+    image_count: int = Field(ge=0)
     imagery_type: ImageryType | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"
     task: Literal["binary", "multiclass"] = "binary"

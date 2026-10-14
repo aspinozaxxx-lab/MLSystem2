@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="680" viewBox="0 0 1120 680" role="img" aria-labelledby="title desc">
+  <title id="title">Ручная тестовая разметка и управляемый пересчёт F1</title>
+  <desc id="desc">Схема: создать пустую выборку, добавить снимки и разметить объекты, опубликовать правки, пересчитать устаревший F1 кнопкой. Автоматический расчёт — после успешного обучения новой сети.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#7592b1"/></marker></defs>
+  <rect width="1120" height="680" rx="24" fill="#0d1b2a"/>
+  <g font-family="Arial, sans-serif">
+    <text x="42" y="57" font-size="30" font-weight="700" fill="#f3f7fc">Тестовый эталон под вашу задачу</text>
+    <text x="42" y="91" font-size="18" fill="#abc1d8">Схема: черновики → публикация → оценка по вашей команде</text>
+    <rect x="42" y="132" width="280" height="337" rx="16" fill="#193047" stroke="#34536e"/>
+    <text x="64" y="170" font-size="21" font-weight="700" fill="#f3f7fc">1. Пустая выборка</text>
+    <rect x="64" y="195" width="236" height="44" rx="9" fill="#246c92"/>
+    <text x="80" y="223" font-size="17" fill="#fff">Вручную в редакторе</text>
+    <text x="64" y="275" font-size="17" fill="#b7cce0">Класс и название</text>
+    <rect x="64" y="293" width="236" height="97" rx="10" fill="#112438" stroke="#45627c" stroke-dasharray="5 5"/>
+    <text x="112" y="332" font-size="18" fill="#f3f7fc">Снимков: 0</text>
+    <text x="112" y="363" font-size="18" fill="#b7cce0">Объектов: 0</text>
+    <text x="64" y="427" font-size="16" fill="#9edbcc">Без запуска инференса</text>
+    <path d="M330 296H377" stroke="#7592b1" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="389" y="132" width="338" height="337" rx="16" fill="#193047" stroke="#34536e"/>
+    <text x="411" y="170" font-size="21" font-weight="700" fill="#f3f7fc">2. Знакомый редактор</text>
+    <rect x="411" y="193" width="294" height="170" rx="10" fill="#465b42"/>
+    <path d="M411 234 705 331M490 193 538 363M631 193 600 363" stroke="#9da186" stroke-width="12" opacity=".5"/>
+    <path d="M447 238 496 224 518 269 465 285ZM560 274 621 244 662 288 613 331 566 317Z" stroke="#f4cc51" stroke-width="3" fill="#f4cc51" fill-opacity=".2"/>
+    <g fill="#fff" stroke="#247ba6" stroke-width="2"><circle cx="560" cy="274" r="5"/><circle cx="621" cy="244" r="5"/><circle cx="662" cy="288" r="5"/><circle cx="613" cy="331" r="5"/><circle cx="566" cy="317" r="5"/></g>
+    <text x="411" y="393" font-size="17" fill="#b7cce0">TIFF · GeoJSON · рисование</text>
+    <text x="411" y="427" font-size="16" fill="#9edbcc">Черновик → «Опубликовать»</text>
+    <path d="M735 296H782" stroke="#7592b1" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="793" y="132" width="285" height="337" rx="16" fill="#193047" stroke="#34536e"/>
+    <text x="815" y="170" font-size="21" font-weight="700" fill="#f3f7fc">3. Пересчитать F1</text>
+    <rect x="815" y="208" width="241" height="106" rx="10" fill="#302d23" stroke="#a89146"/>
+    <text x="834" y="241" font-size="17" fill="#edce80">Прежняя оценка</text>
+    <text x="834" y="282" font-size="23" font-weight="700" fill="#fff">F1 устарел</text>
+    <rect x="1007" y="255" width="34" height="34" rx="7" fill="#7a6532"/>
+    <path d="M1031 269a8 8 0 1 0 1 8m-1-8v-6m0 6h-6" stroke="#fff" stroke-width="2" fill="none"/>
+    <text x="815" y="356" font-size="17" fill="#b7cce0">Нажать круговую стрелку</text>
+    <text x="815" y="385" font-size="17" fill="#b7cce0">Дождаться расчёта в очереди</text>
+    <text x="815" y="427" font-size="16" fill="#9edbcc">Для выбранной сети</text>
+    <rect x="42" y="501" width="1036" height="131" rx="16" fill="#122d32" stroke="#2e6263"/>
+    <text x="65" y="538" font-size="22" font-weight="700" fill="#b0e9d8">Автоматически — только после завершения обучения</text>
+    <text x="65" y="573" font-size="18" fill="#c8dae2">Новая сеть → основные тестовые выборки → новый F1</text>
+    <text x="65" y="606" font-size="17" fill="#a8c1cc">Открытие страницы и публикация правок не запускают пересчёт исторических сетей.</text>
+  </g>
+</svg>

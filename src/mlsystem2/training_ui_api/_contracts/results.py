@@ -305,7 +305,7 @@ class ResultDatasetInfo(BaseModel):
     image_count: int | None = None
     test_f1: float | None = Field(default=None, ge=0.0, le=1.0)
     test_f1_metrics: dict[str, Any] = Field(default_factory=dict)
-    test_f1_status: Literal["current", "stale"] | None = None
+    test_f1_status: Literal["current", "stale", "queued", "running", "error", "unavailable"] | None = None
     test_f1_training_result_id: UUID | None = None
 
 

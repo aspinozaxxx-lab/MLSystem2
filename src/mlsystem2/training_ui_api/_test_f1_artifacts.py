@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,17 @@ from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
 
 
+def raster_content_sha256(path: Path) -> str:
+    stat = path.stat()
+    return _raster_content_sha256(str(path.resolve()), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=64)
+def _raster_content_sha256(path: str, modified: int, changed: int, size: int) -> str:
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def save_test_f1_scene(
     root: Path, config: dict[str, Any], tile: dict[str, Any],
     truth: np.ndarray, prediction: np.ndarray, report: dict[str, Any],
@@ -27,6 +39,7 @@ def save_test_f1_scene(
     root.mkdir(parents=True, exist_ok=True)
     scene_id = f"tile-{int(tile['index'])}"
     image_path = Path(tile["image_path"])
+    viewer_image_path = Path(tile.get("viewer_image_path") or image_path)
     with rasterio.open(image_path) as image:
         if image.crs is None:
             raise RuntimeError("У тестового снимка отсутствует система координат.")
@@ -44,7 +57,8 @@ def save_test_f1_scene(
         masks[f"{prefix}_matches"] = np.asarray(pairs, dtype=np.int32).reshape(-1, 2)
     np.savez_compressed(root / f"{scene_id}.npz", **masks)
     return {
-        "id": scene_id, "image_path": str(image_path), "image_revision": raster_revision(image_path),
+        "id": scene_id, "image_path": str(viewer_image_path), "image_revision": raster_revision(viewer_image_path),
+        "image_sha256": raster_content_sha256(image_path),
         "transform": transform, "crs": crs, "bounds": list(bounds),
         "sample_name": tile.get("test_sample_name") or config.get("class_name") or "Тестовая разметка",
         "sample_id": tile.get("test_sample_id") or config.get("test_sample_id"),

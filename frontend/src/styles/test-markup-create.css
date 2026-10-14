@@ -88,3 +88,4 @@
   .creation-job.history .creation-job-info > small { grid-column: 1 / -1; }
   .creation-job-info small, .creation-job-info > span { font-size: 11px; line-height: 15px; }
 }
+.creation-mode-choice { max-width: 360px; }

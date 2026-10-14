@@ -27,9 +27,8 @@ from ._test_samples import (
     _sample_row,
     _utc_now,
     _validated_tile_indices,
-    queue_test_sample_evaluation,
 )
-from .contracts import JobSource, TrainingUIAPIError
+from .contracts import TrainingUIAPIError
 
 
 class TestSampleRevisionConflict(TrainingUIAPIError):
@@ -191,7 +190,6 @@ def merge_test_sample_annotations(session, sample_id, request, config, *, actor)
         session.add(row)
         session.flush()
         # Ни старые объектовые метрики, ни поснимочные кэши не переносятся.
-        queue_test_sample_evaluation(session, row, config, source=JobSource.MANUAL)
         session.flush()
         yield _detail(session, row, config)
     except BaseException:

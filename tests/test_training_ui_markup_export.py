@@ -50,8 +50,6 @@ from mlsystem2.training_ui_api._raster_valid_data import (
     clip_geometries_to_valid_data,
 )
 from mlsystem2.training_ui_api._queueing import (
-    TEST_F1_PRIORITY_CONFIG_KEY,
-    is_background_test_f1_job,
     is_secondary_job,
     is_urgent_job,
 )
@@ -62,11 +60,9 @@ from mlsystem2.training_ui_api._test_samples import (
     create_test_sample,
     evaluate_test_sample_by_id,
     evaluate_test_sample_preview,
-    evaluate_test_samples_for_pseudo_markup,
     mark_test_samples_stale_for_pseudo_markup,
     optimize_test_sample,
     optimize_test_sample_preview,
-    queue_class_test_f1,
     queue_dataset_test_f1_all,
     queue_test_sample_evaluation,
     queue_training_result_test_f1,
@@ -2543,134 +2539,45 @@ def test_test_sample_batch_option_preserves_source_imagery_type(tmp_path, monkey
 
 @pytest.mark.parametrize("primary_index", [None, 0])
 @pytest.mark.parametrize("source", ["manual", "automation"])
-def test_automatic_test_f1_prioritizes_primary_and_manual_action_promotes_all(
-    tmp_path: Path,
-    monkeypatch,
-    primary_index: int | None,
-    source: str,
+def test_only_completed_network_is_queued_automatically_and_manual_recalculation_promotes_all(
+    tmp_path: Path, monkeypatch, primary_index: int | None, source: str,
 ) -> None:
     config = _configure_export_environment(tmp_path, monkeypatch)
     _write_export_dataset(config.mlmarkup_root, config.images_root)
     configure_schema(None)
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
-
     with session_factory() as session:
-        sample = create_test_sample(
-            session,
-            _TestSampleCreate(
-                name="Основная",
-                dataset_key="Вырубки\\main",
-                tile_width=16,
-                tile_height=16,
-                image_count=1,
-                object_count=1,
-            ),
-            config,
-        )
-        update_test_sample_primary(
-            session,
-            sample.id,
-            _TestSamplePrimaryUpdate(is_primary=True),
-        )
-        base_time = datetime(2026, 8, 1, tzinfo=timezone.utc)
-        results = [
-            TrainingResultRow(
-                source=source,
-                dataset_key="Вырубки\\main",
-                class_key="Вырубки\\main",
-                class_display_name="Вырубки\\main",
-                architecture="segformer_b2",
-                model_name=f"Сеть {index}",
-                mlflow_run_id=f"run-{index}",
-                trained_at=base_time + timedelta(days=index),
-                status="ok",
-            )
-            for index in range(5)
-        ]
+        sample = create_test_sample(session, _TestSampleCreate(
+            dataset_key="Вырубки\\main", tile_width=16, tile_height=16, image_count=1, object_count=1,
+        ), config)
+        update_test_sample_primary(session, sample.id, _TestSamplePrimaryUpdate(is_primary=True), config)
+        results = [TrainingResultRow(source=source, dataset_key="Вырубки\\main", class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main", architecture="segformer_b2", model_name=f"Сеть {index}",
+            mlflow_run_id=f"run-{index}", status="ok",
+            trained_at=datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(days=index))
+            for index in range(5)]
         session.add_all(results)
         session.flush()
         class_row = dataset_class_row(session, "Вырубки\\main")
-        assert class_row is not None
-        preferred = results[-1] if primary_index is None else results[primary_index]
         if primary_index is not None:
-            class_row.primary_training_result_id = preferred.id
-            session.flush()
-
-        assert queue_class_test_f1(session, "Вырубки\\main", config) == 3
-        queued_ids = {
-            metric.training_result_id
-            for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
-        }
-        alternatives = [result for result in reversed(results) if result.id != preferred.id][:2]
-        assert queued_ids == {preferred.id, *(result.id for result in alternatives)}
-        jobs = {
-            uuid.UUID(job.config["training_result_id"]): job
-            for job in session.scalars(select(JobRow)).all()
-            if job.config.get("metric_target") == "training_result"
-        }
-        job_ids = {result_id: job.id for result_id, job in jobs.items()}
-        assert is_urgent_job(jobs[preferred.id])
-        assert not is_secondary_job(jobs[preferred.id])
-        assert all(is_background_test_f1_job(jobs[row.id]) for row in alternatives)
-        assert all(not is_urgent_job(jobs[row.id]) for row in alternatives)
-        assert all(is_secondary_job(jobs[row.id]) for row in alternatives)
-
-        new_primary = alternatives[0]
-        _service.set_primary_training_result(session, new_primary.id, config)
-        assert is_urgent_job(jobs[new_primary.id])
-        assert is_background_test_f1_job(jobs[preferred.id])
-        if primary_index is None:
-            _service.clear_primary_training_result(session, new_primary.id, config)
-        else:
-            _service.set_primary_training_result(session, preferred.id, config)
-        assert is_urgent_job(jobs[preferred.id])
-        assert is_background_test_f1_job(jobs[new_primary.id])
-
-        # Старые ожидающие задания получают тот же порядок без повторного инференса.
-        for job in jobs.values():
-            job.config = {
-                key: value for key, value in job.config.items()
-                if key not in {TEST_F1_PRIORITY_CONFIG_KEY, "ui.secondary_priority"}
-            }
-            job.config = {**job.config, "priority": "urgent"}
-        session.flush()
+            class_row.primary_training_result_id = results[primary_index].id
         assert reconcile_training_result_test_f1(session, config) == 0
-        assert all(is_background_test_f1_job(jobs[row.id]) for row in alternatives)
-        assert is_urgent_job(jobs[preferred.id])
-
-        running = jobs[alternatives[0].id]
-        running.status = "running"
-        running.config = {
-            key: value for key, value in running.config.items()
-            if key not in {TEST_F1_PRIORITY_CONFIG_KEY, "ui.secondary_priority"}
-        }
-        running.config = {**running.config, "priority": "urgent"}
-        session.flush()
-        running_config = dict(running.config)
+        assert session.scalars(select(JobRow)).all() == []
+        completed = results[-1]
+        assert queue_training_result_test_f1(session, completed, config, source=JobSource.AUTOMATION)
+        assert not queue_training_result_test_f1(session, completed, config, source=JobSource.AUTOMATION)
+        jobs = session.scalars(select(JobRow)).all()
+        assert len(jobs) == 1 and jobs[0].config["training_result_id"] == str(completed.id)
+        original_job_id = jobs[0].id
+        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 4
+        jobs = session.scalars(select(JobRow)).all()
+        assert len(jobs) == 5
+        assert all(is_urgent_job(job) and not is_secondary_job(job) for job in jobs)
+        assert all(job.source == "manual" for job in jobs)
+        assert any(job.id == original_job_id for job in jobs)
         assert reconcile_training_result_test_f1(session, config) == 0
-        assert running.config == running_config
-
-        queued_before_manual = len(session.scalars(select(TrainingResultTestMetricRow)).all())
-        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 5 - queued_before_manual
-        assert running.status == "running"
-        all_ids = {
-            metric.training_result_id
-            for metric in session.scalars(select(TrainingResultTestMetricRow)).all()
-        }
-        assert all_ids == {result.id for result in results}
-        all_jobs = {
-            uuid.UUID(job.config["training_result_id"]): job
-            for job in session.scalars(select(JobRow)).all()
-            if job.config.get("metric_target") == "training_result"
-        }
-        assert len(all_jobs) == 5
-        assert all(all_jobs[result_id].id == job_id for result_id, job_id in job_ids.items())
-        assert all(is_urgent_job(job) and not is_secondary_job(job) for job in all_jobs.values())
-        assert all(job.config[TEST_F1_PRIORITY_CONFIG_KEY] == "manual" for job in all_jobs.values())
-        assert all(job.source == "manual" for job in all_jobs.values())
-        assert reconcile_training_result_test_f1(session, config) == 0
-        assert all(is_urgent_job(job) for job in all_jobs.values())
+        assert len(session.scalars(select(JobRow)).all()) == 5
 
 
 def test_persistent_test_sample_metrics_and_stale_revision(
@@ -2745,7 +2652,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         mismatched.training_result = training
         session.add(mismatched)
         session.flush()
-        evaluate_test_samples_for_pseudo_markup(session, mismatched, config)
+        # Сохранение псевдоразметки не является командой пересчитывать F1.
         assert _test_sample_detail(session, sample_id).evaluation.status == "unavailable"
 
         pseudo = PseudoMarkupResultRow(
@@ -2762,7 +2669,10 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         session.add(pseudo)
         session.flush()
 
-        evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
+        sample_row = session.get(_TestSampleRow, sample_id)
+        sample_row.source_training_result_id = training.id
+        sample_row.source_pseudo_result_id = pseudo.id
+        _test_samples.evaluate_test_sample(session, sample_row, config, pseudo_result=pseudo)
         detail = _test_sample_detail(session, sample_id)
         assert detail.evaluation.status == "unavailable"
         assert detail.evaluation.pixel is None
@@ -2814,7 +2724,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(0.75)
         sample_row.quality_metric = "pixel"
         assert _test_sample_detail(session, sample_id).tiles[0].f1_score == pytest.approx(0.25)
-        evaluate_test_samples_for_pseudo_markup(session, pseudo, config)
+        _test_samples.evaluate_test_sample(session, sample_row, config, pseudo_result=pseudo)
 
         saved_revision = sample_row.content_revision
         saved_evaluated_revision = sample_row.evaluated_revision
@@ -2868,7 +2778,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         )
         assert optimized.enabled_image_count == 2
         assert all(tile.enabled for tile in optimized.tiles)
-        assert optimized.evaluation.status == "queued"
+        assert optimized.evaluation.status == "unavailable"
         assert optimized.evaluation.objects is None
 
         training.status = "error"
@@ -3019,7 +2929,10 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         assert pseudo_pending.pseudo_markup.status == "queued"
         assert pseudo_pending.pseudo_markup.job_id == pseudo_job.id
 
-        assert reconcile_test_sample_evaluations(session, config) == 2
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        assert not any((job.config or {}).get("metric_target") == "test_sample" for job in session.scalars(select(JobRow)).all())
+        evaluate_test_sample_by_id(session, first.id, config)
+        evaluate_test_sample_by_id(session, second.id, config)
         assert reconcile_test_sample_evaluations(session, config) == 0
         direct_jobs = [
             job
@@ -3027,7 +2940,7 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
             if (job.config or {}).get("metric_target") == "test_sample"
         ]
         assert len(direct_jobs) == 2
-        assert all(job.source == "automation" for job in direct_jobs)
+        assert all(job.source == "manual" for job in direct_jobs)
         assert all(job.config["priority"] == "urgent" for job in direct_jobs)
         assert {job.dataset_key for job in direct_jobs} == {
             "Вырубки\\main",
@@ -3126,8 +3039,10 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
                 config,
                 class_keys={first.class_key},
             )
-            == 2
+            == 0
         )
+        assert _test_sample_detail(session, first.id).evaluation.status == "stale"
+        evaluate_test_sample_by_id(session, first.id, config)
         pending = _test_sample_detail(session, first.id)
         assert pending.evaluation.status == "queued"
         assert pending.evaluation.training_result_id == first_result.id
@@ -3198,10 +3113,10 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
             succeeded=True,
         )
         raced = _test_sample_detail(session, first.id)
-        assert raced.evaluation.status == "queued"
+        assert raced.evaluation.status == "stale"
         assert raced.evaluation.pixel is not None
         assert raced.evaluation.pixel.true_positive == 90
-        assert raced.evaluation.job_id != retry_job.id
+        assert raced.evaluation.job_id is None
 
 
 def test_direct_test_sample_evaluation_uses_latest_network_and_compatible_schema(
@@ -3269,7 +3184,8 @@ def test_direct_test_sample_evaluation_uses_latest_network_and_compatible_schema
 
         result.class_schema = list(sample.class_schema)
         session.flush()
-        assert reconcile_test_sample_evaluations(session, config) == 1
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        evaluate_test_sample_by_id(session, detail.id, config)
         compatible = _test_sample_detail(session, detail.id)
         assert compatible.evaluation.status == "queued"
         assert compatible.evaluation.target_training_result_id == result.id
@@ -3832,6 +3748,8 @@ def test_managed_network_uses_primary_sample_of_each_source_class_and_macro_f1(
             _TestSampleTileUpdate(enabled=True),
             config,
         )
+        assert metric.status == "stale"
+        assert queue_training_result_test_f1(session, training, config, manual=True, managed_class_keys={second_class.key})
         assert metric.status == "queued"
         refreshed_job = session.get(JobRow, metric.job_id)
         assert refreshed_job is not None
@@ -4069,6 +3987,10 @@ def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_ide
         first_row = session.get(_TestSampleRow, first.id)
         assert first_row is not None
         assert first_row.content_revision == 2
+        assert session.scalars(select(JobRow)).all() == []
+        assert reconcile_training_result_test_f1(session, config) == 0
+        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 2
+        evaluate_test_sample_by_id(session, first.id, config)
         metrics = [session.get(TrainingResultTestMetricRow, result.id) for result in results]
         assert all(metric is not None and metric.status == "queued" for metric in metrics)
         queued_jobs = session.scalars(select(JobRow).where(JobRow.status == "queued")).all()
@@ -4112,6 +4034,8 @@ def test_atomic_test_markup_save_requeues_all_networks_and_reconciliation_is_ide
         )
         assert switched.is_primary is True
         assert _test_sample_detail(session, first.id).is_primary is False
+        assert all(session.get(TrainingResultTestMetricRow, result.id).status == "unavailable" for result in results)
+        assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 2
         for result in results:
             metric = session.get(TrainingResultTestMetricRow, result.id)
             assert metric is not None
@@ -4174,9 +4098,8 @@ def test_app_startup_recovers_missing_test_markup_f1(
 
     with session_factory() as session:
         metric = session.get(TrainingResultTestMetricRow, result_id)
-        assert metric is not None
-        assert metric.status == "queued"
-        assert metric.job_id is not None
+        assert metric is None
+        assert session.scalars(select(JobRow)).all() == []
 
 
 def test_test_sample_optimizer_uses_all_tiles_and_resolves_equal_f1_by_territory() -> None:
@@ -4427,15 +4350,13 @@ def annotation_merge_sample(tmp_path: Path, monkeypatch):
 
 
 def test_annotations_merge_preserves_snapshot_and_is_idempotent(annotation_merge_sample, monkeypatch):
-    from mlsystem2.training_ui_api import _test_sample_annotations
-
     config, client, sample, root, groups = annotation_merge_sample
     sample = client.patch(f'/api/v1/test-samples/{sample["id"]}', json={
         "enabled_tile_indices": [1], "is_primary": True,
     }).json()
     before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
     queued = []
-    monkeypatch.setattr(_test_sample_annotations, "queue_test_sample_evaluation",
+    monkeypatch.setattr(_test_samples, "queue_test_sample_evaluation",
                         lambda session, row, config, **kwargs: queued.append(row.id))
     request = {"expected_revision": sample["content_revision"], "name": "Объединённая выборка",
                "tiles": [{"tile_index": 1, "groups": groups}]}
@@ -4470,7 +4391,7 @@ def test_annotations_merge_preserves_snapshot_and_is_idempotent(annotation_merge
     repeated = client.post(url, json=request)
     assert repeated.status_code == 200
     assert repeated.json()["id"] == updated["id"]
-    assert queued == [uuid.UUID(updated["id"])]
+    assert queued == []
     archive_response = client.post(updated["download_url"], json={
         "enabled_tile_indices": [1], "include_previews": False,
     })
@@ -4894,6 +4815,10 @@ def test_test_f1_view_keeps_exact_masks_after_worker_cleanup_and_prepares_legacy
         # Подмена TIFF блокируется; без него архивные маски остаются доступными.
         image_path.touch()
         assert client.get(scene["raster_url"]).status_code == 412
+        # Служебная смена времени не подменяет пиксели: новая ссылка остаётся доступной.
+        assert client.get(endpoint).json()["scenes"][0]["raster_available"] is True
+        with image_path.open("ab") as stream:
+            stream.write(b"changed")
         assert client.get(endpoint).json()["scenes"][0]["raster_available"] is False
         image_path.unlink()
         assert client.get(scene["layers_url"]).status_code == 200

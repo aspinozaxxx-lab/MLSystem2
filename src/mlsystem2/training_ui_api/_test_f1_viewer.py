@@ -103,6 +103,9 @@ def _image_path(config: TrainingUIAPIConfig, scene: dict[str, Any]) -> Path:
     if not path.is_file():
         raise TrainingUIAPIError("Исходный тестовый снимок удалён. Сохранённые слои доступны без подложки.")
     if raster_revision(path) != scene["image_revision"]:
+        from ._test_f1_artifacts import raster_content_sha256
+        if scene.get("image_sha256") and raster_content_sha256(path) == scene["image_sha256"]:
+            return path
         raise HTTPException(412, "Тестовый TIFF изменился после расчёта F1. Подготовьте визуализацию заново.")
     return path
 
@@ -209,8 +212,8 @@ def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.
         scenes.append(TestF1SceneInfo(
             id=scene_id, name=f"Тайл {scene['source_tile_index']:03d}",
             sample_name=scene["sample_name"], sample_revision=scene["sample_revision"],
-            raster_url=f"{base}/raster/{scene_id}?v={scene['image_revision']}",
-            footprint_url=f"{base}/footprint/{scene_id}?v={scene['image_revision']}",
+            raster_url=f"{base}/raster/{scene_id}?v={raster_revision(path) if available else scene['image_revision']}",
+            footprint_url=f"{base}/footprint/{scene_id}?v={raster_revision(path) if available else scene['image_revision']}",
             layers_url=f"{base}/layers/{scene_id}", raster_available=available,
             object_layers_available=True,
             bounds=bounds, has_alpha=has_alpha, has_nir=has_nir, nodata=nodata,

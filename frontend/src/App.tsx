@@ -43,6 +43,7 @@ import {
 } from "react";
 
 import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
+import { TestF1RefreshButton } from "./TestF1RefreshButton";
 import type {
   AutomationRuleInfo,
   AutomationSnapshot,
@@ -315,6 +316,7 @@ function RoutedPage(context: {
   const [head, second] = context.route;
   if (head === "test-markups" && second === "create") return <TestMarkupCreatePage run={context.run} />;
   if (head === "test-markups" && !second) return <TestMarkupCatalogPage {...context} />;
+  if (head === "test-markups" && second && context.route[2] === "edit") return <Suspense fallback={<LoadingPage text="Загрузка редактора тестовой разметки" />}><DatasetEditorPage key={second} run={context.run} registerRouteGuard={context.registerRouteGuard} testSampleId={second} /></Suspense>;
   if (head === "test-markups" && second) return <TestSampleEditorPage {...context} sampleId={second} />;
   if (head === "results") return <ResultsPage {...context} datasetKey={second ? decodeURIComponent(second) : undefined} />;
   if (head === "test-f1" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра тестового F1" />}><TestF1Page resultId={second} username={context.username} /></Suspense>;
@@ -474,7 +476,7 @@ function Shell({
           </button>
         </nav>
       </header>
-      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1", "classes", "results"].includes(route[0]) || (route[0] === "test-markups" && !route[1]) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
+      <main className={`page ${["dataset-editor", "pseudo-markup", "test-f1", "classes", "results"].includes(route[0]) || (route[0] === "test-markups" && (!route[1] || route[2] === "edit")) ? "page-wide" : route[0] === "start" ? "training-page" : ""}`}>{route[0] === "results" ? <PseudoComparisonTray /> : null}{children}</main>
     </div>
   );
 }
@@ -1028,15 +1030,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
   useEffect(() => {
     if (!classKey || !index) return;
     const controller = new AbortController();
-    void loadCatalog(classKey, controller.signal).then(async (loaded) => {
-      if (!loaded || controller.signal.aborted) return;
-      await run(async () => {
-        try {
-          await apiJson(`/test-samples/classes/${encodeURIComponent(classKey)}/reconcile`, { method: "POST", signal: controller.signal });
-        } catch (error) { if (!controller.signal.aborted) throw error; }
-      });
-      if (!controller.signal.aborted) void loadCatalog(classKey, controller.signal);
-    });
+    void loadCatalog(classKey, controller.signal);
     return () => controller.abort();
   }, [classKey, Boolean(index), loadCatalog, run]);
 
@@ -1095,7 +1089,7 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
           classKey={classKey} onSelect={setClassKey} label="Классы тестовых разметок" />
         <section className="test-markup-class-content">
           {classKey && index ? <div className="test-markup-class-header"><h2>{(index.classes || []).find((item) => item.key === classKey)?.name}</h2><span className="muted">Разметок: {samples?.length ?? "…"}</span></div> : null}
-          {samples ? <TestSampleCatalog samples={samples} onDelete={removeSample} /> : <div className="empty-state" role="status">{index && !(index.classes || []).length ? "Тестовые разметки ещё не созданы." : "Загрузка разметок выбранного класса…"}</div>}
+          {samples ? <TestSampleCatalog samples={samples} onDelete={removeSample} onQueued={async () => { await loadCatalog(classKey); }} /> : <div className="empty-state" role="status">{index && !(index.classes || []).length ? "Тестовые разметки ещё не созданы." : "Загрузка разметок выбранного класса…"}</div>}
         </section>
       </div>
     </div>
@@ -1174,9 +1168,11 @@ function DownloadModeFields({
 function TestSampleCatalog({
   samples,
   onDelete,
+  onQueued,
 }: {
   samples: TestSampleCard[];
   onDelete: (sample: TestSampleCard) => void;
+  onQueued: () => Promise<void>;
 }) {
   if (!samples.length) return <div className="empty-state">В этом классе пока нет тестовых разметок.</div>;
   return (
@@ -1216,6 +1212,7 @@ function TestSampleCatalog({
                 />
                 <div className="test-markup-card-footer">
                   <TestSampleEvaluationBadge evaluation={sample.evaluation} />
+                  <TestF1RefreshButton status={sample.evaluation.status} endpoint={`/test-samples/${sample.id}/evaluate`} label={sample.name} onQueued={onQueued} />
                   {sample.evaluation.status !== "current" && (sample.evaluation.pixel || sample.evaluation.objects)
                     ? <span className="muted">предыдущие значения</span>
                     : null}
@@ -1276,14 +1273,6 @@ function TestSampleEditorPage({
       }
     }
     setLoaded(true);
-    if (!payload) return;
-    await run(async () => {
-      try { await apiJson(`/test-samples/classes/${encodeURIComponent(payload.class_key)}/reconcile`, { method: "POST", signal }); }
-      catch (error) { if (!signal.aborted) throw error; }
-    });
-    if (signal.aborted || revision !== sampleRequest.current) return;
-    const refreshed = await readSample();
-    if (refreshed && !signal.aborted && revision === sampleRequest.current) setSample(refreshed);
   }, [run, sampleId]);
 
   useEffect(() => {
@@ -1489,7 +1478,7 @@ function TestSampleEditorPage({
       body: (
         <p>
           {makePrimary
-            ? "После общего сохранения эта разметка заменит текущую основную разметку класса, а оценки сетей всех его датасетов автоматически пересчитаются."
+            ? "После общего сохранения эта разметка заменит текущую основную разметку класса. Прежние оценки сетей станут неактуальными; пересчёт запускается вручную."
             : "После общего сохранения класс останется без основной тестовой разметки, а тестовые метрики его сетей станут недоступными."}
         </p>
       ),
@@ -1599,6 +1588,7 @@ function TestSampleEditorPage({
         actions={
           <>
             <a className="secondary" href="#/test-markups">Каталог</a>
+            <a className="secondary" href={`#/test-markups/${sample.id}/edit`}><PencilLine size={16} />Редактировать разметку</a>
             {dirty ? <span className="badge warning">Не сохранено</span> : null}
             <button className="primary" type="button" disabled={!dirty || saving || !draft.name.trim()} onClick={() => void save()}>
               <Save size={16} />
@@ -2053,15 +2043,16 @@ function TestSampleEvaluationPanel({
         aside={(
           <div className="button-row">
             <TestSampleEvaluationBadge evaluation={evaluation} />
-            {direct && onRecalculate ? (
+            {direct && onRecalculate && evaluation.status !== "current" ? (
               <button
-                className="secondary compact-action"
+                className="secondary icon-button test-f1-refresh"
                 type="button"
                 disabled={recalculateDisabled}
                 onClick={onRecalculate}
+                title="Пересчитать F1 основной сетью класса"
+                aria-label="Пересчитать F1 основной сетью класса"
               >
-                <RefreshCw size={15} />
-                {recalculating ? "Постановка..." : "Пересчитать основной сетью класса"}
+                <RefreshCw size={15} className={recalculating ? "spinning" : undefined} />
               </button>
             ) : null}
           </div>
@@ -3195,7 +3186,7 @@ function ResultsPage({ datasetKey, ...context }: Pick<RoutedPageProps, "run" | "
           classKey={selectedClassKey || classKey} onSelect={(key) => { setClassKey(key); navigate("results"); }} label="Классы результатов" />
         <section className="class-browser-content">
           <div className="results-class-grid">
-            {selectedClass ? <ResultClassCard item={selectedClass} selectedDatasetKey={selectedDataset?.key} /> : (
+            {selectedClass ? <ResultClassCard item={selectedClass} selectedDatasetKey={selectedDataset?.key} onF1Queued={loadClasses} /> : (
               <div className="empty-state" role="status">{classes === null ? "Загрузка классов…" : "Результатов пока нет."}</div>
             )}
           </div>
@@ -3392,6 +3383,7 @@ function DatasetResultsPanel({
           onPrimary={(result) => void togglePrimaryResult(result)}
           onDeletePseudo={deletePseudo}
           showJobLog={showJobLog}
+          onF1Queued={reloadAfterChange}
         />
       </section>
     </section>
@@ -3700,7 +3692,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
   );
 }
 
-export function ResultClassCard({ item, selectedDatasetKey }: { item: ResultClassInfo; selectedDatasetKey?: string }) {
+export function ResultClassCard({ item, selectedDatasetKey, onF1Queued }: { item: ResultClassInfo; selectedDatasetKey?: string; onF1Queued?: () => Promise<void> }) {
   const datasets = item.datasets || [];
   return (
     <div className="class-card">
@@ -3722,6 +3714,7 @@ export function ResultClassCard({ item, selectedDatasetKey }: { item: ResultClas
                 </a>
                 {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
                   <span className="dataset-result-score">
+                    <span className="test-f1-score-actions">
                     <a
                       className={`result-card-f1 test-f1-link ${dataset.test_f1_status === "current" ? "current" : "stale"}`}
                       href={dataset.test_f1_training_result_id ? `#/test-f1/${dataset.test_f1_training_result_id}` : `#/results/${encodeURIComponent(dataset.key)}`}
@@ -3731,6 +3724,8 @@ export function ResultClassCard({ item, selectedDatasetKey }: { item: ResultClas
                       <small>{metricAggregationLabel(dataset.test_f1_metrics, dataset.quality_metric)}</small>
                       {formatTestF1Percent(dataset.test_f1)}
                     </a>
+                    {dataset.test_f1_training_result_id ? <TestF1RefreshButton status={dataset.test_f1_status} endpoint={`/results/training/${dataset.test_f1_training_result_id}/test-f1`} label={dataset.dataset_name || dataset.name} onQueued={onF1Queued} /> : null}
+                    </span>
                     <CompactPerClassF1
                       metrics={dataset.test_f1_metrics}
                       section={dataset.quality_metric === "objects" ? "objects" : "pixel"}
@@ -3814,6 +3809,7 @@ function ResultsTable({
   onPrimary,
   onDeletePseudo,
   showJobLog,
+  onF1Queued,
 }: {
   payload: DatasetResultsResponse;
   datasets: DatasetInfo[];
@@ -3824,6 +3820,7 @@ function ResultsTable({
   onPrimary: (result: TrainingResultInfo) => void;
   onDeletePseudo: (item: PseudoMarkupResultInfo) => void;
   showJobLog: (jobId: string) => Promise<void>;
+  onF1Queued: () => Promise<void>;
 }) {
   if (!payload.results.length) return <div className="empty-state">Для датасета пока нет результатов</div>;
   return (
@@ -3915,6 +3912,7 @@ function ResultsTable({
                       </span>
                     ) : result.test_f1?.status !== "queued" && result.test_f1?.status !== "running" && result.test_f1?.status !== "error" ? "—" : null}
                     <TestF1CalculationState result={result} />
+                    {result.status === "ok" && result.test_f1 ? <TestF1RefreshButton status={result.test_f1.status} endpoint={`/results/training/${result.id}/test-f1`} label={result.model_name} onQueued={onF1Queued} /> : null}
                   </td>
                   <td className="technical-value" title="Эпоха лучших весов этого этапа" data-label="Эпоха этапа">{result.epoch ?? "—"}</td>
                   <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>

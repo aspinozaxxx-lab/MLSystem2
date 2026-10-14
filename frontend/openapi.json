@@ -2218,6 +2218,548 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/editor": {
+      "get": {
+        "summary": "Editor Catalog",
+        "operationId": "editor_catalog_api_v1_test_samples__sample_id__editor_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDatasetListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/scenes": {
+      "get": {
+        "summary": "Editor Scenes",
+        "operationId": "editor_scenes_api_v1_test_samples__sample_id__editor_scenes_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Editor Add",
+        "operationId": "editor_add_api_v1_test_samples__sample_id__editor_scenes_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorAddScenesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/scenes/{name}": {
+      "get": {
+        "summary": "Editor Scene",
+        "operationId": "editor_scene_api_v1_test_samples__sample_id__editor_scenes__name__get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/rasters": {
+      "get": {
+        "summary": "Editor Browser",
+        "operationId": "editor_browser_api_v1_test_samples__sample_id__editor_rasters_get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Folder"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorRasterBrowserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/rasters/{name}": {
+      "get": {
+        "summary": "Editor Raster",
+        "operationId": "editor_raster_api_v1_test_samples__sample_id__editor_rasters__name__get",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "V"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/drafts/{name}": {
+      "put": {
+        "summary": "Editor Save",
+        "operationId": "editor_save_api_v1_test_samples__sample_id__editor_drafts__name__put",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorSaveDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDraftInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Editor Discard Scene",
+        "operationId": "editor_discard_scene_api_v1_test_samples__sample_id__editor_drafts__name__delete",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDiscardDraftsResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/drafts": {
+      "delete": {
+        "summary": "Editor Discard",
+        "operationId": "editor_discard_api_v1_test_samples__sample_id__editor_drafts_delete",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorDiscardDraftsResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/drafts/import": {
+      "post": {
+        "summary": "Editor Import",
+        "operationId": "editor_import_api_v1_test_samples__sample_id__editor_drafts_import_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetEditorImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorSceneListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test-samples/{sample_id}/editor/drafts/publish": {
+      "post": {
+        "summary": "Editor Publish",
+        "operationId": "editor_publish_api_v1_test_samples__sample_id__editor_drafts_publish_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-sample-batches": {
       "get": {
         "summary": "Get Creation Queue",
@@ -2505,6 +3047,16 @@
                 }
               ],
               "title": "Class Key"
+            }
+          },
+          {
+            "name": "include_empty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Empty"
             }
           }
         ],
@@ -4661,6 +5213,54 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Result Api V1 Pseudolabel Jobs  Job Id  Result Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/test-f1": {
+      "post": {
+        "summary": "Post Training Test F1",
+        "operationId": "post_training_test_f1_api_v1_results_training__result_id__test_f1_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TrainingResultTestF1Info"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Post Training Test F1 Api V1 Results Training  Result Id  Test F1 Post"
                 }
               }
             }
@@ -11562,7 +12162,11 @@
                 "type": "string",
                 "enum": [
                   "current",
-                  "stale"
+                  "stale",
+                  "queued",
+                  "running",
+                  "error",
+                  "unavailable"
                 ]
               },
               {
@@ -12108,7 +12712,7 @@
           },
           "image_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Image Count"
           },
           "imagery_type": {
@@ -12809,7 +13413,7 @@
           },
           "image_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Image Count"
           },
           "enabled_image_count": {
@@ -12819,7 +13423,7 @@
           },
           "actual_object_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Actual Object Count"
           },
           "enabled_object_count": {
@@ -12976,6 +13580,15 @@
             "type": "string",
             "minLength": 1,
             "title": "Dataset Key"
+          },
+          "creation_mode": {
+            "type": "string",
+            "enum": [
+              "automatic",
+              "manual"
+            ],
+            "title": "Creation Mode",
+            "default": "automatic"
           },
           "tile_width": {
             "type": "integer",
@@ -13258,7 +13871,7 @@
           },
           "image_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Image Count"
           },
           "enabled_image_count": {
@@ -13268,7 +13881,7 @@
           },
           "actual_object_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Actual Object Count"
           },
           "enabled_object_count": {
@@ -13319,7 +13932,7 @@
           },
           "territory_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Territory Count"
           },
           "warnings": {
@@ -14033,7 +14646,7 @@
           },
           "image_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Image Count"
           },
           "enabled_image_count": {
@@ -14043,7 +14656,7 @@
           },
           "actual_object_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Actual Object Count"
           },
           "enabled_object_count": {
@@ -14117,7 +14730,7 @@
           },
           "object_count": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Object Count"
           },
           "class_object_counts": {

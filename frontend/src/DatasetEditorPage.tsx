@@ -274,11 +274,16 @@ export function DatasetEditorPage({
   run,
   registerRouteGuard,
   initialDatasetKey,
+  testSampleId,
 }: {
   run: Runner;
   registerRouteGuard: (guard: (() => boolean) | null) => void;
   initialDatasetKey?: string;
+  testSampleId?: string;
 }) {
+  const editorPath = (key: string) => testSampleId
+    ? `/test-samples/${encodeURIComponent(testSampleId)}/editor`
+    : `/dataset-editor/datasets/${encodeURIComponent(key)}`;
   const [datasets, setDatasets] = useState<EditorDataset[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(true);
   const classes = useMemo(
@@ -510,14 +515,14 @@ export function DatasetEditorPage({
     if (showLoading) setDatasetsLoading(true);
     try {
       const payload = await run(() =>
-        apiJson<{ datasets: EditorDataset[] }>("/dataset-editor/datasets"),
+        apiJson<{ datasets: EditorDataset[] }>(testSampleId ? editorPath("") : "/dataset-editor/datasets"),
       );
       if (!payload) return;
       setDatasets(payload.datasets);
     } finally {
       if (showLoading) setDatasetsLoading(false);
     }
-  }, [run]);
+  }, [run, testSampleId]);
 
   useEffect(() => {
     void loadDatasets();
@@ -558,7 +563,7 @@ export function DatasetEditorPage({
       }
       const payload = await run(() =>
         apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
-          `/dataset-editor/datasets/${encodeURIComponent(key)}/scenes`,
+          `${editorPath(key)}/scenes`,
         ),
       );
       if (
@@ -628,7 +633,7 @@ export function DatasetEditorPage({
       || selectedDataset.materialization_status === "failed"
     ) {
       void apiJson(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes`,
+        `${editorPath(datasetKey)}/scenes`,
       ).catch(() => undefined);
     }
   }, [datasetKey, loadScenes, selectedDataset?.key, selectedDataset?.materialization_status]);
@@ -669,7 +674,7 @@ export function DatasetEditorPage({
       }
       const payload = await run(() =>
         apiJson<SceneDetail>(
-          `/dataset-editor/datasets/${encodeURIComponent(key)}/scenes/${encodeURIComponent(name)}`,
+          `${editorPath(key)}/scenes/${encodeURIComponent(name)}`,
         ),
       );
       if (
@@ -734,7 +739,7 @@ export function DatasetEditorPage({
         setDraftSaveStatuses((current) => ({ ...current, [name]: "saving" }));
         try {
           await apiJson<{ deleted_count: number }>(
-            `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/${encodeURIComponent(name)}`,
+            `${editorPath(key)}/drafts/${encodeURIComponent(name)}`,
             { method: "DELETE" },
           );
           if (datasetKeyRef.current !== key) return true;
@@ -780,7 +785,7 @@ export function DatasetEditorPage({
       setDraftSaveStatuses((current) => ({ ...current, [name]: "saving" }));
       try {
         const saved = await apiJson<DraftInfo>(
-          `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/${encodeURIComponent(name)}`,
+          `${editorPath(key)}/drafts/${encodeURIComponent(name)}`,
           {
             method: "PUT",
             body: {
@@ -938,6 +943,7 @@ export function DatasetEditorPage({
 
   const loadPseudoMarkup = useCallback(
     async (ensure: boolean, retry = false) => {
+      if (testSampleId) return null;
       if (!isCurrentDatasetScene(
         datasetKey,
         loadedScenesDatasetKeyRef.current,
@@ -946,7 +952,7 @@ export function DatasetEditorPage({
       )) return null;
       const requestId = ++pseudoLoadRequestRef.current;
       const cacheKey = activePseudoCacheKey;
-      const path = `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup${retry ? "?retry=true" : ""}`;
+      const path = `${editorPath(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/pseudo-markup${retry ? "?retry=true" : ""}`;
       setPseudoRequestPending(true);
       try {
         const payload = await apiJson<PseudoMarkupInfo>(
@@ -1521,6 +1527,7 @@ export function DatasetEditorPage({
   useEffect(() => {
     if (!publication || publication.status === "published") return;
     const timer = window.setInterval(() => {
+      if (testSampleId) return;
       void apiJson<PublicationInfo>(
         `/dataset-editor/publication/${encodeURIComponent(publication.commit)}`,
       )
@@ -1632,7 +1639,7 @@ export function DatasetEditorPage({
     setBusy(true);
     const preview = await run(() =>
       apiJson<RebuildPreview>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/rebuild/preview`,
+        `${editorPath(datasetKey)}/rebuild/preview`,
         { method: "POST" },
       ),
     );
@@ -1645,7 +1652,7 @@ export function DatasetEditorPage({
     setBusy(true);
     const result = await run(() =>
       apiJson<RebuildResult>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/rebuild`,
+        `${editorPath(datasetKey)}/rebuild`,
         {
           method: "POST",
           body: { preview_token: rebuildPreview.preview_token, mode },
@@ -1811,7 +1818,7 @@ export function DatasetEditorPage({
     setDownloading(true);
     try {
       const result = await run(() =>
-        apiDownloadGet(`/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/download`),
+        apiDownloadGet(testSampleId ? `/test-samples/${testSampleId}/download` : `${editorPath(datasetKey)}/download`),
       );
       if (result) downloadBlob(result.blob, result.filename || "датасет.zip");
     } finally {
@@ -1832,7 +1839,7 @@ export function DatasetEditorPage({
     draftSaveTimersRef.current.clear();
     const result = await run(() =>
       apiJson<{ deleted_count: number }>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/drafts`,
+        `${editorPath(datasetKey)}/drafts`,
         { method: "DELETE" },
       ),
     );
@@ -1857,7 +1864,7 @@ export function DatasetEditorPage({
     }
     const result = await run(() =>
       apiJson<MutationResult>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/drafts/publish`,
+        `${editorPath(datasetKey)}/drafts/publish`,
         { method: "POST" },
       ),
     );
@@ -1908,7 +1915,7 @@ export function DatasetEditorPage({
       const uploaded = await readAnnotationFiles(importFiles);
       if (datasetKeyRef.current !== key) return;
       const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
-        `/dataset-editor/datasets/${encodeURIComponent(key)}/drafts/import`,
+        `${editorPath(key)}/drafts/import`,
         { method: "POST", body: { scenes: uploaded, clip_to_footprint: clipToFootprint } },
       );
       if (datasetKeyRef.current !== key) return;
@@ -1931,7 +1938,7 @@ export function DatasetEditorPage({
     if (!datasetKey) return;
     const payload = await run(() =>
       apiJson<RasterBrowser>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/rasters?folder=${encodeURIComponent(folder)}`,
+        `${editorPath(datasetKey)}/rasters?folder=${encodeURIComponent(folder)}`,
       ),
     );
     if (payload) {
@@ -1949,7 +1956,7 @@ export function DatasetEditorPage({
     setBusy(true);
     const result = await run(() =>
       apiJson<MutationResult>(
-        `/dataset-editor/datasets/${encodeURIComponent(datasetKey)}/scenes`,
+        `${editorPath(datasetKey)}/scenes`,
         { method: "POST", body },
       ),
     );
@@ -1969,8 +1976,9 @@ export function DatasetEditorPage({
     <>
       <header className="page-header">
         <div className="page-title">
-          <h1>Редактор датасетов</h1>
-          <p>Один GeoJSON на снимок · черновики сохраняются на сервере и публикуются отдельно</p>
+          <h1>{testSampleId ? "Редактор тестовой разметки" : "Редактор датасетов"}</h1>
+          <p>{testSampleId ? `${selectedDataset?.name || "Тестовая разметка"} · черновики сохраняются отдельно, F1 пересчитывается вручную` : "Один GeoJSON на снимок · черновики сохраняются на сервере и публикуются отдельно"}</p>
+          {testSampleId ? <a href={`#/test-markups/${testSampleId}`}>К составу и метрикам разметки</a> : null}
         </div>
         {publication ? (
           <span className={`badge ${publication.status === "published" ? "ok" : "running"}`}>
@@ -1980,7 +1988,7 @@ export function DatasetEditorPage({
       </header>
 
       <section className="dataset-editor-selectors panel">
-        <label className="field">
+        {!testSampleId ? <><label className="field">
           <span>Класс</span>
           <select value={classKey} onChange={selectClass}>
             {classes.map((item) => <option key={item.key} value={item.key}>{item.name}</option>)}
@@ -1993,7 +2001,7 @@ export function DatasetEditorPage({
               <option key={item.key} value={item.key}>{item.dataset_name} ({item.scene_count})</option>
             ))}
           </select>
-        </label>
+        </label></> : null}
         <button
           className="secondary"
           type="button"
@@ -2021,12 +2029,12 @@ export function DatasetEditorPage({
         <button
           className="secondary"
           type="button"
-          disabled={busy || downloading || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
-          aria-label={downloading ? "Скачивание датасета" : "Скачать датасет"}
-          title="Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"
+          disabled={busy || downloading || !datasetKey || Boolean(testSampleId && !scenes.length) || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          aria-label={downloading ? "Скачивание разметки" : testSampleId ? "Скачать тестовую разметку" : "Скачать датасет"}
+          title={testSampleId ? "Скачать опубликованные TIFF, GeoJSON и маски тестовой разметки" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
           onClick={() => void downloadDataset()}
         >
-          <Download size={16} /><span className="compact-control-label">{downloading ? "Скачивание…" : "Скачать датасет"}</span>
+          <Download size={16} /><span className="compact-control-label">{downloading ? "Скачивание…" : testSampleId ? "Скачать разметку" : "Скачать датасет"}</span>
         </button>
         {selectedDataset?.combined ? (
           <button
@@ -2092,9 +2100,9 @@ export function DatasetEditorPage({
                           Разметка: <strong>{datasetTotals.positive}</strong>
                         </span>
                       )}
-                  <span style={{ color: HARD_NEGATIVE_COLOR }}>
+                  {!testSampleId ? <span style={{ color: HARD_NEGATIVE_COLOR }}>
                     Hard negative: <strong>{datasetTotals.hardNegative}</strong>
-                  </span>
+                  </span> : null}
                 </div>
               </div>
               <button className="secondary icon-button mobile-only" type="button" aria-label="Список снимков" aria-expanded={scenesExpanded} aria-controls="dataset-scene-list" onClick={() => setScenesExpanded((value) => !value)}>
@@ -2179,9 +2187,9 @@ export function DatasetEditorPage({
                             Разметка: <strong>{counts.positive}</strong>
                           </i>
                         )}
-                      <i style={{ color: HARD_NEGATIVE_COLOR }}>
+                      {!testSampleId ? <i style={{ color: HARD_NEGATIVE_COLOR }}>
                         Hard negative: <strong>{counts.hardNegative}</strong>
-                      </i>
+                      </i> : null}
                     </span>
                   </button>
                 );
@@ -2294,10 +2302,10 @@ export function DatasetEditorPage({
                         </button>
                       ) : null}
                     </div>
-                    <div className="dataset-editor-object-switch" role="group" aria-label="Объекты или зоны разметки" style={{ "--object-color": "#A855F7" } as CSSProperties}>
+                    {!testSampleId ? <div className="dataset-editor-object-switch" role="group" aria-label="Объекты или зоны разметки" style={{ "--object-color": "#A855F7" } as CSSProperties}>
                       <button type="button" className={!zoneMode ? "active" : ""} aria-pressed={!zoneMode} onClick={() => switchAnnotationTool(false)}>Объекты</button>
                       <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур может выходить за край снимка: используется только пересечение со снимком">Размеченная зона</button>
-                    </div>
+                    </div> : null}
                     {zoneMode ? (
                       selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
                         <option value="annotation_zone">Все классы</option>
@@ -2338,7 +2346,7 @@ export function DatasetEditorPage({
                               </button>
                             );
                           })
-                        ) : (
+                        ) : !testSampleId ? (
                           <button
                             type="button"
                             className={role === "hard_negative" ? "active" : ""}
@@ -2349,9 +2357,9 @@ export function DatasetEditorPage({
                           >
                             <span className="dataset-editor-color-dot" />Hard negative
                           </button>
-                        )}
+                        ) : null}
                       </div>
-                    ) : (
+                    ) : !testSampleId ? (
                       <label
                         className={`dataset-editor-role-switch ${role === "hard_negative" ? "negative" : "positive"}`}
                         title={role === "positive" ? "Роль positive. Переключить вправо на hard negative" : "Роль hard negative. Переключить влево на positive"}
@@ -2366,7 +2374,7 @@ export function DatasetEditorPage({
                         <span className="dataset-editor-role-track" aria-hidden="true"><span /></span>
                         <span aria-hidden="true">−</span>
                       </label>
-                    )}
+                    ) : null}
                     <button
                       className="secondary icon-button dataset-editor-icon-button"
                       type="button"
@@ -2390,7 +2398,7 @@ export function DatasetEditorPage({
                       className={`${activeDraft.current.deleted ? "secondary" : "danger"} icon-button dataset-editor-icon-button`}
                       type="button"
                       disabled={busy || drawInProgress}
-                      aria-label={activeDraft.current.deleted ? "Отменить удаление снимка" : "Удалить снимок из датасета"}
+                      aria-label={activeDraft.current.deleted ? "Отменить удаление снимка" : testSampleId ? "Удалить снимок из тестовой разметки" : "Удалить снимок из датасета"}
                       title={activeDraft.current.deleted ? "Отменить удаление снимка" : "Пометить снимок на удаление; действие сохраняется в черновике"}
                       onClick={() => void removeScene()}
                     >
@@ -2406,7 +2414,7 @@ export function DatasetEditorPage({
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
-                <div className="dataset-editor-legend dataset-editor-zone-legend" role="group" aria-label="Размеченные зоны">
+                {!testSampleId ? <div className="dataset-editor-legend dataset-editor-zone-legend" role="group" aria-label="Размеченные зоны">
                   <button type="button" className={`dataset-editor-class-chip${hiddenClasses.has("annotation_zone") ? " is-hidden" : ""}`}
                     style={{ "--object-color": "#A855F7" } as CSSProperties}
                     aria-label="Показывать размеченные зоны" aria-pressed={!hiddenClasses.has("annotation_zone")}
@@ -2414,7 +2422,7 @@ export function DatasetEditorPage({
                     <i aria-hidden="true" /><span>Зоны разметки</span><strong>{activeZoneCount}</strong>
                   </button>
                   <span className="muted">{activeZoneCount ? "Обучение только внутри зон" : "Используется весь снимок"}</span>
-                </div>
+                </div> : null}
                 {selectedDataset?.task === "multiclass" ? (
                   <div className="dataset-editor-legend" role="group" aria-label="Видимость классов на карте">
                     {legendClasses.map((item) => (
@@ -2445,12 +2453,12 @@ export function DatasetEditorPage({
                     className="dataset-editor-map"
                     ref={mapTargetRef}
                     role="application"
-                    aria-label="Карта редактора датасета"
+                    aria-label={testSampleId ? "Карта редактора тестовой разметки" : "Карта редактора датасета"}
                     tabIndex={0}
                     onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
                   />
                   <div className="dataset-editor-map-controls">
-                    <button
+                    {!testSampleId ? <button
                       className={`${pseudoVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"
                       disabled={pseudoRequestPending || activeDraft.baseRevision === NEW_SCENE_REVISION}
@@ -2462,7 +2470,7 @@ export function DatasetEditorPage({
                       onClick={togglePseudoMarkup}
                     >
                       <Layers size={17} />
-                    </button>
+                    </button> : null}
                     <button
                       className={`${annotationsVisible ? "primary" : "secondary"} icon-button dataset-editor-map-control`}
                       type="button"

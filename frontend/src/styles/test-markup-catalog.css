@@ -31,3 +31,8 @@
   .test-markup-browser .test-markup-card { padding: 12px; gap: 10px; }
   .test-markup-browser .test-markup-card-header .icon-button { min-height: 36px; min-width: 36px; }
 }
+.test-f1-refresh-control { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.test-f1-score-actions { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.test-f1-refresh.icon-button { min-width: 28px; width: 28px; min-height: 28px; padding: 4px; flex: none; }
+.test-f1-refresh-control .error-text { max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .test-f1-refresh.icon-button { min-width: 44px; width: 44px; min-height: 44px; } }

@@ -1,8 +1,8 @@
-import { CircleAlert, ChevronDown, ChevronUp, Layers3, LoaderCircle, Play, Square, Star, Trash2 } from "lucide-react";
+import { CircleAlert, ChevronDown, ChevronUp, Layers3, LoaderCircle, PencilLine, Play, Square, Star, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { apiJson } from "./api/client";
-import type { JobDetail, TestSampleBatchCreate, TestSampleBatchInfo, TestSampleBatchOptionsResponse, TestSampleCreationSettings } from "./api/types";
+import type { JobDetail, TestSampleBatchCreate, TestSampleBatchInfo, TestSampleBatchOptionsResponse, TestSampleCreationSettings, TestSampleDetail } from "./api/types";
 import { formatDateTime, shortVersion } from "./utils/format";
 import { estimateTestMarkupImageVolume, formatTestMarkupImageVolume } from "./utils/testMarkups";
 import { useTestMarkupClasses } from "./useTestMarkupClasses";
@@ -15,6 +15,8 @@ const statusLabels = { queued: "В очереди", running: "Создаётся
 const pseudoLabels = { ready: "Псевдоразметка готова", queued: "Псевдоразметка в очереди", running: "Создаётся псевдоразметка", unavailable: "Псевдоразметки нет", error: "Ошибка псевдоразметки" };
 
 export function TestMarkupCreatePage({ run }: { run: Runner }) {
+  const [creationMode, setCreationMode] = useState<"automatic" | "manual">("automatic");
+  const [manualName, setManualName] = useState("");
   const [options, setOptions] = useState<TestSampleBatchOptionsResponse | null>(null);
   const { index, classKey, setClassKey, loadClasses } = useTestMarkupClasses(run, true);
   const [datasetKey, setDatasetKey] = useState("");
@@ -33,9 +35,9 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const loadOptions = useCallback(async () => {
     if (!classKey || !classesLoaded) return;
     const revision = ++optionsRequest.current;
-    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>(`/test-sample-batches/options?class_key=${encodeURIComponent(classKey)}`));
+    const payload = await run(() => apiJson<TestSampleBatchOptionsResponse>(`/test-sample-batches/options?class_key=${encodeURIComponent(classKey)}${creationMode === "manual" ? "&include_empty=true" : ""}`));
     if (!payload || revision !== optionsRequest.current) return;
-    optionsCache.current.set(classKey, payload);
+    optionsCache.current.set(`${classKey}:${creationMode}`, payload);
     setOptions(payload);
     setDrafts((current) => {
       const updated = { ...current };
@@ -44,7 +46,7 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
       }
       return updated;
     });
-  }, [run, classKey, classesLoaded]);
+  }, [run, classKey, classesLoaded, creationMode]);
   const loadQueue = useCallback(async () => {
     const revision = ++queueRequest.current;
     const payload = await run(() => apiJson<TestSampleBatchInfo[]>("/test-sample-batches"));
@@ -57,10 +59,10 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   }, [run, loadClasses]);
   useEffect(() => { void loadQueue(); }, [loadQueue]);
   useEffect(() => {
-    setOptions(optionsCache.current.get(classKey) || null);
+    setOptions(optionsCache.current.get(`${classKey}:${creationMode}`) || null);
     void loadOptions();
     return () => { optionsRequest.current += 1; };
-  }, [classKey, loadOptions]);
+  }, [classKey, creationMode, loadOptions]);
   const selectedClass = options?.classes?.find((group) => group.class_key === classKey);
   const datasets = selectedClass?.datasets || [];
   const dataset = datasets.find((source) => source.dataset_key === datasetKey);
@@ -95,6 +97,17 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (creationMode === "manual") {
+      if (!dataset || !manualName.trim() || submitting) return;
+      setSubmitting(true);
+      try {
+        const sample = await run(() => apiJson<TestSampleDetail>("/test-samples", { method: "POST", body: {
+          dataset_key: dataset.dataset_key, name: manualName.trim(), creation_mode: "manual",
+        } }));
+        if (sample) window.location.hash = `/test-markups/${sample.id}/edit`;
+      } finally { setSubmitting(false); }
+      return;
+    }
     if (!dataset || !valid || submitting) return;
     const request: TestSampleBatchCreate = {
       tile_size: settings.tile_size, min_image_count: settings.min_image_count, image_count: settings.image_count,
@@ -121,8 +134,13 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
   const selectedIndex = index?.classes?.find((item) => item.key === classKey);
 
   return <div className="test-markup-create">
-    <header className="page-header"><div><h1>Создание тестовой разметки</h1><p>Один датасет — одно задание</p></div></header>
-    <form className={`panel creation-form${settings.use_optimization && dataset?.pseudo_status !== "ready" ? " needs-pseudo" : ""}`} onSubmit={submit}>
+    <header className="page-header"><div><h1>Создание тестовой разметки</h1><p>Нарезать автоматически или собрать вручную в редакторе</p></div></header>
+    <label className="field creation-mode-choice"><span>Способ создания</span>
+      <select aria-label="Способ создания тестовой разметки" value={creationMode} onChange={(event) => setCreationMode(event.target.value as "automatic" | "manual")}>
+        <option value="automatic">Автоматическая нарезка</option><option value="manual">Вручную в редакторе</option>
+      </select>
+    </label>
+    <form className={`panel creation-form${creationMode === "automatic" && settings.use_optimization && dataset?.pseudo_status !== "ready" ? " needs-pseudo" : ""}`} onSubmit={submit}>
       <div className="creation-source-fields">
         <label className="field creation-class"><span>Класс <small>Разметок: {selectedIndex?.sample_count ?? (index ? 0 : "…")}{selectedIndex?.has_primary ? " · есть основная" : ""}</small></span><select aria-label="Класс" value={classKey} onChange={(event) => { setClassKey(event.target.value); setShowNetworkWarning(false); }} disabled={!index?.classes?.length}>
           {!index?.classes?.length ? <option>{index ? "Нет классов с датасетами" : "Загрузка…"}</option> : null}{index?.classes?.map((group) => <option key={group.key} value={group.key}>{group.name}</option>)}
@@ -139,7 +157,11 @@ export function TestMarkupCreatePage({ run }: { run: Runner }) {
         </div>
       </div>
       <div className="creation-settings">
-        {dataset ? <>
+        {dataset && creationMode === "manual" ? <>
+          <label className="field"><span>Название тестовой разметки</span><input required maxLength={180} aria-label="Название тестовой разметки" value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+          <p className="muted">Создастся пустая разметка выбранного класса. В редакторе добавьте серверные снимки, загрузите GeoJSON или нарисуйте объекты. Обучающий датасет не изменится; инференс при создании не запускается.</p>
+          <button className="primary creation-submit" type="submit" disabled={submitting || !manualName.trim()}><PencilLine size={16} />{submitting ? "Создание…" : "Создать и открыть редактор"}</button>
+        </> : dataset ? <>
           <div className="creation-parameters">
             <label className="field"><span>Размер тайла, пикс.</span><select aria-label="Размер тайла" value={settings.tile_size} onChange={(event) => updateSettings({ tile_size: Number(event.target.value) as Settings["tile_size"] })}>{TEST_SAMPLE_TILE_SIZES.map((size) => <option key={size} value={size}>{size} × {size}</option>)}</select></label>
             <fieldset className="creation-range"><legend>Тайлов в итоге</legend><input type="number" inputMode="numeric" aria-label="Минимум тайлов" min="1" step="1" required value={settings.min_image_count || ""} onChange={(event) => updateSettings({ min_image_count: Number(event.target.value) })} /><span>—</span><input type="number" inputMode="numeric" aria-label="Максимум тайлов" min="1" step="1" required value={settings.image_count || ""} onChange={(event) => updateSettings({ image_count: Number(event.target.value) })} /></fieldset>

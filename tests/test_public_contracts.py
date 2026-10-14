@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 
 EXPECTED_API = {
@@ -145,8 +146,28 @@ def test_test_markup_fast_catalog_contract(monkeypatch) -> None:
     assert {p["name"] for p in paths["/api/v1/test-samples/classes"]["get"]["parameters"]} == {"include_empty"}
     assert {p["name"] for p in paths["/api/v1/test-samples/cards"]["get"]["parameters"]} == {"class_key"}
     assert "204" in paths["/api/v1/test-samples/classes/{class_key}/reconcile"]["post"]["responses"]
-    assert {p["name"] for p in paths["/api/v1/test-sample-batches/options"]["get"]["parameters"]} == {"class_key"}
+    assert {p["name"] for p in paths["/api/v1/test-sample-batches/options"]["get"]["parameters"]} == {"class_key", "include_empty"}
     assert "post" in paths["/api/v1/test-sample-batches/{batch_id}/cancel"]
+
+
+def test_manual_test_markup_reuses_editor_contracts(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TestSampleCreate, TestSampleCard, TestSampleTileInfo
+
+    assert TestSampleCreate.model_fields["creation_mode"].default == "automatic"
+    for dto, field in ((TestSampleCard, "image_count"), (TestSampleCard, "actual_object_count"), (TestSampleTileInfo, "object_count")):
+        assert dto.model_json_schema()["properties"][field]["minimum"] == 0
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    prefix = "/api/v1/test-samples/{sample_id}/editor"
+    for suffix in ("", "/scenes", "/scenes/{name}", "/rasters", "/rasters/{name}"):
+        assert "get" in paths[prefix + suffix]
+    assert "put" in paths[prefix + "/drafts/{name}"]
+    assert "post" in paths[prefix + "/drafts/publish"]
+    assert "post" in paths["/api/v1/results/training/{result_id}/test-f1"]
+    diagram = Path("frontend/public/news/manual-test-markup-editor.svg").read_text(encoding="utf-8")
+    assert "<title" in diagram and "пересчёт F1" in diagram
 
 
 def test_dataset_editor_import_contract(monkeypatch) -> None:

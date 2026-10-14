@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
@@ -71,9 +71,99 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from .common import RouteContext
+from mlsystem2.training_ui_api._dataset_editor import DatasetEditorConflict, DatasetEditorImportClippingRequired
+from mlsystem2.training_ui_api._markup_lock import test_sample_storage_lock
+from mlsystem2.training_ui_api._raster_http import raster_response
+from mlsystem2.training_ui_api._test_sample_editor import (
+    sample_editor_add_images, sample_editor_browse, sample_editor_catalog, sample_editor_detail,
+    sample_editor_discard, sample_editor_import, sample_editor_publish, sample_editor_raster,
+    sample_editor_save_draft, sample_editor_scenes,
+)
+from mlsystem2.training_ui_api.contracts import (
+    DatasetEditorAddScenesRequest, DatasetEditorDatasetListResponse, DatasetEditorDiscardDraftsResult,
+    DatasetEditorDraftInfo, DatasetEditorImportRequest, DatasetEditorMutationResult,
+    DatasetEditorRasterBrowserResponse, DatasetEditorSaveDraftRequest, DatasetEditorSceneDetail,
+    DatasetEditorSceneListResponse,
+)
 
 
 def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
+    def editor_call(operation):
+        try:
+            return _sample_or_404(operation)
+        except DatasetEditorConflict as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        except DatasetEditorImportClippingRequired as exc:
+            return JSONResponse(status_code=400, content={"code": "annotation_outside_footprint", "detail": str(exc)})
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor", response_model=DatasetEditorDatasetListResponse)
+    def editor_catalog(sample_id: uuid.UUID, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        return editor_call(lambda: sample_editor_catalog(db, ctx.config, sample_id, username))
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor/scenes", response_model=DatasetEditorSceneListResponse)
+    def editor_scenes(sample_id: uuid.UUID, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        return editor_call(lambda: sample_editor_scenes(db, ctx.config, sample_id, username))
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor/scenes/{name}", response_model=DatasetEditorSceneDetail)
+    def editor_scene(sample_id: uuid.UUID, name: str, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        return editor_call(lambda: sample_editor_detail(db, ctx.config, sample_id, name, username))
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor/rasters", response_model=DatasetEditorRasterBrowserResponse)
+    def editor_browser(sample_id: uuid.UUID, folder: str = "", db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
+        return editor_call(lambda: sample_editor_browse(db, ctx.config, sample_id, folder))
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor/rasters/{name}")
+    def editor_raster(sample_id: uuid.UUID, name: str, range_header: str | None = Header(default=None, alias="Range"),
+                      v: str | None = None, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        return editor_call(lambda: raster_response(sample_editor_raster(db, ctx.config, sample_id, name, username), range_header, v))
+
+    @app.put("/api/v1/test-samples/{sample_id}/editor/drafts/{name}", response_model=DatasetEditorDraftInfo)
+    def editor_save(sample_id: uuid.UUID, name: str, request: DatasetEditorSaveDraftRequest,
+                    db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        with test_sample_storage_lock(ctx.config, sample_id, write=True):
+            detail = editor_call(lambda: sample_editor_save_draft(db, ctx.config, sample_id, name, request, username))
+            db.commit()
+            return detail
+
+    @app.delete("/api/v1/test-samples/{sample_id}/editor/drafts", response_model=DatasetEditorDiscardDraftsResult)
+    def editor_discard(sample_id: uuid.UUID, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        result = editor_call(lambda: sample_editor_discard(db, sample_id, username))
+        db.commit()
+        return result
+
+    @app.delete("/api/v1/test-samples/{sample_id}/editor/drafts/{name}", response_model=DatasetEditorDiscardDraftsResult)
+    def editor_discard_scene(sample_id: uuid.UUID, name: str, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        result = editor_call(lambda: sample_editor_discard(db, sample_id, username, name))
+        db.commit()
+        return result
+
+    @app.post("/api/v1/test-samples/{sample_id}/editor/drafts/import", response_model=DatasetEditorSceneListResponse)
+    def editor_import(sample_id: uuid.UUID, request: DatasetEditorImportRequest,
+                      db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        with test_sample_storage_lock(ctx.config, sample_id, write=True):
+            result = editor_call(lambda: sample_editor_import(db, ctx.config, sample_id, request, username))
+            if not isinstance(result, JSONResponse):
+                db.commit()
+            return result
+
+    @app.post("/api/v1/test-samples/{sample_id}/editor/drafts/publish", response_model=DatasetEditorMutationResult)
+    def editor_publish(sample_id: uuid.UUID, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        def publish():
+            with sample_editor_publish(db, ctx.config, sample_id, username) as result:
+                db.commit()
+                return result
+        return editor_call(publish)
+
+    @app.post("/api/v1/test-samples/{sample_id}/editor/scenes", response_model=DatasetEditorMutationResult)
+    def editor_add(sample_id: uuid.UUID, request: DatasetEditorAddScenesRequest,
+                   db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        def add():
+            images = sample_editor_add_images(db, ctx.config, sample_id, request)
+            with sample_editor_publish(db, ctx.config, sample_id, username, images=images) as result:
+                db.commit()
+                return result
+        return editor_call(add)
+
     @app.get("/api/v1/test-sample-batches", response_model=list[TestSampleBatchInfo])
     def get_creation_queue(
         db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
@@ -120,10 +210,11 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
     )
     def get_test_sample_batch_options(
         class_key: str | None = None,
+        include_empty: bool = False,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> TestSampleBatchOptionsResponse:
-        return test_sample_batch_options(db, ctx.config, class_key=class_key)
+        return test_sample_batch_options(db, ctx.config, class_key=class_key, include_empty=include_empty)
 
     @app.post(
         "/api/v1/test-sample-batches/options/{dataset_key}/pseudo-markup",
@@ -273,8 +364,9 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> Response:
-        _sample_or_404(lambda: delete_test_sample(db, sample_id, ctx.config))
-        db.commit()
+        with test_sample_storage_lock(ctx.config, sample_id, write=True):
+            _sample_or_404(lambda: delete_test_sample(db, sample_id, ctx.config))
+            db.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.patch(

@@ -450,8 +450,7 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert _service.primary_training_result(session, class_row.key).id == second.id
         session.refresh(sample)
         fallback_job = session.get(JobRow, sample.evaluation_job_id)
-        assert fallback_job is not None
-        assert fallback_job.config["training_result_id"] == str(second.id)
+        assert fallback_job is None
         assert fallback_by_id[first.id].is_primary is False
         assert fallback_by_id[second.id].is_primary is False
         with pytest.raises(TrainingUIAPIError, match="не отмечена основной"):
@@ -468,7 +467,11 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         assert after_by_id[first.id].test_f1 is not None
         session.refresh(sample)
         direct_job = session.get(JobRow, sample.evaluation_job_id)
-        assert sample.metric_status == JobStatus.QUEUED.value
+        assert direct_job is None
+        assert sample.metric_status == "unavailable"
+        from mlsystem2.training_ui_api._test_samples import evaluate_test_sample_by_id
+        evaluate_test_sample_by_id(session, sample.id, config)
+        direct_job = session.get(JobRow, sample.evaluation_job_id)
         assert direct_job is not None
         assert direct_job.config["metric_target"] == "test_sample"
         assert direct_job.config["training_result_id"] == str(second.id)
@@ -482,6 +485,9 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         session.refresh(sample)
         templated_job = session.get(JobRow, sample.evaluation_job_id)
         assert direct_job.status == JobStatus.CANCELLED.value
+        assert templated_job is None
+        evaluate_test_sample_by_id(session, sample.id, config)
+        templated_job = session.get(JobRow, sample.evaluation_job_id)
         assert templated_job is not None
         assert templated_job.id != direct_job.id
         assert templated_job.config["metric_target"] == "test_sample"
@@ -502,6 +508,9 @@ def test_primary_training_result_switches_for_whole_class(tmp_path: Path, monkey
         session.refresh(sample)
         updated_template_job = session.get(JobRow, sample.evaluation_job_id)
         assert templated_job.status == JobStatus.CANCELLED.value
+        assert updated_template_job is None
+        evaluate_test_sample_by_id(session, sample.id, config)
+        updated_template_job = session.get(JobRow, sample.evaluation_job_id)
         assert updated_template_job is not None
         assert updated_template_job.id != templated_job.id
         assert updated_template_job.config["inference_template_id"] == str(updated_template.id)
@@ -816,12 +825,13 @@ def test_successful_training_does_not_assign_primary_star(
     session_factory = create_session_factory(config)
     Base.metadata.create_all(session_factory.kw["bind"])
     reconciled_class_keys: list[set[str]] = []
+    evaluated_result_ids: list[UUID] = []
     post_training_inference_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         _worker,
-        "reconcile_training_result_test_f1",
-        lambda *_args, **_kwargs: False,
+        "queue_training_result_test_f1",
+        lambda _session, result, _config, **_kwargs: evaluated_result_ids.append(result.id) or True,
     )
     monkeypatch.setattr(
         _worker,
@@ -880,6 +890,7 @@ def test_successful_training_does_not_assign_primary_star(
         _worker._finish_training_job(session, job, config, succeeded=True)
 
         assert result.status == ResultStatus.OK.value
+        assert evaluated_result_ids == [result.id]
         assert class_row.primary_training_result_id is None
         assert _service.primary_training_result(session, class_row.key).id == result.id
         assert reconciled_class_keys == [{class_row.key}]
@@ -3091,7 +3102,7 @@ def test_training_ui_frontend_is_react_vite_app() -> None:
     assert "Создать список сцен" in app_tsx
     assert "Каталог тестовых разметок" in app_tsx
     assert "Создание тестовых разметок" in app_tsx
-    assert "Пересчитать основной сетью" in app_tsx
+    assert "Пересчитать F1 основной сетью класса" in app_tsx
     assert "Оценить состав по псевдоразметке" in app_tsx
     assert "Оптимизация состава" in app_tsx
     assert "/optimize-preview" in app_tsx
