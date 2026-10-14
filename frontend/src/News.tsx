@@ -14,6 +14,11 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "training-rgb-band-name-aliases",
+  date: "2026-10-15",
+  title: "Исправлена проверка названий каналов при обучении",
+  updates: ["Обучение и дообучение теперь принимают полные названия каналов Green и Blue наравне с GRN и BLU. Правильные RGB-снимки больше не отклоняются из-за написания названий; проверка порядка, числа каналов и отличие NIR от alpha сохраняются. Исходные снимки и ранее обученные сети не изменяются."],
+}, {
   slug: "training-continuation-dataset-source",
   date: "2026-10-15",
   title: "Дообучение на прежнем или актуальном составе датасета",

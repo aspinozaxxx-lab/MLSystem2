@@ -432,6 +432,7 @@ def live_training(saved_training, request):
                            count=4, dtype="uint8", crs="EPSG:3857", transform=from_origin(left, 16, 1, 1), ALPHA="NO") as raster:
             raster.write(np.full((4, 16, 16), 40, dtype=np.uint8))
             raster.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined)
+            raster.descriptions = ("Red", "Green", "Blue", "NIR")
 
     def annotation(path, geometries):
         path.write_text(json.dumps({"type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
@@ -496,7 +497,10 @@ def test_continuation_uses_actual_scene_list_and_edited_geometry(live_training, 
         child = session.get(JobRow, child_id)
         child.config = {**child.config, "dataset.images_dir": str(env.source_dir / "чужие-снимки")}
         payload = _worker._build_training_config(session, child, env.config, env.config.scratch_root / str(child.id))
-        prepared = prepare_dataset(DatasetPreparationRequest(**payload["dataset"]))
+        prepared = prepare_dataset(DatasetPreparationRequest(
+            **payload["dataset"], expected_band_count=4, expected_dtype="uint8",
+            expected_band_names=["RED", "GRN", "BLU", "NIR"],
+        ))
         assert prepared.dataset is not None, prepared.report
         stems = {Path(scene.image_path).stem for scene in prepared.dataset.scenes}
         assert stems == {"scene_a", "scene_b" if dataset_source == "current" else "scene_removed"}

@@ -14,6 +14,7 @@ from rasterio.crs import CRS
 from ._constants import TARGET_CRS
 
 TOLERANCE = 1e-12
+_BAND_NAME_ALIASES = {"GREEN": "GRN", "BLUE": "BLU"}
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,10 @@ def validate_rasters(
                     "У снимка отсутствуют описания каналов; принят контракт "
                     f"{', '.join(expected_band_names)}: {path}"
                 )
-            elif actual != expected:
+            elif (
+                [_BAND_NAME_ALIASES.get(value, value) for value in actual]
+                != [_BAND_NAME_ALIASES.get(value, value) for value in expected]
+            ):
                 errors.append(
                     "Порядок описанных каналов снимка должен быть "
                     f"{', '.join(expected_band_names)}, получено "

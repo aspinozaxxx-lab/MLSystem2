@@ -871,6 +871,68 @@ def test_prepare_per_image_multiclass_validates_manifest_and_feature_classes(
     assert any("неизвестный класс" in error for error in invalid.report.errors)
 
 
+@pytest.mark.parametrize("count,allow_rgb_alpha", [(3, False), (4, False), (4, True)])
+@pytest.mark.parametrize("names", [("RED", "GRN", "BLU"), ("Red", "Green", "Blue"), (" red ", "gReEn", " blue ")])
+def test_prepare_dataset_accepts_equivalent_rgb_band_names(
+    tmp_path: Path, count: int, allow_rgb_alpha: bool, names: tuple[str, ...],
+) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    image = images / "scene.tif"
+    _write_raster(image, 50, 0, count=count)
+    with rasterio.open(image, "r+") as raster:
+        raster.descriptions = names + (("Alpha" if allow_rgb_alpha else "NIR",) if count == 4 else ())
+        raster.colorinterp = (
+            rasterio.enums.ColorInterp.red, rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+        ) + ((rasterio.enums.ColorInterp.alpha if allow_rgb_alpha else rasterio.enums.ColorInterp.undefined,) if count == 4 else ())
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    _write_per_image_annotation(annotations / "images_scene.geojson", ["positive"])
+    channels = 3 if allow_rgb_alpha else count
+    original_bytes = image.read_bytes()
+
+    result = prepare_dataset(DatasetPreparationRequest(
+        images_dir=str(images), annotations_dir=str(annotations), val_fraction=0.2,
+        expected_band_count=channels, allow_rgb_alpha=allow_rgb_alpha,
+        expected_dtype="uint8", expected_band_names=["RED", "GRN", "BLU", "NIR"][:channels],
+    ))
+
+    assert result.report.status == "ok", result.report.errors
+    assert result.dataset is not None
+    assert result.report.band_count == channels
+    assert result.report.warnings == []
+    assert image.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("names", [
+    ("Blue", "Green", "Red"), ("Red", "Blue", "Green"),
+    ("Red", "Green", "NIR"), ("Red", "Green", None),
+    ("Red", "Green", "Blue edge"),
+])
+def test_prepare_dataset_rejects_wrong_or_incomplete_rgb_band_names(
+    tmp_path: Path, names: tuple[str | None, ...],
+) -> None:
+    images = tmp_path / "images"
+    images.mkdir()
+    _write_raster(images / "scene.tif", 50, 0, count=3)
+    with rasterio.open(images / "scene.tif", "r+") as raster:
+        raster.descriptions = names
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    _write_per_image_annotation(annotations / "images_scene.geojson", ["positive"])
+
+    result = prepare_dataset(DatasetPreparationRequest(
+        images_dir=str(images), annotations_dir=str(annotations), val_fraction=0.2,
+        expected_band_count=3, expected_dtype="uint8", expected_band_names=["RED", "GRN", "BLU"],
+    ))
+
+    assert result.report.status == "error"
+    assert result.dataset is None
+    assert len(result.report.errors) == 1
+    assert "Порядок описанных каналов" in result.report.errors[0]
+
+
 def _write_raster(
     path: Path,
     value: int,

@@ -1035,7 +1035,7 @@ N+1 FP32 вероятностей. После `SlidingWindowSegmentation` бри
 
 1. CLI получает стабильный `settings.yml` через `--settings` и задание конкретного обучения через `--run`, вызывает `settings.api.load_settings(settings_path, run_path)` и инициализирует текущие настройки процесса. Совместимый legacy-режим `--config` остается для старых полных YAML.
 2. Создать или открыть запуск MLflow через `mlflow_adapter` и записать YAML задания запуска в артефакты.
-3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. Поддерживаются legacy binary/multiclass и per-image binary/multiclass через `dataset.annotations_dir`; multiclass-схема читается из manifest. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
+3. `dataset_preparing` принимает локальные пути, проверяет подготовленные TIFF, число каналов и `uint8`, затем возвращает список независимых `PreparedScene`. При проверке явно описанных каналов `GREEN/GRN` и `BLUE/BLU` равнозначны без учёта регистра и окружающих пробелов; порядок остаётся строгим, TIFF не изменяется. Поддерживаются legacy binary/multiclass и per-image binary/multiclass через `dataset.annotations_dir`; multiclass-схема читается из manifest. Общие растровые мозаики не создаются; перекрывающиеся TIFF остаются независимыми.
 4. Если `dataset_preparing` вернул ошибки, `train_pipeline` записывает отчет подготовки в MLflow и
    завершает конвейер с ошибкой.
 5. После успешной подготовки `train_pipeline` сохраняет в MLflow legacy TXT/GeoJSON либо все per-image GeoJSON вместе с manifest в `dataset/`.
