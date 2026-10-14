@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import hashlib
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -268,6 +269,86 @@ def test_geoalert_effective_postprocess_keeps_smooth_settings() -> None:
     assert result["postprocess.smooth.offset"] == 0.125
 
 
+@pytest.mark.parametrize("object_output", [False, True], ids=["binary", "object_f1_v2"])
+@pytest.mark.parametrize(
+    ("mode", "expected_mode", "expected_brick"),
+    [
+        ("keep_compact", "keep_compact", "FilterNonCompactObjects"),
+        ("remove_compact", "remove_compact", "FilterCompactObjects"),
+        (None, "remove_compact", "FilterCompactObjects"),
+    ],
+)
+def test_effective_postprocess_preserves_compact_mode_in_pipeline(
+    object_output, mode, expected_mode, expected_brick,
+) -> None:
+    postprocess = {
+        **INFERENCE_BASE_DEFAULT_CONFIG,
+        "postprocess.filter_compact_objects.enabled": True,
+        "postprocess.filter_compact_objects.min_isoperimetric_quotient": 0.3,
+        "postprocess.filter_compact_objects.max_bbox_ratio": 4.0,
+    }
+    if mode is None:
+        postprocess.pop("postprocess.filter_compact_objects.mode")
+    else:
+        postprocess["postprocess.filter_compact_objects.mode"] = mode
+    config = {
+        "pipeline_variant": "object_f1_v2" if object_output else "next_gen2",
+        "postprocess_config": postprocess,
+    }
+
+    effective = _effective_postprocess_config(config, 8, external=False)
+    pipeline = yaml.safe_load(_model_export.build_geoalert_pipeline_yaml(
+        model_name="zu500_orto", sample_size=512, input_channels=3,
+        probability_output=True, object_output=object_output,
+        postprocess_config=effective,
+    ))
+    vector_processing = next(
+        brick for brick in pipeline["config"]["bricks"]
+        if brick["_class"] == "UnifiedVectorProcessing"
+    )
+    compact_filters = [
+        brick for brick in vector_processing["bricks"]
+        if brick["_class"] in {"FilterCompactObjects", "FilterNonCompactObjects"}
+    ]
+
+    assert effective["postprocess.filter_compact_objects.enabled"] is True
+    assert effective["postprocess.filter_compact_objects.mode"] == expected_mode
+    assert len(compact_filters) == 1
+    assert compact_filters[0]["_class"] == expected_brick
+    assert compact_filters[0]["min_isoperimetric_quotient"] == 0.3
+    assert compact_filters[0]["max_bbox_ratio"] == 4.0
+    assert config["postprocess_config"] == postprocess
+
+
+@pytest.mark.parametrize("mode", ["keep_compact", "remove_compact"])
+@pytest.mark.parametrize("external", [False, True])
+def test_effective_postprocess_does_not_enable_disabled_or_external_compact_filter(
+    mode, external,
+) -> None:
+    config = {
+        "pipeline_variant": "object_f1_v2",
+        "postprocess_config": {
+            **INFERENCE_BASE_DEFAULT_CONFIG,
+            "postprocess.filter_compact_objects.enabled": external,
+            "postprocess.filter_compact_objects.mode": mode,
+        },
+    }
+
+    effective = _effective_postprocess_config(config, 8, external=external)
+    pipeline = yaml.safe_load(_model_export.build_geoalert_pipeline_yaml(
+        model_name="zu500_orto", sample_size=512, input_channels=3,
+        object_output=True, postprocess_config=effective,
+    ))
+
+    if external:
+        assert effective == {}
+    else:
+        assert effective["postprocess.filter_compact_objects.enabled"] is False
+    assert not {"FilterCompactObjects", "FilterNonCompactObjects"}.intersection(
+        _pipeline_bricks(pipeline)
+    )
+
+
 @pytest.mark.parametrize("image_count", [1, 24, 100])
 def test_common_template_disables_implicit_postprocess_but_preserves_area_override(image_count):
     template = {"default_config": INFERENCE_BASE_DEFAULT_CONFIG}
@@ -515,6 +596,212 @@ def test_cached_next_gen2_keeps_probability_pipeline_after_postprocess_change(tm
     assert bricks[2]["thresholds"] == [0.73]
     assert bricks[2]["strict_more"] is True
     assert bricks[3]["min_size"] == 16
+
+
+def test_cached_object_v2_rebuilds_compact_pipeline_without_reexporting_model(
+    tmp_path, monkeypatch,
+) -> None:
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    exports = []
+    separation = {
+        "profile": "object_f1_v2", "foreground_threshold": 0.5,
+        "boundary_threshold": 0.6,
+    }
+
+    def export(**kwargs):
+        name = kwargs["model_name"]
+        exports.append(name)
+        model_zip = io.BytesIO()
+        with zipfile.ZipFile(model_zip, "w") as archive:
+            archive.writestr(f"{name}/config.pbtxt", f'name: "{name}"')
+            archive.writestr(f"{name}/1/model.onnx", b"unchanged-model")
+        path = tmp_path / "export.zip"
+        metadata = {
+            "model_archive": "model.zip", "pipeline": "pipeline.yaml", "input_channels": 3,
+            "sample_size": 512, "task": "binary", "output_kind": "object_probabilities",
+            "threshold": 0.5, "pipeline_variant": "object_f1_v2",
+            "object_separation": separation,
+        }
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("export_metadata.json", json.dumps(metadata))
+            archive.writestr("model.zip", model_zip.getvalue())
+            archive.writestr("pipeline.yaml", _model_export.build_geoalert_pipeline_yaml(
+                model_name=name, sample_size=512, input_channels=3,
+                probability_output=True, object_output=True, object_separation=separation,
+                threshold=0.5, postprocess_config=kwargs["postprocess_config"],
+            ))
+        return SimpleNamespace(zip_path=path, cleanup=lambda: None)
+
+    monkeypatch.setattr(_geoalert_runner, "build_triton_model_export_zip", export)
+    config = {
+        "geoalert_model_repository": str(tmp_path / "models"),
+        "geoalert_pipeline_root": str(tmp_path / "pipelines"),
+        "tile_size": 512, "threshold": 0.5, "pipeline_variant": "object_f1_v2",
+        "postprocess_config": {
+            **INFERENCE_BASE_DEFAULT_CONFIG,
+            "postprocess.filter_compact_objects.enabled": True,
+            "postprocess.filter_compact_objects.mode": "keep_compact",
+        },
+    }
+    effective = _effective_postprocess_config(config, 8, external=False)
+    old_effective = dict(effective)
+    old_effective.pop("postprocess.filter_compact_objects.mode")
+    old = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config=old_effective,
+    )
+    model_path = old.model_dir / "1" / "model.onnx"
+    model_mtime_ns = model_path.stat().st_mtime_ns
+    old_yaml = old.pipeline_path.read_bytes()
+    assert "FilterCompactObjects" in old.bricks
+
+    fixed = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config=effective,
+    )
+    repeated = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config=effective,
+    )
+
+    assert exports == [old.model_name]
+    assert fixed.model_name == old.model_name
+    assert fixed.model_dir == old.model_dir
+    assert fixed.pipeline_path != old.pipeline_path
+    assert repeated == fixed
+    assert model_path.read_bytes() == b"unchanged-model"
+    assert model_path.stat().st_mtime_ns == model_mtime_ns
+    assert old.pipeline_path.read_bytes() == old_yaml
+    assert "FilterNonCompactObjects" in fixed.bricks
+    assert "FilterCompactObjects" not in fixed.bricks
+    bricks = yaml.safe_load(fixed.pipeline_path.read_text(encoding="utf-8"))["config"]["bricks"]
+    assert bricks[0]["_class"] == "ObjectF1Segmentation"
+    assert bricks[0]["separation"]["profile"] == "object_f1_v2"
+    assert bricks[0]["separation"]["boundary_threshold"] == 0.6
+    assert bricks[0]["threshold"] == 0.5
+    assert bricks[0]["adapter"]["output_dtype"] == "float32"
+    assert bricks[1]["value_property_name"] == "instance_id"
+    assert bricks[1]["mark_boundary_objects"] is True
+    assert bricks[1]["boundary_tolerance_pixels"] == 1.0
+    assert bricks[1]["boundary_tag"] == "_touches_raster_boundary"
+
+
+def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    config = {
+        "geoalert_model_repository": str(tmp_path / "models"),
+        "geoalert_pipeline_root": str(tmp_path / "pipelines"),
+        "tile_size": 512, "threshold": 0.5, "pipeline_variant": "object_f1_v2",
+    }
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                         default=str).encode("utf-8")).hexdigest()
+
+    model_digest = digest({
+        "runtime_contract": 6, "checkpoint_sha256": checkpoint_sha, "tile_size": 512,
+        "threshold": 0.5, "external": None, "python_site_packages": None,
+    })
+    model_name = f"mls_ortho_{model_digest[:24]}"
+    model_dir = tmp_path / "models" / model_name
+    (model_dir / "1").mkdir(parents=True)
+    (model_dir / "config.pbtxt").write_text(f'name: "{model_name}"', encoding="utf-8")
+    model_path = model_dir / "1" / "model.onnx"
+    model_path.write_bytes(b"unchanged-onnx")
+    model_mtime = model_path.stat().st_mtime_ns
+    pipeline_root = tmp_path / "pipelines"
+    pipeline_root.mkdir()
+    separation = {"profile": "object_f1_v2", "boundary_threshold": 0.65}
+    model_marker_path = pipeline_root / f"{model_name}.model.json"
+    model_marker_path.write_text(json.dumps({
+        "identity_sha256": model_digest, "checkpoint_sha256": checkpoint_sha,
+        "model_name": model_name, "input_channels": 3, "sample_size": 512,
+        "class_schema": [], "task": "binary", "output_kind": "object_probabilities",
+        "threshold": 0.5, "object_separation": separation,
+    }), encoding="utf-8")
+    model_marker_bytes = model_marker_path.read_bytes()
+    pipeline_identity = {
+        "pipeline_contract": 6, "model_sha256": model_digest, "context": 0,
+        "resolution_m": None, "postprocess": {}, "class_schema": [],
+    }
+    old_digest = digest(pipeline_identity)
+    old_pipeline = pipeline_root / f"{model_name}_{old_digest[:12]}.yaml"
+    old_pipeline.write_text("version: 0.1.4\n", encoding="utf-8")
+    old_marker = old_pipeline.with_suffix(".json")
+    old_marker.write_text(json.dumps({"identity_sha256": old_digest}), encoding="utf-8")
+
+    def unexpected_export(**kwargs):
+        pytest.fail("Обновление CPU-постобработки не должно повторно экспортировать ONNX")
+
+    monkeypatch.setattr(_geoalert_runner, "build_triton_model_export_zip", unexpected_export)
+    current = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config={},
+    )
+    assert current.model_dir == model_dir and current.model_name == model_name
+    expected_digest = digest({**pipeline_identity, "pipeline_contract": 7})
+    assert current.pipeline_path.name == f"{model_name}_{expected_digest[:12]}.yaml"
+    assert current.pipeline_path != old_pipeline
+    assert model_path.read_bytes() == b"unchanged-onnx"
+    assert model_path.stat().st_mtime_ns == model_mtime
+    assert model_marker_path.read_bytes() == model_marker_bytes
+    assert old_pipeline.read_text(encoding="utf-8") == "version: 0.1.4\n"
+    assert json.loads(old_marker.read_text(encoding="utf-8")) == {"identity_sha256": old_digest}
+    marker = json.loads(current.pipeline_path.with_suffix(".json").read_text(encoding="utf-8"))
+    assert marker["identity_sha256"] == expected_digest
+    assert marker["inference_profile"] == "object_f1_instances_v2_interior_geodesic"
+    assert marker["object_separation_algorithm"] == "interior_geodesic_v1"
+    bricks = yaml.safe_load(current.pipeline_path.read_text(encoding="utf-8"))["config"]["bricks"]
+    assert bricks[0]["separation"]["boundary_threshold"] == 0.65
+    assert _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config={},
+    ) == current
+
+
+@pytest.mark.parametrize("profile", ["legacy", "next_gen2", "object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("operation", ["full", "test_sample_f1"])
+def test_geoalert_report_identifies_only_new_object_postprocessing(tmp_path, monkeypatch, profile, operation):
+    report = {"status": "ok", "processed": 1}
+    monkeypatch.setattr(_geoalert_runner, "_run_pseudo_markup", lambda *args: report)
+    monkeypatch.setattr(_geoalert_runner, "_run_test_sample_f1", lambda *args: report)
+    result = _geoalert_runner.run_geoalert({
+        "run_root": str(tmp_path / "run"), "pipeline_variant": profile,
+        "inference_backend": GEOALERT_INFERENCE_BACKEND, "imagery_type": "ortho",
+        "operation": operation,
+    })
+    if profile == "object_f1_v2":
+        assert result == {**report, "inference_profile": "object_f1_instances_v2_interior_geodesic",
+                          "object_separation_algorithm": "interior_geodesic_v1"}
+    else:
+        assert result == report
+    assert report == {"status": "ok", "processed": 1}
+
+
+@pytest.mark.parametrize("profile", ["object_f1", "object_f1_v2"])
+def test_compose_runtime_records_algorithm_and_imports_current_repository(tmp_path, monkeypatch, profile):
+    captured = {}
+
+    def run(command, *, cwd, env, check):
+        spec = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+        captured.update(spec=spec, env=env)
+        Path(spec["result_path"]).write_text(json.dumps({"status": "ok"}), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(_geoalert_runner.subprocess, "run", run)
+    export = _geoalert_runner._RuntimeExport("model", tmp_path, tmp_path / "pipeline.yaml", [])
+    result = _geoalert_runner._run_compose({
+        "pipeline_variant": profile, "geoalert_python_path": sys.executable,
+        "geoalert_inference_root": str(tmp_path),
+    }, tmp_path, export, [], initial_reports=[], source_image_ids=[], coverage_percent=None, warnings=[])
+    assert result == {"status": "ok"}
+    assert captured["env"]["PYTHONPATH"].split(_geoalert_runner.os.pathsep)[0] == str(
+        Path(_geoalert_runner.__file__).resolve().parents[2]
+    )
+    if profile == "object_f1_v2":
+        assert captured["spec"]["inference_profile"] == "object_f1_instances_v2_interior_geodesic"
+        assert captured["spec"]["object_separation_algorithm"] == "interior_geodesic_v1"
+    else:
+        assert "inference_profile" not in captured["spec"]
+        assert "object_separation_algorithm" not in captured["spec"]
 
 
 def _write_raster(path: Path, values: np.ndarray, transform) -> None:

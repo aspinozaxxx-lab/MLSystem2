@@ -38,6 +38,16 @@ ONNX_IR_VERSION = 8
 _BOUNDARY_TAG = "_touches_raster_boundary"
 
 
+def _object_inference_metadata(variant: object) -> dict[str, str]:
+    """Версия текущей CPU-постобработки, независимая от весов checkpoint."""
+    if variant != "object_f1_v2":
+        return {}
+    return {
+        "inference_profile": "object_f1_instances_v2_interior_geodesic",
+        "object_separation_algorithm": "interior_geodesic_v1",
+    }
+
+
 @dataclass(frozen=True)
 class ModelExportArchive:
     """Готовый временный zip-архив."""
@@ -220,6 +230,7 @@ def build_triton_model_export_zip(
                 ),
                 "output_kind": "object_probabilities" if object_f1 else "probabilities" if next_gen2 else "binary_masks",
                 "pipeline_variant": variant if object_f1 else "next_gen2" if next_gen2 else "legacy",
+                **_object_inference_metadata(variant),
                 "output_channels": ["foreground", "boundary"] if object_f1 else ["background", *[str(item["slug"]) for item in class_schema]] if next_gen2 and task == "multiclass" else None,
                 "object_separation": separation.model_dump() if separation is not None else parameters.get("object_separation") if object_f1 else None,
                 "inference_merge": "gaussian_probabilities" if next_gen2 or object_f1 else "drop",
@@ -1118,11 +1129,21 @@ config:
         document = yaml.safe_load(result)
         adapter = document["config"]["bricks"][1]["adapter"]
         adapter["output_dtype"] = "float32"
+        # Сохранить общие опции векторизации, включая отметку краевых объектов:
+        # геометрические фильтры ниже используют её и для отдельных instance-ID.
+        vectorize = next(
+            brick for brick in document["config"]["bricks"]
+            if brick["_class"] == "VectorizeMasks"
+        )
+        vectorize.update(
+            input_rasters=["object_instances"],
+            output_fcs=["output"],
+            value_property_name="instance_id",
+        )
         document["config"]["bricks"] = [
             {"_class": "ObjectF1Segmentation", "input_raster": "input", "input_channels": input_channels,
              "window_size": sample_size, "threshold": threshold, "output_raster": "object_instances", "adapter": adapter},
-            {"_class": "VectorizeMasks", "input_rasters": ["object_instances"], "output_fcs": ["output"],
-             "value_property_name": "instance_id"},
+            vectorize,
         ]
         if object_separation is not None:
             separation = ObjectSeparationConfig.model_validate(object_separation)

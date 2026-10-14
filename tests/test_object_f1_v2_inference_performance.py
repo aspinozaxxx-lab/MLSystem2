@@ -1,4 +1,4 @@
-"""Ускорение object f1 v2 сохраняет точные ID и не повторяет лишнюю работу."""
+"""Точные ID геодезического object f1 v2 и отсутствие лишней CPU-работы."""
 
 from hashlib import sha256
 
@@ -38,6 +38,7 @@ def _complex_case(name):
     elif name == "thin_fallback":
         area[25, 5:59] = .95
         boundary[:] = .9
+        boundary[25, 31] = .1
     elif name == "lobes_fallback":
         y, x = np.mgrid[:64, :64]
         mask = ((x - 17) ** 2 + (y - 32) ** 2 <= 12 ** 2)
@@ -45,6 +46,7 @@ def _complex_case(name):
         mask[31:34, 17:48] = True
         area[mask] = .95
         boundary[mask] = .9
+        boundary[32, 17] = boundary[32, 47] = .1
     elif name == "all_small_regions":
         area[4:60, 4:60] = .95
         boundary[::4] = .9
@@ -105,7 +107,8 @@ def _digest(instances):
     return sha256(np.asarray(instances, dtype="<i4").tobytes()).hexdigest()
 
 
-# Эталоны получены реализацией 396abfb до ускорения, включая точный порядок ID.
+# Эти структурированные случаи сохраняют ID 396abfb; в резервных семенах теперь
+# явно присутствует внутренняя часть, без которой v2 корректно отвергает контур.
 _COMPLEX_GOLDEN = {
     "empty": "4fe7b59af6de3b665b67788cc2f99892ab827efae3a467342b3bb4e3bc8e5bfe",
     "single_holes": "a44719d8ccd7c3ffda935768a78befaef358399aa351d6c6821eafb70f37c7b5",
@@ -116,15 +119,18 @@ _COMPLEX_GOLDEN = {
     "closing_noise": "58a784cd2fec23ba0ec964e6b95c0897ea11f5f60ab8bde854da7d0e2a2ccd31",
     "partial_thresholds": "3a5df8871babad0bed1d9179f493f1b4392155c480e402be8ac81dba30d1b20d",
 }
-_RANDOM_GOLDEN = [
-    "7fefb9bf1269080a88cb96b4c715831ba5c1623c46145eb244f6bf442ee87bf4",
-    "e2a228b03fd2bf4e552ba39c2c1d2dfdfc4e6a48d678122567cb801d3b3b2dfb",
-    "dc7fdf466f95cd83233cbce4ac3e0df332d72b8d6796074a55cd31d1dda7eafe",
-    "3feed7e47ff2b87251059abe7b9b87ddbffa342048f154c00ae3f3d3849b13a7",
-    "8d771914bcf8603bf3479da84a4e2424c283d762ff75c1b886e30f82628517fa",
-    "d48eb0eb61276de601a82ec827222c5c5df2f49922831f372be04b11f49a3548",
-    "11ed46e951449f60cac339fd3d4533e3d2a33757bde03c1c7419541602b9b877",
-    "340d8107922ea656d20afaafe4f0998436b3b0754e8bf8a86cef1943152c1539",
+# Новый контракт v2: семена только преобладающей внутренности и плоский
+# watershed. Случайные смеси вероятностей намеренно больше не воспроизводят
+# ошибочные маркеры из фона/границ. Исторические object_f1-эталоны не изменены.
+_RANDOM_INTERIOR_GEODESIC_GOLDEN = [
+    "ae956471b5a952e0c16ebfca1f2623eb3fc9698ddcbdbca23ab761df2ead0b99",
+    "5d0a9055551fb21b97c83ff3d54276ec5ba96f57290a55c69687821af170d750",
+    "03b537a4ad531e9be00c33e1cfee50d912b31aedd85f7df76e7ea149b3d736f8",
+    "058436447de1db988c28d88c7cf36fd5979473b8a319a456a26fa95102f871f4",
+    "ad7ea33410c1cfc4b1a022b84308f54a5c940fb8fbc4ada488def7a1e5859772",
+    "377e8087f690699c81520585680eaa28ee5f7d64f4122d6a77d5ee4f8a65a561",
+    "58c1efe03c3382a5009db4ee8825d217ef957e9dadce19c6016f99617f955a08",
+    "b615f060fa083fb043a22f527ae74fefc512b4ac03b33af467e598423a846d0b",
 ]
 _SCENE_GOLDEN = [
     "14b372f4c6235719a86596448ed14be9a052f2f216bf6beb343628c839f6eb6a",
@@ -145,11 +151,11 @@ def test_complex_masks_keep_previous_exact_ids(name):
 
 
 @pytest.mark.parametrize("group", range(8))
-def test_random_masks_keep_previous_exact_ids(group):
+def test_random_masks_keep_interior_geodesic_v2_exact_ids(group):
     digest = sha256()
     for index in range(group * 16, (group + 1) * 16):
         digest.update(np.asarray(separate_objects(*_random_case(index)), dtype="<i4").tobytes())
-    assert digest.hexdigest() == _RANDOM_GOLDEN[group]
+    assert digest.hexdigest() == _RANDOM_INTERIOR_GEODESIC_GOLDEN[group]
 
 
 @pytest.mark.parametrize("name, expected_calls", [

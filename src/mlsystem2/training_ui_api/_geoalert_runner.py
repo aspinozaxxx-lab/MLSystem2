@@ -33,6 +33,7 @@ from ._markup_export import find_intersecting_images
 from ._model_export import (
     ModelExportArchive,
     _export_class_schema_override,
+    _object_inference_metadata,
     build_external_triton_model_export_zip,
     build_geoalert_pipeline_yaml,
     build_triton_model_export_zip,
@@ -100,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             "processed": 0,
             "feature_count": 0,
             "error": repr(exc),
+            **_object_inference_metadata(config.get("pipeline_variant")),
         }
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
@@ -119,8 +121,10 @@ def run_geoalert(config: dict[str, Any]) -> dict[str, Any]:
     run_root = Path(config["run_root"])
     _reset_run_root(run_root)
     if config.get("operation") == "test_sample_f1":
-        return _run_test_sample_f1(config, run_root)
-    return _run_pseudo_markup(config, run_root)
+        result = _run_test_sample_f1(config, run_root)
+    else:
+        result = _run_pseudo_markup(config, run_root)
+    return {**result, **_object_inference_metadata(config.get("pipeline_variant"))}
 
 
 def _run_pseudo_markup(config: dict[str, Any], run_root: Path) -> dict[str, Any]:
@@ -469,6 +473,7 @@ def _effective_postprocess_config(
         "postprocess.filter_compact_objects.enabled": (
             params.get("filter_compact_min_isoperimetric_quotient") is not None
         ),
+        "postprocess.filter_compact_objects.mode": params.get("filter_compact_mode"),
         "postprocess.filter_compact_objects.min_isoperimetric_quotient": params.get(
             "filter_compact_min_isoperimetric_quotient"
         ),
@@ -505,7 +510,7 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 6 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
+            "pipeline_contract": 7 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
@@ -569,6 +574,7 @@ def _ensure_runtime_export(
                 pipeline_digest,
                 checkpoint_sha,
                 model_name,
+                inference_metadata=_object_inference_metadata(config.get("pipeline_variant")),
             )
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
         if marker.get("identity_sha256") == pipeline_digest:
@@ -658,6 +664,7 @@ def _ensure_runtime_export(
             pipeline_digest,
             checkpoint_sha,
             model_name,
+            inference_metadata=_object_inference_metadata(config.get("pipeline_variant")),
         )
         return _RuntimeExport(model_name, model_dir, pipeline_path, bricks)
     finally:
@@ -678,6 +685,7 @@ def _run_compose(
     result_path = run_root / "compose_result.json"
     spec_path = run_root / "compose_spec.json"
     spec = {
+        **_object_inference_metadata(config.get("pipeline_variant")),
         "pipeline_path": str(runtime_export.pipeline_path),
         "compose_root": str(run_root / "compose"),
         "progress_path": str(run_root / "progress.json"),
@@ -1009,6 +1017,8 @@ def _install_pipeline_cache(
     identity_sha256: str,
     checkpoint_sha256: str,
     model_name: str,
+    *,
+    inference_metadata: dict[str, str] | None = None,
 ) -> None:
     temporary_pipeline = pipeline_path.with_name(
         f".{pipeline_path.name}.{uuid.uuid4().hex}.tmp"
@@ -1023,6 +1033,7 @@ def _install_pipeline_cache(
             "checkpoint_sha256": checkpoint_sha256,
             "model_name": model_name,
             "bricks": bricks,
+            **(inference_metadata or {}),
         },
     )
 

@@ -58,6 +58,12 @@ def _separate_objects_v2(foreground, boundary, valid, config):
             continue
         component = components[slices] == component_id
         values = boundary[slices]
+        interior = foreground[slices] - values
+        # Низкая вероятность границы ещё не означает внутренность участка:
+        # фон или размытый контур не должны порождать отдельный экземпляр.
+        support = component & (interior > values) & (interior > 1 - foreground[slices])
+        if not support.any():
+            continue
         barriers = (values >= config.boundary_threshold) & component
         radius = config.boundary_closing_radius
         if radius:
@@ -65,26 +71,29 @@ def _separate_objects_v2(foreground, boundary, valid, config):
             padded = np.pad(barriers, radius, mode="edge")
             closed = ndimage.binary_closing(padded, structure=np.ones((2 * radius + 1,) * 2, bool))
             barriers |= closed[radius:-radius, radius:-radius] & component
-        markers, _ = ndimage.label(component & ~barriers)
+        markers, _ = ndimage.label(support & ~barriers)
         marker_sizes = np.bincount(markers.ravel())
         marker_sizes[0] = 0
         markers[marker_sizes[markers] < config.min_marker_pixels] = 0
         marker_count = int((marker_sizes >= config.min_marker_pixels).sum())
         if not marker_count:
             distance = ndimage.distance_transform_edt(np.pad(component, 1))[1:-1, 1:-1]
-            # Значимые максимумы разделяют доли сложной формы, плато — один маркер.
-            # Малые/тонкие компоненты без значимых максимумов получают один центр.
-            peaks = h_maxima(distance, config.fallback_peak_prominence) & component
+            # Резервный центр также требует подтверждённой внутренности:
+            # расстояние измеряется по полной области, а не по узким семенам.
+            peaks = h_maxima(distance, config.fallback_peak_prominence) & support
             markers, marker_count = ndimage.label(peaks)
             if not np.any(markers):
-                markers[np.unravel_index(np.argmax(distance), distance.shape)] = 1
+                markers[np.unravel_index(np.argmax(np.where(support, distance, -1)), distance.shape)] = 1
                 marker_count = 1
         if marker_count == 1:
             # Единственный маркер заполняет всю связную область при любом рельефе.
             instances[slices][component] = offset + 1
             offset += 1
             continue
-        elevation = np.where(barriers, np.maximum(values, config.boundary_threshold), values)
+        # Равномерное расширение внутри полной области отдаёт контур соседним
+        # сердцевинам по геодезическому расстоянию. Рельеф границы способен
+        # присоединить длинную петлю к одному участку вместо ближайших соседей.
+        elevation = np.zeros(component.shape, dtype=np.float32)
         labels = watershed(elevation, markers, mask=component, connectivity=1, watershed_line=False)
         label_sizes = np.bincount(labels.ravel())
         # Пропуски ID после фильтра маркеров не являются маленькими объектами:

@@ -49,10 +49,12 @@ def test_small_noise_is_removed_before_fallback():
     assert separate_objects(area, boundary, valid).max() > 2
 
 
-def test_thin_parcel_survives_absent_interior_and_background_stays_empty():
+def test_thin_parcel_uses_small_real_interior_and_background_stays_empty():
     area = np.zeros((32, 32), np.float32)
     area[15, 4:28] = .95
     boundary = np.where(area > .5, .9, 0).astype(np.float32)
+    # Одного пикселя мало для обычного маркера, но он подтверждает внутренность.
+    boundary[15, 16] = .05
     result = separate_objects(area, boundary, np.ones_like(area, bool), _config())
     assert result.max() == 1
     np.testing.assert_array_equal(result > 0, area > .5)
@@ -76,6 +78,8 @@ def test_distance_fallback_uses_significant_lobes_not_every_local_pixel():
     mask[39:42, 24:57] = True
     area = mask.astype(np.float32) * .95
     boundary = mask.astype(np.float32) * .9
+    # Обе доли имеют настоящую внутренность; чистый контур объектом не считается.
+    boundary[40, 24] = boundary[40, 56] = .05
     result = separate_objects(area, boundary, np.ones_like(mask), _config())
     assert result.max() == 2
     np.testing.assert_array_equal(result > 0, mask)
@@ -97,12 +101,15 @@ def test_accumulator_and_direct_separation_are_identical(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_resegment_reuses_disk_maps_without_repeated_normalization(tmp_path, monkeypatch):
+@pytest.mark.parametrize("second_boundary,high_threshold_count", [(.45, 1), (.6, 2)])
+def test_resegment_reuses_disk_maps_without_repeated_normalization(
+    tmp_path, monkeypatch, second_boundary, high_threshold_count,
+):
     area = np.zeros((64, 64), np.float32)
     area[8:56, 8:56] = .95
     boundary = np.zeros_like(area)
     boundary[8:56, 24] = .4
-    boundary[8:56, 40] = .6
+    boundary[8:56, 40] = second_boundary
     valid = np.ones_like(area, bool)
     accumulator = create_object_scene(ObjectSceneRequest(width=64, height=64, tile_size=64,
         work_dir=str(tmp_path), separation=_config()))
@@ -121,7 +128,9 @@ def test_resegment_reuses_disk_maps_without_repeated_normalization(tmp_path, mon
             raise AssertionError("Повторное разделение не должно создавать дисковые карты")
 
         monkeypatch.setattr(accumulator, "_array", unexpected_allocation)
-        for threshold, count in ((.35, 3), (.5, 2), (.65, 1)):
+        # При .45 внутренность .50 преобладает и высокий порог объединяет
+        # сердцевины; при .60 внутренность .35 остаётся слабее границы.
+        for threshold, count in ((.35, 3), (.425, 2), (.65, high_threshold_count)):
             config = _config(boundary_threshold=threshold)
             result = accumulator.resegment(config)
             assert result.instances is map_identity

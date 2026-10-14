@@ -2352,6 +2352,7 @@ def _save_training_checkpoint(
             }
         )
     if request.config.pipeline_variant == "object_f1_v2":
+        metadata["object_separation_algorithm"] = "interior_geodesic_v1"
         metadata["object_separation"] = metrics.val_object_separation
         metadata["object_threshold_sweep"] = metrics.val_object_threshold_sweep
         metadata["train_config"]["object_separation"] = metrics.val_object_separation

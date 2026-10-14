@@ -111,6 +111,7 @@ _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40,64}")
 _URGENT_PRIORITY = "urgent"
 _EDITOR_SYNC_TTL_SECONDS = 60.0
 _EDITOR_PSEUDO_ALGORITHM_VERSION = 1
+_OBJECT_F1_V2_INFERENCE_PROFILE = "object_f1_instances_v2_interior_geodesic"
 _MANAGED_OWNER_PROPERTY = "_mlsystem2_managed_dataset_key"
 _EDITOR_RASTER_CRS = PyprojCRS.from_epsg(3857)
 _NEW_SCENE_REVISION = "new"
@@ -719,7 +720,14 @@ def editor_scene_pseudo_markup(
         (source_job.config or {}).get("tile_preparation.tile_size") if source_job else None,
         768,
     )
-    inference_config_hash = _editor_pseudo_inference_config_hash(selected, tile_size)
+    inference_profile = (
+        _OBJECT_F1_V2_INFERENCE_PROFILE
+        if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "object_f1_v2"
+        else None
+    )
+    inference_config_hash = _editor_pseudo_inference_config_hash(
+        selected, tile_size, inference_profile=inference_profile,
+    )
     dedup_key = _editor_pseudo_dedup_key(
         dataset.key,
         scene.annotation_name,
@@ -770,6 +778,7 @@ def editor_scene_pseudo_markup(
                 "image_relative_path": image_path.relative_to(root).as_posix(),
                 "inference_config_hash": inference_config_hash,
                 "algorithm_version": _EDITOR_PSEUDO_ALGORITHM_VERSION,
+                **({"inference_profile": inference_profile} if inference_profile else {}),
                 "class_id": class_key,
                 "class_name": dataset.class_name or dataset.name,
                 "training_result_id": str(primary.id),
@@ -2386,7 +2395,12 @@ def _raster_revision(image_path: Path) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _editor_pseudo_inference_config_hash(selected: Any, tile_size: int) -> str:
+def _editor_pseudo_inference_config_hash(
+    selected: Any,
+    tile_size: int,
+    *,
+    inference_profile: str | None = None,
+) -> str:
     payload = {
         "algorithm_version": _EDITOR_PSEUDO_ALGORITHM_VERSION,
         "inference_template_id": (
@@ -2398,6 +2412,8 @@ def _editor_pseudo_inference_config_hash(selected: Any, tile_size: int) -> str:
         "checkpoint_threshold": selected.checkpoint.threshold,
         "tile_size": tile_size,
     }
+    if inference_profile is not None:
+        payload["inference_profile"] = inference_profile
     serialized = json.dumps(
         payload,
         ensure_ascii=False,
